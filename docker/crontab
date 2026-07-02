@@ -1,0 +1,5 @@
+# Batch cadence (OPERATIONS 5): tight schedules are safe because of
+# the per-bot lock (REQ-RES-003). The wall clock lives here, not in
+# the bots (BLUEPRINT 11).
+*/5 * * * * root . /etc/minions.env && python -m minions.sort.main >> /data/bots/_data/logs/sort.cron.log 2>&1
+0 6 * * 1 root . /etc/minions.env && python -m minions.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1

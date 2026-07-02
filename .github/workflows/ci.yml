@@ -1,0 +1,28 @@
+# CI gates, all green on main (BLUEPRINT 13): ruff ALL + format,
+# mypy strict, pytest, wheel build; the ASCII gate rides pytest.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install
+        run: pip install -e '.[dev]'
+      - name: Lint (ruff ALL)
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+      - name: Types (mypy strict)
+        run: mypy
+      - name: Tests (hermetic, offline)
+        run: pytest
+      - name: Wheel build proves pip install .
+        run: python -m build --wheel

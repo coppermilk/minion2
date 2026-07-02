@@ -1,0 +1,42 @@
+# One image, N containers on one mount (BLUEPRINT 14).
+# DRIVE_NAS points at the media tree on the host; .env holds secrets.
+
+x-minion: &minion
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  env_file: .env
+  environment:
+    DRIVE: /data
+    TORCH_HOME: /data/bots/_data/regen/torch
+    HF_HOME: /data/bots/_data/regen/hf
+  volumes:
+    - ${DRIVE_NAS}:/data
+  restart: unless-stopped
+
+services:
+  inbox:
+    <<: *minion
+    command: python -m minions.inbox.main
+
+  # Link bots refresh extractors on every start (OPERATIONS 3).
+  fetch:
+    <<: *minion
+    command: sh -c 'yt-dlp -U; exec python -m minions.fetch.main'
+
+  frames:
+    <<: *minion
+    command: sh -c 'yt-dlp -U; exec python -m minions.frames.main'
+
+  censor:
+    <<: *minion
+    command: python -m minions.censor.main
+
+  print:
+    <<: *minion
+    command: python -m minions.print.main
+
+  # Batch bots ride cron; the foreground cron is the supervisor.
+  batch:
+    <<: *minion
+    command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI|LLM_" > /etc/minions.env; exec cron -f'
