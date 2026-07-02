@@ -312,11 +312,11 @@ bot with a Settings value; two bots whose Steps differ stay separate. This rule
 eliminates duplicates by construction.
 
 Recorded waiver (BLUEPRINT 12): the censor family (censor-blur,
-censor-black, restore) is deliberately split against this rule -- one
-Telegram identity per behaviour, chosen by the operator. The shared
-Step lives behind the adapters (vision.HidePeople, llm.
-RestoreBackground), so no logic is duplicated; only graph assembly
-repeats.
+censor-black, restore) and fan-save are deliberately split against
+this rule -- one Telegram identity per behaviour, chosen by the
+operator. The shared Steps live behind the adapters
+(vision.HidePeople, llm.RestoreBackground, fetch.FetchLink), so no
+logic is duplicated; only graph assembly repeats.
 
 Telegram contract: files cross Telegram as **documents only, both
 directions** -- compressed photo/video payloads are refused with a
@@ -327,6 +327,7 @@ so originals are never recompressed.
 |-----|------|-----------|-------------|
 | inbox | streaming | Telegram file -> `_inbox/` | - |
 | fetch | streaming | link -> video | sink: chat / fan queue |
+| fan-save | streaming | link -> video parked in `bots/fan-save/done/` for later processing | - |
 | frames | streaming | video/link -> every 5th frame, timecode-named -> chat or done dir | `frames_watch` dock |
 | censor-blur | streaming | photo -> people blurred -> chat or done dir | `censor_blur_watch` dock |
 | censor-black | streaming | photo -> people blacked out -> chat or done dir | `censor_black_watch` dock |

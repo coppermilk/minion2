@@ -39,6 +39,7 @@ exactly one place.
 |-----|------|-----------|
 | inbox | streaming | Telegram file -> `_inbox/` |
 | fetch | streaming | link -> video (sink: chat / fan queue) |
+| fan-save | streaming | link (TikTok/YouTube/...) -> video parked in `bots/fan-save/done/` for later processing |
 | frames | streaming | video/link -> every 5th frame, timecode-named -> chat or done dir (`FRAMES_WATCH` adds a folder dock) |
 | censor-blur | streaming | photo -> people blurred -> chat or done dir (`CENSOR_BLUR_WATCH` adds a folder dock) |
 | censor-black | streaming | photo -> people blacked out -> chat or done dir (`CENSOR_BLACK_WATCH` adds a folder dock) |

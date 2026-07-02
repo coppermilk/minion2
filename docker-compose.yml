@@ -66,6 +66,16 @@ services:
     mem_limit: 1g
     cpus: 1
 
+  # fan-save parks downloads in bots/fan-save/done/ for later work.
+  fan-save:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_FAN_SAVE:-}
+    command: sh -c 'yt-dlp -U; exec python -m minions.fan_save.main'
+    mem_limit: 1g
+    cpus: 1
+
   # The censor family: one Telegram identity per behaviour; the
   # torch detector loads lazily on the first photo, hence the caps.
   censor-blur:
