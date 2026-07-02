@@ -128,3 +128,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ['tests']
 addopts = '-q'
+# The suite imports its own helpers as `tests.conftest`; put the
+# repo root on sys.path regardless of how pytest is invoked (bare
+# `pytest` in CI vs `python -m pytest` locally).
+pythonpath = ['.']
