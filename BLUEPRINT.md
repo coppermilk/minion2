@@ -231,7 +231,8 @@ minion_core/
     video.py      probe + frame extraction                     (ffmpeg/ffprobe)
     files.py      stem/next_free_path, EXIF, validate/sanitize, dedup, atomic, lock (Pillow, piexif)
 minions/
-  sort/ censor/ fetch/ frames/ inbox/ week-clean/ print/ _template/
+  sort/ censor_blur/ censor_black/ restore/ fetch/ frames/ inbox/
+  catch/ week-clean/ print/ _template/
 ```
 
 Import direction is strictly downward: bots -> adapters/kernel/settings;
@@ -263,7 +264,9 @@ class Settings:
     source_dirs: tuple[Path, ...]
     print_spooler: tuple[str, ...]  # argv prefix; the PDF is appended
     print_timeout_sec: int
-    censor_watch: Path | None       # second dock; None disables
+    censor_blur_watch: Path | None  # second dock; None disables
+    censor_black_watch: Path | None # second dock; None disables
+    restore_watch: Path | None      # second dock; None disables
     frames_watch: Path | None       # second dock; None disables
     catch_dir: Path | None          # catch bot source; None disables
     # derived, never overridable separately:
@@ -309,12 +312,26 @@ Consolidation rule (normative): two bots with the same **graph shape** are one
 bot with a Settings value; two bots whose Steps differ stay separate. This rule
 eliminates duplicates by construction.
 
+Recorded waiver (BLUEPRINT 12): the censor family (censor-blur,
+censor-black, restore) is deliberately split against this rule -- one
+Telegram identity per behaviour, chosen by the operator. The shared
+Step lives behind the adapters (vision.HidePeople, llm.
+RestoreBackground), so no logic is duplicated; only graph assembly
+repeats.
+
+Telegram contract: files cross Telegram as **documents only, both
+directions** -- compressed photo/video payloads are refused with a
+logged reason (not_a_document) and results go back via sendDocument,
+so originals are never recompressed.
+
 | Bot | Kind | Behaviour | Config axis |
 |-----|------|-----------|-------------|
 | inbox | streaming | Telegram file -> `_inbox/` | - |
 | fetch | streaming | link -> video | sink: chat / fan queue |
 | frames | streaming | video/link -> every `frame_stride`-th frame -> chat or done dir | `frames_watch` dock |
-| censor | streaming | photo -> people hidden -> chat or done dir | mode: blur / black / blur+restore; `censor_watch` dock |
+| censor-blur | streaming | photo -> people blurred -> chat or done dir | `censor_blur_watch` dock |
+| censor-black | streaming | photo -> people blacked out -> chat or done dir | `censor_black_watch` dock |
+| restore | streaming | photo -> people blurred -> LLM repaints background (`_s1`/`_s2`) | `restore_watch` dock |
 | sort | batch | images -> `pictures/<Fandom>/` | `source_dirs`: `_inbox/` or `Downloads/` |
 | catch | streaming | new Downloads image -> labelled copy in `pictures/<Fandom>/`; the original is renamed in place, never moved | `catch_dir` |
 | week-clean | batch | Monday: strip weekly EXIF tag, clear `_inbox/` | - |

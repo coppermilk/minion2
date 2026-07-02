@@ -21,7 +21,7 @@ deploy/        crontab example, kindle Apps Script (off-kernel)
 ## Quick start
 
 ```
-cp .env.example .env       # fill DRIVE (absolute), TG_TOKEN, TG_CHATS
+cp .env.example .env       # DRIVE (absolute), TG_TOKEN_<BOT>, TG_CHATS
 pip install -e '.[dev]'
 pytest                     # hermetic: no network, no models
 python -m minions.inbox.main
@@ -38,12 +38,19 @@ foreground cron of the `batch` container.
 | inbox | streaming | Telegram file -> `_inbox/` |
 | fetch | streaming | link -> video (sink: chat / fan queue) |
 | frames | streaming | video/link -> every Nth frame -> chat or done dir (`FRAMES_WATCH` adds a folder dock) |
-| censor | streaming | photo -> people hidden -> chat or done dir (`CENSOR_WATCH` adds a folder dock) |
+| censor-blur | streaming | photo -> people blurred -> chat or done dir (`CENSOR_BLUR_WATCH` adds a folder dock) |
+| censor-black | streaming | photo -> people blacked out -> chat or done dir (`CENSOR_BLACK_WATCH` adds a folder dock) |
+| restore | streaming | photo -> people blurred, then the LLM repaints the background (`RESTORE_WATCH` adds a folder dock) |
 | sort | batch | images -> `pictures/<Fandom>/` (4 passes) |
 | catch | streaming | new Downloads image -> labelled copy in `pictures/<Fandom>/`; the original never leaves `CATCH_DIR` |
 | week-clean | batch | Monday: strip weekly EXIF tag, clear `_inbox/` |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` (`PRINT_SPOOLER`: lp / SumatraPDF) |
 | kindle | outlier | Apps Script, `deploy/apps_script/` |
+
+Telegram contract: each bot is its own Telegram identity
+(`TG_TOKEN_<BOT>`), and files cross Telegram as documents only, both
+directions -- compressed photos/videos are ignored with a logged
+reason, results come back via sendDocument (never recompressed).
 
 ## CI gates
 

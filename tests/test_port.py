@@ -24,7 +24,7 @@ from minion_core.kernel import Verdict
 from minions.catch.main import CatchDeps
 from minions.catch.main import ClassifyCopy
 from minions.catch.main import build as build_catch
-from minions.censor.main import build as build_censor
+from minions.censor_blur.main import build as build_censor_blur
 from minions.print.main import PrintPdf
 from tests.conftest import make_cfg
 
@@ -179,9 +179,9 @@ def test_censor_build_merges_watch_dock(tmp_path: Path) -> None:
     """The merged, tokenless censor graph still assembles."""
     watch = tmp_path / 'censor_watch'
     watch.mkdir()
-    cfg = make_cfg(tmp_path / 'drive', CENSOR_WATCH=str(watch))
-    assert cfg.censor_watch == watch
-    assert build_censor(cfg, {'TG_TOKEN': ''}) is not None
+    cfg = make_cfg(tmp_path / 'drive', CENSOR_BLUR_WATCH=str(watch))
+    assert cfg.censor_blur_watch == watch
+    assert build_censor_blur(cfg, {'TG_TOKEN': ''}) is not None
 
 
 # ------------------------------------------------- REQ-CATCH-001/2

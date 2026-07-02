@@ -25,7 +25,6 @@ from minion_core.adapters.tg import spool_of
 from minion_core.kernel import ArchiveTo
 from minion_core.kernel import DisposeSource
 from minion_core.kernel import Disposition
-from minion_core.kernel import Folder
 from minion_core.kernel import FolderSpec
 from minion_core.kernel import Reply
 from minion_core.kernel import RouteOrigin
@@ -33,6 +32,7 @@ from minion_core.kernel import SeenPaths
 from minion_core.kernel import SendResult
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
+from minion_core.kernel import merge_watch
 from minion_core.kernel import run
 from minion_core.settings import load
 
@@ -73,27 +73,13 @@ class ExtractFrames(Step):
         )
 
 
-def _docks(cfg: Settings, api: TgApi, spec: TgSpec) -> Stage:
-    """The tg dock, merged with the watch dock when configured.
+def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
+    """Assemble the belt; secrets come from the passed mapping.
 
     One token allows one getUpdates consumer, so links and chat
     videos share the TgAny dock; ``frames_watch`` adds the local
     dock (REQ-DOCK-001).
     """
-    tg: Stage = TgAny(api, spec)
-    if cfg.frames_watch is None:
-        return tg
-    watch = FolderSpec(
-        root=cfg.frames_watch,
-        dest=cfg.bot_dir(BOT),
-        exts=VIDEO_EXTS,
-        poll_sec=cfg.poll_sec,
-    )
-    return tg | Folder(watch, SeenPaths(cfg.seen_paths_max))
-
-
-def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
-    """Assemble the belt; secrets come from the passed mapping."""
     api = TgApi(env.get('TG_TOKEN', ''))
     spec = TgSpec(
         spool=SpoolSpec(
@@ -102,14 +88,22 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         dest=cfg.bot_dir(BOT),
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
-        kinds=('video', 'document'),
     )
     channel = TgChannel(api)
+    watch = None
+    if cfg.frames_watch is not None:
+        watch = FolderSpec(
+            root=cfg.frames_watch,
+            dest=cfg.bot_dir(BOT),
+            exts=VIDEO_EXTS,
+            poll_sec=cfg.poll_sec,
+        )
+    docks = merge_watch(TgAny(api, spec), watch, SeenPaths(cfg.seen_paths_max))
     route = RouteOrigin(
         tg=SendResult(channel), loc=ArchiveTo(cfg.bot_done(BOT))
     )
     return (
-        _docks(cfg, api, spec)
+        docks
         >> FetchLink(cfg)
         >> ExtractFrames(cfg)
         >> route

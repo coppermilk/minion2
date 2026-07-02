@@ -1,12 +1,14 @@
 # One image, N containers on one mount (BLUEPRINT 14).
 # DRIVE_NAS points at the media tree on the host; .env holds secrets.
+# Each Telegram bot runs its own identity (TG_TOKEN_<BOT>): Telegram
+# allows exactly one getUpdates consumer per token.
 
 x-minion: &minion
   build:
     context: .
     dockerfile: docker/Dockerfile
   env_file: .env
-  environment:
+  environment: &minion-env
     DRIVE: /data
     TORCH_HOME: /data/bots/_data/regen/torch
     HF_HOME: /data/bots/_data/regen/hf
@@ -17,20 +19,47 @@ x-minion: &minion
 services:
   inbox:
     <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_INBOX:-}
     command: python -m minions.inbox.main
 
   # Link bots refresh extractors on every start (OPERATIONS 3).
   fetch:
     <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_FETCH:-}
     command: sh -c 'yt-dlp -U; exec python -m minions.fetch.main'
 
   frames:
     <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_FRAMES:-}
     command: sh -c 'yt-dlp -U; exec python -m minions.frames.main'
 
-  censor:
+  # The censor family: one Telegram identity per behaviour.
+  censor-blur:
     <<: *minion
-    command: python -m minions.censor.main
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_CENSOR_BLUR:-}
+    command: python -m minions.censor_blur.main
+
+  censor-black:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_CENSOR_BLACK:-}
+    command: python -m minions.censor_black.main
+
+  restore:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_RESTORE:-}
+    command: python -m minions.restore.main
 
   print:
     <<: *minion

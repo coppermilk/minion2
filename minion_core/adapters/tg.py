@@ -149,7 +149,11 @@ class TgChannel:
         self._api.call('sendMessage', {'chat_id': _chat(origin), 'text': text})
 
     def send_file(self, origin: Origin, path: Path) -> None:
-        """Upload a document toward the origin chat."""
+        """Upload toward the origin chat, always as a document.
+
+        Results go back as documents -- never recompressed by
+        Telegram (the documents-only contract, both directions).
+        """
         if not self._api.live or ':' not in origin.ref:
             return
         import requests
@@ -197,7 +201,6 @@ class TgSpec:
     dest: Path
     offset: Path
     chats: tuple[str, ...]
-    kinds: tuple[str, ...] = ('photo', 'video', 'document')
 
 
 class _TgSource(Source):
@@ -268,8 +271,8 @@ def _ref(msg: dict[str, Any]) -> str:
 
 
 def _accept_media(src: _TgSource, ctx: MsgCtx) -> bool:
-    """Spool a matching payload; True when one was emitted."""
-    file_id = _file_id(ctx.msg, src.spec.kinds)
+    """Spool a document payload; True when one was emitted."""
+    file_id = _file_id(ctx.msg)
     if file_id is None:
         return False
     got = src.api.download(file_id, src.spec.spool)
@@ -292,21 +295,30 @@ def _accept_link(src: _TgSource, ctx: MsgCtx) -> bool:
 
 
 class TgMedia(_TgSource):
-    """Emit photo/video/document payloads, spooled to disk."""
+    """Emit document payloads, spooled to disk (documents only)."""
 
     def accept(self, msg: dict[str, Any], emit: Emit) -> None:
         """Download the message payload and emit its job."""
         _accept_media(self, MsgCtx(msg, emit))
 
 
-def _file_id(msg: dict[str, Any], kinds: tuple[str, ...]) -> str | None:
-    """The largest matching payload's file id, if any."""
-    if 'photo' in kinds and msg.get('photo'):
-        best = max(msg['photo'], key=lambda p: p.get('file_size', 0))
-        return str(best['file_id'])
-    for kind in ('video', 'document'):
-        if kind in kinds and msg.get(kind):
-            return str(msg[kind]['file_id'])
+_COMPRESSED = ('photo', 'video', 'video_note', 'animation')
+"""Payload kinds Telegram recompresses; the contract refuses them."""
+
+
+def _file_id(msg: dict[str, Any]) -> str | None:
+    """The document payload's file id, if any.
+
+    Files cross Telegram as documents only, both directions:
+    compressed photo/video payloads are refused loudly so the sender
+    learns to re-send as a file, and originals stay originals.
+    """
+    if msg.get('document'):
+        return str(msg['document']['file_id'])
+    if any(msg.get(kind) for kind in _COMPRESSED):
+        _LOG.warning(
+            'rejected reason=not_a_document chat=%s', msg['chat']['id']
+        )
     return None
 
 

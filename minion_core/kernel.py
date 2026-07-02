@@ -504,6 +504,17 @@ def _folder_envelope(path: Path, dest: Path) -> Envelope:
     return Envelope(job)
 
 
+def merge_watch(tg: Stage, watch: FolderSpec | None, seen: SeenPaths) -> Stage:
+    """The tg dock, merged with a watch dock when configured.
+
+    Two docks, one belt (REQ-DOCK-001): an absent watch dir keeps
+    the belt Telegram-only with zero caller branching.
+    """
+    if watch is None:
+        return tg
+    return tg | Folder(watch, seen)
+
+
 def next_free_path(path: Path) -> Path:
     """First non-colliding sibling: name, name_2, ... (REQ-DATA-001)."""
     if not path.exists():

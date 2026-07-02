@@ -21,11 +21,6 @@ CHAT = 'chat'
 QUEUE = 'queue'
 """fetch sink axis: park the downloaded file in the fan queue."""
 
-MODE_BLUR = 'blur'
-MODE_BLACK = 'black'
-MODE_RESTORE = 'restore'
-"""censor mode axis values (BLUEPRINT 9)."""
-
 UNKNOWN = 'Unknown'
 """The fandom folder sparse fandoms demote into (BLUEPRINT 9)."""
 
@@ -45,13 +40,14 @@ _DEFAULTS: dict[str, str] = {
     'YTDLP_CONTAINER': 'mkv',
     'YTDLP_PLAYER_CLIENTS': 'default',
     'SOURCE_DIRS': '',
-    'CENSOR_MODE': MODE_BLUR,
     'FETCH_SINK': CHAT,
     'WEEK_TAG': 'bananaland:week',
     'POLL_SEC': '2.0',
     'PRINT_SPOOLER': 'lp',
     'PRINT_TIMEOUT_SEC': '120',
-    'CENSOR_WATCH': '',
+    'CENSOR_BLUR_WATCH': '',
+    'CENSOR_BLACK_WATCH': '',
+    'RESTORE_WATCH': '',
     'FRAMES_WATCH': '',
     'CATCH_DIR': '',
 }
@@ -72,13 +68,14 @@ class Settings:
     ytdlp_container: str
     ytdlp_player_clients: tuple[str, ...]
     source_dirs: tuple[Path, ...]
-    censor_mode: str
     fetch_sink: str
     week_tag: str
     poll_sec: float
     print_spooler: tuple[str, ...]
     print_timeout_sec: int
-    censor_watch: Path | None
+    censor_blur_watch: Path | None
+    censor_black_watch: Path | None
+    restore_watch: Path | None
     frames_watch: Path | None
     catch_dir: Path | None
 
@@ -153,13 +150,18 @@ def load(env: Mapping[str, str]) -> Settings:
         ytdlp_container=get('YTDLP_CONTAINER'),
         ytdlp_player_clients=_csv(get('YTDLP_PLAYER_CLIENTS')),
         source_dirs=_dirs(get('SOURCE_DIRS')),
-        censor_mode=get('CENSOR_MODE'),
         fetch_sink=get('FETCH_SINK'),
         week_tag=get('WEEK_TAG'),
         poll_sec=float(get('POLL_SEC')),
         print_spooler=_argv(get('PRINT_SPOOLER')),
         print_timeout_sec=int(get('PRINT_TIMEOUT_SEC')),
-        censor_watch=_opt_dir('CENSOR_WATCH', get('CENSOR_WATCH')),
+        censor_blur_watch=_opt_dir(
+            'CENSOR_BLUR_WATCH', get('CENSOR_BLUR_WATCH')
+        ),
+        censor_black_watch=_opt_dir(
+            'CENSOR_BLACK_WATCH', get('CENSOR_BLACK_WATCH')
+        ),
+        restore_watch=_opt_dir('RESTORE_WATCH', get('RESTORE_WATCH')),
         frames_watch=_opt_dir('FRAMES_WATCH', get('FRAMES_WATCH')),
         catch_dir=_opt_dir('CATCH_DIR', get('CATCH_DIR')),
     )

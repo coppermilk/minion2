@@ -12,11 +12,16 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from minion_core.adapters.files import sanitize
+from minion_core.kernel import Disposition
+from minion_core.kernel import Step
+from minion_core.kernel import Verdict
 from minion_core.prompts import load_prompt
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
+
+    from minion_core.kernel import Job
 
 
 class LlmError(Exception):
@@ -85,3 +90,23 @@ def _first_image(response: Any) -> bytes:  # noqa: ANN401 -- vendor response
             if blob is not None and blob.data:
                 return bytes(blob.data)
     raise LlmError('no image in restore response')
+
+
+class RestoreBackground(Step):
+    """Repaint the hidden regions of a censored image.
+
+    The second step of the restore bot's two-step belt: consumes the
+    ``_s1`` file HidePeople produced, delivers the ``_s2`` repaint
+    (OPERATIONS 6 naming).
+    """
+
+    def __init__(self, spec: LlmSpec) -> None:
+        self._spec = spec
+
+    def process(self, job: Job) -> Verdict:
+        """Repaint; a refused model is a stable failure code."""
+        try:
+            out = restore_background(job.src, self._spec)
+        except LlmError:
+            return Verdict(Disposition.FAILED, reason='restore_failed')
+        return Verdict(Disposition.DELIVERED, result=out, reply='restored')

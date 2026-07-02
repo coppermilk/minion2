@@ -35,6 +35,9 @@ reason code -- REQ-OBS-001).
 | `cache_wiped_live` | `regen/` deleted mid-run | current run FAILED on model load | CT-C | re-run when idle; the cache rebuilds unattended |
 | `bad_config` | relative path override | process refuses to start, loud error | CT-C | make the override absolute (REQ-CFG-001); never relative |
 | `classify_failed` | LLM naming or vision placement crashed | catch job FAILED; file untouched in `catch_dir` | CT-B | none needed; the belt continues (REQ-CATCH-002) -- investigate the adapter if it persists |
+| `no_person` | censor-family detector found nobody | job SKIPPED; the original is NOT sent back | CT-B | expected: a silent pass-through would leak an uncensored photo |
+| `restore_failed` | image model returned no repaint | restore job FAILED; the `_s1` blur stays in the work dir | CT-B | retry later or check `GEMINI_API_KEY`/model id |
+| `not_a_document` | compressed photo/video sent to a bot | payload ignored, logged | CT-D | re-send the file as a document; Telegram recompresses anything else (the documents-only contract) |
 | `bad_image` | non-image bytes under an image extension | job REJECTED; file left in place | CT-B | expected: untrusted input validated explicitly (BLUEPRINT 4) |
 | `printer_missing` | spooler binary absent | print jobs FAILED | CT-C | fix `PRINT_SPOOLER` (REQ-PRT-001) or install the spooler |
 | `print_timeout` | hung spooler | FAILED after `print_timeout_sec` | CT-C | none; the bound exists so the daemon never wedges |

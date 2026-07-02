@@ -23,13 +23,19 @@ from typing import TypeAlias
 
 import numpy as np
 
+from minion_core.adapters.files import HideSpec
+from minion_core.adapters.files import hide_boxes
 from minion_core.adapters.files import load_rgb
+from minion_core.kernel import Disposition
+from minion_core.kernel import Step
+from minion_core.kernel import Verdict
 from minion_core.settings import UNKNOWN
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from collections.abc import Iterator
 
+    from minion_core.kernel import Job
     from minion_core.settings import Settings
 
 _LOG = logging.getLogger('vision')
@@ -204,3 +210,29 @@ def _mtcnn() -> Any:  # noqa: ANN401 -- vendor model handle
     from facenet_pytorch import MTCNN
 
     return MTCNN(keep_all=True)
+
+
+class HidePeople(Step):
+    """Hide every detected person (the censor family's one step).
+
+    Correctness is CT-B: a missed person leaks the hidden subject,
+    so detections apply verbatim and zero detections is a SKIP,
+    never a silent pass-through of the original. The mode is fixed
+    per bot (files.BLUR / files.BLACK), not a runtime knob.
+    """
+
+    def __init__(self, mode: str) -> None:
+        self._mode = mode
+
+    def process(self, job: Job) -> Verdict:
+        """Detect and hide; the ``_s1`` copy is the result."""
+        boxes = person_boxes(job.src)
+        if not boxes:
+            return Verdict(
+                Disposition.SKIPPED,
+                reason='no_person',
+                reply='no people found',
+            )
+        out = job.dest / f'{job.src.stem}_s1{job.src.suffix}'
+        hide_boxes(job.src, out, HideSpec(boxes=boxes, mode=self._mode))
+        return Verdict(Disposition.DELIVERED, result=out, reply='censored')

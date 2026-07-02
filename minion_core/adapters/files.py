@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from minion_core.settings import Settings
 
 __all__ = [
+    'BLACK',
+    'BLUR',
     'BatchLock',
     'BudgetWriter',
     'Deliver',
@@ -173,9 +175,16 @@ def _alive(pid: int) -> bool:
     return True
 
 
+BLUR = 'blur'
+"""Hide mode: Gaussian blur over the region (censor-blur bot)."""
+
+BLACK = 'black'
+"""Hide mode: solid rectangle over the region (censor-black bot)."""
+
+
 @dataclass(frozen=True)
 class HideSpec:
-    """Regions to hide and how (censor axis, BLUEPRINT 9)."""
+    """Regions to hide and how (the censor family, BLUEPRINT 9)."""
 
     boxes: tuple[tuple[int, int, int, int], ...]
     mode: str
@@ -198,7 +207,7 @@ def hide_boxes(src: Path, out: Path, spec: HideSpec) -> Path:
     with Image.open(src) as opened:
         img = opened.convert('RGB')
     for box in spec.boxes:
-        if spec.mode == 'black':
+        if spec.mode == BLACK:
             ImageDraw.Draw(img).rectangle(box, fill=(0, 0, 0))
         else:
             region = img.crop(box)
