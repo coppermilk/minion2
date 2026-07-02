@@ -53,15 +53,23 @@ PERSON_SCORE_MIN = 0.7
 
 
 class EmbeddingCache:
-    """Append-only vectors in regen/, keyed by file content.
+    """Append-only vectors in regen/, keyed by verified content.
 
-    The stored key is the SHA-256 of the image bytes: an image is
-    embedded exactly once in its life; moves and renames (Demote,
-    Re-place) reuse the vector, and byte-identical duplicates share
-    one vector by construction -- identity is content, never a
-    heuristic (CT-B). The fandom mapping is rebuilt from the live
-    tree on every refresh and never persisted (REQ-SORT-001). The
-    scan is capped at ``max_embedding_scan`` (OPERATIONS 4).
+    The stored key is ``SHA-256:byte-length``. Identity is never
+    taken on faith among coexisting files: when two live files share
+    a key, their bytes are compared directly -- equal bytes share
+    one vector (a verified duplicate), unequal bytes are a detected
+    collision, split onto distinct keys with a CRITICAL log. That
+    makes wrong-vector service impossible for anything that can be
+    checked; the sole unwitnessable case (a file deleted, a
+    different one with the same digest AND length appearing later)
+    sits at ~2**-256 and cannot be verified by any bounded key
+    without storing full content copies.
+
+    An image is embedded exactly once in its life; moves and renames
+    (Demote, Re-place) reuse the vector. The fandom mapping is
+    rebuilt from the live tree on every refresh and never persisted
+    (REQ-SORT-001). The scan is capped at ``max_embedding_scan``.
     """
 
     def __init__(self, cfg: Settings) -> None:
@@ -82,10 +90,13 @@ class EmbeddingCache:
         stored = self._load()
         kept: dict[str, Vector] = {}
         library: dict[str, Vector] = {}
+        witness: dict[str, Path] = {}
         computed = False
         for fandom, path in _tree(root, self._cap):
-            ident = _identity(path)
+            ident = _identify(path, witness)
             vec = stored.get(ident)
+            if vec is None:
+                vec = kept.get(ident)
             if vec is None:
                 vec = embed(path)
                 computed = True
@@ -119,13 +130,25 @@ class EmbeddingCache:
             tmp.unlink(missing_ok=True)
 
 
-def _identity(path: Path) -> str:
-    """The stored cache key: the content itself, hashed.
+def _identify(path: Path, witness: dict[str, Path]) -> str:
+    """The verified cache key for one live file.
 
-    A hash read per refresh is the price of never serving a wrong
-    vector; embedding stays once-per-content.
+    ``witness`` maps each key to the first live file that claimed it
+    this scan. A repeated key is settled by comparing the bytes
+    themselves: identical -> a true duplicate, share the key (and
+    the vector); different -> a detected hash collision, salted onto
+    its own key so a wrong vector can never be served.
     """
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    data = path.read_bytes()
+    ident = f'{hashlib.sha256(data).hexdigest()}:{len(data)}'
+    holder = witness.get(ident)
+    if holder is None:
+        witness[ident] = path
+        return ident
+    if holder.read_bytes() == data:
+        return ident
+    _LOG.critical('hash_collision a=%s b=%s', holder, path)
+    return f'{ident}:{path.name}'
 
 
 def _tree(root: Path, cap: int) -> Iterator[tuple[str, Path]]:

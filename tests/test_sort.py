@@ -33,11 +33,13 @@ DEPS = SortDeps(namer=lambda p: f'named {p.stem}', embed=_embed)
 
 
 def _jpeg(path: Path) -> Path:
+    import hashlib
+
     from PIL import Image
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tone = sum(path.name.encode()) % 200 + 20  # unique content per name
-    Image.new('RGB', (8, 8), (tone, 200, 255 - tone)).save(path, 'JPEG')
+    rgb = tuple(hashlib.sha256(path.name.encode()).digest()[:3])
+    Image.new('RGB', (8, 8), rgb).save(path, 'JPEG')  # unique bytes
     return path
 
 

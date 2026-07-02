@@ -13,6 +13,8 @@ from tests.conftest import make_cfg
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
     from minion_core.adapters.vision import Vector
     from minion_core.settings import Settings
 
@@ -164,6 +166,57 @@ def test_two_processes_share_one_cache(tmp_path: Path) -> None:
     sort_side.invalidate()
     third = catch_side.refresh(cfg.pictures, embed)
     assert list(third) == ['A|1.jpg']  # no ghosts, no crash
+
+
+def test_live_duplicates_share_one_verified_vector(
+    tmp_path: Path,
+) -> None:
+    """Byte-identical files share a vector by byte comparison."""
+    cfg = make_cfg(tmp_path / 'drive')
+    (cfg.pictures / 'A').mkdir()
+    (cfg.pictures / 'B').mkdir()
+    (cfg.pictures / 'A' / 'one.jpg').write_bytes(b'same-bytes')
+    (cfg.pictures / 'B' / 'two.jpg').write_bytes(b'same-bytes')
+    embed = CountingEmbedder()
+    got = EmbeddingCache(cfg).refresh(cfg.pictures, embed)
+    assert sorted(got) == ['A|one.jpg', 'B|two.jpg']
+    assert len(embed.calls) == 1  # embedded once, verified, shared
+    assert np.array_equal(got['A|one.jpg'], got['B|two.jpg'])
+
+
+def test_hash_collision_is_detected_and_split(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The 100% guarantee for coexisting files: bytes decide.
+
+    Even if the digest lies (forced equal here), differing bytes are
+    detected by direct comparison and the files get distinct keys --
+    a wrong vector is never served.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    (cfg.pictures / 'A').mkdir()
+    (cfg.pictures / 'B').mkdir()
+    (cfg.pictures / 'A' / 'one.jpg').write_bytes(b'AAAA')
+    (cfg.pictures / 'B' / 'two.jpg').write_bytes(b'BBBB')
+
+    class _LyingHash:
+        def __init__(self, data: bytes) -> None:
+            pass
+
+        def hexdigest(self) -> str:
+            return 'deadbeef'
+
+    from minion_core.adapters import vision
+
+    monkeypatch.setattr(vision.hashlib, 'sha256', _LyingHash)
+    embed = CountingEmbedder()
+    with caplog.at_level('CRITICAL', logger='vision'):
+        got = EmbeddingCache(cfg).refresh(cfg.pictures, embed)
+    assert 'hash_collision' in caplog.text
+    assert len(embed.calls) == 2  # split: each content embedded alone
+    assert not np.array_equal(got['A|one.jpg'], got['B|two.jpg'])
 
 
 def test_nearest_fandom_by_cosine() -> None:
