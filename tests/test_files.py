@@ -103,12 +103,26 @@ def test_second_batch_invocation_is_locked_out(
 
 
 def test_stale_lock_of_dead_process_is_reaped(tmp_path: Path) -> None:
-    """A crash cannot wedge the schedule: dead pids are reaped."""
+    """A crash on THIS host cannot wedge the schedule."""
+    import socket
+
     path = tmp_path / 'sort.lock'
-    path.write_text('999999999', encoding='ascii')
+    path.write_text(f'{socket.gethostname()}:999999999', encoding='ascii')
     lock = BatchLock(path)
     assert lock.acquire()
     lock.release()
+
+
+def test_foreign_host_lock_is_never_stolen(tmp_path: Path) -> None:
+    """A foreign container's lock is respected, not reaped.
+
+    Pid liveness means nothing across pid namespaces (REQ-RES-003).
+    """
+    path = tmp_path / 'sort.lock'
+    path.write_text('other-container:999999999', encoding='ascii')
+    lock = BatchLock(path)
+    assert not lock.acquire()
+    assert path.exists()
 
 
 def test_stem_is_canonical(tmp_path: Path) -> None:

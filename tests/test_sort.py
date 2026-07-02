@@ -36,7 +36,8 @@ def _jpeg(path: Path) -> Path:
     from PIL import Image
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new('RGB', (8, 8), (10, 200, 10)).save(path, 'JPEG')
+    tone = sum(path.name.encode()) % 200 + 20  # unique content per name
+    Image.new('RGB', (8, 8), (tone, 200, 255 - tone)).save(path, 'JPEG')
     return path
 
 

@@ -27,6 +27,7 @@ from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
 from minion_core.adapters.vision import IMAGE_EXTS
 from minion_core.adapters.vision import HidePeople
+from minion_core.adapters.vision import warm_detector
 from minion_core.kernel import ArchiveTo
 from minion_core.kernel import DisposeSource
 from minion_core.kernel import FolderSpec
@@ -84,9 +85,11 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
 
 
 def main(env: Mapping[str, str] | None = None) -> int:
-    """Build Settings once and drain the belt."""
+    """Build Settings once, warm the model at init, drain the belt."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
+    if mapping.get('TG_TOKEN') or cfg.restore_watch is not None:
+        warm_detector()  # resources at init, never mid-flight
     return run(BOT, build(cfg, mapping), cfg.logs)
 
 

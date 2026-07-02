@@ -141,6 +141,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         log = bot_logger(BOT, cfg.logs)
         log.warning('skipped reason=bad_config catch_dir unset')
         return 0
+    vision.warm_embedder()  # resources at init, never mid-flight
     return run(BOT, build(cfg, real_deps(mapping)), cfg.logs)
 
 

@@ -31,9 +31,10 @@ reason code -- REQ-OBS-001).
 | `stale_extractor` | yt-dlp extractors rotted | downloads FAILED as sites change | CT-C | restart the container (`yt-dlp -U` runs on start) or refresh the pinned binary on schedule |
 | `download_timeout` | hung extractor/host | FAILED after `download_timeout_sec` | CT-C | none; the bound exists so the daemon never wedges (REQ-RES-001) |
 | `probe_failed` | ffmpeg/ffprobe missing or both probe paths failed | frame jobs FAILED | CT-C | ship binaries in `bin/` or let the image apt-install ffmpeg |
-| `batch_locked` | second batch invocation while one runs | second run exits immediately | CT-C | none; this is REQ-RES-003 working -- a tight cron schedule is safe because of it |
+| `batch_locked` | second batch invocation while one runs | second run exits immediately | CT-C | none; this is REQ-RES-003 working. A lock is auto-reaped only when its holder died on the same host; a lock orphaned by a RECREATED container names a foreign host -- delete `state/<bot>.lock` by hand |
 | `cache_wiped_live` | `regen/` deleted mid-run | current run FAILED on model load | CT-C | re-run when idle; the cache rebuilds unattended |
 | `bad_config` | relative path override | process refuses to start, loud error | CT-C | make the override absolute (REQ-CFG-001); never relative |
+| `bad_update` | malformed Telegram payload | update skipped, logged; offset advances past it | CT-C | none; explicit boundary validation -- a poison update can neither crash the dock nor wedge it in a replay loop |
 | `classify_failed` | LLM naming or vision placement crashed | catch job FAILED; file untouched in `catch_dir` | CT-B | none needed; the belt continues (REQ-CATCH-002) -- investigate the adapter if it persists |
 | `no_person` | censor-family detector found nobody | job SKIPPED; the original is NOT sent back | CT-B | expected: a silent pass-through would leak an uncensored photo |
 | `restore_failed` | image model returned no repaint | restore job FAILED; the `_s1` blur stays in the work dir | CT-B | retry later or check `GEMINI_API_KEY`/model id |
@@ -63,11 +64,12 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
 
 ## 4. Sort cache (vision adapter)
 
-- **Append-only**: `_embeddings.npz` keys vectors by file identity
-  (`name|size`); an image is embedded exactly once in its life. Moves between
-  fandoms (Demote, Re-place) reuse the vector; only genuinely new files are
-  computed; removed identities drop out; the scan is capped at
-  `max_embedding_scan`.
+- **Append-only**: `_embeddings.npz` keys vectors by the SHA-256 of the
+  image bytes -- identity is content, never a heuristic. An image is embedded
+  exactly once in its life; moves and renames (Demote, Re-place) reuse the
+  vector; byte-identical duplicates share one vector; removed content drops
+  out. The hash read per refresh is the price of never serving a wrong
+  vector; the scan stays capped at `max_embedding_scan`.
 - **Demote never invalidates** (REQ-SORT-001 restated): the fandom mapping is
   rebuilt from the live tree on every refresh and never persisted, so
   Re-place matches the new layout by construction -- ghosts are impossible

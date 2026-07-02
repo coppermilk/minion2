@@ -12,6 +12,7 @@ rebuilds unattended, wiped by Demote (REQ-SORT-001).
 from __future__ import annotations
 
 import functools
+import hashlib
 import itertools
 import logging
 import os
@@ -52,19 +53,15 @@ PERSON_SCORE_MIN = 0.7
 
 
 class EmbeddingCache:
-    """Append-only vectors in regen/, keyed by file identity.
+    """Append-only vectors in regen/, keyed by file content.
 
-    Stored keys are ``<name>|<size>``: an image is embedded exactly
-    once in its life; moves between fandoms (Demote, Re-place) reuse
-    the vector. The fandom mapping is rebuilt from the live tree on
-    every refresh and never persisted (REQ-SORT-001). The scan is
-    capped at ``max_embedding_scan`` (OPERATIONS 4).
-
-    Waiver (BLUEPRINT 12): identity is name + byte size, not a
-    content hash -- hashing every image per refresh would defeat the
-    cache. Names are collision-free per folder (REQ-DATA-001); a
-    same-name same-size different-content pair is the accepted
-    residual risk.
+    The stored key is the SHA-256 of the image bytes: an image is
+    embedded exactly once in its life; moves and renames (Demote,
+    Re-place) reuse the vector, and byte-identical duplicates share
+    one vector by construction -- identity is content, never a
+    heuristic (CT-B). The fandom mapping is rebuilt from the live
+    tree on every refresh and never persisted (REQ-SORT-001). The
+    scan is capped at ``max_embedding_scan`` (OPERATIONS 4).
     """
 
     def __init__(self, cfg: Settings) -> None:
@@ -123,8 +120,12 @@ class EmbeddingCache:
 
 
 def _identity(path: Path) -> str:
-    """The stored cache key: stable across moves between fandoms."""
-    return f'{path.name}|{path.stat().st_size}'
+    """The stored cache key: the content itself, hashed.
+
+    A hash read per refresh is the price of never serving a wrong
+    vector; embedding stays once-per-content.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _tree(root: Path, cap: int) -> Iterator[tuple[str, Path]]:
@@ -162,6 +163,22 @@ def _cosine(a: Vector, b: Vector) -> float:
     if norm == 0.0:
         return -1.0
     return float(np.dot(a, b) / norm)
+
+
+def warm_detector() -> None:
+    """Load the person detector at process start.
+
+    Resources come up at init, never mid-flight: the first photo
+    must not pay the model-load latency and memory spike.
+    """
+    from torchvision.models import detection
+
+    _detector(detection)
+
+
+def warm_embedder() -> None:
+    """Load CLIP at process start (same init-not-mid-flight rule)."""
+    _clip()
 
 
 @functools.lru_cache(maxsize=1)

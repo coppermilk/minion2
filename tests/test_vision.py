@@ -37,7 +37,7 @@ def _library(cfg: Settings, layout: dict[str, list[str]]) -> None:
     for fandom, names in layout.items():
         (cfg.pictures / fandom).mkdir(parents=True, exist_ok=True)
         for name in names:
-            (cfg.pictures / fandom / name).write_bytes(b'img')
+            (cfg.pictures / fandom / name).write_bytes(name.encode())
 
 
 def test_refresh_is_incremental(tmp_path: Path) -> None:
@@ -51,7 +51,7 @@ def test_refresh_is_incremental(tmp_path: Path) -> None:
     assert len(embed.calls) == 2
 
     (cfg.pictures / 'A' / '2.jpg').unlink()
-    (cfg.pictures / 'A' / '3.jpg').write_bytes(b'img')
+    (cfg.pictures / 'A' / '3.jpg').write_bytes(b'3.jpg')
     second = cache.refresh(cfg.pictures, embed)
     assert sorted(second) == ['A|1.jpg', 'A|3.jpg']
     assert embed.calls.count('1.jpg') == 1  # cache hit, not re-run
@@ -152,7 +152,7 @@ def test_two_processes_share_one_cache(tmp_path: Path) -> None:
 
     # catch files a new image while sort is between runs
     (cfg.pictures / 'B').mkdir()
-    (cfg.pictures / 'B' / '2.jpg').write_bytes(b'img')
+    (cfg.pictures / 'B' / '2.jpg').write_bytes(b'B-2.jpg')
     second = catch_side.refresh(cfg.pictures, embed)
     assert sorted(second) == ['A|1.jpg', 'B|2.jpg']
     assert embed.calls.count('1.jpg') == 1  # reused, not recomputed

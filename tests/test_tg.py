@@ -117,6 +117,33 @@ def test_disallowed_chat_is_dropped(tmp_path: Path) -> None:
     assert list(source(iter(()))) == []
 
 
+def test_malformed_update_never_wedges_the_dock(
+    tmp_path: Path,
+) -> None:
+    """Untrusted payloads are validated explicitly (BLUEPRINT 4).
+
+    A poison update is a logged bad_update; the dock survives, the
+    offset advances past it, and the next good update is served.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    poison = {'update_id': 7, 'message': {'chat': {}}}  # no chat id
+    good = {
+        'update_id': 8,
+        'message': {
+            'chat': {'id': 1},
+            'message_id': 9,
+            'text': 'https://example.com/ok.mp4',
+        },
+    }
+    api = _ScriptedApi([poison, good])
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    api.owner = source
+    out = list(source(iter(())))
+    assert len(out) == 1  # the good update was served
+    assert out[0].job.origin.ref.startswith('1:9:')
+    assert OffsetStore(cfg.state / 't.offset').read() == 9  # past poison
+
+
 def test_chats_from_parses_csv() -> None:
     """TG_CHATS is a comma-separated allow-list."""
     assert chats_from({'TG_CHATS': ' 1, 22 ,'}) == ('1', '22')

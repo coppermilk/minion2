@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING
@@ -128,8 +129,13 @@ class BudgetWriter:
 class BatchLock:
     """One run at a time per batch bot (REQ-RES-003).
 
-    O_CREAT|O_EXCL with the holder's pid inside; a lock left by a
-    dead process is reaped, so a crash cannot wedge the schedule.
+    O_CREAT|O_EXCL with ``host:pid`` inside. A lock left by a dead
+    process on THIS host is reaped, so a crash cannot wedge the
+    schedule; a foreign host's lock is never touched -- pid liveness
+    is meaningless across pid namespaces, and stealing a live lock
+    would break the no-overlap guarantee. An orphaned foreign lock
+    (its container was recreated, not restarted) is removed by hand
+    (OPERATIONS 2, ``batch_locked``).
     """
 
     def __init__(self, path: Path) -> None:
@@ -145,7 +151,7 @@ class BatchLock:
         except FileExistsError:
             return False
         with os.fdopen(fd, 'w', encoding='ascii') as fh:
-            fh.write(str(os.getpid()))
+            fh.write(f'{socket.gethostname()}:{os.getpid()}')
         self._held = True
         return True
 
@@ -157,9 +163,14 @@ class BatchLock:
 
     def _reap(self) -> None:
         try:
-            pid = int(self._path.read_text(encoding='ascii'))
+            host, _, raw_pid = self._path.read_text(
+                encoding='ascii'
+            ).partition(':')
+            pid = int(raw_pid)
         except (OSError, ValueError):
             return
+        if host != socket.gethostname():
+            return  # foreign holder: never steal across namespaces
         if not _alive(pid):
             self._path.unlink(missing_ok=True)
 

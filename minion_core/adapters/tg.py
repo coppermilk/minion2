@@ -227,10 +227,26 @@ class _TgSource(Source):
             {'offset': offset, 'timeout': POLL_TIMEOUT_SEC},
         )
         for upd in updates:
-            self._route(upd, emit)
-            offset = upd['update_id'] + 1
-            self._offsets.write(offset)  # REQ-DATA-003
+            offset = max(offset, self._consume(upd, emit))
         return offset
+
+    def _consume(self, upd: dict[str, Any], emit: Emit) -> int:
+        """Validate one untrusted update explicitly (BLUEPRINT 4).
+
+        A malformed payload is a logged ``bad_update``, never a
+        crashed dock; the offset still advances past it, so a poison
+        update cannot wedge the bot in a replay loop.
+        """
+        uid = upd.get('update_id')
+        if not isinstance(uid, int):
+            _LOG.warning('rejected reason=bad_update keys=%s', sorted(upd))
+            return 0
+        try:
+            self._route(upd, emit)
+        except (KeyError, TypeError, ValueError) as exc:
+            _LOG.warning('rejected reason=bad_update id=%s err=%s', uid, exc)
+        self._offsets.write(uid + 1)  # REQ-DATA-003
+        return uid + 1
 
     def _route(self, upd: dict[str, Any], emit: Emit) -> None:
         msg = upd.get('message')

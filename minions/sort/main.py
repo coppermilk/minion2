@@ -102,6 +102,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     mapping = os.environ if env is None else env
     cfg = load(mapping)
     if cfg.sort_watch:
+        vision.warm_embedder()  # resources at init, never mid-flight
         return run(BOT, build_watch(cfg, real_deps(mapping)), cfg.logs)
     log = bot_logger(BOT, cfg.logs)
     lock = BatchLock(cfg.state / f'{BOT}.lock')
