@@ -1,0 +1,126 @@
+# Bananaland build + the law block (BLUEPRINT 4, 15.1).
+#
+# Waiver register (BLUEPRINT 12): every global ignore below carries its
+# written reason; anything narrower lives in per-file-ignores or an
+# inline `noqa` with a reason at the site.
+
+[build-system]
+requires = ['setuptools>=69']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'bananaland'
+version = '1.0.0'
+description = 'Personal media pipeline: two transports in, one tree out.'
+readme = 'README.md'
+# Waiver: BLUEPRINT targets Python 3.14; 3.11 is the floor so the suite
+# runs on present interpreters. The code uses no post-3.11 syntax.
+requires-python = '>=3.11'
+dependencies = [
+    'requests>=2.32',
+    'Pillow>=10.0',
+    'piexif>=1.1',
+    'numpy>=1.26',
+]
+
+[project.optional-dependencies]
+# Heavy vendors stay optional: lazy imports keep bots and the test
+# suite runnable without them (BLUEPRINT 6, Power-of-10 rule 3).
+ml = ['torch', 'torchvision', 'transformers', 'facenet-pytorch']
+llm = ['google-genai']
+links = ['yt-dlp']
+dev = [
+    'pytest>=8',
+    'ruff>=0.8',
+    'mypy>=1.13',
+    'types-requests',
+    'build',
+]
+
+[tool.setuptools.packages.find]
+include = ['minion_core*', 'minions*']
+
+[tool.setuptools.package-data]
+minion_core = ['py.typed', 'prompts/*.md']
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.format]
+quote-style = 'single'
+
+[tool.ruff.lint]
+select = ['ALL']
+ignore = [
+    # Formatter conflicts: ruff itself asks these off when the
+    # formatter runs (magic trailing comma / implicit concat).
+    'COM812',
+    'ISC001',
+    # Docstring style pairs: pep257 convention picks D211/D212.
+    'D203',
+    'D213',
+    # Message-in-raise style: short literal messages in raises are the
+    # house style; a separate msg variable adds noise, not safety.
+    'EM101',
+    'EM102',
+    'TRY003',
+    # Constructors are field assignments; the class docstring is the
+    # documentation point (one concept, one name).
+    'D107',
+    # Noun-phrase summaries ("The chat allow-list ...") are the house
+    # docstring style; imperative mood is not a safety property.
+    'D401',
+    # Exceptions are named by the failure they carry, 1:1 with the
+    # OPERATIONS reason codes (Blocked, QuotaExceeded), never
+    # Error-suffixed mechanism names.
+    'N818',
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 5
+
+[tool.ruff.lint.pylint]
+max-args = 3
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = 'single'
+
+[tool.ruff.lint.pydocstyle]
+convention = 'pep257'
+
+[tool.ruff.lint.per-file-ignores]
+# Sanctioned lazy vendor loads (BLUEPRINT 4, Power-of-10 rule 8).
+'minion_core/adapters/*' = ['PLC0415']
+# Tests: assert is the medium; magic values are fixtures; docstring
+# ceremony and packaging rules do not apply to CT-E tooling.
+'tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
+             'PLC0415']
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+strict = true
+packages = ['minion_core', 'minions']
+python_version = '3.11'
+
+[[tool.mypy.overrides]]
+# Waiver: untyped / optional vendors behind adapters; each is the sole
+# import site per REQ-ARC-002, so the unchecked surface is one file.
+module = [
+    'piexif',
+    'yt_dlp.*',
+    'torch.*',
+    'torchvision.*',
+    'transformers.*',
+    'facenet_pytorch.*',
+    'google.*',
+]
+ignore_missing_imports = true
+
+# -------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ['tests']
+addopts = '-q'
