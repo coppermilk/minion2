@@ -1,7 +1,7 @@
 # Removes every bananaland task (symmetric to register-tasks.ps1).
 
 param(
-    [string[]]$Bots = @('sort', 'week-clean', 'print', 'catch')
+    [string[]]$Bots = @('print', 'catch')
 )
 
 foreach ($bot in $Bots) {

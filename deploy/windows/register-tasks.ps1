@@ -1,12 +1,15 @@
 # Registers the Windows deployment in Task Scheduler (BLUEPRINT 14).
-# Run from an elevated PowerShell. Default set is the BLUEPRINT 14
-# Windows row: sort (Downloads axis, SORT_WATCH=1 in .env -> new
-# images sort instantly) at logon, week-clean on Monday mornings,
-# print and catch at logon as always-on streamers. The wall clock
-# lives here, in the scheduler -- never in the bots (BLUEPRINT 11).
+# Run from an elevated PowerShell.
 #
-#   .\register-tasks.ps1                 # the default set
-#   .\register-tasks.ps1 -Bots inbox     # add any streaming bot
+# Division of labour: Windows runs exactly two bots -- the printer
+# (`print`, the machine the printer is attached to) and the
+# Downloads watcher (`catch`). Every other bot runs in Docker on the
+# NAS (docker-compose.yml); registering one here too would make it
+# run in two places (a second print/ watcher prints every PDF
+# twice).
+#
+#   .\register-tasks.ps1                 # print + catch
+#   .\register-tasks.ps1 -Bots inbox     # add extras deliberately
 
 param(
     [string[]]$Bots = @()
@@ -29,13 +32,6 @@ function Register-Streaming {
         /TR (New-BotCommand $Bot)
 }
 
-schtasks /Create /F /TN 'bananaland\week-clean' /SC WEEKLY /D MON `
-    /ST 06:00 /TR (New-BotCommand 'week-clean')
-
-# sort is a watch daemon (set SORT_WATCH=1 in .env): new images in
-# Downloads/_inbox sort instantly; the lock (REQ-RES-003) keeps any
-# manual one-shot run safe alongside it.
-Register-Streaming 'sort'
 Register-Streaming 'print'
 Register-Streaming 'catch'
 foreach ($bot in $Bots) { Register-Streaming $bot }

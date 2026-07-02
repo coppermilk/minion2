@@ -410,7 +410,7 @@ with doubles at the adapter boundary only.
 
 | Aspect | Windows | NAS (Docker) | Cloud |
 |--------|---------|--------------|-------|
-| Bots | sort (Downloads axis), print (SumatraPDF axis), catch | streaming + batch bots | kindle |
+| Bots | print (SumatraPDF axis), catch (Downloads watcher) | streaming bots, sort (watch daemon), week-clean | kindle |
 | `DRIVE` | `.env` (e.g. `C:\Users\a\My Drive`) | compose `DRIVE=/data` | Apps Script `Config.gs` |
 | Filesystem | Drive for Desktop (mapped) | `${DRIVE_NAS}` bind at `/data` | Drive API |
 | Launch | Task Scheduler, bare Python | `docker compose up -d` | Apps Script trigger |

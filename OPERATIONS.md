@@ -92,8 +92,9 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
   belongs to cron; the container runs `cron -f` foreground as the supervisor.
   An idle run exits fast -- sort returns before touching the cache or any
   adapter when there is nothing to place and nothing in `Unknown/` -- and
-  the per-bot lock makes overlap impossible. On Windows the scheduler is
-  Task Scheduler: `deploy/windows/register-tasks.ps1`.
+  the per-bot lock makes overlap impossible. The Windows machine runs only
+  print and catch, at logon via `deploy/windows/register-tasks.ps1`; every
+  other bot lives in Docker so each bot runs in exactly one place.
 - **Instant sorting** (`SORT_WATCH=1`): sort runs as a watch daemon -- one
   Folder dock per source dir triggers a locked pass run the moment a new
   stable image lands (~`POLL_SEC` latency; the write-stability guard keeps

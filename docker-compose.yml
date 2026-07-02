@@ -13,8 +13,10 @@
 # model run may take. Logs rotate so TELEMETRY on the host stays
 # bounded.
 #
-# catch is deliberately NOT a service here: its source is the
-# user's Windows Downloads folder (deploy/windows/), not /data.
+# print and catch are deliberately NOT services here: the printer
+# and the Downloads folder live on the Windows machine
+# (deploy/windows/). Each bot runs in exactly one place -- a second
+# print/ watcher would print every PDF twice.
 
 x-minion: &minion
   build:
@@ -92,12 +94,6 @@ services:
     command: python -m minions.restore.main
     mem_limit: 4g
     cpus: 2
-
-  print:
-    <<: *minion
-    command: python -m minions.print.main
-    mem_limit: 512m
-    cpus: 0.5
 
   # sort runs as a watch daemon: Downloads/_inbox sort instantly
   # (SORT_WATCH axis); it may load CLIP when there is work.

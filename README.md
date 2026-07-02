@@ -28,8 +28,10 @@ python -m minions.inbox.main
 ```
 
 Docker (NAS): set `DRIVE_NAS` in `.env`, then
-`docker compose up -d`. Batch bots (sort, week-clean) run under the
-foreground cron of the `batch` container.
+`docker compose up -d` -- Telegram bots, sort (watch daemon) and
+week-clean (cron in the `batch` container). Windows runs only print
+and catch via `deploy/windows/register-tasks.ps1`; each bot runs in
+exactly one place.
 
 ## The bots
 
