@@ -12,3 +12,4 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+deploy/windows/launcher-bootstrap.log

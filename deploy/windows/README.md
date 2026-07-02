@@ -25,8 +25,14 @@ Four steps:
    `deploy\windows\register-tasks.ps1`
    (print and catch at logon; extras only via `-Bots`, and only if
    you removed them from compose first).
-4. Verify: `schtasks /Query /TN bananaland\` and watch
-   `DRIVE\bots\_data\logs\<bot>.log`.
+4. Verify: `schtasks /Query /TN bananaland\` and watch the logs in
+   `DRIVE\bots\_data\logs\`:
+   - `<bot>.log` -- runtime events (every disposition with its
+     reason code, REQ-OBS-001);
+   - `<bot>.launcher.log` -- startup problems that happen before
+     the bot's own logger exists (a `bad_config` refusal, a missing
+     python, a runner error). If a task "silently does nothing",
+     the answer is here. Rolls to `.old.log` at ~10 MB.
 
 Idle cost is near zero by design: both bots sleep in folder waits,
 catch embeds an image at most once in its life (identity-keyed
