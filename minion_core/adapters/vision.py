@@ -68,14 +68,23 @@ class EmbeddingCache:
         self._file.unlink(missing_ok=True)
 
     def refresh(self, root: Path, embed: Embedder) -> dict[str, Vector]:
-        """Sync vectors with the fandom tree under ``root``."""
+        """Sync vectors with the fandom tree under ``root``.
+
+        An unchanged tree writes nothing: idle cron runs and
+        Drive-synced deployments cost zero rewrites.
+        """
         old = self._load()
         new: dict[str, Vector] = {}
+        computed = False
         for fandom, path in _tree(root, self._cap):
             key = f'{fandom}|{path.name}'
             known = old.get(key)
-            new[key] = known if known is not None else embed(path)
-        self._save(new)
+            if known is None:
+                known = embed(path)
+                computed = True
+            new[key] = known
+        if computed or new.keys() != old.keys():
+            self._save(new)
         return new
 
     def _load(self) -> dict[str, Vector]:

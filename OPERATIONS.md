@@ -70,13 +70,27 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
   `Unknown/` and clears the cache so Re-place matches the new layout, not
   ghosts of the old one. Skipping this is a silent-misplacement defect, not an
   optimization.
+- **Shared across containers**: every container mounts the same `/data`, so
+  there is exactly one `_embeddings.npz`. Writes are atomic (temp + replace),
+  a reader never sees a torn file, and `refresh` rebuilds its key set from
+  the live tree -- a stale cache cannot resurrect ghosts. Two concurrent
+  writers (sort's cron run and catch) degrade to last-writer-wins: the
+  loser's vectors are recomputed next run; never corruption. On Drive-synced
+  deployments a sync conflict copy may simply be deleted -- the cache is
+  CACHE-class data.
+- **No idle rewrites**: an unchanged tree writes nothing; the npz is only
+  rewritten when a vector was computed or the key set changed, so the
+  5-minute cron and Drive sync cost nothing while asleep.
 
 ## 5. Scheduling and liveness
 
 - **Batch bots** (sort, week-clean) are one-shot: scan, act, exit. Cadence
   belongs to cron; the container runs `cron -f` foreground as the supervisor.
-  An idle run exits fast, and the per-bot lock makes overlap impossible, so a
-  tight schedule (every 5 min) is cheap and safe.
+  An idle run exits fast -- sort returns before touching the cache or any
+  adapter when there is nothing to place and nothing in `Unknown/` -- and
+  the per-bot lock makes overlap impossible, so a tight schedule (every
+  5 min) is cheap and safe. On Windows the scheduler is Task Scheduler:
+  `deploy/windows/register-tasks.ps1` mirrors the cron cadence.
 - **Streaming bots** run 24/7 under `restart: unless-stopped`.
 - **Liveness definition**: the container is up AND the offset is advancing.
   A crash is a supervised restart; the restart is safe because STATE is on

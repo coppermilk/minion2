@@ -17,6 +17,7 @@ CHECKED_SUFFIXES = (
     '.txt',
     '.example',
     '.gs',
+    '.ps1',
 )
 
 SKIP_DIRS = {

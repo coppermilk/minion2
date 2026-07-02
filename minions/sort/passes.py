@@ -43,12 +43,27 @@ class SortDeps:
 
 
 def run_passes(cfg: Settings, deps: SortDeps) -> None:
-    """Name -> Place -> Demote -> Re-place, in that order."""
+    """Name -> Place -> Demote -> Re-place, in that order.
+
+    An idle run (nothing to place, nothing to re-place) exits
+    before touching the cache or any adapter (OPERATIONS 5): the
+    tight cron cadence costs nothing while asleep.
+    """
+    if _idle(cfg):
+        _LOG.info('idle: nothing to sort')
+        return
     cache = EmbeddingCache(cfg)
     name_pass(cfg, deps)
     place_pass(cfg, deps, cache)
     demote_pass(cfg, cache)  # invalidates the cache (REQ-SORT-001)
     replace_pass(cfg, deps, cache)
+
+
+def _idle(cfg: Settings) -> bool:
+    """Whether this run has no work at all."""
+    if _source_images(cfg):
+        return False
+    return not _images(cfg.pictures / UNKNOWN, cfg.max_embedding_scan)
 
 
 def _images(root: Path, cap: int) -> list[Path]:

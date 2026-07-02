@@ -103,6 +103,59 @@ def test_corrupt_cache_rebuilds_unattended(tmp_path: Path) -> None:
     assert list(got) == ['A|1.jpg']
 
 
+def test_unchanged_tree_writes_nothing(tmp_path: Path) -> None:
+    """Idle economy: an unchanged tree never rewrites the npz."""
+    cfg = make_cfg(tmp_path / 'drive')
+    _library(cfg, {'A': ['1.jpg']})
+    cache = EmbeddingCache(cfg)
+    embed = CountingEmbedder()
+    cache.refresh(cfg.pictures, embed)
+    npz = cfg.regen / '_embeddings.npz'
+    before = npz.stat()
+
+    again = cache.refresh(cfg.pictures, embed)
+    after = npz.stat()
+    assert list(again) == ['A|1.jpg']
+    assert embed.calls.count('1.jpg') == 1  # no recompute
+    assert (after.st_mtime_ns, after.st_ino) == (
+        before.st_mtime_ns,
+        before.st_ino,
+    )
+
+
+def test_two_processes_share_one_cache(tmp_path: Path) -> None:
+    """Containers on one mount interleave safely (OPERATIONS 4).
+
+    Two independent EmbeddingCache instances stand in for sort and
+    catch running in different containers against the same
+    ``regen/_embeddings.npz``: last-writer-wins is at worst a
+    recompute, and every refresh serves exactly the live tree.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    _library(cfg, {'A': ['1.jpg']})
+    sort_side = EmbeddingCache(cfg)
+    catch_side = EmbeddingCache(cfg)
+    embed = CountingEmbedder()
+
+    first = sort_side.refresh(cfg.pictures, embed)
+    assert list(first) == ['A|1.jpg']
+
+    # catch files a new image while sort is between runs
+    (cfg.pictures / 'B').mkdir()
+    (cfg.pictures / 'B' / '2.jpg').write_bytes(b'img')
+    second = catch_side.refresh(cfg.pictures, embed)
+    assert sorted(second) == ['A|1.jpg', 'B|2.jpg']
+    assert embed.calls.count('1.jpg') == 1  # reused, not recomputed
+
+    # sort demotes B mid-flight and invalidates; catch refreshes
+    # concurrently -- the rebuilt cache still mirrors the live tree
+    (cfg.pictures / 'B' / '2.jpg').unlink()
+    (cfg.pictures / 'B').rmdir()
+    sort_side.invalidate()
+    third = catch_side.refresh(cfg.pictures, embed)
+    assert list(third) == ['A|1.jpg']  # no ghosts, no crash
+
+
 def test_nearest_fandom_by_cosine() -> None:
     """The closest vector's fandom wins; empty library is None."""
     target = np.array([1.0, 0.0])

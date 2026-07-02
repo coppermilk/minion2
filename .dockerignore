@@ -1,0 +1,20 @@
+# Smaller build context: only what the image runs.
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.mypy_cache
+.pytest_cache
+.ruff_cache
+dist
+build
+tests
+deploy
+docker-compose.yml
+.env
+.env.example
+BLUEPRINT.md
+OPERATIONS.md

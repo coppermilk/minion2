@@ -98,6 +98,7 @@ def test_demote_invalidates_cache_before_replace(
     """REQ-SORT-001: the order is demote -> invalidate -> refresh."""
     cfg = make_cfg(tmp_path / 'drive')
     _seed_library(cfg)
+    _jpeg(cfg.inbox / 'incoming_cat.jpg')  # a non-idle run
     calls: list[str] = []
     monkeypatch.setattr(
         EmbeddingCache,
@@ -137,6 +138,18 @@ def test_full_run_end_to_end(tmp_path: Path) -> None:
     cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
     assert any('stray_cat' in n for n in cats)
     assert list(cfg.inbox.iterdir()) == []
+
+
+def test_idle_run_exits_fast_and_writes_nothing(tmp_path: Path) -> None:
+    """OPERATIONS 5: an idle run touches neither cache nor adapters."""
+    cfg = make_cfg(tmp_path / 'drive')
+    _seed_library(cfg)
+
+    def explode(path: Path) -> str:
+        raise AssertionError('idle run must not call adapters')
+
+    run_passes(cfg, SortDeps(namer=explode, embed=explode))
+    assert not (cfg.regen / '_embeddings.npz').exists()
 
 
 def test_source_dirs_axis(tmp_path: Path) -> None:
