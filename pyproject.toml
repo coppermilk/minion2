@@ -105,7 +105,10 @@ convention = 'pep257'
 [tool.mypy]
 strict = true
 packages = ['minion_core', 'minions']
-python_version = '3.11'
+# Waiver: the package floor is 3.11, but numpy >= 2.5 ships PEP 695
+# `type` statements in its stubs, which mypy only parses at a 3.12+
+# target. The code itself uses no post-3.11 syntax (ruff enforces).
+python_version = '3.12'
 
 [[tool.mypy.overrides]]
 # Waiver: untyped / optional vendors behind adapters; each is the sole
