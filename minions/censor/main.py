@@ -59,14 +59,17 @@ class HidePeople(Step):
         """Detect, hide, and optionally restore the background."""
         boxes = vision.person_boxes(job.src)
         if not boxes:
-            return Verdict(Disposition.SKIPPED, reason='no_person',
-                           reply='no people found')
+            return Verdict(
+                Disposition.SKIPPED,
+                reason='no_person',
+                reply='no people found',
+            )
         out = job.dest / f'{job.src.stem}_s1{job.src.suffix}'
-        hide_boxes(job.src, out,
-                   HideSpec(boxes=boxes, mode=self._cfg.censor_mode))
+        hide_boxes(
+            job.src, out, HideSpec(boxes=boxes, mode=self._cfg.censor_mode)
+        )
         final = self._maybe_restore(out)
-        return Verdict(Disposition.DELIVERED, result=final,
-                       reply='censored')
+        return Verdict(Disposition.DELIVERED, result=final, reply='censored')
 
     def _maybe_restore(self, hidden: Path) -> Path:
         if self._cfg.censor_mode != MODE_RESTORE:
@@ -78,17 +81,22 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the belt; secrets come from the passed mapping."""
     api = TgApi(env.get('TG_TOKEN', ''))
     spec = TgSpec(
-        spool=SpoolSpec(into=cfg.bot_dir(BOT),
-                        budget=functools.partial(free_quota, cfg)),
+        spool=SpoolSpec(
+            into=cfg.bot_dir(BOT), budget=functools.partial(free_quota, cfg)
+        ),
         dest=cfg.bot_dir(BOT),
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
         kinds=('photo', 'document'),
     )
     channel = TgChannel(api)
-    return (TgMedia(api, spec) >> HidePeople(cfg, llm.spec_from(env))
-            >> SendResult(channel) >> Reply(channel)
-            >> DisposeSource(spool_of))
+    return (
+        TgMedia(api, spec)
+        >> HidePeople(cfg, llm.spec_from(env))
+        >> SendResult(channel)
+        >> Reply(channel)
+        >> DisposeSource(spool_of)
+    )
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

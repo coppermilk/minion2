@@ -39,8 +39,9 @@ class Nop(Step):
 
 def build(cfg: Settings) -> Stage:
     """Assemble the belt: one source, one step, sinks last."""
-    spec = FolderSpec(root=cfg.inbox, dest=cfg.inbox,
-                      exts=('.txt',), poll_sec=cfg.poll_sec)
+    spec = FolderSpec(
+        root=cfg.inbox, dest=cfg.inbox, exts=('.txt',), poll_sec=cfg.poll_sec
+    )
     seen = SeenPaths(cfg.seen_paths_max)
     return Folder(spec, seen) >> Nop()
 

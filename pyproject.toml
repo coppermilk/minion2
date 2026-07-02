@@ -95,10 +95,11 @@ convention = 'pep257'
 [tool.ruff.lint.per-file-ignores]
 # Sanctioned lazy vendor loads (BLUEPRINT 4, Power-of-10 rule 8).
 'minion_core/adapters/*' = ['PLC0415']
-# Tests: assert is the medium; magic values are fixtures; docstring
-# ceremony and packaging rules do not apply to CT-E tooling.
+# Tests: assert is the medium; magic values are fixtures; doubles
+# carry unused hook arguments; docstring ceremony, import-placement
+# and packaging rules do not apply to CT-E tooling.
 'tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
-             'PLC0415']
+             'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]

@@ -124,6 +124,7 @@ class Settings:
 
 def load(env: Mapping[str, str]) -> Settings:
     """Build Settings from a mapping; coerce one line per field."""
+
     def get(key: str) -> str:
         return env.get(key, _DEFAULTS.get(key, ''))
 

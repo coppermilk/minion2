@@ -44,8 +44,13 @@ YTDLP = 'yt-dlp'
 CHUNK = 64 * 1024
 """Direct-transfer streaming chunk size."""
 
-_YOUTUBE_HOSTS = ('youtube.com', 'www.youtube.com', 'youtu.be',
-                  'm.youtube.com', 'music.youtube.com')
+_YOUTUBE_HOSTS = (
+    'youtube.com',
+    'www.youtube.com',
+    'youtu.be',
+    'm.youtube.com',
+    'music.youtube.com',
+)
 
 
 class Blocked(Exception):
@@ -113,11 +118,16 @@ def _argv(url: str, into: Path, cfg: Settings) -> list[str]:
         YTDLP,
         '--no-playlist',
         '--no-simulate',
-        '--print', 'after_move:filepath',
-        '-f', cfg.ytdlp_format,
-        '--merge-output-format', cfg.ytdlp_container,
-        '-P', str(into),
-        '-o', '%(title).80s.%(ext)s',
+        '--print',
+        'after_move:filepath',
+        '-f',
+        cfg.ytdlp_format,
+        '--merge-output-format',
+        cfg.ytdlp_container,
+        '-P',
+        str(into),
+        '-o',
+        '%(title).80s.%(ext)s',
     ]
     if _is_youtube(url):
         clients = ','.join(cfg.ytdlp_player_clients)
@@ -160,8 +170,7 @@ class _Readable(Protocol):
         """Return up to ``n`` bytes; empty means done."""
 
 
-def _pull(resp: _Readable, writer: BudgetWriter,
-          deadline: float) -> None:
+def _pull(resp: _Readable, writer: BudgetWriter, deadline: float) -> None:
     """Copy chunks under the wall-time bound (REQ-RES-001)."""
     while True:
         if monotonic() > deadline:
@@ -187,7 +196,12 @@ class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
         """Check the new destination before following it."""
         guard(newurl)
         return super().redirect_request(
-            req, fp, code, msg, headers, newurl,
+            req,
+            fp,
+            code,
+            msg,
+            headers,
+            newurl,
         )
 
 
@@ -199,8 +213,13 @@ _FAILURES: tuple[tuple[type[BaseException], Disposition, str], ...] = (
     (FetchFailed, Disposition.FAILED, 'stale_extractor'),
 )
 
-_CAUGHT = (Blocked, QuotaExceeded, subprocess.TimeoutExpired,
-           TimeoutError, FetchFailed)
+_CAUGHT = (
+    Blocked,
+    QuotaExceeded,
+    subprocess.TimeoutExpired,
+    TimeoutError,
+    FetchFailed,
+)
 
 
 class FetchLink(Step):
@@ -222,8 +241,11 @@ class FetchLink(Step):
             got = download(url, job.dest, self._cfg)
         except _CAUGHT as exc:
             return _failure(exc)
-        return Verdict(Disposition.DELIVERED, result=got,
-                       reply=f'fetched {sanitize(got.name)}')
+        return Verdict(
+            Disposition.DELIVERED,
+            result=got,
+            reply=f'fetched {sanitize(got.name)}',
+        )
 
 
 def _failure(exc: BaseException) -> Verdict:

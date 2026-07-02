@@ -28,8 +28,11 @@ BOT = 'week-clean'
 
 def _strip_tags(cfg: Settings, log: logging.Logger) -> None:
     """Remove the weekly tag across the library, scan capped."""
-    tagged = (p for p in sorted(cfg.pictures.rglob('*'))
-              if p.suffix.lower() in IMAGE_EXTS)
+    tagged = (
+        p
+        for p in sorted(cfg.pictures.rglob('*'))
+        if p.suffix.lower() in IMAGE_EXTS
+    )
     for path in itertools.islice(tagged, cfg.max_embedding_scan):
         if has_week(path, cfg.week_tag):
             strip_week(path, cfg.week_tag)

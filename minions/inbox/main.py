@@ -38,15 +38,20 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the belt; secrets come from the passed mapping."""
     api = TgApi(env.get('TG_TOKEN', ''))
     spec = TgSpec(
-        spool=SpoolSpec(into=cfg.bot_dir(BOT),
-                        budget=functools.partial(free_quota, cfg)),
+        spool=SpoolSpec(
+            into=cfg.bot_dir(BOT), budget=functools.partial(free_quota, cfg)
+        ),
         dest=cfg.inbox,
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
     )
     channel = TgChannel(api)
-    return (TgMedia(api, spec) >> Deliver()
-            >> Reply(channel) >> DisposeSource(spool_of))
+    return (
+        TgMedia(api, spec)
+        >> Deliver()
+        >> Reply(channel)
+        >> DisposeSource(spool_of)
+    )
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

@@ -1,0 +1,132 @@
+"""tg adapter tests: REQ-DATA-003, REQ-DEG-001, allow-list."""
+
+from __future__ import annotations
+
+import functools
+from typing import TYPE_CHECKING
+from typing import Any
+
+from minion_core.adapters.files import free_quota
+from minion_core.adapters.tg import OffsetStore
+from minion_core.adapters.tg import SpoolSpec
+from minion_core.adapters.tg import TgApi
+from minion_core.adapters.tg import TgChannel
+from minion_core.adapters.tg import TgLinks
+from minion_core.adapters.tg import TgSpec
+from minion_core.adapters.tg import chats_from
+from minion_core.adapters.tg import spool_of
+from minion_core.kernel import Origin
+from tests.conftest import make_cfg
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from minion_core.settings import Settings
+
+
+def test_offset_round_trip(tmp_path: Path) -> None:
+    """REQ-DATA-003: the offset persists across restart."""
+    store = OffsetStore(tmp_path / 'state' / 'bot.offset')
+    assert store.read() == 0
+    store.write(4242)
+    reborn = OffsetStore(tmp_path / 'state' / 'bot.offset')
+    assert reborn.read() == 4242
+
+
+def test_corrupt_offset_is_loud_then_replays(tmp_path: Path) -> None:
+    """offset_lost: corrupt state reads as 0 (replay), never crash."""
+    path = tmp_path / 'bot.offset'
+    path.write_text('garbage', encoding='ascii')
+    assert OffsetStore(path).read() == 0
+
+
+def _spec(cfg: Settings, chats: tuple[str, ...]) -> TgSpec:
+    return TgSpec(
+        spool=SpoolSpec(
+            into=cfg.bot_dir('t'), budget=functools.partial(free_quota, cfg)
+        ),
+        dest=cfg.inbox,
+        offset=cfg.state / 't.offset',
+        chats=chats,
+    )
+
+
+def test_tokenless_source_ends_immediately(tmp_path: Path) -> None:
+    """REQ-DEG-001: no token -> the dock ends; the belt lives on."""
+    cfg = make_cfg(tmp_path / 'drive')
+    source = TgLinks(TgApi(''), _spec(cfg, ('1',)))
+    assert list(source(iter(()))) == []
+
+
+def test_tokenless_channel_is_a_noop(tmp_path: Path) -> None:
+    """REQ-DEG-001: replies vanish silently without a token."""
+    channel = TgChannel(TgApi(''))
+    origin = Origin('tg', '1:2:/spool/x')
+    channel.send_text(origin, 'hello')  # must not raise, must not call
+    channel.send_file(origin, tmp_path / 'x.bin')
+
+
+class _ScriptedApi(TgApi):
+    """API double: one batch of updates, then stop the source."""
+
+    def __init__(self, updates: list[dict[str, Any]]) -> None:
+        super().__init__(token='test-token')  # noqa: S106 -- double, not a secret
+        self._updates = updates
+        self.offsets_asked: list[int] = []
+        self.owner: TgLinks | None = None
+
+    def call(self, method: str, params: dict[str, Any]) -> Any:
+        assert method == 'getUpdates'
+        self.offsets_asked.append(params['offset'])
+        if self.owner is not None:
+            self.owner.stop()
+        batch, self._updates = self._updates, []
+        return batch
+
+
+def _msg(chat: int, text: str) -> dict[str, Any]:
+    return {
+        'update_id': 7,
+        'message': {'chat': {'id': chat}, 'message_id': 9, 'text': text},
+    }
+
+
+def test_links_source_spools_and_advances_offset(
+    tmp_path: Path,
+) -> None:
+    """A link message becomes a .url spool; the offset advances."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _ScriptedApi([_msg(1, 'grab https://example.com/v.mp4')])
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    api.owner = source
+    out = list(source(iter(())))
+    assert len(out) == 1
+    job = out[0].job
+    assert job.src.suffix == '.url'
+    assert job.src.read_text(encoding='ascii').startswith('https://')
+    assert OffsetStore(cfg.state / 't.offset').read() == 8
+    assert spool_of(job.origin) == job.src
+
+
+def test_disallowed_chat_is_dropped(tmp_path: Path) -> None:
+    """The allow-list is the primary control (OPERATIONS 3)."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _ScriptedApi([_msg(666, 'https://example.com/x')])
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    api.owner = source
+    assert list(source(iter(()))) == []
+
+
+def test_chats_from_parses_csv() -> None:
+    """TG_CHATS is a comma-separated allow-list."""
+    assert chats_from({'TG_CHATS': ' 1, 22 ,'}) == ('1', '22')
+    assert chats_from({}) == ()
+
+
+def test_spool_of_survives_windows_paths() -> None:
+    """The third ref field may itself contain colons."""
+    origin = Origin('tg', r'5:6:C:\Users\a\My Drive\bots\x.jpg')
+    got = spool_of(origin)
+    assert got is not None
+    assert str(got).endswith('x.jpg')
+    assert spool_of(Origin('tg', '5:6')) is None

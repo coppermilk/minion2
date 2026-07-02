@@ -34,8 +34,15 @@ class FrameSpec:
 
 def probe(path: Path, timeout_sec: int) -> float:
     """Duration in seconds, via ffprobe."""
-    argv = [FFPROBE, '-v', 'error', '-print_format', 'json',
-            '-show_format', str(path)]
+    argv = [
+        FFPROBE,
+        '-v',
+        'error',
+        '-print_format',
+        'json',
+        '-show_format',
+        str(path),
+    ]
     out = _run(argv, timeout_sec)
     try:
         return float(json.loads(out)['format']['duration'])
@@ -47,8 +54,17 @@ def frames(src: Path, out: Path, spec: FrameSpec) -> list[Path]:
     """Extract every ``stride``-th frame into ``out`` as JPEGs."""
     out.mkdir(parents=True, exist_ok=True)
     select = f'select=not(mod(n\\,{spec.stride}))'
-    argv = [FFMPEG, '-y', '-i', str(src), '-vf', select,
-            '-vsync', 'vfr', str(out / 'frame_%04d.jpg')]
+    argv = [
+        FFMPEG,
+        '-y',
+        '-i',
+        str(src),
+        '-vf',
+        select,
+        '-vsync',
+        'vfr',
+        str(out / 'frame_%04d.jpg'),
+    ]
     _run(argv, spec.timeout_sec)
     return sorted(out.glob('frame_*.jpg'))
 

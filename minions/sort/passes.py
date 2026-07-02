@@ -55,8 +55,9 @@ def _images(root: Path, cap: int) -> list[Path]:
     """Images directly under ``root``, scan capped (bounded)."""
     if not root.is_dir():
         return []
-    found = (p for p in sorted(root.iterdir())
-             if p.suffix.lower() in IMAGE_EXTS)
+    found = (
+        p for p in sorted(root.iterdir()) if p.suffix.lower() in IMAGE_EXTS
+    )
     return list(itertools.islice(found, cap))
 
 
@@ -78,8 +79,7 @@ def name_pass(cfg: Settings, deps: SortDeps) -> None:
         move_atomic(path, next_free_path(path.with_name(named)))
 
 
-def place_pass(cfg: Settings, deps: SortDeps,
-               cache: EmbeddingCache) -> None:
+def place_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
     """Pass 2: nearest fandom decides the folder."""
     library = cache.refresh(cfg.pictures, deps.embed)
     for path in _source_images(cfg):
@@ -108,8 +108,7 @@ def demote_pass(cfg: Settings, cache: EmbeddingCache) -> None:
             unknown = cfg.pictures / UNKNOWN / path.name
             move_atomic(path, next_free_path(unknown))
         fandom_dir.rmdir()
-        _LOG.info('demoted fandom=%s count=%d', fandom_dir.name,
-                  len(members))
+        _LOG.info('demoted fandom=%s count=%d', fandom_dir.name, len(members))
     cache.invalidate()  # REQ-SORT-001: before Re-place
 
 
@@ -117,18 +116,19 @@ def _fandoms(pictures: Path) -> list[Path]:
     """Every fandom directory except Unknown."""
     if not pictures.is_dir():
         return []
-    return [p for p in sorted(pictures.iterdir())
-            if p.is_dir() and p.name != UNKNOWN]
+    return [
+        p
+        for p in sorted(pictures.iterdir())
+        if p.is_dir() and p.name != UNKNOWN
+    ]
 
 
-def replace_pass(cfg: Settings, deps: SortDeps,
-                 cache: EmbeddingCache) -> None:
+def replace_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
     """Pass 4: re-run placement against the new layout."""
     library = cache.refresh(cfg.pictures, deps.embed)
     if not library:
         return
-    for path in _images(cfg.pictures / UNKNOWN,
-                        cfg.max_embedding_scan):
+    for path in _images(cfg.pictures / UNKNOWN, cfg.max_embedding_scan):
         fandom = nearest_fandom(deps.embed(path), library)
         if fandom is None:
             continue

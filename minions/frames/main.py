@@ -59,8 +59,9 @@ class ExtractFrames(Step):
             return Verdict(Disposition.FAILED, reason='probe_failed')
         if not shots:
             return Verdict(Disposition.FAILED, reason='probe_failed')
-        return Verdict(Disposition.DELIVERED, result=out,
-                       reply=f'{len(shots)} frames')
+        return Verdict(
+            Disposition.DELIVERED, result=out, reply=f'{len(shots)} frames'
+        )
 
 
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
@@ -71,17 +72,23 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """
     api = TgApi(env.get('TG_TOKEN', ''))
     spec = TgSpec(
-        spool=SpoolSpec(into=cfg.bot_dir(BOT),
-                        budget=functools.partial(free_quota, cfg)),
+        spool=SpoolSpec(
+            into=cfg.bot_dir(BOT), budget=functools.partial(free_quota, cfg)
+        ),
         dest=cfg.bot_dir(BOT),
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
         kinds=('video', 'document'),
     )
     channel = TgChannel(api)
-    return (TgAny(api, spec) >> FetchLink(cfg) >> ExtractFrames(cfg)
-            >> SendResult(channel) >> Reply(channel)
-            >> DisposeSource(spool_of))
+    return (
+        TgAny(api, spec)
+        >> FetchLink(cfg)
+        >> ExtractFrames(cfg)
+        >> SendResult(channel)
+        >> Reply(channel)
+        >> DisposeSource(spool_of)
+    )
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

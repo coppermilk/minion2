@@ -254,7 +254,8 @@ class Step(Stage):
             return self.process(job)
         except Exception:
             logging.getLogger(type(self).__name__).exception(
-                'step_crashed src=%s', job.src,
+                'step_crashed src=%s',
+                job.src,
             )
             return Verdict(Disposition.FAILED, reason='step_crashed')
 
@@ -291,7 +292,8 @@ class Sink(Stage):
             self.handle(env)
         except Exception:
             logging.getLogger(type(self).__name__).exception(
-                'sink_crashed src=%s', env.job.src,
+                'sink_crashed src=%s',
+                env.job.src,
             )
 
 
@@ -523,8 +525,11 @@ def _log_env(log: logging.Logger, env: Envelope) -> None:
     if verdict is None:
         return
     if verdict.disposition is Disposition.DELIVERED:
-        log.info('delivered src=%s result=%s', env.job.src,
-                 verdict.result)
+        log.info('delivered src=%s result=%s', env.job.src, verdict.result)
         return
-    log.warning('%s reason=%s src=%s', verdict.disposition.value,
-                verdict.reason, env.job.src)
+    log.warning(
+        '%s reason=%s src=%s',
+        verdict.disposition.value,
+        verdict.reason,
+        env.job.src,
+    )

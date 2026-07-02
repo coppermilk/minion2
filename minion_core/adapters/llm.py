@@ -37,21 +37,21 @@ def spec_from(env: Mapping[str, str]) -> LlmSpec:
     return LlmSpec(
         key=env.get('GEMINI_API_KEY', ''),
         name_model=env.get('LLM_NAME_MODEL', 'gemini-2.5-flash'),
-        image_model=env.get('LLM_IMAGE_MODEL',
-                            'gemini-2.5-flash-image'),
+        image_model=env.get('LLM_IMAGE_MODEL', 'gemini-2.5-flash-image'),
     )
 
 
 def _client(spec: LlmSpec) -> Any:  # noqa: ANN401 -- vendor client handle
     from google import genai
+
     return genai.Client(api_key=spec.key)
 
 
 def _image_part(path: Path) -> Any:  # noqa: ANN401 -- vendor part handle
     from google.genai import types
+
     mime = 'image/png' if path.suffix.lower() == '.png' else 'image/jpeg'
-    return types.Part.from_bytes(data=path.read_bytes(),
-                                 mime_type=mime)
+    return types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)
 
 
 def name_image(path: Path, spec: LlmSpec) -> str:
@@ -70,8 +70,7 @@ def restore_background(path: Path, spec: LlmSpec) -> Path:
     """Repaint hidden regions; writes the ``_s2`` sibling file."""
     response = _client(spec).models.generate_content(
         model=spec.image_model,
-        contents=[load_prompt('restore_background'),
-                  _image_part(path)],
+        contents=[load_prompt('restore_background'), _image_part(path)],
     )
     data = _first_image(response)
     out = path.with_stem(path.stem.removesuffix('_s1') + '_s2')

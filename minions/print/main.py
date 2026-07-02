@@ -50,23 +50,28 @@ class PrintPdf(Step):
                 check=False,
             )
         except FileNotFoundError:
-            return Verdict(Disposition.FAILED,
-                           reason='printer_missing')
+            return Verdict(Disposition.FAILED, reason='printer_missing')
         except subprocess.TimeoutExpired:
             return Verdict(Disposition.FAILED, reason='print_timeout')
         if proc.returncode != 0:
             return Verdict(Disposition.FAILED, reason='print_failed')
-        return Verdict(Disposition.DELIVERED, result=job.src,
-                       reply=f'printed {job.src.name}')
+        return Verdict(
+            Disposition.DELIVERED,
+            result=job.src,
+            reply=f'printed {job.src.name}',
+        )
 
 
 def build(cfg: Settings) -> Stage:
     """Assemble the belt: watch the queue, print, archive."""
-    spec = FolderSpec(root=cfg.print_queue, dest=cfg.print_done,
-                      exts=('.pdf',), poll_sec=cfg.poll_sec)
+    spec = FolderSpec(
+        root=cfg.print_queue,
+        dest=cfg.print_done,
+        exts=('.pdf',),
+        poll_sec=cfg.poll_sec,
+    )
     seen = SeenPaths(cfg.seen_paths_max)
-    return (Folder(spec, seen) >> PrintPdf()
-            >> ArchiveTo(cfg.print_done))
+    return Folder(spec, seen) >> PrintPdf() >> ArchiveTo(cfg.print_done)
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

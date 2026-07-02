@@ -194,6 +194,7 @@ def hide_boxes(src: Path, out: Path, spec: HideSpec) -> Path:
     from PIL import Image
     from PIL import ImageDraw
     from PIL import ImageFilter
+
     with Image.open(src) as opened:
         img = opened.convert('RGB')
     for box in spec.boxes:
@@ -217,6 +218,7 @@ def load_rgb(path: Path) -> Any:  # noqa: ANN401 -- opaque vendor handle
     the handle opaquely.
     """
     from PIL import Image
+
     with Image.open(path) as img:
         return img.convert('RGB')
 
@@ -224,6 +226,7 @@ def load_rgb(path: Path) -> Any:  # noqa: ANN401 -- opaque vendor handle
 def valid_image(path: Path) -> bool:
     """Validate untrusted image bytes explicitly (BLUEPRINT 4)."""
     from PIL import Image
+
     try:
         with Image.open(path) as img:
             img.verify()
@@ -235,6 +238,7 @@ def valid_image(path: Path) -> bool:
 def tag_week(path: Path, tag: str) -> None:
     """Write the weekly EXIF tag into a JPEG (no-op otherwise)."""
     import piexif
+
     if path.suffix.lower() not in _JPEG:
         return
     exif = piexif.load(str(path))
@@ -246,6 +250,7 @@ def tag_week(path: Path, tag: str) -> None:
 def has_week(path: Path, tag: str) -> bool:
     """Whether the JPEG carries the weekly tag."""
     import piexif
+
     if path.suffix.lower() not in _JPEG:
         return False
     exif = piexif.load(str(path))
@@ -256,6 +261,7 @@ def has_week(path: Path, tag: str) -> bool:
 def strip_week(path: Path, tag: str) -> None:
     """Remove the weekly EXIF tag if present."""
     import piexif
+
     if not has_week(path, tag):
         return
     exif = piexif.load(str(path))
@@ -274,5 +280,6 @@ class Deliver(Step):
         name = stem(job.stem, job.origin.source) + job.src.suffix.lower()
         target = next_free_path(job.dest / name)
         moved = move_atomic(job.src, target)
-        return Verdict(Disposition.DELIVERED, result=moved,
-                       reply=f'saved {moved.name}')
+        return Verdict(
+            Disposition.DELIVERED, result=moved, reply=f'saved {moved.name}'
+        )

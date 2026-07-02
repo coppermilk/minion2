@@ -64,6 +64,7 @@ class TgApi:
     def call(self, method: str, params: dict[str, Any]) -> Any:  # noqa: ANN401 -- Bot API returns free-form JSON
         """POST one Bot API method; raise TgError on refusal."""
         import requests
+
         url = f'{self.base}/bot{self.token}/{method}'
         resp = requests.post(url, json=params, timeout=API_TIMEOUT_SEC)
         body = resp.json()
@@ -74,13 +75,13 @@ class TgApi:
     def download(self, file_id: str, spool: SpoolSpec) -> Path:
         """Stream a file by id into the spool, budget-bounded."""
         import requests
+
         meta = self.call('getFile', {'file_id': file_id})
         remote = meta['file_path']
         name = sanitize(remote.rsplit('/', 1)[-1])
         target = next_free_path(spool.into / name)
         url = f'{self.base}/file/bot{self.token}/{remote}'
-        with requests.get(url, stream=True,
-                          timeout=API_TIMEOUT_SEC) as resp:
+        with requests.get(url, stream=True, timeout=API_TIMEOUT_SEC) as resp:
             resp.raise_for_status()
             chunks = resp.iter_content(CHUNK)
             return _spool(chunks, target, spool.budget())
@@ -98,8 +99,7 @@ class SpoolSpec:
     budget: Callable[[], int]
 
 
-def _spool(chunks: Iterator[bytes], target: Path,
-           budget: int) -> Path:
+def _spool(chunks: Iterator[bytes], target: Path, budget: int) -> Path:
     """Write a chunk stream under a byte budget (REQ-RES-002)."""
     writer = BudgetWriter(target, budget)
     try:
@@ -146,14 +146,14 @@ class TgChannel:
         """Reply toward the origin chat; no-op when tokenless."""
         if not self._api.live or ':' not in origin.ref:
             return
-        self._api.call('sendMessage',
-                       {'chat_id': _chat(origin), 'text': text})
+        self._api.call('sendMessage', {'chat_id': _chat(origin), 'text': text})
 
     def send_file(self, origin: Origin, path: Path) -> None:
         """Upload a document toward the origin chat."""
         if not self._api.live or ':' not in origin.ref:
             return
         import requests
+
         url = f'{self._api.base}/bot{self._api.token}/sendDocument'
         with path.open('rb') as fh:
             resp = requests.post(
@@ -235,8 +235,7 @@ class _TgSource(Source):
             return
         chat = str(msg['chat']['id'])
         if chat not in self.spec.chats:
-            _LOG.warning('rejected reason=chat_not_allowed chat=%s',
-                         chat)
+            _LOG.warning('rejected reason=chat_not_allowed chat=%s', chat)
             return
         self.accept(msg, emit)
 
@@ -247,8 +246,12 @@ class _TgSource(Source):
     def emit_spooled(self, spooled: Path, ctx: MsgCtx) -> None:
         """Emit a job addressed to the chat, disposing the spool."""
         ref = f'{_ref(ctx.msg)}:{spooled}'
-        job = Job(src=spooled, dest=self.spec.dest,
-                  stem=spooled.stem, origin=Origin('tg', ref))
+        job = Job(
+            src=spooled,
+            dest=self.spec.dest,
+            stem=spooled.stem,
+            origin=Origin('tg', ref),
+        )
         ctx.emit(Envelope(job))
 
 
@@ -296,8 +299,7 @@ class TgMedia(_TgSource):
         _accept_media(self, MsgCtx(msg, emit))
 
 
-def _file_id(msg: dict[str, Any],
-             kinds: tuple[str, ...]) -> str | None:
+def _file_id(msg: dict[str, Any], kinds: tuple[str, ...]) -> str | None:
     """The largest matching payload's file id, if any."""
     if 'photo' in kinds and msg.get('photo'):
         best = max(msg['photo'], key=lambda p: p.get('file_size', 0))

@@ -84,8 +84,7 @@ class EmbeddingCache:
 
     def _save(self, vectors: dict[str, Vector]) -> None:
         self._file.parent.mkdir(parents=True, exist_ok=True)
-        fd, raw = tempfile.mkstemp(dir=self._file.parent,
-                                   suffix='.part')
+        fd, raw = tempfile.mkstemp(dir=self._file.parent, suffix='.part')
         tmp = Path(raw)
         try:
             with os.fdopen(fd, 'wb') as fh:
@@ -99,20 +98,23 @@ class EmbeddingCache:
 
 def _tree(root: Path, cap: int) -> Iterator[tuple[str, Path]]:
     """Yield ``(fandom, image)`` pairs, scan capped (bounded)."""
-    pairs = ((d.name, p) for d in _fandom_dirs(root)
-             for p in sorted(d.iterdir())
-             if p.suffix.lower() in IMAGE_EXTS)
+    pairs = (
+        (d.name, p)
+        for d in _fandom_dirs(root)
+        for p in sorted(d.iterdir())
+        if p.suffix.lower() in IMAGE_EXTS
+    )
     yield from itertools.islice(pairs, cap)
 
 
 def _fandom_dirs(root: Path) -> list[Path]:
     """Every fandom directory except Unknown."""
-    return sorted(p for p in root.iterdir()
-                  if p.is_dir() and p.name != UNKNOWN)
+    return sorted(
+        p for p in root.iterdir() if p.is_dir() and p.name != UNKNOWN
+    )
 
 
-def nearest_fandom(vec: Vector,
-                   library: dict[str, Vector]) -> str | None:
+def nearest_fandom(vec: Vector, library: dict[str, Vector]) -> str | None:
     """The fandom of the most similar library vector (cosine)."""
     best_key: str | None = None
     best_sim = -2.0
@@ -136,14 +138,18 @@ def _clip() -> tuple[Any, Any]:
     """Load CLIP once; weights persist in CACHE via TORCH_HOME."""
     from transformers import CLIPModel
     from transformers import CLIPProcessor
+
     name = 'openai/clip-vit-base-patch32'
-    return (CLIPModel.from_pretrained(name),
-            CLIPProcessor.from_pretrained(name))
+    return (
+        CLIPModel.from_pretrained(name),
+        CLIPProcessor.from_pretrained(name),
+    )
 
 
 def embed_image(path: Path) -> Vector:
     """CLIP image embedding (lazy torch + transformers load)."""
     import torch
+
     model, processor = _clip()
     batch = processor(images=load_rgb(path), return_tensors='pt')
     with torch.no_grad():
@@ -157,6 +163,7 @@ def person_boxes(path: Path) -> tuple[Box, ...]:
     import torch
     from torchvision.models import detection
     from torchvision.transforms import functional as tvf
+
     model = _detector(detection)
     tensor = tvf.to_tensor(load_rgb(path))
     with torch.no_grad():
@@ -174,8 +181,9 @@ def _detector(detection: Any) -> Any:  # noqa: ANN401 -- vendor module handle
 def _to_boxes(found: dict[str, Any]) -> tuple[Box, ...]:
     """Keep confident person detections only."""
     boxes: list[Box] = []
-    for label, score, box in zip(found['labels'], found['scores'],
-                                 found['boxes'], strict=True):
+    for label, score, box in zip(
+        found['labels'], found['scores'], found['boxes'], strict=True
+    ):
         if int(label) != 1 or float(score) < PERSON_SCORE_MIN:
             continue
         x0, y0, x1, y1 = (int(v) for v in box)
@@ -188,11 +196,11 @@ def face_boxes(path: Path) -> tuple[Box, ...]:
     found, _ = _mtcnn().detect(load_rgb(path))
     if found is None:
         return ()
-    return tuple((int(a), int(b), int(c), int(d))
-                 for a, b, c, d in found)
+    return tuple((int(a), int(b), int(c), int(d)) for a, b, c, d in found)
 
 
 @functools.lru_cache(maxsize=1)
 def _mtcnn() -> Any:  # noqa: ANN401 -- vendor model handle
     from facenet_pytorch import MTCNN
+
     return MTCNN(keep_all=True)
