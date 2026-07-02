@@ -123,6 +123,29 @@ def test_chats_from_parses_csv() -> None:
     assert chats_from({}) == ()
 
 
+def test_two_whitelisted_users_served_without_crosstalk(
+    tmp_path: Path,
+) -> None:
+    """One shared allow-list serves every listed chat concurrently.
+
+    Each job's origin ref carries its own chat id, so replies and
+    results always route back to the chat the message came from.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _ScriptedApi(
+        [
+            _msg(1, 'https://example.com/a.mp4'),
+            _msg(22, 'https://example.com/b.mp4'),
+        ]
+    )
+    source = TgLinks(api, _spec(cfg, ('1', '22')))
+    api.owner = source
+    out = list(source(iter(())))
+    assert len(out) == 2
+    chats = [env.job.origin.ref.split(':', 1)[0] for env in out]
+    assert chats == ['1', '22']  # each reply routes to its own chat
+
+
 def test_spool_of_survives_windows_paths() -> None:
     """The third ref field may itself contain colons."""
     origin = Origin('tg', r'5:6:C:\Users\a\My Drive\bots\x.jpg')
