@@ -38,6 +38,7 @@ from minion_core.settings import load
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
     from minion_core.kernel import Job
     from minion_core.kernel import Stage
@@ -48,28 +49,57 @@ BOT = 'frames'
 VIDEO_EXTS = ('.mp4', '.mkv', '.webm', '.mov', '.avi')
 """Video suffixes the watch dock accepts."""
 
+STRIDE = 5
+"""Every 5th source frame -- an invariant, deliberately not a knob
+(the timecoded file names below encode this step)."""
+
+
+def _timecode(total_sec: int, frame_no: int) -> str:
+    """``[hour-]minute-second-frame``: 1-05-325 or 1-1-05-198000.
+
+    The hour field appears only for videos longer than an hour; the
+    trailing number is the source frame index (a multiple of 5).
+    """
+    hours, rest = divmod(total_sec, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f'{hours}-{minutes}-{seconds:02d}-{frame_no}'
+    return f'{minutes}-{seconds:02d}-{frame_no}'
+
+
+def _stamp(shots: list[Path], fps: float) -> list[Path]:
+    """Rename ffmpeg's sequence to timecoded names."""
+    named = []
+    for k, shot in enumerate(shots):
+        frame_no = k * STRIDE
+        code = _timecode(int(frame_no / fps), frame_no)
+        named.append(shot.rename(shot.with_name(f'{code}.jpg')))
+    return named
+
 
 class ExtractFrames(Step):
-    """The bot's one transformation: video -> frame directory."""
+    """The bot's one transformation: video -> timecoded frames."""
 
     def __init__(self, cfg: Settings) -> None:
         self._cfg = cfg
 
     def process(self, job: Job) -> Verdict:
-        """Extract every ``frame_stride``-th frame."""
+        """Extract every 5th frame; name each by its timecode."""
         out = job.dest / f'{job.src.stem}_frames'
         spec = video.FrameSpec(
-            stride=self._cfg.frame_stride,
+            stride=STRIDE,
             timeout_sec=self._cfg.download_timeout_sec,
         )
         try:
+            fps = video.probe_fps(job.src, spec.timeout_sec)
             shots = video.frames(job.src, out, spec)
         except video.ProbeError:
             return Verdict(Disposition.FAILED, reason='probe_failed')
         if not shots:
             return Verdict(Disposition.FAILED, reason='probe_failed')
+        named = _stamp(shots, fps)
         return Verdict(
-            Disposition.DELIVERED, result=out, reply=f'{len(shots)} frames'
+            Disposition.DELIVERED, result=out, reply=f'{len(named)} frames'
         )
 
 

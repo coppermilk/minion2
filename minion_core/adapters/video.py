@@ -50,6 +50,32 @@ def probe(path: Path, timeout_sec: int) -> float:
         raise ProbeError(f'probe_failed: {path.name}') from exc
 
 
+def probe_fps(path: Path, timeout_sec: int) -> float:
+    """Frames per second of the first video stream, via ffprobe."""
+    argv = [
+        FFPROBE,
+        '-v',
+        'error',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'stream=r_frame_rate',
+        '-print_format',
+        'json',
+        str(path),
+    ]
+    out = _run(argv, timeout_sec)
+    try:
+        rate = json.loads(out)['streams'][0]['r_frame_rate']
+        num, _, den = str(rate).partition('/')
+        fps = float(num) / float(den or 1)
+    except (KeyError, IndexError, ValueError, ZeroDivisionError) as exc:
+        raise ProbeError(f'probe_failed: {path.name}') from exc
+    if fps <= 0:
+        raise ProbeError(f'probe_failed: {path.name}')
+    return fps
+
+
 def frames(src: Path, out: Path, spec: FrameSpec) -> list[Path]:
     """Extract every ``stride``-th frame into ``out`` as JPEGs."""
     out.mkdir(parents=True, exist_ok=True)

@@ -256,7 +256,6 @@ class Settings:
     quota_bytes: int
     max_embedding_scan: int
     seen_paths_max: int
-    frame_stride: int
     demote_min_count: int
     ytdlp_format: str
     ytdlp_container: str
@@ -328,7 +327,7 @@ so originals are never recompressed.
 |-----|------|-----------|-------------|
 | inbox | streaming | Telegram file -> `_inbox/` | - |
 | fetch | streaming | link -> video | sink: chat / fan queue |
-| frames | streaming | video/link -> every `frame_stride`-th frame -> chat or done dir | `frames_watch` dock |
+| frames | streaming | video/link -> every 5th frame, timecode-named -> chat or done dir | `frames_watch` dock |
 | censor-blur | streaming | photo -> people blurred -> chat or done dir | `censor_blur_watch` dock |
 | censor-black | streaming | photo -> people blacked out -> chat or done dir | `censor_black_watch` dock |
 | restore | streaming | photo -> people blurred -> LLM repaints background (`_s1`/`_s2`) | `restore_watch` dock |

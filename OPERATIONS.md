@@ -109,7 +109,9 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
 
 Stems come from `files.stem`: `MMDD_<source>_<name>.<ext>` (`source` is `tg` or
 `loc`); two-step bots append `_s1` (intermediate) / `_s2` (final); collisions
-resolve via `next_free_path`.
+resolve via `next_free_path`. Extracted frames are timecode-named
+`[hour-]minute-second-frame.jpg` (frame = source frame index, a multiple of
+5): `1-05-325.jpg`, or `1-1-05-198000.jpg` past the one-hour mark.
 
 ## 7. Configuration and tests in operation
 

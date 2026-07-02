@@ -34,7 +34,6 @@ _DEFAULTS: dict[str, str] = {
     'QUOTA_BYTES': str(32 * 1024**3),
     'MAX_EMBEDDING_SCAN': '5000',
     'SEEN_PATHS_MAX': '4096',
-    'FRAME_STRIDE': '30',
     'DEMOTE_MIN_COUNT': '3',
     'YTDLP_FORMAT': 'bestvideo*+bestaudio/best',
     'YTDLP_CONTAINER': 'mkv',
@@ -63,7 +62,6 @@ class Settings:
     quota_bytes: int
     max_embedding_scan: int
     seen_paths_max: int
-    frame_stride: int
     demote_min_count: int
     ytdlp_format: str
     ytdlp_container: str
@@ -146,7 +144,6 @@ def load(env: Mapping[str, str]) -> Settings:
         quota_bytes=int(get('QUOTA_BYTES')),
         max_embedding_scan=int(get('MAX_EMBEDDING_SCAN')),
         seen_paths_max=int(get('SEEN_PATHS_MAX')),
-        frame_stride=int(get('FRAME_STRIDE')),
         demote_min_count=int(get('DEMOTE_MIN_COUNT')),
         ytdlp_format=get('YTDLP_FORMAT'),
         ytdlp_container=get('YTDLP_CONTAINER'),
