@@ -66,24 +66,34 @@ def test_scan_is_capped(tmp_path: Path) -> None:
     assert len(got) == 3
 
 
-def test_invalidate_forces_full_rebuild(tmp_path: Path) -> None:
-    """REQ-SORT-001: after Demote the cache must not serve ghosts."""
+def test_move_between_fandoms_never_recomputes(tmp_path: Path) -> None:
+    """REQ-SORT-001: identity keys survive a demote-style move."""
     cfg = make_cfg(tmp_path / 'drive')
     _library(cfg, {'A': ['1.jpg'], 'Sparse': ['s.jpg']})
     cache = EmbeddingCache(cfg)
     embed = CountingEmbedder()
-    cache.refresh(cfg.pictures, embed)
     assert 'Sparse|s.jpg' in cache.refresh(cfg.pictures, embed)
 
-    # Demote moves the sparse fandom away and invalidates.
+    # A demote-style move: the file changes fandom, not identity.
     (cfg.pictures / 'Sparse' / 's.jpg').rename(
         cfg.pictures / 'A' / 's.jpg',
     )
     (cfg.pictures / 'Sparse').rmdir()
+    remapped = cache.refresh(cfg.pictures, embed)
+    assert sorted(remapped) == ['A|1.jpg', 'A|s.jpg']  # live layout
+    assert embed.calls.count('s.jpg') == 1  # vector reused, not ghosted
+
+
+def test_invalidate_forces_full_rebuild(tmp_path: Path) -> None:
+    """The manual recovery tool really does wipe and recompute."""
+    cfg = make_cfg(tmp_path / 'drive')
+    _library(cfg, {'A': ['1.jpg']})
+    cache = EmbeddingCache(cfg)
+    embed = CountingEmbedder()
+    cache.refresh(cfg.pictures, embed)
     cache.invalidate()
-    rebuilt = cache.refresh(cfg.pictures, embed)
-    assert sorted(rebuilt) == ['A|1.jpg', 'A|s.jpg']
-    assert embed.calls.count('s.jpg') == 2  # stale vector recomputed
+    assert list(cache.refresh(cfg.pictures, embed)) == ['A|1.jpg']
+    assert embed.calls.count('1.jpg') == 2  # recomputed after wipe
 
 
 def test_unknown_is_not_a_reference_fandom(tmp_path: Path) -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pytest
 
 from minion_core.adapters.vision import EmbeddingCache
 from minions.sort.passes import SortDeps
@@ -85,37 +84,36 @@ def test_demote_pass_moves_sparse_to_unknown(tmp_path: Path) -> None:
     cfg = make_cfg(tmp_path / 'drive', DEMOTE_MIN_COUNT='3')
     _seed_library(cfg)
     _jpeg(cfg.pictures / 'Sparse' / 'one_cat.jpg')
-    demote_pass(cfg, EmbeddingCache(cfg))
+    demote_pass(cfg)
     assert not (cfg.pictures / 'Sparse').exists()
     assert (cfg.pictures / 'Unknown' / 'one_cat.jpg').exists()
     assert (cfg.pictures / 'Cats').exists()  # big fandoms stay
 
 
-def test_demote_invalidates_cache_before_replace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """REQ-SORT-001: the order is demote -> invalidate -> refresh."""
+def test_demote_then_replace_reuses_vectors(tmp_path: Path) -> None:
+    """REQ-SORT-001: re-place is exact and recomputes nothing.
+
+    Demote moves a fandom away; Re-place matches the live layout;
+    every library vector is embedded exactly once in its life.
+    """
     cfg = make_cfg(tmp_path / 'drive')
     _seed_library(cfg)
-    _jpeg(cfg.inbox / 'incoming_cat.jpg')  # a non-idle run
+    _jpeg(cfg.pictures / 'Sparse' / 'lone_cat.jpg')
+    _jpeg(cfg.inbox / 'fresh_cat.jpg')  # a non-idle run
     calls: list[str] = []
-    monkeypatch.setattr(
-        EmbeddingCache,
-        'invalidate',
-        lambda self: calls.append('invalidate'),
-    )
-    real_refresh = EmbeddingCache.refresh
 
-    def spy_refresh(
-        self: EmbeddingCache, root: Path, embed: object
-    ) -> dict[str, Vector]:
-        calls.append('refresh')
-        return real_refresh(self, root, embed)  # type: ignore[arg-type]
+    def counting(path: Path) -> Vector:
+        calls.append(path.name)
+        return _embed(path)
 
-    monkeypatch.setattr(EmbeddingCache, 'refresh', spy_refresh)
-    run_passes(cfg, DEPS)
-    assert calls == ['refresh', 'invalidate', 'refresh']
+    deps = SortDeps(namer=lambda p: f'named {p.stem}', embed=counting)
+    run_passes(cfg, deps)
+    assert not (cfg.pictures / 'Sparse').exists()  # demoted
+    cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
+    assert 'lone_cat.jpg' in cats  # rescued by re-place
+    library = [f'{k}_{i}.jpg' for k in ('cat', 'dog') for i in range(3)]
+    for name in library:
+        assert calls.count(name) == 1  # embedded once in its life
 
 
 def test_replace_pass_rescues_unknown(tmp_path: Path) -> None:
@@ -163,3 +161,73 @@ def test_source_dirs_axis(tmp_path: Path) -> None:
     assert not (downloads / 'dl_cat.jpg').exists()
     cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
     assert any('dl_cat' in n for n in cats)
+
+
+def test_sort_watch_axis_coerces(tmp_path: Path) -> None:
+    """SORT_WATCH=1 enables the watch daemon; default stays off."""
+    from minion_core.settings import load
+
+    assert not load({'DRIVE': str(tmp_path)}).sort_watch
+    assert load({'DRIVE': str(tmp_path), 'SORT_WATCH': '1'}).sort_watch
+
+
+def test_watch_belt_sorts_on_arrival(tmp_path: Path) -> None:
+    """Instant sorting: a new stable image triggers a full run."""
+    from minion_core.kernel import Disposition
+    from minion_core.kernel import Folder
+    from minion_core.kernel import FolderSpec
+    from minion_core.kernel import SeenPaths
+    from minions.sort.main import SortTrigger
+
+    cfg = make_cfg(tmp_path / 'drive')
+    _seed_library(cfg)
+    _jpeg(cfg.inbox / 'wild_cat.jpg')
+    spec = FolderSpec(
+        root=cfg.inbox, dest=cfg.inbox, exts=('.jpg',), once=True
+    )
+    graph = Folder(spec, SeenPaths(8)) >> SortTrigger(cfg, DEPS)
+    out = list(graph(iter(())))
+    assert len(out) == 1
+    assert out[0].verdict is not None
+    assert out[0].verdict.disposition is Disposition.DELIVERED
+    cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
+    assert any('wild_cat' in n for n in cats)
+
+
+def test_watch_trigger_respects_lock(tmp_path: Path) -> None:
+    """A held lock turns the trigger into SKIPPED batch_locked."""
+    from minion_core.adapters.files import BatchLock
+    from minion_core.kernel import Disposition
+    from minion_core.kernel import Job
+    from minion_core.kernel import Origin
+    from minions.sort.main import SortTrigger
+
+    cfg = make_cfg(tmp_path / 'drive')
+    pic = _jpeg(cfg.inbox / 'busy_cat.jpg')
+    lock = BatchLock(cfg.state / 'sort.lock')
+    assert lock.acquire()
+    try:
+        job = Job(
+            src=pic,
+            dest=cfg.inbox,
+            stem='busy_cat',
+            origin=Origin('loc', str(pic)),
+        )
+        verdict = SortTrigger(cfg, DEPS).process(job)
+    finally:
+        lock.release()
+    assert verdict.disposition is Disposition.SKIPPED
+    assert verdict.reason == 'batch_locked'
+    assert pic.exists()  # nothing ran, nothing moved
+
+
+def test_build_watch_covers_all_source_dirs(tmp_path: Path) -> None:
+    """One dock per source dir, folded into one belt."""
+    from minions.sort.main import build_watch
+
+    a = tmp_path / 'a'
+    b = tmp_path / 'b'
+    a.mkdir()
+    b.mkdir()
+    cfg = make_cfg(tmp_path / 'drive', SOURCE_DIRS=f'{a};{b}')
+    assert build_watch(cfg, DEPS) is not None

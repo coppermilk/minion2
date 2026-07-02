@@ -66,7 +66,7 @@ worst credible outcome is irreversible loss of the user's own files.
 | Tier | Worst credible outcome | Representative items | Rigor above baseline laws |
 |------|------------------------|----------------------|---------------------------|
 | CT-A | Irreversible media/state loss | offset persistence; two-sided quota; disposal ordering; collision-free naming; atomic writes | requirement + robustness (boundary + fault-injection) tests; second-pass review; no fallback of any kind |
-| CT-B | Wrong output, hard to notice; privacy leak | sort placement; censor correctness (a miss leaks the hidden subject); SSRF guard; cache invalidation after demote | requirement + positive and negative tests; decision coverage on the path |
+| CT-B | Wrong output, hard to notice; privacy leak | sort placement; censor correctness (a miss leaks the hidden subject); SSRF guard; placement-mapping freshness after demote | requirement + positive and negative tests; decision coverage on the path |
 | CT-C | Availability loss (wedge/stall) | step crash guard; download timeout; bounded queue; batch lock; supervised restart; extractor self-update | requirement + a fault-injection test proving survival |
 | CT-D | Cosmetic | reply strings, log formatting | review only |
 | CT-E | None (tooling) | tests, stubs, docs | structural laws only (lint + types) |
@@ -93,7 +93,7 @@ identifiers used in CI.
 | REQ-RES-001 | Every download is wall-time bounded | CT-C | download_timeout_sec (7) | test: hung-extractor timeout |
 | REQ-RES-002 | Disk quota is enforced before, and mid-stream for direct transfers | CT-A | quota_bytes (7) | test: quota boundary |
 | REQ-RES-003 | A batch bot cannot overlap its own previous run | CT-C | per-bot lock (8) | test: second invocation exits |
-| REQ-SORT-001 | The Demote pass invalidates the embedding cache before Re-place | CT-B | sort pass 3->4 (9) | test: stale-vector rebuild |
+| REQ-SORT-001 | Placement never uses a persisted layout: the fandom mapping is rebuilt from the live tree on every refresh; stored vectors are keyed by file identity only | CT-B | identity-keyed cache (9) | test: demote then re-place with zero recomputation |
 | REQ-CFG-001 | A relative path override is rejected at load | CT-C | settings.load (7) | test: relative override raises |
 | REQ-OBS-001 | Every non-DELIVERED disposition is logged with a stable reason code | CT-C | Verdict.reason (5) | review + test: log emitted |
 | REQ-ARC-001 | No bot imports a sibling bot | CT-E | layout (6) | analysis: import-boundary rule |
@@ -332,7 +332,7 @@ so originals are never recompressed.
 | censor-blur | streaming | photo -> people blurred -> chat or done dir | `censor_blur_watch` dock |
 | censor-black | streaming | photo -> people blacked out -> chat or done dir | `censor_black_watch` dock |
 | restore | streaming | photo -> people blurred -> LLM repaints background (`_s1`/`_s2`) | `restore_watch` dock |
-| sort | batch | images -> `pictures/<Fandom>/` | `source_dirs`: `_inbox/` or `Downloads/` |
+| sort | batch | images -> `pictures/<Fandom>/` | `source_dirs`: `_inbox/` or `Downloads/`; `SORT_WATCH`: streaming trigger, instant sorting |
 | catch | streaming | new Downloads image -> labelled copy in `pictures/<Fandom>/`; the original is renamed in place, never moved | `catch_dir` |
 | week-clean | batch | Monday: strip weekly EXIF tag, clear `_inbox/` | - |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` | `print_spooler`: lp / SumatraPDF argv |
@@ -345,8 +345,9 @@ of section 8.
 
 Sort is four named passes: **Name** (LLM labels the image) -> **Place** (vision
 nearest-fandom into `pictures/<Fandom>/`) -> **Demote** (fandoms under
-`demote_min_count` -> `Unknown/`; cache invalidated, REQ-SORT-001) ->
-**Re-place** (vision re-runs against the new layout).
+`demote_min_count` -> `Unknown/`; vectors survive -- the cache is
+identity-keyed and the fandom mapping is never persisted, REQ-SORT-001) ->
+**Re-place** (vision re-runs against the new layout at zero recompute cost).
 
 ## 10. Resource budgets (every resource has a declared, enforced bound)
 

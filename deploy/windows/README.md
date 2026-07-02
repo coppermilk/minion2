@@ -12,11 +12,13 @@ One page, four steps:
    - `PRINT_SPOOLER=C:\Apps\SumatraPDF.exe;-print-to-default;-silent`
      -- the print bot's spooler axis (REQ-PRT-001).
    - `CATCH_DIR=C:\Users\a\Downloads` -- the catch bot's source.
+   - `SORT_WATCH=1` -- sort runs as a watch daemon: new images in
+     `SOURCE_DIRS`/`_inbox` sort instantly instead of on a timer.
    - `TG_TOKEN_<BOT>` per Telegram bot; `TG_CHATS` allow-list.
 3. From an elevated PowerShell:
    `deploy\windows\register-tasks.ps1`
-   (sort every 5 minutes, week-clean Mondays 06:00, print and
-   catch at logon; add more with `-Bots inbox,censor-blur`).
+   (sort, print and catch at logon; week-clean Mondays 06:00; add
+   more with `-Bots inbox,censor-blur`).
 4. Verify: `schtasks /Query /TN bananaland\` and watch
    `DRIVE\bots\_data\logs\<bot>.log`.
 

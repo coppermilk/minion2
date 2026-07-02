@@ -52,11 +52,19 @@ PERSON_SCORE_MIN = 0.7
 
 
 class EmbeddingCache:
-    """Incremental ``(path, fandom)``-keyed vectors in regen/.
+    """Append-only vectors in regen/, keyed by file identity.
 
-    Recomputes only new files, drops removed ones, and caps the scan
-    at ``max_embedding_scan`` (OPERATIONS 4). Keys are
-    ``<fandom>|<file name>``.
+    Stored keys are ``<name>|<size>``: an image is embedded exactly
+    once in its life; moves between fandoms (Demote, Re-place) reuse
+    the vector. The fandom mapping is rebuilt from the live tree on
+    every refresh and never persisted (REQ-SORT-001). The scan is
+    capped at ``max_embedding_scan`` (OPERATIONS 4).
+
+    Waiver (BLUEPRINT 12): identity is name + byte size, not a
+    content hash -- hashing every image per refresh would defeat the
+    cache. Names are collision-free per folder (REQ-DATA-001); a
+    same-name same-size different-content pair is the accepted
+    residual risk.
     """
 
     def __init__(self, cfg: Settings) -> None:
@@ -64,28 +72,31 @@ class EmbeddingCache:
         self._cap = cfg.max_embedding_scan
 
     def invalidate(self) -> None:
-        """Drop the cache (REQ-SORT-001: Demote calls this)."""
+        """Drop the cache -- a manual recovery tool (CACHE class)."""
         self._file.unlink(missing_ok=True)
 
     def refresh(self, root: Path, embed: Embedder) -> dict[str, Vector]:
-        """Sync vectors with the fandom tree under ``root``.
+        """Return the live ``fandom|name -> vector`` library.
 
-        An unchanged tree writes nothing: idle cron runs and
-        Drive-synced deployments cost zero rewrites.
+        Embeds only identities never seen before; an unchanged tree
+        writes nothing, so idle runs and Drive-synced deployments
+        cost zero rewrites.
         """
-        old = self._load()
-        new: dict[str, Vector] = {}
+        stored = self._load()
+        kept: dict[str, Vector] = {}
+        library: dict[str, Vector] = {}
         computed = False
         for fandom, path in _tree(root, self._cap):
-            key = f'{fandom}|{path.name}'
-            known = old.get(key)
-            if known is None:
-                known = embed(path)
+            ident = _identity(path)
+            vec = stored.get(ident)
+            if vec is None:
+                vec = embed(path)
                 computed = True
-            new[key] = known
-        if computed or new.keys() != old.keys():
-            self._save(new)
-        return new
+            kept[ident] = vec
+            library[f'{fandom}|{path.name}'] = vec
+        if computed or kept.keys() != stored.keys():
+            self._save(kept)
+        return library
 
     def _load(self) -> dict[str, Vector]:
         if not self._file.is_file():
@@ -109,6 +120,11 @@ class EmbeddingCache:
             tmp.replace(self._file)
         finally:
             tmp.unlink(missing_ok=True)
+
+
+def _identity(path: Path) -> str:
+    """The stored cache key: stable across moves between fandoms."""
+    return f'{path.name}|{path.stat().st_size}'
 
 
 def _tree(root: Path, cap: int) -> Iterator[tuple[str, Path]]:

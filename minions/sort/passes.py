@@ -55,7 +55,7 @@ def run_passes(cfg: Settings, deps: SortDeps) -> None:
     cache = EmbeddingCache(cfg)
     name_pass(cfg, deps)
     place_pass(cfg, deps, cache)
-    demote_pass(cfg, cache)  # invalidates the cache (REQ-SORT-001)
+    demote_pass(cfg)  # vectors survive: identity-keyed cache
     replace_pass(cfg, deps, cache)
 
 
@@ -109,11 +109,13 @@ def _place(path: Path, into: Path, week_tag: str) -> None:
     _LOG.info('placed src=%s fandom=%s', target.name, into.name)
 
 
-def demote_pass(cfg: Settings, cache: EmbeddingCache) -> None:
-    """Pass 3: sparse fandoms sink to Unknown; the cache dies.
+def demote_pass(cfg: Settings) -> None:
+    """Pass 3: sparse fandoms sink to Unknown; vectors survive.
 
-    Skipping the invalidation is a silent-misplacement defect
-    (REQ-SORT-001), not an optimization.
+    No invalidation is needed (REQ-SORT-001 restated): the cache is
+    identity-keyed and the fandom mapping is rebuilt from the live
+    tree on every refresh, so Re-place matches the new layout by
+    construction -- at zero recomputation cost.
     """
     for fandom_dir in _fandoms(cfg.pictures):
         members = _images(fandom_dir, cfg.max_embedding_scan)
@@ -124,7 +126,6 @@ def demote_pass(cfg: Settings, cache: EmbeddingCache) -> None:
             move_atomic(path, next_free_path(unknown))
         fandom_dir.rmdir()
         _LOG.info('demoted fandom=%s count=%d', fandom_dir.name, len(members))
-    cache.invalidate()  # REQ-SORT-001: before Re-place
 
 
 def _fandoms(pictures: Path) -> list[Path]:

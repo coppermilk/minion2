@@ -1,7 +1,6 @@
-# Windows deployment runs sort via Task Scheduler; this example is
-# for a bare-metal Linux host without the batch container.
-# Cadence belongs to cron (BLUEPRINT 11); overlap is impossible
-# because of the per-bot lock (REQ-RES-003).
+# Bare-metal Linux host without the compose stack. sort is NOT
+# scheduled here: run it as a watch daemon (SORT_WATCH=1) so new
+# images in _inbox/Downloads sort instantly; only week-clean keeps
+# a calendar cadence (the wall clock lives in cron, BLUEPRINT 11).
 
-*/5 * * * * cd /opt/bananaland && python -m minions.sort.main >> "$DRIVE/bots/_data/logs/sort.cron.log" 2>&1
 0 6 * * 1 cd /opt/bananaland && python -m minions.week_clean.main >> "$DRIVE/bots/_data/logs/week-clean.cron.log" 2>&1

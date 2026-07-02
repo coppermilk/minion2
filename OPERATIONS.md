@@ -63,13 +63,17 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
 
 ## 4. Sort cache (vision adapter)
 
-- **Incremental**: `_embeddings.npz` keys vectors by `(path, fandom)`;
-  recomputes only new/changed files, drops removed ones, caps the scan at
-  `max_embedding_scan` -- re-running sort is cheap by design.
-- **Invalidate after Demote** (REQ-SORT-001): Demote moves sparse fandoms to
-  `Unknown/` and clears the cache so Re-place matches the new layout, not
-  ghosts of the old one. Skipping this is a silent-misplacement defect, not an
-  optimization.
+- **Append-only**: `_embeddings.npz` keys vectors by file identity
+  (`name|size`); an image is embedded exactly once in its life. Moves between
+  fandoms (Demote, Re-place) reuse the vector; only genuinely new files are
+  computed; removed identities drop out; the scan is capped at
+  `max_embedding_scan`.
+- **Demote never invalidates** (REQ-SORT-001 restated): the fandom mapping is
+  rebuilt from the live tree on every refresh and never persisted, so
+  Re-place matches the new layout by construction -- ghosts are impossible
+  and a demoted library costs zero re-embeds. `invalidate()` remains as a
+  manual recovery tool only (the cache is CACHE-class: wipe at any idle
+  moment).
 - **Shared across containers**: every container mounts the same `/data`, so
   there is exactly one `_embeddings.npz`. Writes are atomic (temp + replace),
   a reader never sees a torn file, and `refresh` rebuilds its key set from
@@ -88,9 +92,13 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
   belongs to cron; the container runs `cron -f` foreground as the supervisor.
   An idle run exits fast -- sort returns before touching the cache or any
   adapter when there is nothing to place and nothing in `Unknown/` -- and
-  the per-bot lock makes overlap impossible, so a tight schedule (every
-  5 min) is cheap and safe. On Windows the scheduler is Task Scheduler:
-  `deploy/windows/register-tasks.ps1` mirrors the cron cadence.
+  the per-bot lock makes overlap impossible. On Windows the scheduler is
+  Task Scheduler: `deploy/windows/register-tasks.ps1`.
+- **Instant sorting** (`SORT_WATCH=1`): sort runs as a watch daemon -- one
+  Folder dock per source dir triggers a locked pass run the moment a new
+  stable image lands (~`POLL_SEC` latency; the write-stability guard keeps
+  half-written files out). The batch lock makes the daemon and any manual
+  one-shot run safe together; week-clean stays on the calendar.
 - **Streaming bots** run 24/7 under `restart: unless-stopped`.
 - **Liveness definition**: the container is up AND the offset is advancing.
   A crash is a supervised restart; the restart is safe because STATE is on

@@ -40,6 +40,7 @@ _DEFAULTS: dict[str, str] = {
     'YTDLP_CONTAINER': 'mkv',
     'YTDLP_PLAYER_CLIENTS': 'default',
     'SOURCE_DIRS': '',
+    'SORT_WATCH': '',
     'FETCH_SINK': CHAT,
     'WEEK_TAG': 'bananaland:week',
     'POLL_SEC': '2.0',
@@ -68,6 +69,7 @@ class Settings:
     ytdlp_container: str
     ytdlp_player_clients: tuple[str, ...]
     source_dirs: tuple[Path, ...]
+    sort_watch: bool
     fetch_sink: str
     week_tag: str
     poll_sec: float
@@ -150,6 +152,7 @@ def load(env: Mapping[str, str]) -> Settings:
         ytdlp_container=get('YTDLP_CONTAINER'),
         ytdlp_player_clients=_csv(get('YTDLP_PLAYER_CLIENTS')),
         source_dirs=_dirs(get('SOURCE_DIRS')),
+        sort_watch=get('SORT_WATCH') == '1',
         fetch_sink=get('FETCH_SINK'),
         week_tag=get('WEEK_TAG'),
         poll_sec=float(get('POLL_SEC')),
