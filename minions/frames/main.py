@@ -1,8 +1,9 @@
 """frames bot: a video (file or link) becomes its every-Nth frames.
 
-Graph: (TgLinks | TgMedia) -> FetchLink -> ExtractFrames ->
-SendResult -> Reply -> DisposeSource. FetchLink passes media files
-through untouched, so both docks share one belt.
+Graph: (TgAny | Folder) -> FetchLink -> ExtractFrames ->
+RouteOrigin(chat / done dir) -> Reply -> DisposeSource. FetchLink
+passes media files through untouched, so links, chat videos and
+watched-folder videos share one belt (REQ-DOCK-001).
 """
 
 from __future__ import annotations
@@ -21,9 +22,14 @@ from minion_core.adapters.tg import TgChannel
 from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
+from minion_core.kernel import ArchiveTo
 from minion_core.kernel import DisposeSource
 from minion_core.kernel import Disposition
+from minion_core.kernel import Folder
+from minion_core.kernel import FolderSpec
 from minion_core.kernel import Reply
+from minion_core.kernel import RouteOrigin
+from minion_core.kernel import SeenPaths
 from minion_core.kernel import SendResult
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
@@ -38,6 +44,9 @@ if TYPE_CHECKING:
     from minion_core.settings import Settings
 
 BOT = 'frames'
+
+VIDEO_EXTS = ('.mp4', '.mkv', '.webm', '.mov', '.avi')
+"""Video suffixes the watch dock accepts."""
 
 
 class ExtractFrames(Step):
@@ -64,12 +73,27 @@ class ExtractFrames(Step):
         )
 
 
-def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
-    """Assemble the belt: one dock accepts links and videos.
+def _docks(cfg: Settings, api: TgApi, spec: TgSpec) -> Stage:
+    """The tg dock, merged with the watch dock when configured.
 
-    One token allows one getUpdates consumer, so both kinds share
-    the TgAny dock instead of merging two Telegram docks.
+    One token allows one getUpdates consumer, so links and chat
+    videos share the TgAny dock; ``frames_watch`` adds the local
+    dock (REQ-DOCK-001).
     """
+    tg: Stage = TgAny(api, spec)
+    if cfg.frames_watch is None:
+        return tg
+    watch = FolderSpec(
+        root=cfg.frames_watch,
+        dest=cfg.bot_dir(BOT),
+        exts=VIDEO_EXTS,
+        poll_sec=cfg.poll_sec,
+    )
+    return tg | Folder(watch, SeenPaths(cfg.seen_paths_max))
+
+
+def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
+    """Assemble the belt; secrets come from the passed mapping."""
     api = TgApi(env.get('TG_TOKEN', ''))
     spec = TgSpec(
         spool=SpoolSpec(
@@ -81,11 +105,14 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         kinds=('video', 'document'),
     )
     channel = TgChannel(api)
+    route = RouteOrigin(
+        tg=SendResult(channel), loc=ArchiveTo(cfg.bot_done(BOT))
+    )
     return (
-        TgAny(api, spec)
+        _docks(cfg, api, spec)
         >> FetchLink(cfg)
         >> ExtractFrames(cfg)
-        >> SendResult(channel)
+        >> route
         >> Reply(channel)
         >> DisposeSource(spool_of)
     )

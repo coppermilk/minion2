@@ -85,6 +85,7 @@ identifiers used in CI.
 | REQ-KRN-002 | A non-DELIVERED envelope bypasses all later Steps | CT-B | kernel short-circuit (5) | test: short-circuit |
 | REQ-KRN-003 | Source-to-belt buffering is bounded (backpressure) | CT-C | bounded queue bridge (5) | test: backpressure |
 | REQ-KRN-004 | Disposal Sinks execute only after delivery is decided | CT-A | sink ordering (5) | test: failed job leaves source intact |
+| REQ-KRN-005 | Folder emits a file only after its size is stable across one poll interval | CT-B | Folder stability guard (5) | test: growing file withheld, stable file emitted |
 | REQ-DATA-001 | Output never overwrites an existing file | CT-A | files.next_free_path (6) | test: collision resolves to _2 |
 | REQ-DATA-002 | File writes are atomic (no torn media) | CT-A | files atomic write (6) | test: interrupted-write |
 | REQ-DATA-003 | The Telegram offset persists across restart | CT-A | STATE dir (1.2) | test: offset round-trip |
@@ -98,6 +99,10 @@ identifiers used in CI.
 | REQ-ARC-001 | No bot imports a sibling bot | CT-E | layout (6) | analysis: import-boundary rule |
 | REQ-ARC-002 | No file outside adapters/ imports a vendor SDK | CT-E | adapter rule (6) | analysis: forbidden-import rule |
 | REQ-DEG-001 | A token-less bot degrades to folder-only without code branches in the bot | CT-C | TgChannel no-op (5) | test: tokenless graph runs |
+| REQ-PRT-001 | The print spooler command is a Settings value; no code branches on the host OS | CT-C | print spooler axis (7, 9) | test: argv assembled from Settings; analysis: no sys.platform outside adapters |
+| REQ-DOCK-001 | A streaming bot with a configured watch dir serves both docks through one belt; each delivered result reaches the sink of its origin (tg -> chat, loc -> done dir) | CT-B | RouteOrigin sink (5) + watch axes (9) | test: merged graph routes both origins |
+| REQ-CATCH-001 | catch never moves or deletes a file out of the watched folder; the library copy is a copy | CT-A | catch ClassifyCopy step (9) | test: original present and byte-identical after delivery |
+| REQ-CATCH-002 | A file that fails classification is left untouched and logged with a stable reason; the belt continues | CT-B | catch step verdicts (9) | test: failing namer yields FAILED, file intact, next file processed |
 
 ## 4. Design laws (CI-enforced; the design cannot drift)
 
@@ -256,6 +261,11 @@ class Settings:
     ytdlp_container: str
     ytdlp_player_clients: tuple[str, ...]
     source_dirs: tuple[Path, ...]
+    print_spooler: tuple[str, ...]  # argv prefix; the PDF is appended
+    print_timeout_sec: int
+    censor_watch: Path | None       # second dock; None disables
+    frames_watch: Path | None       # second dock; None disables
+    catch_dir: Path | None          # catch bot source; None disables
     # derived, never overridable separately:
     @property
     def inbox(self):    return self.drive / '_inbox'
@@ -303,11 +313,12 @@ eliminates duplicates by construction.
 |-----|------|-----------|-------------|
 | inbox | streaming | Telegram file -> `_inbox/` | - |
 | fetch | streaming | link -> video | sink: chat / fan queue |
-| frames | streaming | video/link -> every `frame_stride`-th frame -> chat | - |
-| censor | streaming | photo -> people hidden -> chat | mode: blur / black / blur+restore |
+| frames | streaming | video/link -> every `frame_stride`-th frame -> chat or done dir | `frames_watch` dock |
+| censor | streaming | photo -> people hidden -> chat or done dir | mode: blur / black / blur+restore; `censor_watch` dock |
 | sort | batch | images -> `pictures/<Fandom>/` | `source_dirs`: `_inbox/` or `Downloads/` |
+| catch | streaming | new Downloads image -> labelled copy in `pictures/<Fandom>/`; the original is renamed in place, never moved | `catch_dir` |
 | week-clean | batch | Monday: strip weekly EXIF tag, clear `_inbox/` | - |
-| print | streaming | PDF in `print/` -> printer -> `print/_done/` | - |
+| print | streaming | PDF in `print/` -> spooler -> `print/_done/` | `print_spooler`: lp / SumatraPDF argv |
 | kindle | outlier | Google Doc -> PDF -> `print/`; weekly archive | Apps Script (off-kernel, declared, not disguised) |
 
 Two honest kinds: **streaming** bots are per-file belts drained forever;
@@ -381,7 +392,7 @@ with doubles at the adapter boundary only.
 
 | Aspect | Windows | NAS (Docker) | Cloud |
 |--------|---------|--------------|-------|
-| Bots | sort (Downloads axis), print | streaming + batch bots | kindle |
+| Bots | sort (Downloads axis), print (SumatraPDF axis), catch | streaming + batch bots | kindle |
 | `DRIVE` | `.env` (e.g. `C:\Users\a\My Drive`) | compose `DRIVE=/data` | Apps Script `Config.gs` |
 | Filesystem | Drive for Desktop (mapped) | `${DRIVE_NAS}` bind at `/data` | Drive API |
 | Launch | Task Scheduler, bare Python | `docker compose up -d` | Apps Script trigger |

@@ -89,3 +89,22 @@ def test_adapters_never_import_bots() -> None:
             assert not name.startswith('minions'), (
                 f'{path.name}: core imports a bot ({name})'
             )
+
+
+def test_no_host_os_branching_outside_adapters() -> None:
+    """REQ-PRT-001 analysis: no host-OS branch outside adapters/.
+
+    BLUEPRINT 1.2: the software never branches on the host OS; the
+    spooler difference is configuration, not a platform read.
+    """
+    for path in _sources():
+        rel = str(path.relative_to(REPO)).replace('\\', '/')
+        if rel.startswith('minion_core/adapters/'):
+            continue
+        source = path.read_text(encoding='ascii')
+        assert 'sys.platform' not in source, (
+            f'{rel}: host-OS branch outside adapters/'
+        )
+        assert 'platform.system' not in source, (
+            f'{rel}: host-OS branch outside adapters/'
+        )

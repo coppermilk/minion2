@@ -37,11 +37,12 @@ foreground cron of the `batch` container.
 |-----|------|-----------|
 | inbox | streaming | Telegram file -> `_inbox/` |
 | fetch | streaming | link -> video (sink: chat / fan queue) |
-| frames | streaming | video/link -> every Nth frame -> chat |
-| censor | streaming | photo -> people hidden -> chat |
+| frames | streaming | video/link -> every Nth frame -> chat or done dir (`FRAMES_WATCH` adds a folder dock) |
+| censor | streaming | photo -> people hidden -> chat or done dir (`CENSOR_WATCH` adds a folder dock) |
 | sort | batch | images -> `pictures/<Fandom>/` (4 passes) |
+| catch | streaming | new Downloads image -> labelled copy in `pictures/<Fandom>/`; the original never leaves `CATCH_DIR` |
 | week-clean | batch | Monday: strip weekly EXIF tag, clear `_inbox/` |
-| print | streaming | PDF in `print/` -> printer -> `print/_done/` |
+| print | streaming | PDF in `print/` -> spooler -> `print/_done/` (`PRINT_SPOOLER`: lp / SumatraPDF) |
 | kindle | outlier | Apps Script, `deploy/apps_script/` |
 
 ## CI gates

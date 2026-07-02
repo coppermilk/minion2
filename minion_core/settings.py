@@ -49,6 +49,11 @@ _DEFAULTS: dict[str, str] = {
     'FETCH_SINK': CHAT,
     'WEEK_TAG': 'bananaland:week',
     'POLL_SEC': '2.0',
+    'PRINT_SPOOLER': 'lp',
+    'PRINT_TIMEOUT_SEC': '120',
+    'CENSOR_WATCH': '',
+    'FRAMES_WATCH': '',
+    'CATCH_DIR': '',
 }
 
 
@@ -71,6 +76,11 @@ class Settings:
     fetch_sink: str
     week_tag: str
     poll_sec: float
+    print_spooler: tuple[str, ...]
+    print_timeout_sec: int
+    censor_watch: Path | None
+    frames_watch: Path | None
+    catch_dir: Path | None
 
     # Derived, never overridable separately (BLUEPRINT 1.2).
     @property
@@ -147,6 +157,11 @@ def load(env: Mapping[str, str]) -> Settings:
         fetch_sink=get('FETCH_SINK'),
         week_tag=get('WEEK_TAG'),
         poll_sec=float(get('POLL_SEC')),
+        print_spooler=_argv(get('PRINT_SPOOLER')),
+        print_timeout_sec=int(get('PRINT_TIMEOUT_SEC')),
+        censor_watch=_opt_dir('CENSOR_WATCH', get('CENSOR_WATCH')),
+        frames_watch=_opt_dir('FRAMES_WATCH', get('FRAMES_WATCH')),
+        catch_dir=_opt_dir('CATCH_DIR', get('CATCH_DIR')),
     )
 
 
@@ -166,3 +181,15 @@ def _dirs(raw: str) -> tuple[Path, ...]:
     """Split a ';'-separated path list; every entry must be absolute."""
     parts = (part.strip() for part in raw.split(';'))
     return tuple(_abs('SOURCE_DIRS', Path(p)) for p in parts if p)
+
+
+def _argv(raw: str) -> tuple[str, ...]:
+    """Split a ';'-joined argv prefix (spooler axis, REQ-PRT-001)."""
+    return tuple(part.strip() for part in raw.split(';') if part.strip())
+
+
+def _opt_dir(name: str, raw: str) -> Path | None:
+    """An optional watch dir; empty disables, relative still raises."""
+    if not raw.strip():
+        return None
+    return _abs(name, Path(raw.strip()))

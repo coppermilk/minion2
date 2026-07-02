@@ -74,7 +74,7 @@ def test_print_bot_prints_and_archives(
         stem='doc',
         origin=Origin('loc', str(pdf)),
     )
-    verdict = PrintPdf().process(job)
+    verdict = PrintPdf(cfg).process(job)
     assert verdict.disposition is Disposition.DELIVERED
     assert sent == [str(pdf)]
 
@@ -98,7 +98,7 @@ def test_print_bot_missing_printer_is_failed(
         stem='doc',
         origin=Origin('loc', str(pdf)),
     )
-    verdict = PrintPdf().process(job)
+    verdict = PrintPdf(cfg).process(job)
     assert verdict.disposition is Disposition.FAILED
     assert verdict.reason == 'printer_missing'
     assert build_print(cfg) is not None

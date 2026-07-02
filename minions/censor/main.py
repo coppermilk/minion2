@@ -1,8 +1,9 @@
 """censor bot: people in a photo are hidden before it goes back.
 
-Graph: TgMedia(photo) -> HidePeople -> SendResult -> Reply ->
-DisposeSource. Mode axis (BLUEPRINT 9): blur / black / restore
-(blur, then the LLM repaints the hidden background).
+Graph: (TgMedia | Folder) -> HidePeople -> RouteOrigin(chat / done
+dir) -> Reply -> DisposeSource. Mode axis (BLUEPRINT 9): blur /
+black / restore (blur, then the LLM repaints the hidden
+background); ``censor_watch`` adds the local dock (REQ-DOCK-001).
 
 Correctness is CT-B: a missed person leaks the hidden subject, so
 detections are applied verbatim and zero detections is a SKIP, never
@@ -27,9 +28,14 @@ from minion_core.adapters.tg import TgMedia
 from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
+from minion_core.kernel import ArchiveTo
 from minion_core.kernel import DisposeSource
 from minion_core.kernel import Disposition
+from minion_core.kernel import Folder
+from minion_core.kernel import FolderSpec
 from minion_core.kernel import Reply
+from minion_core.kernel import RouteOrigin
+from minion_core.kernel import SeenPaths
 from minion_core.kernel import SendResult
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
@@ -77,6 +83,25 @@ class HidePeople(Step):
         return llm.restore_background(hidden, self._llm)
 
 
+def _docks(cfg: Settings, api: TgApi, spec: TgSpec) -> Stage:
+    """The tg dock, merged with the watch dock when configured.
+
+    Two docks, one belt (REQ-DOCK-001): drop a photo into
+    ``censor_watch`` and the same transformation runs without
+    Telegram -- the v1 folder-watcher behaviour by construction.
+    """
+    tg: Stage = TgMedia(api, spec)
+    if cfg.censor_watch is None:
+        return tg
+    watch = FolderSpec(
+        root=cfg.censor_watch,
+        dest=cfg.bot_dir(BOT),
+        exts=vision.IMAGE_EXTS,
+        poll_sec=cfg.poll_sec,
+    )
+    return tg | Folder(watch, SeenPaths(cfg.seen_paths_max))
+
+
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the belt; secrets come from the passed mapping."""
     api = TgApi(env.get('TG_TOKEN', ''))
@@ -90,10 +115,13 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         kinds=('photo', 'document'),
     )
     channel = TgChannel(api)
+    route = RouteOrigin(
+        tg=SendResult(channel), loc=ArchiveTo(cfg.bot_done(BOT))
+    )
     return (
-        TgMedia(api, spec)
+        _docks(cfg, api, spec)
         >> HidePeople(cfg, llm.spec_from(env))
-        >> SendResult(channel)
+        >> route
         >> Reply(channel)
         >> DisposeSource(spool_of)
     )

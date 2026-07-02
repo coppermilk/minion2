@@ -63,3 +63,35 @@ def test_precedence_is_the_mapping_you_pass(tmp_path: Path) -> None:
     a = load({'DRIVE': str(tmp_path / 'a')})
     b = load({'DRIVE': str(tmp_path / 'b')})
     assert a.drive != b.drive
+
+
+def test_port_axes_default_off(tmp_path: Path) -> None:
+    """Watch docks and catch are absent unless configured."""
+    cfg = load({'DRIVE': str(tmp_path)})
+    assert cfg.censor_watch is None
+    assert cfg.frames_watch is None
+    assert cfg.catch_dir is None
+    assert cfg.print_spooler == ('lp',)
+
+
+def test_port_axes_coerce_one_line_each(tmp_path: Path) -> None:
+    """The new fields follow the same coercion style."""
+    cfg = load(
+        {
+            'DRIVE': str(tmp_path),
+            'PRINT_SPOOLER': 'C:\\S.exe;-print-to-default;-silent',
+            'CENSOR_WATCH': str(tmp_path / 'cw'),
+            'CATCH_DIR': str(tmp_path / 'dl'),
+        }
+    )
+    assert cfg.print_spooler == ('C:\\S.exe', '-print-to-default', '-silent')
+    assert cfg.censor_watch == tmp_path / 'cw'
+    assert cfg.catch_dir == tmp_path / 'dl'
+
+
+def test_relative_watch_dir_raises(tmp_path: Path) -> None:
+    """REQ-CFG-001 covers the new path fields for free."""
+    with pytest.raises(BadConfig, match='CENSOR_WATCH'):
+        load({'DRIVE': str(tmp_path), 'CENSOR_WATCH': 'relative/dir'})
+    with pytest.raises(BadConfig, match='CATCH_DIR'):
+        load({'DRIVE': str(tmp_path), 'CATCH_DIR': 'Downloads'})

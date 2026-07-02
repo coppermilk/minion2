@@ -385,6 +385,24 @@ class DisposeSource(Sink):
             path.unlink()
 
 
+class RouteOrigin(Sink):
+    """Delegate to exactly one sink by the job's origin source.
+
+    Two docks, one belt (REQ-DOCK-001): a tg-origin result reaches
+    the chat sink, a loc-origin result reaches the folder sink -- no
+    bot code branches on origin.
+    """
+
+    def __init__(self, tg: Sink, loc: Sink) -> None:
+        self._tg = tg
+        self._loc = loc
+
+    def handle(self, env: Envelope) -> None:
+        """Hand the envelope to the sink of its origin."""
+        side = self._tg if env.job.origin.source == 'tg' else self._loc
+        side.handle(env)
+
+
 class SeenPaths:
     """Thread-safe LRU set of already-emitted paths (bounded)."""
 
@@ -405,6 +423,11 @@ class SeenPaths:
                 self._seen.popitem(last=False)
             return True
 
+    def has(self, path: Path) -> bool:
+        """Whether the path was already emitted (non-mutating)."""
+        with self._lock:
+            return str(path) in self._seen
+
 
 @dataclass(frozen=True)
 class FolderSpec:
@@ -417,29 +440,61 @@ class FolderSpec:
     once: bool = False
 
 
+PENDING_MAX = 1024
+"""Bound on the stability guard's size memory (bounded memory)."""
+
+BATCH_SCANS = 2
+"""Scans a once-mode dock runs: sight, then the stability pass."""
+
+
 class Folder(Source):
-    """Emit each new matching file under ``spec.root`` (dock 'loc')."""
+    """Emit each new matching file under ``spec.root`` (dock 'loc').
+
+    Write-stability guard (REQ-KRN-005): a path is emitted only when
+    its size is unchanged across two consecutive scans, so a file
+    still being copied into the watch dir is never consumed torn.
+    Once-mode therefore runs exactly two scans.
+    """
 
     def __init__(self, spec: FolderSpec, seen: SeenPaths) -> None:
         super().__init__()
         self._spec = spec
         self._seen = seen
+        self._pending: OrderedDict[str, int] = OrderedDict()
+        self._scans = 0
 
     def produce(self, emit: Emit) -> None:
         """Poll the folder; bounded by stop() or ``spec.once``."""
         while True:
             self._scan(emit)
-            if self._spec.once or self.stopped:
+            if self.stopped:
                 return
-            self.wait(self._spec.poll_sec)
+            if self._spec.once and self._scans >= BATCH_SCANS:
+                return
+            if not self._spec.once:
+                self.wait(self._spec.poll_sec)
 
     def _scan(self, emit: Emit) -> None:
+        self._scans += 1
         for path in sorted(self._spec.root.glob('*')):
             if path.suffix.lower() not in self._spec.exts:
                 continue
-            if not self._seen.add(path):
+            if self._seen.has(path):
                 continue
-            emit(_folder_envelope(path, self._spec.dest))
+            if self._stable(path):
+                self._seen.add(path)
+                emit(_folder_envelope(path, self._spec.dest))
+
+    def _stable(self, path: Path) -> bool:
+        """REQ-KRN-005: only a size unchanged across polls is whole."""
+        key = str(path)
+        size = path.stat().st_size
+        if self._pending.pop(key, None) == size:
+            return True
+        self._pending[key] = size
+        while len(self._pending) > PENDING_MAX:
+            self._pending.popitem(last=False)
+        return False
 
 
 def _folder_envelope(path: Path, dest: Path) -> Envelope:

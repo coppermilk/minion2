@@ -1,8 +1,9 @@
 """print bot: a PDF dropped into ``print/`` reaches the printer.
 
 Graph: Folder(print/) -> PrintPdf -> ArchiveTo(print/_done/).
-Printing goes through the ``lp`` command (stdlib subprocess -- no
-vendor SDK, so the step lives with its bot).
+The spooler is a Settings axis (REQ-PRT-001): ``lp`` on the NAS,
+SumatraPDF on Windows -- the software never branches on the host OS
+(BLUEPRINT 1.2); the deployment's .env decides.
 """
 
 from __future__ import annotations
@@ -30,23 +31,24 @@ if TYPE_CHECKING:
 
 BOT = 'print'
 
-LP = 'lp'
-"""The spooler command; CUPS owns the actual printer."""
-
-LP_TIMEOUT_SEC = 120
-"""Wall-time bound on handing a file to the spooler."""
-
 
 class PrintPdf(Step):
-    """The bot's one transformation: hand the PDF to the spooler."""
+    """The bot's one transformation: hand the PDF to the spooler.
+
+    The argv is ``[*cfg.print_spooler, <pdf path>]`` -- the spooler
+    is configuration, never a host-OS branch (REQ-PRT-001).
+    """
+
+    def __init__(self, cfg: Settings) -> None:
+        self._cfg = cfg
 
     def process(self, job: Job) -> Verdict:
         """Print; the file itself is the delivered result."""
         try:
-            proc = subprocess.run(  # noqa: S603 -- fixed binary, no shell
-                [LP, str(job.src)],
+            proc = subprocess.run(  # noqa: S603 -- configured argv, no shell
+                [*self._cfg.print_spooler, str(job.src)],
                 capture_output=True,
-                timeout=LP_TIMEOUT_SEC,
+                timeout=self._cfg.print_timeout_sec,
                 check=False,
             )
         except FileNotFoundError:
@@ -71,7 +73,7 @@ def build(cfg: Settings) -> Stage:
         poll_sec=cfg.poll_sec,
     )
     seen = SeenPaths(cfg.seen_paths_max)
-    return Folder(spec, seen) >> PrintPdf() >> ArchiveTo(cfg.print_done)
+    return Folder(spec, seen) >> PrintPdf(cfg) >> ArchiveTo(cfg.print_done)
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

@@ -34,6 +34,12 @@ reason code -- REQ-OBS-001).
 | `batch_locked` | second batch invocation while one runs | second run exits immediately | CT-C | none; this is REQ-RES-003 working -- a tight cron schedule is safe because of it |
 | `cache_wiped_live` | `regen/` deleted mid-run | current run FAILED on model load | CT-C | re-run when idle; the cache rebuilds unattended |
 | `bad_config` | relative path override | process refuses to start, loud error | CT-C | make the override absolute (REQ-CFG-001); never relative |
+| `classify_failed` | LLM naming or vision placement crashed | catch job FAILED; file untouched in `catch_dir` | CT-B | none needed; the belt continues (REQ-CATCH-002) -- investigate the adapter if it persists |
+| `bad_image` | non-image bytes under an image extension | job REJECTED; file left in place | CT-B | expected: untrusted input validated explicitly (BLUEPRINT 4) |
+| `printer_missing` | spooler binary absent | print jobs FAILED | CT-C | fix `PRINT_SPOOLER` (REQ-PRT-001) or install the spooler |
+| `print_timeout` | hung spooler | FAILED after `print_timeout_sec` | CT-C | none; the bound exists so the daemon never wedges |
+| `print_failed` | spooler returned non-zero | print jobs FAILED | CT-C | check the printer/CUPS queue; the PDF stays in `print/` for the retry after restart |
+| `step_crashed` | unclassified fault inside a Step | job FAILED with a stack trace in the log | CT-C | this is the crash guard working (REQ-KRN-001); file a defect for the missing stable code |
 
 ## 3. Link fetching (fetch adapter)
 
