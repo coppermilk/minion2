@@ -36,7 +36,8 @@ reason code -- REQ-OBS-001).
 | `bad_config` | relative path override | process refuses to start, loud error | CT-C | make the override absolute (REQ-CFG-001); never relative |
 | `bad_update` | malformed Telegram payload | update skipped, logged; offset advances past it | CT-C | none; explicit boundary validation -- a poison update can neither crash the dock nor wedge it in a replay loop |
 | `hash_collision` | two coexisting images with equal digest+length but different bytes | both embedded on distinct keys; CRITICAL log | CT-B | none needed -- detected by direct byte comparison and split; correctness holds by construction |
-| `classify_failed` | LLM naming or vision placement crashed | catch job FAILED; file untouched in `catch_dir` | CT-B | none needed; the belt continues (REQ-CATCH-002) -- investigate the adapter if it persists |
+| `classify_failed` | the Gemini JSON classification crashed or returned garbage | catch job FAILED / sort leaves the file in its source dir | CT-B | none needed; the file is retried on the next run (REQ-CATCH-002) -- check `GEMINI_API_KEY`/model id if it persists |
+| `script_fetch_failed` | weekly script doc unreachable or not shared "anyone with the link" | classification proceeds without scene labels | CT-D | re-share the doc publicly and drop a fresh `.gdoc` shortcut into `_inbox/` |
 | `no_person` | censor-family detector found nobody | job SKIPPED; the original is NOT sent back | CT-B | expected: a silent pass-through would leak an uncensored photo |
 | `restore_failed` | image model returned no repaint | restore job FAILED; the `_s1` blur stays in the work dir | CT-B | retry later or check `GEMINI_API_KEY`/model id |
 | `not_a_document` | compressed photo/video sent to a bot | payload ignored, logged | CT-D | re-send the file as a document; Telegram recompresses anything else (the documents-only contract) |
@@ -115,11 +116,26 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
 
 ## 6. Naming
 
-Stems come from `files.stem`: `MMDD_<source>_<name>.<ext>` (`source` is `tg` or
-`loc`); two-step bots append `_s1` (intermediate) / `_s2` (final); collisions
-resolve via `next_free_path`. Extracted frames are timecode-named
-`[hour-]minute-second-frame.jpg` (frame = source frame index, a multiple of
-5): `1-05-325.jpg`, or `1-1-05-198000.jpg` past the one-hour mark.
+Two naming domains, one file each:
+
+- **Transport** (`files.stem`): `MMDD_<source>_<name>.<ext>` (`source` is
+  `tg` or `loc`); two-step bots append `_s1` (intermediate) / `_s2` (final);
+  collisions resolve via `next_free_path` (`_2`, `_3`, ...). Extracted
+  frames are timecode-named `[hour-]minute-second-frame.jpg` (frame = source
+  frame index, a multiple of 5): `1-05-325.jpg`, or `1-1-05-198000.jpg` past
+  the one-hour mark.
+- **Library** (`files.usd_prim`): everything sort/catch place under
+  `pictures/<Fandom>/` is a valid OpenUSD prim identifier -- UpperCamelCase,
+  letters and digits only, layer prefix first (`Bg|Fg|Ov|Pr|Tx`), e.g.
+  `FgSnapeOfficeAngry.jpg`; collisions take a bare digit suffix via
+  `next_free_prim` (`FgSnapeOfficeAngry2.jpg`) so the name stays a prim.
+  The Gemini verdict supplies the name; a `censored=true` verdict is logged
+  (`censored=True` on the `placed` line) but changes nothing else.
+
+Weekly script hints ride the same tree: drop the week's Google Doc `.gdoc`
+shortcut(s) into `_inbox/` (docs shared "anyone with the link"); the first
+sort/catch run consumes them (fetch + delete) and archives the text under
+`Scripts/`, where every later run reads it for the rest of the week.
 
 ## 7. Configuration and tests in operation
 

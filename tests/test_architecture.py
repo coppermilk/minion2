@@ -13,18 +13,21 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 VENDORS = {
-    'requests': 'minion_core/adapters/tg.py',
-    'yt_dlp': 'minion_core/adapters/fetch.py',
-    'PIL': 'minion_core/adapters/files.py',
-    'piexif': 'minion_core/adapters/files.py',
-    'numpy': 'minion_core/adapters/vision.py',
-    'torch': 'minion_core/adapters/vision.py',
-    'torchvision': 'minion_core/adapters/vision.py',
-    'transformers': 'minion_core/adapters/vision.py',
-    'facenet_pytorch': 'minion_core/adapters/vision.py',
-    'google': 'minion_core/adapters/llm.py',
+    'requests': (
+        'minion_core/adapters/tg.py',
+        'minion_core/adapters/scripts.py',
+    ),
+    'yt_dlp': ('minion_core/adapters/fetch.py',),
+    'PIL': ('minion_core/adapters/files.py',),
+    'piexif': ('minion_core/adapters/files.py',),
+    'numpy': ('minion_core/adapters/vision.py',),
+    'torch': ('minion_core/adapters/vision.py',),
+    'torchvision': ('minion_core/adapters/vision.py',),
+    'transformers': ('minion_core/adapters/vision.py',),
+    'facenet_pytorch': ('minion_core/adapters/vision.py',),
+    'google': ('minion_core/adapters/llm.py',),
 }
-"""Each vendor and its single sanctioned import site."""
+"""Each vendor and its sanctioned import sites (adapters only)."""
 
 
 def _sources() -> list[Path]:
@@ -64,14 +67,14 @@ def test_no_bot_imports_a_sibling_bot() -> None:
 
 
 def test_vendors_only_behind_their_adapter() -> None:
-    """REQ-ARC-002: one vendor, one adapter, one import site."""
+    """REQ-ARC-002: vendors import only at their sanctioned sites."""
     for path in _sources():
         rel = str(path.relative_to(REPO)).replace('\\', '/')
         for name in _imports(path):
-            owner = VENDORS.get(name.split('.')[0])
-            if owner is None:
+            owners = VENDORS.get(name.split('.')[0])
+            if owners is None:
                 continue
-            assert rel == owner, f'{rel}: vendor {name!r} belongs to {owner}'
+            assert rel in owners, f'{rel}: vendor {name!r} belongs to {owners}'
 
 
 def test_kernel_imports_stdlib_only() -> None:

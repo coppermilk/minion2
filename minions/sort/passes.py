@@ -1,9 +1,11 @@
-"""The four named passes of sort (BLUEPRINT 9).
+"""The three named passes of sort (BLUEPRINT 9).
 
-Name -> Place -> Demote -> Re-place. Reply parsing and placement
-live here, with the bot (BLUEPRINT 11): one LLM reply maps to
-exactly one placement. Batch bots are pure functions of the folder
-state at start; every scan is capped (bounded loops).
+Classify-place -> Demote -> Re-place. Placement lives here, with
+the bot (BLUEPRINT 11): one model verdict maps to exactly one
+placement. The Gemini JSON verdict decides both the prim name and
+the fandom folder; CLIP embeddings survive only to rescue images
+out of Unknown/. Batch bots are pure functions of the folder state
+at start; every scan is capped (bounded loops).
 """
 
 from __future__ import annotations
@@ -13,12 +15,12 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from minion_core.adapters import scripts
 from minion_core.adapters.files import move_atomic
-from minion_core.adapters.files import next_free_path
-from minion_core.adapters.files import sanitize
-from minion_core.adapters.files import stem
+from minion_core.adapters.files import next_free_prim
 from minion_core.adapters.files import tag_week
 from minion_core.adapters.files import valid_image
+from minion_core.adapters.llm import LlmError
 from minion_core.adapters.vision import IMAGE_EXTS
 from minion_core.adapters.vision import EmbeddingCache
 from minion_core.adapters.vision import nearest_fandom
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from minion_core.adapters.llm import Classification
     from minion_core.adapters.vision import Embedder
     from minion_core.settings import Settings
 
@@ -38,25 +41,25 @@ _LOG = logging.getLogger('sort')
 class SortDeps:
     """The non-deterministic frontier, injected (BLUEPRINT 11)."""
 
-    namer: Callable[[Path], str]
+    classify: Callable[[Path, str], Classification]
     embed: Embedder
 
 
 def run_passes(cfg: Settings, deps: SortDeps) -> None:
-    """Name -> Place -> Demote -> Re-place, in that order.
+    """Classify-place -> Demote -> Re-place, in that order.
 
     An idle run (nothing to place, nothing to re-place) exits
     before touching the cache or any adapter (OPERATIONS 5): the
-    tight cron cadence costs nothing while asleep.
+    tight cron cadence costs nothing while asleep. The weekly
+    script hint is read once per run, so a fresh ``.gdoc`` drop is
+    consumed by the very run its images trigger.
     """
     if _idle(cfg):
         _LOG.info('idle: nothing to sort')
         return
-    cache = EmbeddingCache(cfg)
-    name_pass(cfg, deps)
-    place_pass(cfg, deps, cache)
+    classify_pass(cfg, deps, scripts.script_hint(cfg))
     demote_pass(cfg)  # vectors survive: identity-keyed cache
-    replace_pass(cfg, deps, cache)
+    replace_pass(cfg, deps, EmbeddingCache(cfg))
 
 
 def _idle(cfg: Settings) -> bool:
@@ -83,34 +86,38 @@ def _source_images(cfg: Settings) -> list[Path]:
     return [p for d in dirs for p in _images(d, cap)]
 
 
-def name_pass(cfg: Settings, deps: SortDeps) -> None:
-    """Pass 1: the LLM labels each image; the label is the name."""
+def classify_pass(cfg: Settings, deps: SortDeps, hint: str) -> None:
+    """Pass 1: one JSON verdict names the image AND picks the folder.
+
+    A failed classification leaves the file in the source dir --
+    logged, retried on the next run (the model is a frontier, not a
+    gate). ``censored`` is telemetry only: the image is placed like
+    any other (operator decision).
+    """
     for path in _source_images(cfg):
         if not valid_image(path):
             _LOG.warning('rejected reason=bad_image src=%s', path)
             continue
-        label = sanitize(deps.namer(path))
-        named = stem(label, 'loc') + path.suffix.lower()
-        move_atomic(path, next_free_path(path.with_name(named)))
-
-
-def place_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
-    """Pass 2: nearest fandom decides the folder."""
-    library = cache.refresh(cfg.pictures, deps.embed)
-    for path in _source_images(cfg):
-        fandom = nearest_fandom(deps.embed(path), library) or UNKNOWN
-        _place(path, cfg.pictures / fandom, cfg.week_tag)
-
-
-def _place(path: Path, into: Path, week_tag: str) -> None:
-    """Move one image into its fandom, carrying the weekly tag."""
-    target = move_atomic(path, next_free_path(into / path.name))
-    tag_week(target, week_tag)
-    _LOG.info('placed src=%s fandom=%s', target.name, into.name)
+        try:
+            verdict = deps.classify(path, hint)
+        except (LlmError, OSError):
+            _LOG.exception('classify_failed src=%s', path)
+            continue
+        named = verdict.filename + path.suffix.lower()
+        into = cfg.pictures / verdict.fandom
+        target = move_atomic(path, next_free_prim(into / named))
+        tag_week(target, cfg.week_tag)
+        _LOG.info(
+            'placed src=%s fandom=%s confidence=%s censored=%s',
+            target.name,
+            verdict.fandom,
+            verdict.confidence,
+            verdict.censored,
+        )
 
 
 def demote_pass(cfg: Settings) -> None:
-    """Pass 3: sparse fandoms sink to Unknown; vectors survive.
+    """Pass 2: sparse fandoms sink to Unknown; vectors survive.
 
     No invalidation is needed (REQ-SORT-001 restated): the cache is
     identity-keyed and the fandom mapping is rebuilt from the live
@@ -123,7 +130,7 @@ def demote_pass(cfg: Settings) -> None:
             continue
         for path in members:
             unknown = cfg.pictures / UNKNOWN / path.name
-            move_atomic(path, next_free_path(unknown))
+            move_atomic(path, next_free_prim(unknown))
         fandom_dir.rmdir()
         _LOG.info('demoted fandom=%s count=%d', fandom_dir.name, len(members))
 
@@ -140,7 +147,11 @@ def _fandoms(pictures: Path) -> list[Path]:
 
 
 def replace_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
-    """Pass 4: re-run placement against the new layout."""
+    """Pass 3: CLIP re-matches Unknown against the live layout.
+
+    The one surviving embedding consumer (BLUEPRINT 9): Gemini never
+    sees these images again, so the nearest labelled fandom decides.
+    """
     library = cache.refresh(cfg.pictures, deps.embed)
     if not library:
         return
@@ -148,4 +159,8 @@ def replace_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
         fandom = nearest_fandom(deps.embed(path), library)
         if fandom is None:
             continue
-        _place(path, cfg.pictures / fandom, cfg.week_tag)
+        target = move_atomic(
+            path, next_free_prim(cfg.pictures / fandom / path.name)
+        )
+        tag_week(target, cfg.week_tag)
+        _LOG.info('placed src=%s fandom=%s', target.name, fandom)

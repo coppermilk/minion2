@@ -1,4 +1,4 @@
-"""LLM boundary: image naming + background restore (google-genai).
+"""LLM boundary: image classification + background restore (google-genai).
 
 Sole importer of the google SDK (REQ-ARC-002); loaded lazily so the
 suite and non-LLM bots never touch it. Prompts come from
@@ -7,15 +7,17 @@ suite and non-LLM bots never touch it. Prompts come from
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
 
-from minion_core.adapters.files import sanitize
+from minion_core.adapters.files import usd_prim
 from minion_core.kernel import Disposition
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
 from minion_core.prompts import load_prompt
+from minion_core.settings import UNKNOWN
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -33,17 +35,33 @@ class LlmSpec:
     """Endpoint identity: key + model ids (config, not code)."""
 
     key: str
-    name_model: str
-    image_model: str
+    model: str
+    restore_model: str
 
 
 def spec_from(env: Mapping[str, str]) -> LlmSpec:
     """Build the spec from an explicitly passed mapping."""
     return LlmSpec(
         key=env.get('GEMINI_API_KEY', ''),
-        name_model=env.get('LLM_NAME_MODEL', 'gemini-2.5-flash'),
-        image_model=env.get('LLM_IMAGE_MODEL', 'gemini-2.5-flash-image'),
+        model=env.get('GEMINI_MODEL', 'gemini-2.5-flash-lite'),
+        restore_model=env.get('GEMINI_BG_RESTORE_MODEL', 'gemini-3-pro-image'),
     )
+
+
+@dataclass(frozen=True)
+class Classification:
+    """The consumed slice of the model's JSON verdict (classify.md).
+
+    The remaining JSON fields (character, layer, location, emotion)
+    are prompt-side scaffolding: they shape ``filename`` but are not
+    read by any bot.
+    """
+
+    fandom: str
+    filename: str
+    censored: bool
+    confidence: str
+    description: str
 
 
 def _client(spec: LlmSpec) -> Any:  # noqa: ANN401 -- vendor client handle
@@ -59,22 +77,65 @@ def _image_part(path: Path) -> Any:  # noqa: ANN401 -- vendor part handle
     return types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)
 
 
-def name_image(path: Path, spec: LlmSpec) -> str:
-    """A short, safe label for the image (sort pass 1)."""
+def classify_image(path: Path, hint: str, spec: LlmSpec) -> Classification:
+    """One JSON verdict per image: fandom, prim name, flags.
+
+    ``hint`` is this week's script text (adapters.scripts); when
+    present it rides into the prompt under the script_hint framing
+    so scene labels land after the layer prefix.
+    """
+    prompt = load_prompt('classify')
+    if hint:
+        prompt = f'{prompt}\n\n{load_prompt("script_hint")}\n\n{hint}'
     response = _client(spec).models.generate_content(
-        model=spec.name_model,
-        contents=[load_prompt('name_image'), _image_part(path)],
+        model=spec.model,
+        contents=[prompt, _image_part(path)],
     )
-    text = (response.text or '').strip()
-    if not text:
-        raise LlmError('empty naming response')
-    return sanitize(text.splitlines()[0])
+    return _parse_classification(response.text or '')
+
+
+def _parse_classification(text: str) -> Classification:
+    """Coerce the raw reply into a Classification (pure, testable).
+
+    The model is untrusted input (BLUEPRINT 4): fences are stripped,
+    names are sanitized to prim identifiers, a missing fandom falls
+    back to Unknown so the CLIP Re-place pass can rescue it later.
+    """
+    try:
+        data = json.loads(_unfence(text))
+    except ValueError as exc:
+        raise LlmError(f'unparseable classify response: {exc}') from exc
+    if not isinstance(data, dict):
+        raise LlmError('classify response is not a JSON object')
+    raw_fandom = _text_field(data, 'fandom')
+    return Classification(
+        fandom=usd_prim(raw_fandom) if raw_fandom else UNKNOWN,
+        filename=usd_prim(_text_field(data, 'filename')),
+        censored=bool(data.get('censored', False)),
+        confidence=_text_field(data, 'confidence'),
+        description=_text_field(data, 'description'),
+    )
+
+
+def _text_field(data: dict[str, Any], key: str) -> str:
+    """A string field of the reply; null and absence read as ''."""
+    value = data.get(key)
+    return value.strip() if isinstance(value, str) else ''
+
+
+def _unfence(text: str) -> str:
+    """Strip an optional markdown code fence around the JSON."""
+    body = text.strip()
+    if body.startswith('```'):
+        body = body.partition('\n')[2]
+        body = body.rpartition('```')[0]
+    return body.strip()
 
 
 def restore_background(path: Path, spec: LlmSpec) -> Path:
     """Repaint hidden regions; writes the ``_s2`` sibling file."""
     response = _client(spec).models.generate_content(
-        model=spec.image_model,
+        model=spec.restore_model,
         contents=[load_prompt('restore_background'), _image_part(path)],
     )
     data = _first_image(response)

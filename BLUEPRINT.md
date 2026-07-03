@@ -102,7 +102,7 @@ identifiers used in CI.
 | REQ-PRT-001 | The print spooler command is a Settings value; no code branches on the host OS | CT-C | print spooler axis (7, 9) | test: argv assembled from Settings; analysis: no sys.platform outside adapters |
 | REQ-DOCK-001 | A streaming bot with a configured watch dir serves both docks through one belt; each delivered result reaches the sink of its origin (tg -> chat, loc -> done dir) | CT-B | RouteOrigin sink (5) + watch axes (9) | test: merged graph routes both origins |
 | REQ-CATCH-001 | catch never moves or deletes a file out of the watched folder; the library copy is a copy | CT-A | catch ClassifyCopy step (9) | test: original present and byte-identical after delivery |
-| REQ-CATCH-002 | A file that fails classification is left untouched and logged with a stable reason; the belt continues | CT-B | catch step verdicts (9) | test: failing namer yields FAILED, file intact, next file processed |
+| REQ-CATCH-002 | A file that fails classification is left untouched and logged with a stable reason; the belt continues | CT-B | catch step verdicts (9) | test: failing classifier yields FAILED, file intact, next file processed |
 
 ## 4. Design laws (CI-enforced; the design cannot drift)
 
@@ -223,13 +223,16 @@ minion_core/
   kernel.py       the belt (section 5) + logging
   settings.py     Settings + load(env) (section 7)
   prompts/        LLM prompt texts as package-data + load_prompt
-  adapters/       one file per external system; its SOLE importer
+  adapters/       one file per external system; vendors import ONLY here
+                  (each vendor's sanctioned sites are enumerated in the
+                  structural analysis; requests serves two boundaries)
     tg.py         Bot API, long-poll, media receive            (requests)
     fetch.py      link download: yt-dlp + timeout + quota + SSRF guard (yt-dlp)
-    llm.py        image naming + background restore            (google-genai)
+    llm.py        JSON image classification + background restore (google-genai)
+    scripts.py    weekly Google Docs script text for the classify hint (requests)
     vision.py     embeddings/nearest-fandom + person masks + faces (torch et al.)
     video.py      probe + frame extraction                     (ffmpeg/ffprobe)
-    files.py      stem/next_free_path, EXIF, validate/sanitize, dedup, atomic, lock (Pillow, piexif)
+    files.py      stem/usd_prim/next_free_path, EXIF, validate/sanitize, dedup, atomic, lock (Pillow, piexif)
 minions/
   sort/ censor_blur/ censor_black/ restore/ fetch/ frames/ inbox/
   catch/ week-clean/ print/ _template/
@@ -333,7 +336,7 @@ so originals are never recompressed.
 | censor-black | streaming | photo -> people blacked out -> chat or done dir | `censor_black_watch` dock |
 | restore | streaming | photo -> people blurred -> LLM repaints background (`_s1`/`_s2`) | `restore_watch` dock |
 | sort | batch | images -> `pictures/<Fandom>/` | `source_dirs`: `_inbox/` or `Downloads/`; `SORT_WATCH`: streaming trigger, instant sorting |
-| catch | streaming | new Downloads image -> labelled copy in `pictures/<Fandom>/`; the original is renamed in place, never moved | `catch_dir` |
+| catch | streaming | new Downloads image -> prim-named copy in `pictures/<Fandom>/` (same Gemini verdict as sort); the original is renamed in place, never moved | `catch_dir` |
 | week-clean | batch | Monday: strip weekly EXIF tag, clear `_inbox/` | - |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` | `print_spooler`: lp / SumatraPDF argv |
 | kindle | outlier | Google Doc -> PDF -> `print/`; weekly archive | Apps Script (off-kernel, declared, not disguised) |
@@ -343,11 +346,21 @@ Two honest kinds: **streaming** bots are per-file belts drained forever;
 belt algebra would be a poor fit), run one-shot under cron, and hold the lock
 of section 8.
 
-Sort is four named passes: **Name** (LLM labels the image) -> **Place** (vision
-nearest-fandom into `pictures/<Fandom>/`) -> **Demote** (fandoms under
-`demote_min_count` -> `Unknown/`; vectors survive -- the cache is
-identity-keyed and the fandom mapping is never persisted, REQ-SORT-001) ->
-**Re-place** (vision re-runs against the new layout at zero recompute cost).
+Sort is three named passes: **Classify-place** (one Gemini JSON verdict per
+image decides BOTH the OpenUSD prim filename and the `pictures/<Fandom>/`
+folder; the weekly script hint from `adapters/scripts.py` rides into the
+prompt) -> **Demote** (fandoms under `demote_min_count` -> `Unknown/`;
+vectors survive -- the cache is identity-keyed and the fandom mapping is
+never persisted, REQ-SORT-001) -> **Re-place** (vision re-matches `Unknown/`
+against the live layout at zero recompute cost -- the one surviving
+embedding consumer; Gemini never sees an image twice).
+
+Library naming: files under `pictures/` are valid OpenUSD prim identifiers
+(UpperCamelCase, letters+digits, e.g. `FgSnapeOfficeAngry.jpg`); collisions
+take a bare digit suffix (`FgSnapeOfficeAngry2.jpg`, `files.next_free_prim`).
+The `MMDD_<source>_<name>` stem remains the transport-bot convention only.
+A `censored=true` verdict (bars/mosaic/blur/stickers) changes nothing about
+placement; it is recorded in the log line (operator decision).
 
 ## 10. Resource budgets (every resource has a declared, enforced bound)
 
@@ -368,8 +381,10 @@ logged boundaries, so any surprise is attributable from telemetry alone:
 
 1. **Model inference** (llm, vision) -- behind adapters; reply parsing lives
    with `sort/`, so one reply maps to exactly one placement.
-2. **Network** (fetch, Drive) -- bounded by timeout + quota; host set made
-   deterministic by the SSRF guard (REQ-SEC-001).
+2. **Network** (fetch, Drive, weekly script fetch) -- bounded by timeout +
+   quota; the fetch host set is made deterministic by the SSRF guard
+   (REQ-SEC-001); the script fetch talks to one fixed Docs export host and
+   degrades to an empty hint on any failure.
 3. **Model-weights version** -- pinned in CACHE; a weights change is a
    configuration change (section 12), never drift.
 4. **Wall clock** -- read only by cron; batch bots are pure functions of the

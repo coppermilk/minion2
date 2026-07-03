@@ -1,4 +1,4 @@
-"""sort bot: the four passes, one-shot or watch-triggered.
+"""sort bot: the three passes, one-shot or watch-triggered.
 
 Config axes (BLUEPRINT 9): ``SOURCE_DIRS`` -- ``_inbox/`` by
 default, a Downloads folder on the Windows deployment; and
@@ -47,13 +47,13 @@ def real_deps(env: Mapping[str, str]) -> SortDeps:
     """Wire the live adapters (tests inject doubles instead)."""
     spec = llm.spec_from(env)
     return SortDeps(
-        namer=functools.partial(llm.name_image, spec=spec),
+        classify=functools.partial(llm.classify_image, spec=spec),
         embed=vision.embed_image,
     )
 
 
 class SortTrigger(Step):
-    """Run the four passes when a new stable image lands.
+    """Run the three passes when a new stable image lands.
 
     The passes move the trigger file themselves, so there is no
     disposal sink; the per-bot lock keeps a slow run from

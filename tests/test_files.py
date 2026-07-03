@@ -15,10 +15,12 @@ from minion_core.adapters.files import atomic_write
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.files import has_week
 from minion_core.adapters.files import next_free_path
+from minion_core.adapters.files import next_free_prim
 from minion_core.adapters.files import sanitize
 from minion_core.adapters.files import stem
 from minion_core.adapters.files import strip_week
 from minion_core.adapters.files import tag_week
+from minion_core.adapters.files import usd_prim
 from minion_core.kernel import Disposition
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
@@ -36,6 +38,26 @@ def test_collision_resolves_to_2(tmp_path: Path) -> None:
     (tmp_path / 'a_2.jpg').write_bytes(b'x')
     assert next_free_path(taken) == tmp_path / 'a_3.jpg'
     assert next_free_path(tmp_path / 'free.jpg').name == 'free.jpg'
+
+
+def test_prim_collision_keeps_a_valid_prim(tmp_path: Path) -> None:
+    """Library collisions stay USD prims: a bare digit, no '_'."""
+    taken = tmp_path / 'FgSnapeOfficeAngry.jpg'
+    taken.write_bytes(b'x')
+    assert next_free_prim(taken).name == 'FgSnapeOfficeAngry2.jpg'
+    (tmp_path / 'FgSnapeOfficeAngry2.jpg').write_bytes(b'x')
+    assert next_free_prim(taken).name == 'FgSnapeOfficeAngry3.jpg'
+    assert next_free_prim(tmp_path / 'PrWand.jpg').name == 'PrWand.jpg'
+
+
+def test_usd_prim_sanitizes_untrusted_names() -> None:
+    """OPERATIONS 6: library names are valid USD prim identifiers."""
+    assert usd_prim('FgSnapeOfficeAngry') == 'FgSnapeOfficeAngry'
+    assert usd_prim('Fg Snape_Office-1!') == 'FgSnapeOffice1'
+    assert usd_prim('42Wallpaper') == 'X42Wallpaper'
+    assert usd_prim('') == 'Item'
+    assert usd_prim('***') == 'Item'
+    assert len(usd_prim('A' * 500)) <= 80
 
 
 def test_interrupted_write_leaves_no_torn_file(

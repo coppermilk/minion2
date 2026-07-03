@@ -195,15 +195,21 @@ def _jpeg(path: Path) -> Path:
     return path
 
 
-def _deps(*, namer_fails: bool = False) -> CatchDeps:
-    import numpy as np
+def _deps(*, classify_fails: bool = False) -> CatchDeps:
+    from minion_core.adapters.llm import Classification
 
-    def namer(path: Path) -> str:
-        if namer_fails:
+    def classify(path: Path, hint: str) -> Classification:
+        if classify_fails:
             raise RuntimeError('llm down')
-        return f'label {path.stem}'
+        return Classification(
+            fandom='Cats',
+            filename='FgCatSofaCalm',
+            censored=False,
+            confidence='high',
+            description='a test image',
+        )
 
-    return CatchDeps(namer=namer, embed=lambda p: np.array([1.0, 0.0]))
+    return CatchDeps(classify=classify)
 
 
 def _catch_job(cfg: Settings, path: Path) -> Job:
@@ -227,20 +233,21 @@ def test_catch_copies_and_never_moves(tmp_path: Path) -> None:
     assert verdict.disposition is Disposition.DELIVERED
     assert verdict.result is not None
     assert verdict.result.parent == cfg.pictures / 'Cats'
+    assert verdict.result.name == 'FgCatSofaCalm.jpg'
     assert verdict.result.read_bytes() == original_bytes
     stayed = list(downloads.iterdir())  # renamed, never relocated
     assert len(stayed) == 1
     assert stayed[0].read_bytes() == original_bytes
-    assert 'label_wallpaper' in stayed[0].name
+    assert stayed[0].name == 'FgCatSofaCalm.jpg'
 
 
 def test_catch_failure_leaves_file_untouched(tmp_path: Path) -> None:
-    """REQ-CATCH-002: a namer crash is FAILED; the belt continues."""
+    """REQ-CATCH-002: a classify crash is FAILED; the belt continues."""
     downloads = tmp_path / 'Downloads'
     cfg = make_cfg(tmp_path / 'drive', CATCH_DIR=str(downloads))
     first = _jpeg(downloads / 'one.jpg')
     before = first.read_bytes()
-    step = ClassifyCopy(cfg, _deps(namer_fails=True))
+    step = ClassifyCopy(cfg, _deps(classify_fails=True))
 
     verdict = step.process(_catch_job(cfg, first))
     assert verdict.disposition is Disposition.FAILED
@@ -260,7 +267,7 @@ def test_catch_skips_already_labelled(tmp_path: Path) -> None:
     """A renamed original is never re-caught into a loop."""
     downloads = tmp_path / 'Downloads'
     cfg = make_cfg(tmp_path / 'drive', CATCH_DIR=str(downloads))
-    done = _jpeg(downloads / '0702_loc_label_wallpaper.jpg')
+    done = _jpeg(downloads / 'FgCatSofaCalm.jpg')
     verdict = ClassifyCopy(cfg, _deps()).process(_catch_job(cfg, done))
     assert verdict.disposition is Disposition.SKIPPED
     assert verdict.reason == 'already_labelled'

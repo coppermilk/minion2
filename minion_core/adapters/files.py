@@ -20,6 +20,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 from typing import Any
 
+from minion_core.kernel import NAME_TRIES
 from minion_core.kernel import Disposition
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
@@ -48,10 +49,12 @@ __all__ = [
     'load_rgb',
     'move_atomic',
     'next_free_path',
+    'next_free_prim',
     'sanitize',
     'stem',
     'strip_week',
     'tag_week',
+    'usd_prim',
     'used_bytes',
     'valid_image',
 ]
@@ -77,6 +80,42 @@ def stem(name: str, source: str, when: date | None = None) -> str:
     """Canonical stem ``MMDD_<source>_<name>`` (OPERATIONS 6)."""
     day = date.today() if when is None else when  # noqa: DTZ011 -- local date is the naming intent
     return f'{day:%m%d}_{source}_{sanitize(name)}'
+
+
+_NON_PRIM = re.compile(r'[^A-Za-z0-9]+')
+
+USD_FALLBACK = 'Item'
+"""Prim name used when nothing survives sanitizing."""
+
+
+def usd_prim(name: str) -> str:
+    """Reduce an untrusted name to a valid OpenUSD prim identifier.
+
+    Library files are USD prims (OPERATIONS 6): letters and digits
+    only, never starting with a digit; bounded like ``sanitize``.
+    """
+    safe = _NON_PRIM.sub('', name)[:NAME_MAX]
+    if not safe:
+        return USD_FALLBACK
+    if safe[0].isdigit():
+        return f'X{safe}'[:NAME_MAX]
+    return safe
+
+
+def next_free_prim(path: Path) -> Path:
+    """First non-colliding sibling that is still a valid prim.
+
+    The USD twin of ``next_free_path`` (REQ-DATA-001): a bare digit
+    suffix (``Stem2``) instead of ``Stem_2``, keeping the name a
+    prim identifier.
+    """
+    if not path.exists():
+        return path
+    for n in range(2, NAME_TRIES):
+        cand = path.with_stem(f'{path.stem}{n}')
+        if not cand.exists():
+            return cand
+    raise FileExistsError(f'name_collision unresolved: {path}')
 
 
 def used_bytes(root: Path) -> int:
