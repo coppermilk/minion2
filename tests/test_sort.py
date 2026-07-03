@@ -64,26 +64,42 @@ def _seed_library(cfg: Settings) -> None:
         _jpeg(cfg.pictures / 'Dogs' / f'dog_{i}.jpg')
 
 
-def test_classify_pass_places_by_json_fandom(tmp_path: Path) -> None:
-    """Pass 1: the JSON verdict names the file AND picks the folder."""
-    from minion_core.adapters.files import has_week
+def test_classify_pass_renames_in_place_with_fandom_tag(
+    tmp_path: Path,
+) -> None:
+    """Pass 1: prim name + EXIF fandom; the file waits out its week."""
+    from minion_core.adapters.files import read_fandom
 
     cfg = make_cfg(tmp_path / 'drive')
     _jpeg(cfg.inbox / 'new_cat.jpg')
     classify_pass(cfg, DEPS, '')
-    placed = cfg.pictures / 'Cats' / 'FgCatsCalm.jpg'
-    assert placed.exists()
-    assert has_week(placed, cfg.week_tag)
-    assert list(cfg.inbox.iterdir()) == []
+    classified = cfg.inbox / 'FgCatsCalm.jpg'
+    assert classified.exists()  # still in _inbox, not in pictures/
+    assert not (cfg.pictures / 'Cats').exists()
+    assert read_fandom(classified) == 'Cats'
 
 
 def test_classify_pass_collision_gets_bare_digit(tmp_path: Path) -> None:
-    """Library collisions stay valid prims: Name2, not Name_2."""
+    """Same-week collisions stay valid prims: Name2, not Name_2."""
     cfg = make_cfg(tmp_path / 'drive')
-    _jpeg(cfg.pictures / 'Cats' / 'FgCatsCalm.jpg')
+    _jpeg(cfg.inbox / 'FgCatsCalm.jpg')  # last trigger's result
     _jpeg(cfg.inbox / 'other_cat.jpg')
     classify_pass(cfg, DEPS, '')
-    assert (cfg.pictures / 'Cats' / 'FgCatsCalm2.jpg').exists()
+    assert (cfg.inbox / 'FgCatsCalm2.jpg').exists()
+
+
+def test_classified_files_do_not_retrigger_the_model(
+    tmp_path: Path,
+) -> None:
+    """A prim-shaped name is at rest: no second Gemini call, idle run."""
+    cfg = make_cfg(tmp_path / 'drive')
+    _jpeg(cfg.inbox / 'FgCatsCalm.jpg')
+
+    def explode(path: Path, hint: str) -> Classification:
+        raise AssertionError('classified file must not re-classify')
+
+    run_passes(cfg, SortDeps(classify=explode, embed=_embed))
+    assert (cfg.inbox / 'FgCatsCalm.jpg').exists()
 
 
 def test_classify_pass_rejects_non_images(tmp_path: Path) -> None:
@@ -107,17 +123,17 @@ def test_classify_failure_leaves_source_for_retry(tmp_path: Path) -> None:
     assert pic.exists()
 
 
-def test_censored_places_normally_and_logs(
+def test_censored_classifies_normally_and_logs(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """censored=true is telemetry only: same placement, one log line."""
+    """censored=true is telemetry only: same handling, one log line."""
     import logging
 
     cfg = make_cfg(tmp_path / 'drive')
     _jpeg(cfg.inbox / 'censored_cat.jpg')
     with caplog.at_level(logging.INFO, logger='sort'):
         classify_pass(cfg, DEPS, '')
-    assert (cfg.pictures / 'Cats' / 'FgCatsCalm.jpg').exists()
+    assert (cfg.inbox / 'FgCatsCalm.jpg').exists()
     assert any('censored=True' in r.getMessage() for r in caplog.records)
 
 
@@ -183,14 +199,19 @@ def test_replace_pass_rescues_unknown(tmp_path: Path) -> None:
     assert (cfg.pictures / 'Cats' / 'lost_cat.jpg').exists()
 
 
-def test_full_run_end_to_end(tmp_path: Path) -> None:
-    """The three passes compose: inbox image lands in its fandom."""
+def test_full_week_end_to_end(tmp_path: Path) -> None:
+    """The week's cycle: classify in place, Monday moves to fandom."""
+    import minions.week_clean.main
+    from tests.conftest import make_env
+
     cfg = make_cfg(tmp_path / 'drive')
     _seed_library(cfg)
     _jpeg(cfg.inbox / 'stray cat.jpg')
     run_passes(cfg, DEPS)
+    assert (cfg.inbox / 'FgCatsCalm.jpg').exists()  # the working week
+    assert minions.week_clean.main.main(make_env(tmp_path / 'drive')) == 0
     cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
-    assert 'FgCatsCalm.jpg' in cats
+    assert 'FgCatsCalm.jpg' in cats  # Monday shelves it by EXIF fandom
     assert list(cfg.inbox.iterdir()) == []
 
 
@@ -218,8 +239,7 @@ def test_source_dirs_axis(tmp_path: Path) -> None:
     _jpeg(downloads / 'dl_cat.jpg')
     run_passes(cfg, DEPS)
     assert not (downloads / 'dl_cat.jpg').exists()
-    cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
-    assert 'FgCatsCalm.jpg' in cats
+    assert (downloads / 'FgCatsCalm.jpg').exists()  # classified in place
 
 
 def test_sort_watch_axis_coerces(tmp_path: Path) -> None:
@@ -249,8 +269,7 @@ def test_watch_belt_sorts_on_arrival(tmp_path: Path) -> None:
     assert len(out) == 1
     assert out[0].verdict is not None
     assert out[0].verdict.disposition is Disposition.DELIVERED
-    cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
-    assert 'FgCatsCalm.jpg' in cats
+    assert (cfg.inbox / 'FgCatsCalm.jpg').exists()  # classified in place
 
 
 def test_watch_trigger_respects_lock(tmp_path: Path) -> None:

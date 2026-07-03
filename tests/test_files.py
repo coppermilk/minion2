@@ -60,6 +60,24 @@ def test_usd_prim_sanitizes_untrusted_names() -> None:
     assert len(usd_prim('A' * 500)) <= 80
 
 
+def test_fandom_tag_round_trip(tmp_path: Path) -> None:
+    """The classify verdict survives the week inside the JPEG."""
+    from PIL import Image
+
+    from minion_core.adapters.files import read_fandom
+    from minion_core.adapters.files import tag_fandom
+
+    pic = tmp_path / 'FgSnapeOfficeAngry.jpg'
+    Image.new('RGB', (8, 8), (10, 20, 30)).save(pic, 'JPEG')
+    assert read_fandom(pic) == ''
+    tag_fandom(pic, 'HarryPotter')
+    assert read_fandom(pic) == 'HarryPotter'
+    png = tmp_path / 'PrWand.png'
+    Image.new('RGB', (8, 8)).save(png, 'PNG')
+    tag_fandom(png, 'HarryPotter')  # no-op, must not raise
+    assert read_fandom(png) == ''
+
+
 def test_interrupted_write_leaves_no_torn_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

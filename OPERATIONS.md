@@ -127,13 +127,23 @@ Two naming domains, one file each:
   editor's import dialog is chronological order; the video name is the
   sanitized source stem (a download's stem is its title):
   `0-01-05-000325_BackstageMilan.jpg`.
-- **Library** (`files.usd_prim`): everything sort/catch place under
-  `pictures/<Fandom>/` is a valid OpenUSD prim identifier -- UpperCamelCase,
-  letters and digits only, layer prefix first (`Bg|Fg|Ov|Pr|Tx`), e.g.
-  `FgSnapeOfficeAngry.jpg`; collisions take a bare digit suffix via
-  `next_free_prim` (`FgSnapeOfficeAngry2.jpg`) so the name stays a prim.
-  The Gemini verdict supplies the name; a `censored=true` verdict is logged
-  (`censored=True` on the `placed` line) but changes nothing else.
+- **Library** (`files.usd_prim`): everything sort/catch classify is a valid
+  OpenUSD prim identifier -- UpperCamelCase, letters and digits only, layer
+  prefix first (`Bg|Fg|Ov|Pr|Tx`), e.g. `FgSnapeOfficeAngry.jpg`; collisions
+  take a bare digit suffix via `next_free_prim` (`FgSnapeOfficeAngry2.jpg`)
+  so the name stays a prim. The Gemini verdict supplies the name; a
+  `censored=true` verdict is logged (`censored=True` on the `classified`
+  line) but changes nothing else.
+
+The working week: sort classifies IN PLACE -- the file is renamed to its
+prim in `_inbox/` and the fandom goes into EXIF ImageDescription
+(`files.tag_fandom`), because the prim name deliberately carries no fandom.
+The week's material stays in `_inbox/` for editing; Monday's week-clean run
+reads the EXIF fandom back and shelves everything classified into
+`pictures/<Fandom>/` (a non-JPEG loses the fandom and lands in `Unknown/`,
+where Re-place rescues it). Unclassified leftovers are never deleted --
+they wait for the next attempt. catch is the exception: its copy goes
+straight into the library (the original stays in Downloads anyway).
 
 Weekly script hints ride the same tree: drop the week's Google Doc `.gdoc`
 shortcut(s) into `_inbox/` (docs shared "anyone with the link"); the first

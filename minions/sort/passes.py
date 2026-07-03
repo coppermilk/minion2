@@ -1,11 +1,13 @@
 """The three named passes of sort (BLUEPRINT 9).
 
-Classify-place -> Demote -> Re-place. Placement lives here, with
-the bot (BLUEPRINT 11): one model verdict maps to exactly one
-placement. The Gemini JSON verdict decides both the prim name and
-the fandom folder; CLIP embeddings survive only to rescue images
-out of Unknown/. Batch bots are pure functions of the folder state
-at start; every scan is capped (bounded loops).
+Classify -> Demote -> Re-place. The Gemini JSON verdict decides
+both the prim name and the fandom, but the image STAYS in its
+source dir for the working week: the name becomes the prim, the
+fandom goes into EXIF (files.tag_fandom), and the Monday week-clean
+run moves the classified week into ``pictures/`` (BLUEPRINT 9).
+CLIP embeddings survive only to rescue images out of Unknown/.
+Batch bots are pure functions of the folder state at start; every
+scan is capped (bounded loops).
 """
 
 from __future__ import annotations
@@ -16,8 +18,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import scripts
+from minion_core.adapters.files import PRIM_NAMED
 from minion_core.adapters.files import move_atomic
 from minion_core.adapters.files import next_free_prim
+from minion_core.adapters.files import tag_fandom
 from minion_core.adapters.files import tag_week
 from minion_core.adapters.files import valid_image
 from minion_core.adapters.llm import LlmError
@@ -46,9 +50,9 @@ class SortDeps:
 
 
 def run_passes(cfg: Settings, deps: SortDeps) -> None:
-    """Classify-place -> Demote -> Re-place, in that order.
+    """Classify -> Demote -> Re-place, in that order.
 
-    An idle run (nothing to place, nothing to re-place) exits
+    An idle run (nothing to classify, nothing to re-place) exits
     before touching the cache or any adapter (OPERATIONS 5): the
     tight cron cadence costs nothing while asleep. The weekly
     script hint is read once per run, so a fresh ``.gdoc`` drop is
@@ -63,7 +67,11 @@ def run_passes(cfg: Settings, deps: SortDeps) -> None:
 
 
 def _idle(cfg: Settings) -> bool:
-    """Whether this run has no work at all."""
+    """Whether this run has no work at all.
+
+    Already-classified images waiting out their week in the source
+    dirs are not work; only unclassified arrivals and Unknown/ are.
+    """
     if _source_images(cfg):
         return False
     return not _images(cfg.pictures / UNKNOWN, cfg.max_embedding_scan)
@@ -80,19 +88,31 @@ def _images(root: Path, cap: int) -> list[Path]:
 
 
 def _source_images(cfg: Settings) -> list[Path]:
-    """Every image waiting in the configured source dirs."""
+    """Every UNclassified image waiting in the source dirs.
+
+    A prim-shaped name marks a file this pass already handled; it
+    rests in place until the Monday mover (week-clean) collects it,
+    and must not re-trigger the model.
+    """
     dirs = cfg.source_dirs or (cfg.inbox,)
     cap = cfg.max_embedding_scan
-    return [p for d in dirs for p in _images(d, cap)]
+    return [
+        p
+        for d in dirs
+        for p in _images(d, cap)
+        if not PRIM_NAMED.match(p.name)
+    ]
 
 
 def classify_pass(cfg: Settings, deps: SortDeps, hint: str) -> None:
-    """Pass 1: one JSON verdict names the image AND picks the folder.
+    """Pass 1: one JSON verdict; the image keeps waiting in place.
 
-    A failed classification leaves the file in the source dir --
-    logged, retried on the next run (the model is a frontier, not a
-    gate). ``censored`` is telemetry only: the image is placed like
-    any other (operator decision).
+    The name becomes the prim, the fandom goes into EXIF -- the file
+    itself stays in its source dir for the working week (the Monday
+    week-clean run moves it into the library). A failed
+    classification leaves the file untouched -- logged, retried on
+    the next run (the model is a frontier, not a gate). ``censored``
+    is telemetry only (operator decision).
     """
     for path in _source_images(cfg):
         if not valid_image(path):
@@ -104,11 +124,10 @@ def classify_pass(cfg: Settings, deps: SortDeps, hint: str) -> None:
             _LOG.exception('classify_failed src=%s', path)
             continue
         named = verdict.filename + path.suffix.lower()
-        into = cfg.pictures / verdict.fandom
-        target = move_atomic(path, next_free_prim(into / named))
-        tag_week(target, cfg.week_tag)
+        target = path.rename(next_free_prim(path.with_name(named)))
+        tag_fandom(target, verdict.fandom)
         _LOG.info(
-            'placed src=%s fandom=%s confidence=%s censored=%s',
+            'classified src=%s fandom=%s confidence=%s censored=%s',
             target.name,
             verdict.fandom,
             verdict.confidence,

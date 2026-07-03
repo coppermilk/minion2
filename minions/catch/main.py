@@ -15,13 +15,13 @@ from __future__ import annotations
 import functools
 import logging
 import os
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import llm
 from minion_core.adapters import scripts
 from minion_core.adapters import vision
+from minion_core.adapters.files import PRIM_NAMED
 from minion_core.adapters.files import atomic_write
 from minion_core.adapters.files import next_free_prim
 from minion_core.adapters.files import valid_image
@@ -48,9 +48,6 @@ if TYPE_CHECKING:
 BOT = 'catch'
 
 _LOG = logging.getLogger(BOT)
-
-_LABELLED = re.compile(r'^(Bg|Fg|Ov|Pr|Tx)[A-Za-z0-9]*\.')
-"""A name already shaped like a layered prim: processed earlier."""
 
 
 @dataclass(frozen=True)
@@ -83,7 +80,7 @@ class ClassifyCopy(Step):
 
     def process(self, job: Job) -> Verdict:
         """Classify one new download; failures leave it untouched."""
-        if _LABELLED.match(job.src.name):
+        if PRIM_NAMED.match(job.src.name):
             return Verdict(Disposition.SKIPPED, reason='already_labelled')
         if not valid_image(job.src):
             return Verdict(Disposition.REJECTED, reason='bad_image')

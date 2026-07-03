@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 __all__ = [
     'BLACK',
     'BLUR',
+    'PRIM_NAMED',
     'BatchLock',
     'BudgetWriter',
     'Deliver',
@@ -50,9 +51,11 @@ __all__ = [
     'move_atomic',
     'next_free_path',
     'next_free_prim',
+    'read_fandom',
     'sanitize',
     'stem',
     'strip_week',
+    'tag_fandom',
     'tag_week',
     'usd_prim',
     'used_bytes',
@@ -83,6 +86,13 @@ def stem(name: str, source: str, when: date | None = None) -> str:
 
 
 _NON_PRIM = re.compile(r'[^A-Za-z0-9]+')
+
+PRIM_NAMED = re.compile(r'^(?:Bg|Fg|Ov|Pr|Tx)[A-Za-z0-9]*\.')
+"""A filename already shaped like a layered prim: classified earlier.
+
+The one skip-guard sort and catch share (one place per fact): a
+name the classifier produced always starts with a layer prefix.
+"""
 
 USD_FALLBACK = 'Item'
 """Prim name used when nothing survives sanitizing."""
@@ -326,6 +336,34 @@ def strip_week(path: Path, tag: str) -> None:
     exif = piexif.load(str(path))
     del exif['Exif'][piexif.ExifIFD.UserComment]
     piexif.insert(piexif.dump(exif), str(path))
+
+
+def tag_fandom(path: Path, fandom: str) -> None:
+    """Record the fandom inside the JPEG (no-op otherwise).
+
+    The prim filename deliberately carries no fandom, so while a
+    classified image waits in ``_inbox/`` the verdict lives in EXIF
+    ImageDescription; the Monday mover reads it back. A non-JPEG
+    loses the fandom and lands in Unknown, where Re-place rescues it.
+    """
+    import piexif
+
+    if path.suffix.lower() not in _JPEG:
+        return
+    exif = piexif.load(str(path))
+    exif['0th'][piexif.ImageIFD.ImageDescription] = fandom.encode('ascii')
+    piexif.insert(piexif.dump(exif), str(path))
+
+
+def read_fandom(path: Path) -> str:
+    """The fandom recorded by ``tag_fandom``, or ''."""
+    import piexif
+
+    if path.suffix.lower() not in _JPEG:
+        return ''
+    exif = piexif.load(str(path))
+    raw = exif['0th'].get(piexif.ImageIFD.ImageDescription, b'')
+    return bytes(raw).decode('ascii', errors='ignore').strip()
 
 
 @dataclass(frozen=True)
