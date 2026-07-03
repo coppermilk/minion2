@@ -41,7 +41,7 @@ def test_extract_names_frames_by_timecode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The ffmpeg sequence becomes [hour-]min-sec-frame names."""
+    """The sequence becomes [hour-]min-sec-frame_<video> names."""
     cfg = make_cfg(tmp_path / 'drive')
     clip = cfg.bot_dir('frames') / 'clip.mp4'
     clip.parent.mkdir(parents=True, exist_ok=True)
@@ -67,8 +67,12 @@ def test_extract_names_frames_by_timecode(
     assert verdict.disposition is Disposition.DELIVERED
     assert verdict.result is not None
     names = sorted(p.name for p in verdict.result.iterdir())
-    # fps=5: frames 0, 5, 10 land at 0s, 1s, 2s
-    assert names == ['0-00-0.jpg', '0-01-5.jpg', '0-02-10.jpg']
+    # fps=5: frames 0, 5, 10 land at 0s, 1s, 2s; the video name rides
+    assert names == [
+        '0-00-0_clip.jpg',
+        '0-01-5_clip.jpg',
+        '0-02-10_clip.jpg',
+    ]
 
 
 def test_missing_fps_is_probe_failed(

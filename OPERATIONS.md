@@ -121,8 +121,10 @@ Two naming domains, one file each:
 - **Transport** (`files.stem`): `MMDD_<source>_<name>.<ext>` (`source` is
   `tg` or `loc`); two-step bots append `_s1` (intermediate) / `_s2` (final);
   collisions resolve via `next_free_path` (`_2`, `_3`, ...). Extracted
-  frames are timecode-named `[hour-]minute-second-frame.jpg` (frame = source
-  frame index, a multiple of 5): `1-05-325.jpg`, or `1-1-05-198000.jpg` past
+  frames are named `<timecode>_<video name>.jpg` where the timecode is
+  `[hour-]minute-second-frame` (frame = source frame index, a multiple of
+  5) and the video name is the sanitized source stem (a download's stem is
+  its title): `1-05-325_BackstageMilan.jpg`, or `1-1-05-198000_...` past
   the one-hour mark.
 - **Library** (`files.usd_prim`): everything sort/catch place under
   `pictures/<Fandom>/` is a valid OpenUSD prim identifier -- UpperCamelCase,

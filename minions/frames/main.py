@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from minion_core.adapters import video
 from minion_core.adapters.fetch import FetchLink
 from minion_core.adapters.files import free_quota
+from minion_core.adapters.files import sanitize
 from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgAny
 from minion_core.adapters.tg import TgApi
@@ -67,13 +68,17 @@ def _timecode(total_sec: int, frame_no: int) -> str:
     return f'{minutes}-{seconds:02d}-{frame_no}'
 
 
-def _stamp(shots: list[Path], fps: float) -> list[Path]:
-    """Rename ffmpeg's sequence to timecoded names."""
+def _stamp(shots: list[Path], fps: float, label: str) -> list[Path]:
+    """Rename ffmpeg's sequence to ``<timecode>_<video name>`` names.
+
+    The label rides along so a frame stays recognizable outside its
+    folder (a downloaded video's stem is its title).
+    """
     named = []
     for k, shot in enumerate(shots):
         frame_no = k * STRIDE
         code = _timecode(int(frame_no / fps), frame_no)
-        named.append(shot.rename(shot.with_name(f'{code}.jpg')))
+        named.append(shot.rename(shot.with_name(f'{code}_{label}.jpg')))
     return named
 
 
@@ -84,7 +89,7 @@ class ExtractFrames(Step):
         self._cfg = cfg
 
     def process(self, job: Job) -> Verdict:
-        """Extract every 5th frame; name each by its timecode."""
+        """Extract every 5th frame; timecode + video name each."""
         out = job.dest / f'{job.src.stem}_frames'
         spec = video.FrameSpec(
             stride=STRIDE,
@@ -97,7 +102,7 @@ class ExtractFrames(Step):
             return Verdict(Disposition.FAILED, reason='probe_failed')
         if not shots:
             return Verdict(Disposition.FAILED, reason='probe_failed')
-        named = _stamp(shots, fps)
+        named = _stamp(shots, fps, sanitize(job.src.stem))
         return Verdict(
             Disposition.DELIVERED, result=out, reply=f'{len(named)} frames'
         )
