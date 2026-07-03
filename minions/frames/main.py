@@ -52,20 +52,19 @@ VIDEO_EXTS = ('.mp4', '.mkv', '.webm', '.mov', '.avi')
 
 STRIDE = 5
 """Every 5th source frame -- an invariant, deliberately not a knob
-(the timecoded file names below encode this step)."""
+(the timecoded, fixed-width file names below encode this step)."""
 
 
 def _timecode(total_sec: int, frame_no: int) -> str:
-    """``[hour-]minute-second-frame``: 1-05-325 or 1-1-05-198000.
+    """``hour-minute-second-frame``, zero-padded: 0-01-05-000325.
 
-    The hour field appears only for videos longer than an hour; the
-    trailing number is the source frame index (a multiple of 5).
+    Every field is fixed-width (frame = source frame index, a
+    multiple of 5, 6 digits), so the alphabetical order an editor's
+    import dialog uses IS the chronological order.
     """
     hours, rest = divmod(total_sec, 3600)
     minutes, seconds = divmod(rest, 60)
-    if hours:
-        return f'{hours}-{minutes}-{seconds:02d}-{frame_no}'
-    return f'{minutes}-{seconds:02d}-{frame_no}'
+    return f'{hours}-{minutes:02d}-{seconds:02d}-{frame_no:06d}'
 
 
 def _stamp(shots: list[Path], fps: float, label: str) -> list[Path]:

@@ -122,10 +122,11 @@ Two naming domains, one file each:
   `tg` or `loc`); two-step bots append `_s1` (intermediate) / `_s2` (final);
   collisions resolve via `next_free_path` (`_2`, `_3`, ...). Extracted
   frames are named `<timecode>_<video name>.jpg` where the timecode is
-  `[hour-]minute-second-frame` (frame = source frame index, a multiple of
-  5) and the video name is the sanitized source stem (a download's stem is
-  its title): `1-05-325_BackstageMilan.jpg`, or `1-1-05-198000_...` past
-  the one-hour mark.
+  `hour-minute-second-frame`, every field zero-padded (frame = source
+  frame index, a multiple of 5, 6 digits) so alphabetical order in an
+  editor's import dialog is chronological order; the video name is the
+  sanitized source stem (a download's stem is its title):
+  `0-01-05-000325_BackstageMilan.jpg`.
 - **Library** (`files.usd_prim`): everything sort/catch place under
   `pictures/<Fandom>/` is a valid OpenUSD prim identifier -- UpperCamelCase,
   letters and digits only, layer prefix first (`Bg|Fg|Ov|Pr|Tx`), e.g.

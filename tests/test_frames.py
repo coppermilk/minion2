@@ -24,17 +24,20 @@ def test_stride_is_hardcoded_to_five() -> None:
     assert STRIDE == 5
 
 
-def test_timecode_under_an_hour() -> None:
-    """minute-second-frame, seconds zero-padded."""
-    assert _timecode(0, 0) == '0-00-0'
-    assert _timecode(65, 325) == '1-05-325'
-    assert _timecode(59, 295) == '0-59-295'
+def test_timecode_is_fixed_width() -> None:
+    """hour-minute-second-frame, every field zero-padded."""
+    assert _timecode(0, 0) == '0-00-00-000000'
+    assert _timecode(65, 325) == '0-01-05-000325'
+    assert _timecode(59, 295) == '0-00-59-000295'
+    assert _timecode(3661, 198000) == '1-01-01-198000'
+    assert _timecode(7325, 900000) == '2-02-05-900000'
 
 
-def test_timecode_past_the_hour() -> None:
-    """The hour field appears only for videos over an hour."""
-    assert _timecode(3661, 198000) == '1-1-01-198000'
-    assert _timecode(7325, 900000) == '2-2-05-900000'
+def test_timecode_sorts_chronologically() -> None:
+    """Alphabetical order in an editor IS the chronological order."""
+    times = [(9 * 60 + 59, 17970), (10 * 60, 18000), (3600, 108000)]
+    codes = [_timecode(sec, frame) for sec, frame in times]
+    assert sorted(codes) == codes
 
 
 def test_extract_names_frames_by_timecode(
@@ -69,9 +72,9 @@ def test_extract_names_frames_by_timecode(
     names = sorted(p.name for p in verdict.result.iterdir())
     # fps=5: frames 0, 5, 10 land at 0s, 1s, 2s; the video name rides
     assert names == [
-        '0-00-0_clip.jpg',
-        '0-01-5_clip.jpg',
-        '0-02-10_clip.jpg',
+        '0-00-00-000000_clip.jpg',
+        '0-00-01-000005_clip.jpg',
+        '0-00-02-000010_clip.jpg',
     ]
 
 
