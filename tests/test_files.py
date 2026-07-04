@@ -166,16 +166,30 @@ def test_foreign_host_lock_is_never_stolen(tmp_path: Path) -> None:
 
 
 def test_stem_is_canonical(tmp_path: Path) -> None:
-    """OPERATIONS 6: MMDD_<source>_<name>."""
+    """OPERATIONS 6: MMDD_<source>_<name>; the name is preserved."""
     when = date(2026, 7, 2)
-    assert stem('cat pic!', 'tg', when) == '0702_tg_cat_pic'
+    assert stem('cat pic!', 'tg', when) == '0702_tg_cat pic!'
     assert stem('x', 'loc', when).startswith('0702_loc_')
 
 
-def test_sanitize_reduces_hostile_names() -> None:
-    """Untrusted names collapse to a safe ASCII fragment."""
+def test_sanitize_keeps_the_original_name() -> None:
+    """Transport must never lose the sender's name (Cyrillic, spaces).
+
+    Unicode is built from code points so this source stays ASCII
+    (repo gate); runtime filenames on disk may be UTF-8.
+    """
+    quoted = chr(0xAB) + 'BU' + chr(0xBB)  # guillemets around BU
+    assert sanitize(f'LISOVSKIY {quoted}.mp4') == f'LISOVSKIY {quoted}.mp4'
+    klip = ''.join(map(chr, (0x41A, 0x43B, 0x438, 0x43F)))  # Cyrillic
+    assert sanitize(f'{klip} 5.mov') == f'{klip} 5.mov'
+
+
+def test_sanitize_strips_only_dangerous_chars() -> None:
+    """Path separators, control and reserved chars are the only losses."""
     assert sanitize('../../etc/passwd') == 'etc_passwd'
+    assert sanitize('a/b\\c:d?e') == 'a_b_c_d_e'
     assert sanitize('') == 'item'
+    assert sanitize('///') == 'item'
     assert len(sanitize('x' * 500)) <= 80
 
 

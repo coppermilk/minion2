@@ -161,12 +161,14 @@ def test_documents_only_refuses_compressed(
     """A compressed photo is ignored and logged not_a_document."""
     photo = _msg({'photo': [{'file_id': 'p1', 'file_size': 10}]})
     with caplog.at_level('WARNING', logger='tg'):
-        assert tg._file_id(photo) is None
+        assert tg._document(photo) is None
     assert 'not_a_document' in caplog.text
 
 
 def test_documents_only_accepts_documents() -> None:
     """A document payload is the one accepted kind."""
     doc = _msg({'document': {'file_id': 'd1'}})
-    assert tg._file_id(doc) == 'd1'
-    assert tg._file_id(_msg({'text': 'hello'})) is None
+    got = tg._document(doc)
+    assert got is not None
+    assert got['file_id'] == 'd1'
+    assert tg._document(_msg({'text': 'hello'})) is None

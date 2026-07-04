@@ -65,7 +65,12 @@ __all__ = [
 NAME_MAX = 80
 """Longest sanitized name fragment kept (bounded names)."""
 
-_UNSAFE = re.compile(r'[^A-Za-z0-9._-]+')
+_UNSAFE = re.compile(r'[\x00-\x1f/\\:*?"<>|]+')
+"""Path separators, control chars and the Windows-reserved set --
+the only things stripped from a name; everything else (Unicode
+letters, spaces, brackets) is the sender's and is kept."""
+
+_SPACES = re.compile(r'\s+')
 _JPEG = ('.jpg', '.jpeg')
 
 
@@ -74,9 +79,17 @@ class QuotaExceeded(Exception):
 
 
 def sanitize(name: str) -> str:
-    """Reduce untrusted names to a safe ASCII fragment."""
-    safe = _UNSAFE.sub('_', name).strip('._-')
-    return safe[:NAME_MAX] or 'item'
+    """Make an untrusted name filesystem-safe without losing it.
+
+    The transport keeps the sender's original name intact -- Cyrillic,
+    spaces, brackets and all (OPERATIONS 6): it may carry meaning and
+    must never be dropped. Only path separators, control characters
+    and the Windows-reserved set are removed; the library classifier
+    (``usd_prim``) does the ASCII reduction where a prim is required.
+    """
+    safe = _UNSAFE.sub('_', name)
+    safe = _SPACES.sub(' ', safe).strip(' ._-')
+    return safe[:NAME_MAX].strip() or 'item'
 
 
 def stem(name: str, source: str, when: date | None = None) -> str:

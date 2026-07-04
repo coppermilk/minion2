@@ -12,7 +12,9 @@ from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.tg import TgChannel
 from minion_core.adapters.tg import TgLinks
+from minion_core.adapters.tg import TgMedia
 from minion_core.adapters.tg import TgSpec
+from minion_core.adapters.tg import _document
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
 from minion_core.kernel import Origin
@@ -115,6 +117,50 @@ def test_disallowed_chat_is_dropped(tmp_path: Path) -> None:
     source = TgLinks(api, _spec(cfg, ('1',)))
     api.owner = source
     assert list(source(iter(()))) == []
+
+
+class _RecordApi(TgApi):
+    """API double that records the download call and spools a stub."""
+
+    def __init__(self) -> None:
+        super().__init__(token='t')  # noqa: S106 -- double, not a secret
+        self.name_seen: str | None = None
+
+    def download(
+        self, file_id: str, spool: SpoolSpec, name: str | None = None
+    ) -> Path:
+        self.name_seen = name
+        from minion_core.adapters.files import sanitize
+
+        got = spool.into / sanitize(name or f'{file_id}.bin')
+        got.parent.mkdir(parents=True, exist_ok=True)
+        got.write_bytes(b'x')
+        return got
+
+
+def test_document_original_name_is_preserved(tmp_path: Path) -> None:
+    """The sender's document.file_name reaches the spool, not file_0."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    source = TgMedia(api, _spec(cfg, ('1',)))
+    klip = ''.join(map(chr, (0x41A, 0x43B, 0x438, 0x43F)))  # Cyrillic
+    msg = {
+        'chat': {'id': 1},
+        'message_id': 9,
+        'document': {'file_id': 'FID', 'file_name': f'{klip} 5.mp4'},
+    }
+    emitted: list[Any] = []
+    source.accept(msg, emitted.append)
+    assert api.name_seen == f'{klip} 5.mp4'  # original passed through
+    assert len(emitted) == 1
+    assert emitted[0].job.src.name == f'{klip} 5.mp4'
+
+
+def test_document_helper_refuses_compressed() -> None:
+    """A photo/video payload is not a document: None (logged elsewhere)."""
+    assert _document({'chat': {'id': 1}, 'photo': [{'file_id': 'x'}]}) is None
+    doc = {'file_id': 'F', 'file_name': 'a.mp4'}
+    assert _document({'chat': {'id': 1}, 'document': doc}) == doc
 
 
 def test_malformed_update_never_wedges_the_dock(

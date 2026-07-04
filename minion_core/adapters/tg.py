@@ -72,14 +72,23 @@ class TgApi:
             raise TgError(f'{method}: {body.get("description")}')
         return body['result']
 
-    def download(self, file_id: str, spool: SpoolSpec) -> Path:
-        """Stream a file by id into the spool, budget-bounded."""
+    def download(
+        self, file_id: str, spool: SpoolSpec, name: str | None = None
+    ) -> Path:
+        """Stream a file by id into the spool, budget-bounded.
+
+        ``name`` is the sender's original filename
+        (``document.file_name``); it is preserved verbatim
+        (sanitized, not replaced) so meaningful names survive. Only
+        when Telegram gives no name do we fall back to the opaque
+        server basename.
+        """
         import requests
 
         meta = self.call('getFile', {'file_id': file_id})
         remote = meta['file_path']
-        name = sanitize(remote.rsplit('/', 1)[-1])
-        target = next_free_path(spool.into / name)
+        base = name or remote.rsplit('/', 1)[-1]
+        target = next_free_path(spool.into / sanitize(base))
         url = f'{self.base}/file/bot{self.token}/{remote}'
         with requests.get(url, stream=True, timeout=API_TIMEOUT_SEC) as resp:
             resp.raise_for_status()
@@ -288,10 +297,12 @@ def _ref(msg: dict[str, Any]) -> str:
 
 def _accept_media(src: _TgSource, ctx: MsgCtx) -> bool:
     """Spool a document payload; True when one was emitted."""
-    file_id = _file_id(ctx.msg)
-    if file_id is None:
+    doc = _document(ctx.msg)
+    if doc is None:
         return False
-    got = src.api.download(file_id, src.spec.spool)
+    got = src.api.download(
+        str(doc['file_id']), src.spec.spool, doc.get('file_name')
+    )
     src.emit_spooled(got, ctx)
     return True
 
@@ -322,15 +333,16 @@ _COMPRESSED = ('photo', 'video', 'video_note', 'animation')
 """Payload kinds Telegram recompresses; the contract refuses them."""
 
 
-def _file_id(msg: dict[str, Any]) -> str | None:
-    """The document payload's file id, if any.
+def _document(msg: dict[str, Any]) -> dict[str, Any] | None:
+    """The document payload, if any (carries file_id + file_name).
 
     Files cross Telegram as documents only, both directions:
     compressed photo/video payloads are refused loudly so the sender
     learns to re-send as a file, and originals stay originals.
     """
-    if msg.get('document'):
-        return str(msg['document']['file_id'])
+    doc = msg.get('document')
+    if isinstance(doc, dict):
+        return doc
     if any(msg.get(kind) for kind in _COMPRESSED):
         _LOG.warning(
             'rejected reason=not_a_document chat=%s', msg['chat']['id']
