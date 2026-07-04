@@ -19,13 +19,13 @@
 # print/ watcher would print every PDF twice.
 
 # The image is built on GitHub and published to GHCR (image.yml); the
-# NAS `docker compose pull`s it. `build:` stays as a local fallback --
-# `docker compose build` still works and tags the same name.
+# NAS only `docker compose pull`s it -- there is deliberately no
+# `build:` here, so a project can ONLY run the published image and can
+# never start compiling torch on the NAS. To build locally for dev:
+# docker build -t ghcr.io/coppermilk/minion2:latest -f docker/Dockerfile .
 x-minion: &minion
   image: ghcr.io/coppermilk/minion2:latest
-  build:
-    context: .
-    dockerfile: docker/Dockerfile
+  pull_policy: missing
   env_file: .env
   environment: &minion-env
     DRIVE: /data
