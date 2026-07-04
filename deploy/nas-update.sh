@@ -64,29 +64,26 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 
-# Fetch and hard-reset to origin/main. .env is git-ignored, so it is
-# never touched; any accidental local edit to a tracked file is
-# discarded on purpose -- this is a deploy checkout, not a workspace.
+# Fetch and hard-reset to origin/main (compose file + this script).
+# .env is git-ignored, so it is never touched; any accidental local
+# edit to a tracked file is discarded on purpose -- this is a deploy
+# checkout, not a workspace.
 "$GIT" fetch --prune origin main
-before="$("$GIT" rev-parse HEAD)"
 "$GIT" reset --hard origin/main
-after="$("$GIT" rev-parse origin/main)"
+echo "at $("$GIT" rev-parse --short HEAD)"
 
-if [ "$before" = "$after" ]; then
-    echo "already current at $after; bots left running"
-    exit 0
-fi
-echo "updating $before -> $after"
-
-# Pull the freshly built image (bots still up on the old one). set -e
-# aborts here on a bad pull, before anything is stopped.
+# Converge to the published image, idempotently. `pull` grabs the new
+# GHCR image (a fast no-op when the digest is unchanged); set -e
+# aborts here on a bad pull, before the running bots are touched.
 compose pull
 
-# Clean swap: stop the old containers, start the new ones.
-compose down
+# `up -d` recreates only the containers whose image actually changed
+# and starts anything not yet running -- so the SAME task both does
+# the first-ever start after a clone and every later update, with no
+# needless restarts when nothing moved.
 compose up -d
 
 # Keep the NAS volume bounded: drop the now-dangling old image layers.
 "$DOCKER" image prune -f
 
-echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ($after) ====="
+echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ====="
