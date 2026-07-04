@@ -4,6 +4,8 @@
 # broken Dockerfile reach main once); only main also PUSHES it to
 # ghcr.io/coppermilk/minion2. The GHA layer cache keeps the heavy
 # dependency layer warm, so a code-only change ships just the code.
+# After each publish, old package versions are pruned so the registry
+# does not pile up (the NAS only ever pulls :latest).
 name: image
 
 on:
@@ -44,3 +46,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Prune stale versions after a publish: keep the few most recent
+      # (:latest + a couple of SHA tags), delete the rest.
+      - if: env.PUBLISH == 'true'
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: minion2
+          package-type: container
+          min-versions-to-keep: 5
+          delete-only-pre-release-versions: false
