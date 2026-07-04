@@ -39,5 +39,9 @@ RUN pip install --no-cache-dir --no-deps .
 COPY docker/crontab /etc/cron.d/minions
 RUN chmod 0644 /etc/cron.d/minions
 
-# DRIVE and TORCH_HOME come from compose; STATE/CACHE live on /data.
-CMD ["python", "-m", "minions._template.main"]
+# No runnable default: every real bot is selected by compose, which
+# sets its command plus DRIVE=/data and the .env. Running the image
+# directly (docker run / Container Manager "run image") would have no
+# DRIVE and crash-loop on a confusing traceback, so the default is a
+# one-line pointer to the right way in instead.
+CMD ["sh", "-c", "echo 'minion2: run a bot via docker compose (docker-compose.yml sets its command, DRIVE=/data and .env) -- not by launching this image directly.' >&2; exit 1"]
