@@ -30,7 +30,7 @@ python -m minions.inbox.main
 Docker (NAS): set `DRIVE_NAS` in `.env`, then
 `docker compose up -d` -- Telegram bots, sort (watch daemon) and
 week-clean (cron in the `batch` container). Windows runs only print
-and catch via `deploy/windows/register-tasks.ps1`; each bot runs in
+and catch via `deploy/windows/run.ps1`; each bot runs in
 exactly one place. The same `.env` file works on both machines
 verbatim (paths are validated against both OS flavors).
 

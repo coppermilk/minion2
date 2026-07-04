@@ -102,7 +102,7 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
   An idle run exits fast -- sort returns before touching the cache or any
   adapter when there is nothing to place and nothing in `Unknown/` -- and
   the per-bot lock makes overlap impossible. The Windows machine runs only
-  print and catch, at logon via `deploy/windows/register-tasks.ps1`; every
+  print and catch, at logon via `deploy/windows/run.ps1`; every
   other bot lives in Docker so each bot runs in exactly one place.
 - **Instant sorting** (`SORT_WATCH=1`): sort runs as a watch daemon -- one
   Folder dock per source dir triggers a locked pass run the moment a new
