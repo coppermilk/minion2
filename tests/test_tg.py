@@ -120,11 +120,17 @@ def test_disallowed_chat_is_dropped(tmp_path: Path) -> None:
 
 
 class _RecordApi(TgApi):
-    """API double that records the download call and spools a stub."""
+    """API double that records downloads and sendMessage help replies."""
 
     def __init__(self) -> None:
         super().__init__(token='t')  # noqa: S106 -- double, not a secret
         self.name_seen: str | None = None
+        self.messages: list[str] = []
+
+    def call(self, method: str, params: dict[str, Any]) -> Any:
+        assert method == 'sendMessage'
+        self.messages.append(params['text'])
+        return {}
 
     def download(
         self, file_id: str, spool: SpoolSpec, name: str | None = None
@@ -161,6 +167,28 @@ def test_document_helper_refuses_compressed() -> None:
     assert _document({'chat': {'id': 1}, 'photo': [{'file_id': 'x'}]}) is None
     doc = {'file_id': 'F', 'file_name': 'a.mp4'}
     assert _document({'chat': {'id': 1}, 'document': doc}) == doc
+
+
+def test_help_reply_on_a_non_document(tmp_path: Path) -> None:
+    """A message with no document/link gets a one-line usage + reminder."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    spec = TgSpec(
+        spool=SpoolSpec(
+            into=cfg.bot_dir('t'), budget=functools.partial(free_quota, cfg)
+        ),
+        dest=cfg.inbox,
+        offset=cfg.state / 't.offset',
+        chats=('1',),
+        help='I blur people.',
+    )
+    source = TgMedia(api, spec)
+    source.accept(
+        {'chat': {'id': 1}, 'message_id': 9, 'text': 'hi'}, lambda _e: None
+    )
+    assert len(api.messages) == 1
+    assert 'I blur people.' in api.messages[0]
+    assert 'document' in api.messages[0]  # the documents-only reminder
 
 
 def test_malformed_update_never_wedges_the_dock(

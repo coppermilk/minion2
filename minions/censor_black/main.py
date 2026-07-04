@@ -54,6 +54,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         dest=cfg.bot_dir(BOT),
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
+        help='Send a photo and I black out faces.',
     )
     channel = TgChannel(api)
     watch = None

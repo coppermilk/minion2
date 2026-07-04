@@ -202,6 +202,10 @@ def chats_from(env: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(',') if part.strip())
 
 
+DOCS_ONLY = 'Send files as a document (not a compressed photo/video).'
+"""The documents-only reminder appended to every bot's help line."""
+
+
 @dataclass(frozen=True)
 class TgSpec:
     """Where a Telegram dock spools, delivers, and remembers."""
@@ -210,6 +214,7 @@ class TgSpec:
     dest: Path
     offset: Path
     chats: tuple[str, ...]
+    help: str = ''
 
 
 class _TgSource(Source):
@@ -271,6 +276,20 @@ class _TgSource(Source):
         """Turn one allowed message into envelopes (per source)."""
         raise NotImplementedError
 
+    def offer_help(self, msg: dict[str, Any]) -> None:
+        """Reply a one-line usage hint when a message produced no work.
+
+        A plain text or a compressed photo/video gets a friendly
+        nudge instead of silence: what this bot does, plus the
+        documents-only reminder.
+        """
+        if not self.api.live or not self.spec.help:
+            return
+        text = f'{self.spec.help} {DOCS_ONLY}'
+        self.api.call(
+            'sendMessage', {'chat_id': msg['chat']['id'], 'text': text}
+        )
+
     def emit_spooled(self, spooled: Path, ctx: MsgCtx) -> None:
         """Emit a job addressed to the chat, disposing the spool."""
         ref = f'{_ref(ctx.msg)}:{spooled}'
@@ -325,8 +344,9 @@ class TgMedia(_TgSource):
     """Emit document payloads, spooled to disk (documents only)."""
 
     def accept(self, msg: dict[str, Any], emit: Emit) -> None:
-        """Download the message payload and emit its job."""
-        _accept_media(self, MsgCtx(msg, emit))
+        """Download the message payload and emit its job, or help."""
+        if not _accept_media(self, MsgCtx(msg, emit)):
+            self.offer_help(msg)
 
 
 _COMPRESSED = ('photo', 'video', 'video_note', 'animation')
@@ -354,8 +374,9 @@ class TgLinks(_TgSource):
     """Emit the first link of each message as a spooled .url file."""
 
     def accept(self, msg: dict[str, Any], emit: Emit) -> None:
-        """Spool the link and emit its job."""
-        _accept_link(self, MsgCtx(msg, emit))
+        """Spool the link and emit its job, or reply with help."""
+        if not _accept_link(self, MsgCtx(msg, emit)):
+            self.offer_help(msg)
 
 
 class TgAny(_TgSource):
@@ -366,7 +387,7 @@ class TgAny(_TgSource):
     """
 
     def accept(self, msg: dict[str, Any], emit: Emit) -> None:
-        """Prefer the link; fall through to the payload."""
+        """Prefer the link; fall through to the payload, else help."""
         ctx = MsgCtx(msg, emit)
-        if not _accept_link(self, ctx):
-            _accept_media(self, ctx)
+        if not _accept_link(self, ctx) and not _accept_media(self, ctx):
+            self.offer_help(msg)

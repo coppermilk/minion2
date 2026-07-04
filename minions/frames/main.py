@@ -141,6 +141,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         dest=cfg.bot_dir(BOT),
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
+        help='Send a video or a link and I extract frames.',
     )
     channel = TgChannel(api)
     watch = None

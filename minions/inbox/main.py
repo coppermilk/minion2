@@ -44,6 +44,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         dest=cfg.inbox,
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
+        help='I save your file to the inbox.',
     )
     channel = TgChannel(api)
     return (
