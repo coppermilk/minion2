@@ -53,17 +53,20 @@ def _job(cfg: Settings, bot: str, src: Path) -> Job:
     )
 
 
-@pytest.mark.parametrize('mode', ['blur', 'black'])
-def test_hide_people_delivers_s1(
+def _full_mask(width: int, height: int) -> vision.Mask:
+    """A person mask covering the whole frame (all pixels hidden)."""
+    return vision.Mask(width, height, bytes([255]) * (width * height))
+
+
+def test_hide_faces_delivers_s1(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    mode: str,
 ) -> None:
-    """The shared step hides and delivers the ``_s1`` copy."""
+    """censor-black: black out the face, deliver the ``_s1`` copy."""
     cfg = make_cfg(tmp_path / 'drive')
-    src = _jpeg(cfg.bot_dir('censor-' + mode) / 'pic.jpg')
-    monkeypatch.setattr(vision, 'person_boxes', lambda p: ((8, 8, 24, 24),))
-    verdict = vision.HidePeople(mode).process(_job(cfg, 'censor-' + mode, src))
+    src = _jpeg(cfg.bot_dir('censor-black') / 'pic.jpg')
+    monkeypatch.setattr(vision, 'face_boxes', lambda p: ((8, 8, 24, 24),))
+    verdict = vision.HideFaces().process(_job(cfg, 'censor-black', src))
     assert verdict.disposition is Disposition.DELIVERED
     assert verdict.result is not None
     assert verdict.result.name == 'pic_s1.jpg'
@@ -71,15 +74,45 @@ def test_hide_people_delivers_s1(
     assert src.is_file()  # the original is untouched by the step
 
 
-def test_no_person_is_skip_never_passthrough(
+def test_blur_contour_delivers_s1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """censor-blur: blur the person silhouette, deliver the ``_s1`` copy."""
+    cfg = make_cfg(tmp_path / 'drive')
+    src = _jpeg(cfg.bot_dir('censor-blur') / 'pic.jpg')
+    monkeypatch.setattr(vision, 'person_masks', lambda p: _full_mask(32, 32))
+    verdict = vision.BlurContour().process(_job(cfg, 'censor-blur', src))
+    assert verdict.disposition is Disposition.DELIVERED
+    assert verdict.result is not None
+    assert verdict.result.name == 'pic_s1.jpg'
+    assert verdict.result.is_file()
+    assert src.is_file()
+
+
+def test_no_face_is_skip_never_passthrough(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """CT-B: zero detections must not send the original back."""
     cfg = make_cfg(tmp_path / 'drive')
+    src = _jpeg(cfg.bot_dir('censor-black') / 'pic.jpg')
+    monkeypatch.setattr(vision, 'face_boxes', lambda p: ())
+    verdict = vision.HideFaces().process(_job(cfg, 'censor-black', src))
+    assert verdict.disposition is Disposition.SKIPPED
+    assert verdict.reason == 'no_face'
+    assert verdict.result is None
+
+
+def test_no_person_contour_is_skip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CT-B for the blur bot: no mask -> SKIP, not a pass-through."""
+    cfg = make_cfg(tmp_path / 'drive')
     src = _jpeg(cfg.bot_dir('censor-blur') / 'pic.jpg')
-    monkeypatch.setattr(vision, 'person_boxes', lambda p: ())
-    verdict = vision.HidePeople('blur').process(_job(cfg, 'censor-blur', src))
+    monkeypatch.setattr(vision, 'person_masks', lambda p: None)
+    verdict = vision.BlurContour().process(_job(cfg, 'censor-blur', src))
     assert verdict.disposition is Disposition.SKIPPED
     assert verdict.reason == 'no_person'
     assert verdict.result is None
@@ -101,7 +134,7 @@ def test_restore_belt_delivers_s2(
 
     monkeypatch.setattr(llm, 'restore_background', fake_repaint)
     spec = llm.spec_from({})
-    hide = vision.HidePeople('blur')
+    hide = vision.HidePersonBoxes()
     first = hide.process(_job(cfg, 'restore', src))
     assert first.result is not None
     assert first.result.name == 'pic_s1.jpg'

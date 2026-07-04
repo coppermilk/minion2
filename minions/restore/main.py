@@ -1,8 +1,8 @@
 """restore bot: blur the people, then the LLM repaints the scene.
 
-Graph: (TgMedia | Folder) -> HidePeople(BLUR) -> RestoreBackground
+Graph: (TgMedia | Folder) -> HidePersonBoxes -> RestoreBackground
 -> RouteOrigin(chat / done dir) -> Reply -> DisposeSource. A
-two-step belt: HidePeople writes the ``_s1`` intermediate, the LLM
+two-step belt: HidePersonBoxes writes the ``_s1`` intermediate, the LLM
 repaint delivers ``_s2`` (OPERATIONS 6). One of the three
 censor-family bots (BLUEPRINT 9 waiver); ``RESTORE_WATCH`` adds the
 local dock (REQ-DOCK-001).
@@ -14,7 +14,6 @@ import functools
 import os
 from typing import TYPE_CHECKING
 
-from minion_core.adapters.files import BLUR
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.llm import RestoreBackground
 from minion_core.adapters.llm import spec_from
@@ -26,7 +25,7 @@ from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
 from minion_core.adapters.vision import IMAGE_EXTS
-from minion_core.adapters.vision import HidePeople
+from minion_core.adapters.vision import HidePersonBoxes
 from minion_core.adapters.vision import warm_detector
 from minion_core.kernel import ArchiveTo
 from minion_core.kernel import DisposeSource
@@ -76,7 +75,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     )
     return (
         docks
-        >> HidePeople(BLUR)
+        >> HidePersonBoxes()
         >> RestoreBackground(spec_from(env))
         >> route
         >> Reply(channel)

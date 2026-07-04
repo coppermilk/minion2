@@ -206,7 +206,7 @@ class RestoreBackground(Step):
     """Repaint the hidden regions of a censored image.
 
     The second step of the restore bot's two-step belt: consumes the
-    ``_s1`` file HidePeople produced, delivers the ``_s2`` repaint
+    ``_s1`` file HidePersonBoxes produced, delivers the ``_s2`` repaint
     (OPERATIONS 6 naming).
     """
 

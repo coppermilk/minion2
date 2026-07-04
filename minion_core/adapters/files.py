@@ -42,8 +42,10 @@ __all__ = [
     'BudgetWriter',
     'Deliver',
     'HideSpec',
+    'Mask',
     'QuotaExceeded',
     'atomic_write',
+    'blur_masked',
     'free_quota',
     'has_week',
     'hide_boxes',
@@ -263,6 +265,20 @@ class HideSpec:
     mode: str
 
 
+@dataclass(frozen=True)
+class Mask:
+    """A full-frame L-mode alpha (255 = hide) for contour blur.
+
+    The vision adapter owns numpy and builds ``data`` from a person
+    segmentation; passing raw L bytes keeps numpy out of this file
+    and Pillow out of vision (REQ-ARC-002).
+    """
+
+    width: int
+    height: int
+    data: bytes
+
+
 BLUR_RADIUS = 24
 """Gaussian radius strong enough to hide identity."""
 
@@ -290,6 +306,26 @@ def hide_boxes(src: Path, out: Path, spec: HideSpec) -> Path:
             img.paste(blurred, (box[0], box[1]))
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
+    return out
+
+
+def blur_masked(src: Path, out: Path, mask: Mask) -> Path:
+    """Blur only where the mask marks a person (contour blur, CT-B).
+
+    The whole frame is blurred once, then the blurred pixels are
+    composited back only under the person silhouette -- no rectangle
+    over the rest of the scene (censor-blur).
+    """
+    from PIL import Image
+    from PIL import ImageFilter
+
+    with Image.open(src) as opened:
+        base = opened.convert('RGB')
+    blurred = base.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+    alpha = Image.frombytes('L', (mask.width, mask.height), mask.data)
+    result = Image.composite(blurred, base, alpha)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    result.save(out)
     return out
 
 

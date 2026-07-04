@@ -24,7 +24,11 @@ from typing import TypeAlias
 
 import numpy as np
 
+from minion_core.adapters.files import BLACK
+from minion_core.adapters.files import BLUR
 from minion_core.adapters.files import HideSpec
+from minion_core.adapters.files import Mask
+from minion_core.adapters.files import blur_masked
 from minion_core.adapters.files import hide_boxes
 from minion_core.adapters.files import load_rgb
 from minion_core.kernel import Disposition
@@ -50,6 +54,9 @@ IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp')
 
 PERSON_SCORE_MIN = 0.7
 """Detection confidence below which a person box is noise."""
+
+MASK_THRESHOLD = 0.5
+"""Per-pixel probability above which a mask covers the person."""
 
 
 class EmbeddingCache:
@@ -189,14 +196,22 @@ def _cosine(a: Vector, b: Vector) -> float:
 
 
 def warm_detector() -> None:
-    """Load the person detector at process start.
+    """Load the person-box detector at process start (restore).
 
     Resources come up at init, never mid-flight: the first photo
     must not pay the model-load latency and memory spike.
     """
-    from torchvision.models import detection
+    _load_detection(_BOXES)
 
-    _detector(detection)
+
+def warm_masks() -> None:
+    """Load the person-segmentation model at start (censor-blur)."""
+    _load_detection(_MASKS)
+
+
+def warm_faces() -> None:
+    """Load the face detector at start (censor-black)."""
+    _mtcnn()
 
 
 def warm_embedder() -> None:
@@ -229,24 +244,73 @@ def embed_image(path: Path) -> Vector:
     return vec
 
 
+_BOXES = 'fasterrcnn_resnet50_fpn'
+_MASKS = 'maskrcnn_resnet50_fpn'
+
+_DETECTORS: dict[str, Any] = {}
+"""Loaded torchvision detection models, one per constructor name.
+
+The cache is a plain dict (not a typed factory) so no function
+returns the untyped vendor model -- keeping the module free of
+``Any``-return waivers. Populated once at warm-up, read on each photo.
+"""
+
+
+def _load_detection(ctor: str) -> None:
+    """Load a torchvision detection model into the cache (once)."""
+    if ctor in _DETECTORS:
+        return
+    from torchvision.models import detection
+
+    model = getattr(detection, ctor)(weights='DEFAULT')
+    model.eval()
+    _DETECTORS[ctor] = model
+
+
 def person_boxes(path: Path) -> tuple[Box, ...]:
     """Bounding boxes of detected people (lazy torchvision load)."""
     import torch
-    from torchvision.models import detection
     from torchvision.transforms import functional as tvf
 
-    model = _detector(detection)
+    _load_detection(_BOXES)
     tensor = tvf.to_tensor(load_rgb(path))
     with torch.no_grad():
-        found = model([tensor])[0]
+        found = _DETECTORS[_BOXES]([tensor])[0]
     return _to_boxes(found)
 
 
-@functools.lru_cache(maxsize=1)
-def _detector(detection: Any) -> Any:  # noqa: ANN401 -- vendor module handle
-    model = detection.fasterrcnn_resnet50_fpn(weights='DEFAULT')
-    model.eval()
-    return model
+def person_masks(path: Path) -> Mask | None:
+    """A union L-mask of every confident person, or None (lazy load).
+
+    Instance segmentation (Mask R-CNN) so censor-blur can blur the
+    person's silhouette instead of a full bounding box. numpy builds
+    the L bytes here; Pillow composites them in files.blur_masked.
+    """
+    import torch
+    from torchvision.transforms import functional as tvf
+
+    _load_detection(_MASKS)
+    tensor = tvf.to_tensor(load_rgb(path))
+    with torch.no_grad():
+        found = _DETECTORS[_MASKS]([tensor])[0]
+    return _union_mask(found)
+
+
+def _union_mask(found: dict[str, Any]) -> Mask | None:
+    """Union the confident person masks into one L-mode alpha."""
+    union: Vector | None = None
+    for label, score, mask in zip(
+        found['labels'], found['scores'], found['masks'], strict=True
+    ):
+        if int(label) != 1 or float(score) < PERSON_SCORE_MIN:
+            continue
+        binary = mask[0].numpy() >= MASK_THRESHOLD
+        union = binary if union is None else (union | binary)
+    if union is None:
+        return None
+    height, width = union.shape
+    data = (union.astype(np.uint8) * 255).tobytes()
+    return Mask(width=int(width), height=int(height), data=data)
 
 
 def _to_boxes(found: dict[str, Any]) -> tuple[Box, ...]:
@@ -277,20 +341,64 @@ def _mtcnn() -> Any:  # noqa: ANN401 -- vendor model handle
     return MTCNN(keep_all=True)
 
 
-class HidePeople(Step):
-    """Hide every detected person (the censor family's one step).
+def _s1(job: Job) -> Path:
+    """The intermediate the censor family writes (OPERATIONS 6)."""
+    return job.dest / f'{job.src.stem}_s1{job.src.suffix}'
 
-    Correctness is CT-B: a missed person leaks the hidden subject,
-    so detections apply verbatim and zero detections is a SKIP,
-    never a silent pass-through of the original. The mode is fixed
-    per bot (files.BLUR / files.BLACK), not a runtime knob.
+
+class HideFaces(Step):
+    """censor-black: black out each detected face (CT-B).
+
+    Correctness is CT-B: a missed face leaks identity, so boxes apply
+    verbatim and zero detections is a SKIP, never a pass-through of
+    the original. Faces, not the whole person: a portrait keeps its
+    scene, only the face goes dark.
     """
 
-    def __init__(self, mode: str) -> None:
-        self._mode = mode
+    def process(self, job: Job) -> Verdict:
+        """Detect faces and black them; the ``_s1`` copy is the result."""
+        boxes = face_boxes(job.src)
+        if not boxes:
+            return Verdict(
+                Disposition.SKIPPED, reason='no_face', reply='no faces found'
+            )
+        out = _s1(job)
+        hide_boxes(job.src, out, HideSpec(boxes=boxes, mode=BLACK))
+        return Verdict(Disposition.DELIVERED, result=out, reply='censored')
+
+
+class BlurContour(Step):
+    """censor-blur: blur each person's silhouette (CT-B).
+
+    Segmentation, not a box: only the person is blurred, the scene
+    behind stays sharp. Zero detections is a SKIP (never a
+    pass-through of the original).
+    """
 
     def process(self, job: Job) -> Verdict:
-        """Detect and hide; the ``_s1`` copy is the result."""
+        """Segment people and blur them; the ``_s1`` copy is the result."""
+        mask = person_masks(job.src)
+        if mask is None:
+            return Verdict(
+                Disposition.SKIPPED,
+                reason='no_person',
+                reply='no people found',
+            )
+        out = _s1(job)
+        blur_masked(job.src, out, mask)
+        return Verdict(Disposition.DELIVERED, result=out, reply='censored')
+
+
+class HidePersonBoxes(Step):
+    """restore step 1: blur whole-person boxes for the LLM to erase.
+
+    restore only needs the people marked so the repaint model removes
+    them; a person box (not just the face) covers the whole subject.
+    Zero detections is a SKIP (CT-B).
+    """
+
+    def process(self, job: Job) -> Verdict:
+        """Blur every person box; the ``_s1`` copy is the result."""
         boxes = person_boxes(job.src)
         if not boxes:
             return Verdict(
@@ -298,6 +406,6 @@ class HidePeople(Step):
                 reason='no_person',
                 reply='no people found',
             )
-        out = job.dest / f'{job.src.stem}_s1{job.src.suffix}'
-        hide_boxes(job.src, out, HideSpec(boxes=boxes, mode=self._mode))
+        out = _s1(job)
+        hide_boxes(job.src, out, HideSpec(boxes=boxes, mode=BLUR))
         return Verdict(Disposition.DELIVERED, result=out, reply='censored')

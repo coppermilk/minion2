@@ -1,9 +1,10 @@
-"""censor-blur bot: people in a photo are blurred before it goes back.
+"""censor-blur bot: people's silhouettes are blurred before it returns.
 
-Graph: (TgMedia | Folder) -> HidePeople(BLUR) -> RouteOrigin(chat /
-done dir) -> Reply -> DisposeSource. One of the three censor-family
-bots (BLUEPRINT 9 waiver): one Telegram identity per behaviour;
-``CENSOR_BLUR_WATCH`` adds the local dock (REQ-DOCK-001).
+Graph: (TgMedia | Folder) -> BlurContour -> RouteOrigin(chat / done
+dir) -> Reply -> DisposeSource. Segmentation blur (not a box) so the
+scene stays sharp. One of the three censor-family bots (BLUEPRINT 9
+waiver): one Telegram identity per behaviour; ``CENSOR_BLUR_WATCH``
+adds the local dock (REQ-DOCK-001).
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import functools
 import os
 from typing import TYPE_CHECKING
 
-from minion_core.adapters.files import BLUR
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgApi
@@ -22,8 +22,8 @@ from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
 from minion_core.adapters.vision import IMAGE_EXTS
-from minion_core.adapters.vision import HidePeople
-from minion_core.adapters.vision import warm_detector
+from minion_core.adapters.vision import BlurContour
+from minion_core.adapters.vision import warm_masks
 from minion_core.kernel import ArchiveTo
 from minion_core.kernel import DisposeSource
 from minion_core.kernel import FolderSpec
@@ -72,7 +72,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     )
     return (
         docks
-        >> HidePeople(BLUR)
+        >> BlurContour()
         >> route
         >> Reply(channel)
         >> DisposeSource(spool_of)
@@ -84,7 +84,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     mapping = os.environ if env is None else env
     cfg = load(mapping)
     if mapping.get('TG_TOKEN') or cfg.censor_blur_watch is not None:
-        warm_detector()  # resources at init, never mid-flight
+        warm_masks()  # resources at init, never mid-flight
     return run(BOT, build(cfg, mapping), cfg.logs)
 
 
