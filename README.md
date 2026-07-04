@@ -34,10 +34,14 @@ and catch via `deploy/windows/register-tasks.ps1`; each bot runs in
 exactly one place. The same `.env` file works on both machines
 verbatim (paths are validated against both OS flavors).
 
-Auto-update on the NAS with no shell access: point DSM Task
-Scheduler (root, weekly) at `deploy/nas-update.sh` -- it hard-resets
-to `origin/main`, rebuilds, and restarts the bots, rebuilding
-*before* it stops anything so a bad build never takes them offline.
+The image is built on GitHub and published to GHCR on every push to
+main (`.github/workflows/image.yml`); the NAS pulls it rather than
+compiling torch, so an update is a quick layer download. Auto-update
+with no shell access: point DSM Task Scheduler (root, weekly) at
+`deploy/nas-update.sh` -- it fetches `origin/main`, `docker compose
+pull`s the fresh image, and restarts the bots, pulling *before* it
+stops anything so a failed pull never takes them offline. Make the
+GHCR package public once for anonymous pulls (or `docker login`).
 
 ## The bots
 

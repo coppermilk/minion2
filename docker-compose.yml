@@ -18,7 +18,11 @@
 # (deploy/windows/). Each bot runs in exactly one place -- a second
 # print/ watcher would print every PDF twice.
 
+# The image is built on GitHub and published to GHCR (image.yml); the
+# NAS `docker compose pull`s it. `build:` stays as a local fallback --
+# `docker compose build` still works and tags the same name.
 x-minion: &minion
+  image: ghcr.io/coppermilk/minion2:latest
   build:
     context: .
     dockerfile: docker/Dockerfile

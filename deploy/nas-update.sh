@@ -1,11 +1,21 @@
 #!/bin/sh
-# Synology NAS auto-update: pull latest main, rebuild, restart the bots.
+# Synology NAS auto-update: pull the prebuilt image, restart the bots.
+#
+# The image is built on GitHub and published to GHCR (image.yml), so
+# the NAS never compiles torch -- it just downloads the ready image,
+# and thanks to the layer order only the small code layer changes.
 #
 # Runs from DSM Task Scheduler as a root user-defined script. The repo
-# is public, so `git fetch` needs no credentials. Safe by design:
-# the image is rebuilt BEFORE the running bots are touched, so a
-# failed pull or build never leaves the bots stopped -- they keep
-# serving the old image until a good build is ready.
+# and (once you flip its visibility) the GHCR package are public, so
+# both `git fetch` and `docker pull` need no credentials. Safe by
+# design: the new image is pulled BEFORE the running bots are touched,
+# so a failed fetch or pull never leaves the bots stopped -- they keep
+# serving the old image until a good one is in hand.
+#
+# One-time: make the GHCR package public so the pull is anonymous --
+# github.com/coppermilk?tab=packages -> minion2 -> Package settings ->
+# Change visibility -> Public. (Otherwise add a `docker login ghcr.io`
+# with a read:packages token before the pull below.)
 #
 # Setup (once): Control Panel -> Task Scheduler -> Create ->
 # Scheduled Task -> User-defined script; User: root; Schedule: e.g.
@@ -68,15 +78,15 @@ if [ "$before" = "$after" ]; then
 fi
 echo "updating $before -> $after"
 
-# Build first (bots still up on the old image). set -e aborts here on
-# a bad build, before anything is stopped.
-compose build
+# Pull the freshly built image (bots still up on the old one). set -e
+# aborts here on a bad pull, before anything is stopped.
+compose pull
 
 # Clean swap: stop the old containers, start the new ones.
 compose down
 compose up -d
 
-# Keep the NAS volume bounded: drop the now-dangling old layers.
+# Keep the NAS volume bounded: drop the now-dangling old image layers.
 "$DOCKER" image prune -f
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ($after) ====="
