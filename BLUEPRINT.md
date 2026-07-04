@@ -323,24 +323,34 @@ eliminates duplicates by construction.
 Recorded waiver (BLUEPRINT 12): the censor family (censor-blur,
 censor-black, restore) and fan-save are deliberately split against
 this rule -- one Telegram identity per behaviour, chosen by the
-operator. The shared Steps live behind the adapters
-(vision.HidePeople, llm.RestoreBackground, fetch.FetchLink), so no
-logic is duplicated; only graph assembly repeats.
+operator. The behaviours diverge on purpose: censor-black hides
+**faces** (vision.HideFaces), censor-blur blurs the **person
+silhouette** (vision.BlurContour, Mask R-CNN segmentation), restore
+blurs **person boxes** for the LLM to erase (vision.HidePersonBoxes,
+llm.RestoreBackground). Each is a thin Step over the shared adapters,
+so only graph assembly repeats.
 
 Telegram contract: files cross Telegram as **documents only, both
 directions** -- compressed photo/video payloads are refused with a
 logged reason (not_a_document) and results go back via sendDocument,
-so originals are never recompressed.
+so originals are never recompressed. A message that produces no work
+(plain text, or a refused compressed payload) gets a one-line usage
+reply plus the documents-only reminder.
+
+Output-folder convention: every archiving bot (frames, censor-blur/
+black, restore, fan-save) files its result into
+`bots/<bot>/done/<MMDD> <name>/` and keeps the consumed original in
+that folder's `_done/` (files.Shelve).
 
 | Bot | Kind | Behaviour | Config axis |
 |-----|------|-----------|-------------|
 | inbox | streaming | Telegram file -> `_inbox/` | - |
 | fetch | streaming | link -> video | sink: chat / fan queue |
-| fan-save | streaming | link -> video parked in `bots/fan-save/done/` for later processing | - |
-| frames | streaming | video/link -> every 5th frame, timecode-named -> chat or done dir | `frames_watch` dock |
-| censor-blur | streaming | photo -> people blurred -> chat or done dir | `censor_blur_watch` dock |
-| censor-black | streaming | photo -> people blacked out -> chat or done dir | `censor_black_watch` dock |
-| restore | streaming | photo -> people blurred -> LLM repaints background (`_s1`/`_s2`) | `restore_watch` dock |
+| fan-save | streaming | link -> video parked in `done/<MMDD> <title>/` (link in `_done/`) | - |
+| frames | streaming | video/link -> every 5th frame into `done/<MMDD> <clip>/`, clip in `_done/`, summary to chat | `frames_watch` dock |
+| censor-blur | streaming | photo -> person silhouette blurred -> chat + done folder | `censor_blur_watch` dock |
+| censor-black | streaming | photo -> faces blacked out -> chat + done folder | `censor_black_watch` dock |
+| restore | streaming | photo -> people blurred -> LLM repaints scene (`_s1`/`_s2`) -> chat + done folder | `restore_watch` dock |
 | sort | batch | images classified in place (prim name + EXIF fandom); the week waits in `_inbox/` | `source_dirs`: `_inbox/` or `Downloads/`; `SORT_WATCH`: streaming trigger, instant classification |
 | catch | streaming | new Downloads image -> prim-named copy in `pictures/<Fandom>/` (same Gemini verdict as sort); the original is renamed in place, never moved | `catch_dir` |
 | week-clean | batch | Monday, purely mechanical: strip the weekly tag and shelve each classified image from `_inbox/` into `pictures/<Fandom>/` per its EXIF fandom; unclassified files stay for retry | - |

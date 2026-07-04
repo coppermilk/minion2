@@ -49,11 +49,11 @@ GHCR package public once for anonymous pulls (or `docker login`).
 |-----|------|-----------|
 | inbox | streaming | Telegram file -> `_inbox/` |
 | fetch | streaming | link -> video (sink: chat / fan queue) |
-| fan-save | streaming | link (TikTok/YouTube/...) -> video parked in `bots/fan-save/done/` for later processing |
-| frames | streaming | video/link -> every 5th frame, named `<timecode>_<video name>.jpg` -> chat or done dir (`FRAMES_WATCH` adds a folder dock) |
-| censor-blur | streaming | photo -> people blurred -> chat or done dir (`CENSOR_BLUR_WATCH` adds a folder dock) |
-| censor-black | streaming | photo -> people blacked out -> chat or done dir (`CENSOR_BLACK_WATCH` adds a folder dock) |
-| restore | streaming | photo -> people blurred, then the LLM repaints the background (`RESTORE_WATCH` adds a folder dock) |
+| fan-save | streaming | link (TikTok/YouTube/...) -> video parked in `bots/fan-save/done/<MMDD> <title>/` (link spool kept in its `_done/`) |
+| frames | streaming | video/link -> every 5th frame into `done/<MMDD> <clip>/` (clip filed in `_done/`), summary to chat (never the frames); `FRAMES_WATCH` adds a folder dock |
+| censor-blur | streaming | photo -> people's silhouettes blurred (segmentation) -> chat + `done/<MMDD> <name>/` with the original in `_done/` (`CENSOR_BLUR_WATCH` adds a folder dock) |
+| censor-black | streaming | photo -> faces blacked out -> chat + `done/<MMDD> <name>/` with the original in `_done/` (`CENSOR_BLACK_WATCH` adds a folder dock) |
+| restore | streaming | photo -> people blurred, then the LLM repaints the scene without them -> chat + a `done/` folder (`RESTORE_WATCH` adds a folder dock) |
 | sort | batch | classifies images IN PLACE in `_inbox/` the moment they land (Gemini -> prim name + EXIF fandom + week tag; CLIP decides instantly when Gemini punts); the working week stays in `_inbox/` |
 | catch | streaming | new Downloads image -> prim-named copy straight into `pictures/<Fandom>/`; the original never leaves `CATCH_DIR` |
 | week-clean | batch | Monday, mechanical: strip the week tag, shelve each classified image into `pictures/<Fandom>/` per its EXIF; unclassified files stay for retry |

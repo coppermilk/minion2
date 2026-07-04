@@ -38,7 +38,8 @@ reason code -- REQ-OBS-001).
 | `hash_collision` | two coexisting images with equal digest+length but different bytes | both embedded on distinct keys; CRITICAL log | CT-B | none needed -- detected by direct byte comparison and split; correctness holds by construction |
 | `classify_failed` | the Gemini JSON classification crashed or returned garbage | catch job FAILED / sort leaves the file in its source dir | CT-B | none needed; the file is retried on the next run (REQ-CATCH-002) -- check `GEMINI_API_KEY`/model id if it persists |
 | `script_fetch_failed` | weekly script doc unreachable or not shared "anyone with the link" | classification proceeds without scene labels | CT-D | re-share the doc publicly and drop a fresh `.gdoc` shortcut into `_inbox/` |
-| `no_person` | censor-family detector found nobody | job SKIPPED; the original is NOT sent back | CT-B | expected: a silent pass-through would leak an uncensored photo |
+| `no_person` | censor-blur/restore detector found no person | job SKIPPED; the original is NOT sent back | CT-B | expected: a silent pass-through would leak an uncensored photo |
+| `no_face` | censor-black found no face | job SKIPPED; the original is NOT sent back | CT-B | expected (same leak-safety as `no_person`); if a face was clearly present, the angle/occlusion beat the detector -- re-send a clearer crop |
 | `restore_failed` | image model returned no repaint | restore job FAILED; the `_s1` blur stays in the work dir | CT-B | retry later or check `GEMINI_API_KEY`/model id |
 | `not_a_document` | compressed photo/video sent to a bot | payload ignored, logged | CT-D | re-send the file as a document; Telegram recompresses anything else (the documents-only contract) |
 | `bad_image` | non-image bytes under an image extension | job REJECTED; file left in place | CT-B | expected: untrusted input validated explicitly (BLUEPRINT 4) |
@@ -120,13 +121,20 @@ Two naming domains, one file each:
 
 - **Transport** (`files.stem`): `MMDD_<source>_<name>.<ext>` (`source` is
   `tg` or `loc`); two-step bots append `_s1` (intermediate) / `_s2` (final);
-  collisions resolve via `next_free_path` (`_2`, `_3`, ...). Extracted
-  frames are named `<timecode>_<video name>.jpg` where the timecode is
-  `hour-minute-second-frame`, every field zero-padded (frame = source
-  frame index, a multiple of 5, 6 digits) so alphabetical order in an
-  editor's import dialog is chronological order; the video name is the
-  sanitized source stem (a download's stem is its title):
-  `0-01-05-000325_BackstageMilan.jpg`.
+  collisions resolve via `next_free_path` (`_2`, `_3`, ...). The sender's
+  original name is preserved (`files.sanitize` keeps Unicode letters,
+  spaces and brackets -- Cyrillic survives; only path separators, control
+  and Windows-reserved chars are stripped) and NEVER lost except by the
+  library classifier. Extracted frames are `<timecode>_<video name>.jpg`
+  where the timecode drops empty leading fields -- `5-25` under a minute,
+  `1-05-325` past a minute, `1-01-05-3900` past an hour (frame = source
+  frame index, a multiple of 5).
+- **Output folders** (`files.Shelve`, `files.dated_dir`): every archiving
+  bot files its result(s) into `bots/<bot>/done/<MMDD> <name>/` and moves
+  the consumed original into that folder's `_done/` (kept, not deleted) --
+  frames, censor-blur/black, restore and fan-save all follow this. censor
+  and restore still send the result to the chat; frames replies a summary
+  only (never the frames).
 - **Library** (`files.usd_prim`): everything sort/catch classify is a valid
   OpenUSD prim identifier -- UpperCamelCase, letters and digits only, layer
   prefix first (`Bg|Fg|Ov|Pr|Tx`), e.g. `FgSnapeOfficeAngry.jpg`; collisions
