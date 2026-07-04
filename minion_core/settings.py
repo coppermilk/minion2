@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
+from pathlib import PureWindowsPath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -139,7 +141,7 @@ def load(env: Mapping[str, str]) -> Settings:
     if not drive:
         raise BadConfig('bad_config: DRIVE is required')
     return Settings(
-        drive=_abs('DRIVE', Path(drive)),
+        drive=_abs('DRIVE', drive),
         download_timeout_sec=int(get('DOWNLOAD_TIMEOUT_SEC')),
         quota_bytes=int(get('QUOTA_BYTES')),
         max_embedding_scan=int(get('MAX_EMBEDDING_SCAN')),
@@ -167,11 +169,22 @@ def load(env: Mapping[str, str]) -> Settings:
     )
 
 
-def _abs(name: str, path: Path) -> Path:
-    """Reject any relative path override at load (REQ-CFG-001)."""
-    if not path.is_absolute():
-        raise BadConfig(f'bad_config: {name} must be absolute: {path}')
-    return path
+def _abs(name: str, raw: str) -> Path:
+    """Reject any relative path override at load (REQ-CFG-001).
+
+    Absolute is tested against BOTH path flavors, never the host OS
+    (BLUEPRINT 1.2 -- no host-OS branch): one ``.env`` is shared
+    across the NAS and the Windows box, so a Windows ``CATCH_DIR``
+    must read as absolute on Linux and a POSIX ``DRIVE`` as absolute
+    on Windows. A path absolute on neither flavor is genuinely
+    relative and is still refused loudly.
+    """
+    absolute = PurePosixPath(raw).is_absolute() or (
+        PureWindowsPath(raw).is_absolute()
+    )
+    if not absolute:
+        raise BadConfig(f'bad_config: {name} must be absolute: {raw}')
+    return Path(raw)
 
 
 def _csv(raw: str) -> tuple[str, ...]:
@@ -182,7 +195,7 @@ def _csv(raw: str) -> tuple[str, ...]:
 def _dirs(raw: str) -> tuple[Path, ...]:
     """Split a ';'-separated path list; every entry must be absolute."""
     parts = (part.strip() for part in raw.split(';'))
-    return tuple(_abs('SOURCE_DIRS', Path(p)) for p in parts if p)
+    return tuple(_abs('SOURCE_DIRS', p) for p in parts if p)
 
 
 def _argv(raw: str) -> tuple[str, ...]:
@@ -194,4 +207,4 @@ def _opt_dir(name: str, raw: str) -> Path | None:
     """An optional watch dir; empty disables, relative still raises."""
     if not raw.strip():
         return None
-    return _abs(name, Path(raw.strip()))
+    return _abs(name, raw.strip())

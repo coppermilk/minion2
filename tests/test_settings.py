@@ -99,3 +99,21 @@ def test_relative_watch_dir_raises(tmp_path: Path) -> None:
         load({'DRIVE': str(tmp_path), 'CENSOR_BLUR_WATCH': 'relative/dir'})
     with pytest.raises(BadConfig, match='CATCH_DIR'):
         load({'DRIVE': str(tmp_path), 'CATCH_DIR': 'Downloads'})
+
+
+def test_foreign_platform_path_is_absolute(tmp_path: Path) -> None:
+    """One shared .env: a Windows path reads absolute on Linux too.
+
+    Absolute is tested against both flavors, so a Windows CATCH_DIR
+    sitting in the .env every NAS container loads does not crash the
+    Linux bots that never use it -- and a POSIX DRIVE stays valid on
+    Windows. A genuinely relative path is refused on both.
+    """
+    cfg = load(
+        {'DRIVE': str(tmp_path), 'CATCH_DIR': 'C:\\Users\\a\\Downloads'}
+    )
+    assert cfg.catch_dir is not None  # accepted, not rejected
+    posix = load({'DRIVE': '/volume1/media', 'CATCH_DIR': '/mnt/dl'})
+    assert posix.catch_dir is not None  # POSIX absolute still fine
+    with pytest.raises(BadConfig, match='CATCH_DIR'):
+        load({'DRIVE': str(tmp_path), 'CATCH_DIR': 'a\\b'})  # relative

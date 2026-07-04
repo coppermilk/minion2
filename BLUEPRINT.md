@@ -284,7 +284,12 @@ class Settings:
 ```
 
 `load` coerces one line per field and **raises on any relative path override**
-(REQ-CFG-001; a raise, not an assert -- it survives `python -O`). Precedence is
+(REQ-CFG-001; a raise, not an assert -- it survives `python -O`). Absolute is
+tested against BOTH path flavors (POSIX and Windows), never the host OS, so a
+single `.env` is shared verbatim across the NAS and the Windows box: a Windows
+`CATCH_DIR` reads as absolute on Linux (the containers that never use it just
+ignore it) and a POSIX `DRIVE` reads as absolute on Windows; a path absolute
+on neither flavor is genuinely relative and still refused. Precedence is
 the mapping you pass: production passes `os.environ` (so a container's
 `DRIVE=/data` wins); a test passes `{'DRIVE': str(tmp_path)}` -- hence no
 import-order rituals and nothing to leak between tests. Secrets live in a
