@@ -1,5 +1,9 @@
 # One image, N containers on one mount (BLUEPRINT 14).
-FROM python:3.14-slim
+# 3.13, not 3.14: torch and numpy ship prebuilt cp313 wheels, so the
+# slim image needs no compiler; a bleeding-edge Python would force a
+# from-source numpy/torch build (no gcc in slim -> failure). The code
+# floor is 3.11 and the suite runs on 3.13 in CI, so this matches.
+FROM python:3.13-slim
 
 # ffmpeg/ffprobe for the video adapter; cron supervises batch bots.
 RUN apt-get update \

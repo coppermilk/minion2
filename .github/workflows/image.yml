@@ -1,13 +1,14 @@
-# Build the one shared image on GitHub and publish it to GHCR, so the
-# NAS pulls a ready image instead of compiling torch itself. Runs only
-# on main (which only ever receives green commits); the GHA layer
-# cache keeps the heavy dependency layer warm between runs, so a
-# code-only change rebuilds and uploads just the small code layer.
+# Build the one shared image and publish it to GHCR, so the NAS pulls
+# a ready image instead of compiling torch itself. Every branch/PR
+# BUILDS the image (proving it still compiles -- the gap that let a
+# broken Dockerfile reach main once); only main also PUSHES it to
+# ghcr.io/coppermilk/minion2. The GHA layer cache keeps the heavy
+# dependency layer warm, so a code-only change ships just the code.
 name: image
 
 on:
   push:
-    branches: [main]
+  pull_request:
 
 jobs:
   build:
@@ -15,10 +16,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -35,7 +39,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           platforms: linux/amd64
-          push: true
+          push: ${{ env.PUBLISH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
