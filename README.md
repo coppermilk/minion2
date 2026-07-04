@@ -31,7 +31,13 @@ Docker (NAS): set `DRIVE_NAS` in `.env`, then
 `docker compose up -d` -- Telegram bots, sort (watch daemon) and
 week-clean (cron in the `batch` container). Windows runs only print
 and catch via `deploy/windows/register-tasks.ps1`; each bot runs in
-exactly one place.
+exactly one place. The same `.env` file works on both machines
+verbatim (paths are validated against both OS flavors).
+
+Auto-update on the NAS with no shell access: point DSM Task
+Scheduler (root, weekly) at `deploy/nas-update.sh` -- it hard-resets
+to `origin/main`, rebuilds, and restarts the bots, rebuilding
+*before* it stops anything so a bad build never takes them offline.
 
 ## The bots
 
