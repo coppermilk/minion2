@@ -72,6 +72,11 @@ trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 "$GIT" reset --hard origin/main
 echo "at $("$GIT" rev-parse --short HEAD)"
 
+# Remember the current image before pulling, so we can drop exactly
+# that one afterwards if the pull brought a different digest.
+IMAGE='ghcr.io/coppermilk/minion2:latest'
+old_id="$("$DOCKER" images --no-trunc -q "$IMAGE" 2>/dev/null || true)"
+
 # Converge to the published image, idempotently. `pull` grabs the new
 # GHCR image (a fast no-op when the digest is unchanged); set -e
 # aborts here on a bad pull, before the running bots are touched.
@@ -83,7 +88,15 @@ compose pull
 # needless restarts when nothing moved.
 compose up -d
 
-# Keep the NAS volume bounded: drop the now-dangling old image layers.
+# The old image is now untagged and unused (the containers were
+# recreated onto the new one). Remove it explicitly when the digest
+# changed, then sweep any other dangling layers so the NAS stays
+# bounded -- no pile of stale <none> images.
+new_id="$("$DOCKER" images --no-trunc -q "$IMAGE" 2>/dev/null || true)"
+if [ -n "$old_id" ] && [ "$old_id" != "$new_id" ]; then
+    echo "removing old image $old_id"
+    "$DOCKER" rmi "$old_id" 2>/dev/null || true
+fi
 "$DOCKER" image prune -f
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ====="
