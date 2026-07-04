@@ -45,6 +45,18 @@ CHUNK = 64 * 1024
 _URL = re.compile(r'https?://\S+')
 
 
+def _scrub(text: str, token: str) -> str:
+    """Redact the bot token from a message before it is surfaced.
+
+    ``requests`` puts the full request URL -- which embeds
+    ``/bot<TOKEN>/`` -- into its exception messages, and those
+    messages reach the log (source_crashed) and any reply. A leaked
+    token is a full account takeover, so it never leaves this module
+    in the clear; the log keeps the method and status, not the secret.
+    """
+    return text.replace(token, '<token>') if token else text
+
+
 class TgError(Exception):
     """The Bot API refused a call."""
 
@@ -66,8 +78,15 @@ class TgApi:
         import requests
 
         url = f'{self.base}/bot{self.token}/{method}'
-        resp = requests.post(url, json=params, timeout=API_TIMEOUT_SEC)
-        body = resp.json()
+        try:
+            resp = requests.post(url, json=params, timeout=API_TIMEOUT_SEC)
+            body = resp.json()
+        except requests.RequestException as exc:
+            # `from None`: break the chain so the original exception --
+            # whose message embeds the token-bearing URL -- cannot reach
+            # the log via the source thread's exception handler.
+            clean = _scrub(str(exc), self.token)
+            raise TgError(f'{method}: {clean}') from None
         if not body.get('ok'):
             raise TgError(f'{method}: {body.get("description")}')
         return body['result']
@@ -90,10 +109,15 @@ class TgApi:
         base = name or remote.rsplit('/', 1)[-1]
         target = next_free_path(spool.into / sanitize(base))
         url = f'{self.base}/file/bot{self.token}/{remote}'
-        with requests.get(url, stream=True, timeout=API_TIMEOUT_SEC) as resp:
-            resp.raise_for_status()
-            chunks = resp.iter_content(CHUNK)
-            return _spool(chunks, target, spool.budget())
+        try:
+            with requests.get(
+                url, stream=True, timeout=API_TIMEOUT_SEC
+            ) as resp:
+                resp.raise_for_status()
+                chunks = resp.iter_content(CHUNK)
+                return _spool(chunks, target, spool.budget())
+        except requests.RequestException as exc:
+            raise TgError(f'getFile: {_scrub(str(exc), self.token)}') from None
 
 
 @dataclass(frozen=True)
@@ -168,14 +192,20 @@ class TgChannel:
         import requests
 
         url = f'{self._api.base}/bot{self._api.token}/sendDocument'
-        with path.open('rb') as fh:
-            resp = requests.post(
-                url,
-                data={'chat_id': _chat(origin)},
-                files={'document': (path.name, fh)},
-                timeout=API_TIMEOUT_SEC,
-            )
-        if not resp.json().get('ok'):
+        try:
+            with path.open('rb') as fh:
+                resp = requests.post(
+                    url,
+                    data={'chat_id': _chat(origin)},
+                    files={'document': (path.name, fh)},
+                    timeout=API_TIMEOUT_SEC,
+                )
+            ok = resp.json().get('ok')
+        except requests.RequestException as exc:
+            raise TgError(
+                f'sendDocument: {_scrub(str(exc), self._api.token)}'
+            ) from None
+        if not ok:
             raise TgError(f'sendDocument: {path.name}')
 
 

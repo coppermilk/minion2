@@ -37,6 +37,14 @@ x-minion: &minion
     - ${DRIVE_NAS}:/data
   restart: unless-stopped
   init: true
+  # No container may gain more privilege than it starts with (blocks
+  # setuid escalation). We deliberately do NOT force a non-root USER or
+  # cap_drop here: the containers write into a Synology bind mount whose
+  # files are owned by the DSM user, and a fixed in-container uid would
+  # break those writes. Add `user:` + `cap_drop: [ALL]` per host once
+  # the mount's ownership is pinned.
+  security_opt:
+    - no-new-privileges:true
   logging:
     driver: json-file
     options:

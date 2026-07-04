@@ -44,6 +44,29 @@ def test_doc_id_extracted_from_full_url() -> None:
     assert scripts.read_script_doc('') == ''  # empty in, empty out
 
 
+def test_bad_doc_id_never_reaches_the_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crafted id with URL metacharacters is rejected, not fetched.
+
+    A ``.gdoc`` is untrusted input; only an opaque base64url id may be
+    interpolated into the export URL, or a stray ``/`` / ``?`` could
+    retarget the credential-less request.
+    """
+    called = False
+
+    def guard(*_a: object, **_k: object) -> object:
+        nonlocal called
+        called = True
+        raise AssertionError
+
+    monkeypatch.setattr('requests.get', guard, raising=False)
+    assert scripts.read_script_doc('../../secret') == ''
+    assert scripts.read_script_doc('id?x=y') == ''
+    assert scripts.read_script_doc('a/b') == ''
+    assert not called
+
+
 def test_gdoc_shortcuts_consumed_and_combined(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -127,7 +150,9 @@ def test_export_response_must_be_plain_text(
             return
 
     monkeypatch.setattr(
-        'requests.get', lambda url, timeout: Resp(), raising=False
+        'requests.get',
+        lambda url, timeout, allow_redirects: Resp(),
+        raising=False,
     )
     assert scripts.read_script_doc('abc') == ''
 
@@ -145,6 +170,8 @@ def test_long_script_is_truncated(
             return
 
     monkeypatch.setattr(
-        'requests.get', lambda url, timeout: Resp(), raising=False
+        'requests.get',
+        lambda url, timeout, allow_redirects: Resp(),
+        raising=False,
     )
     assert len(scripts.read_script_doc('abc')) == scripts.MAX_SCRIPT_CHARS

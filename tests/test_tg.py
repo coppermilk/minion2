@@ -6,15 +6,19 @@ import functools
 from typing import TYPE_CHECKING
 from typing import Any
 
+import pytest
+
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.tg import OffsetStore
 from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.tg import TgChannel
+from minion_core.adapters.tg import TgError
 from minion_core.adapters.tg import TgLinks
 from minion_core.adapters.tg import TgMedia
 from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import _document
+from minion_core.adapters.tg import _scrub
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
 from minion_core.kernel import Origin
@@ -216,6 +220,41 @@ def test_malformed_update_never_wedges_the_dock(
     assert len(out) == 1  # the good update was served
     assert out[0].job.origin.ref.startswith('1:9:')
     assert OffsetStore(cfg.state / 't.offset').read() == 9  # past poison
+
+
+def test_scrub_redacts_the_token() -> None:
+    """A leaked token is replaced; an empty token is a no-op."""
+    tk = 'AAA-sensitive-BBB'
+    msg = f'failed for url https://api.telegram.org/bot{tk}/getUpdates'
+    out = _scrub(msg, tk)
+    assert tk not in out
+    assert '<token>' in out
+    assert _scrub('untouched', '') == 'untouched'
+
+
+def test_network_error_never_leaks_the_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A requests failure surfaces as TgError with no token, no chain.
+
+    The original exception embeds the token-bearing URL; `from None`
+    breaks the chain so it cannot reach the log via the source
+    thread's exception handler.
+    """
+    import requests
+
+    tk = 'AAA-sensitive-BBB'
+    api = TgApi(token=tk)
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise requests.ConnectionError(f'pool error /bot{tk}/getUpdates')
+
+    monkeypatch.setattr(requests, 'post', boom)
+    with pytest.raises(TgError) as caught:
+        api.call('getUpdates', {})
+    assert tk not in str(caught.value)
+    assert '<token>' in str(caught.value)
+    assert caught.value.__cause__ is None  # chain broken by `from None`
 
 
 def test_chats_from_parses_csv() -> None:

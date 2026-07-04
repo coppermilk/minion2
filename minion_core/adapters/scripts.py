@@ -41,6 +41,11 @@ _EXPORT_URL = 'https://docs.google.com/document/d/{id}/export?format=txt'
 
 _DOC_ID = re.compile(r'/document/d/([a-zA-Z0-9_-]+)')
 
+_ID_OK = re.compile(r'^[A-Za-z0-9_-]+$')
+"""A Drive document id is opaque base64url; nothing else may reach
+the export URL (a stray ``/`` or ``?`` would let a crafted shortcut
+retarget the request)."""
+
 
 def script_hint(cfg: Settings) -> str:
     """This week's script text, or '' when there is none.
@@ -85,6 +90,9 @@ def read_script_doc(doc_id: str) -> str:
         return ''
     match = _DOC_ID.search(doc_id)
     doc_id = match.group(1) if match else doc_id.strip()
+    if not _ID_OK.match(doc_id):
+        _LOG.warning('script_skipped reason=bad_doc_id')
+        return ''
     return _fetch_text(_EXPORT_URL.format(id=doc_id))
 
 
@@ -92,7 +100,12 @@ def _fetch_text(url: str) -> str:
     import requests
 
     try:
-        resp = requests.get(url, timeout=FETCH_TIMEOUT_SEC)
+        # No redirects: the export URL is fixed, so a 3xx can only be
+        # an attempt to bounce this credential-less fetch somewhere
+        # unintended (e.g. an SSRF pivot). Treat it as a failure.
+        resp = requests.get(
+            url, timeout=FETCH_TIMEOUT_SEC, allow_redirects=False
+        )
         resp.raise_for_status()
     except (requests.RequestException, OSError) as exc:
         _LOG.warning('script_fetch_failed reason=%s', exc)
