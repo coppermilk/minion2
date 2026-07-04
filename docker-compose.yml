@@ -9,9 +9,11 @@
 # containers stay consistent (OPERATIONS 4).
 #
 # Idle economy: long-poll and folder waits block (no busy loops),
-# sort exits fast when idle, and the limits below cap what a busy
-# model run may take. Logs rotate so TELEMETRY on the host stays
-# bounded.
+# sort exits fast when idle, and the mem_limit below caps what a busy
+# model run may take. No cpus: caps -- the Synology kernel ships no
+# CFS bandwidth controller, so a NanoCPUs limit is rejected at create
+# ("kernel does not support CPU CFS scheduler"); memory is the cap
+# that matters for torch anyway. Logs rotate so TELEMETRY stays bounded.
 #
 # print and catch are deliberately NOT services here: the printer
 # and the Downloads folder live on the Windows machine
@@ -49,7 +51,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_INBOX:-}
     command: python -m minions.inbox.main
     mem_limit: 512m
-    cpus: 0.5
 
   # Link bots refresh extractors on every start (OPERATIONS 3).
   fetch:
@@ -59,7 +60,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_FETCH:-}
     command: sh -c 'yt-dlp -U; exec python -m minions.fetch.main'
     mem_limit: 1g
-    cpus: 1
 
   frames:
     <<: *minion
@@ -68,7 +68,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_FRAMES:-}
     command: sh -c 'yt-dlp -U; exec python -m minions.frames.main'
     mem_limit: 1g
-    cpus: 1
 
   # fan-save parks downloads in bots/fan-save/done/ for later work.
   fan-save:
@@ -78,7 +77,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_FAN_SAVE:-}
     command: sh -c 'yt-dlp -U; exec python -m minions.fan_save.main'
     mem_limit: 1g
-    cpus: 1
 
   # The censor family: one Telegram identity per behaviour; the
   # torch detector loads lazily on the first photo, hence the caps.
@@ -89,7 +87,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_CENSOR_BLUR:-}
     command: python -m minions.censor_blur.main
     mem_limit: 4g
-    cpus: 2
 
   censor-black:
     <<: *minion
@@ -98,7 +95,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_CENSOR_BLACK:-}
     command: python -m minions.censor_black.main
     mem_limit: 4g
-    cpus: 2
 
   restore:
     <<: *minion
@@ -107,7 +103,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_RESTORE:-}
     command: python -m minions.restore.main
     mem_limit: 4g
-    cpus: 2
 
   # sort runs as a watch daemon: Downloads/_inbox sort instantly
   # (SORT_WATCH axis); it may load CLIP when there is work.
@@ -118,11 +113,9 @@ services:
       SORT_WATCH: '1'
     command: python -m minions.sort.main
     mem_limit: 4g
-    cpus: 2
 
   # week-clean rides cron; the foreground cron is the supervisor.
   batch:
     <<: *minion
     command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI" > /etc/minions.env; exec cron -f'
     mem_limit: 512m
-    cpus: 0.5
