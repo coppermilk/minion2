@@ -4,8 +4,8 @@
 # broken Dockerfile reach main once); only main also PUSHES it to
 # ghcr.io/coppermilk/minion2. The GHA layer cache keeps the heavy
 # dependency layer warm, so a code-only change ships just the code.
-# After each publish, old package versions are pruned so the registry
-# does not pile up (the NAS only ever pulls :latest).
+# After each publish, old GHCR package versions AND old workflow runs
+# are pruned so nothing piles up (the NAS only ever pulls :latest).
 name: image
 
 on:
@@ -18,8 +18,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: write  # to delete old workflow runs after a publish
     env:
       PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      # Don't upload the per-build .dockerbuild record artifact or the
+      # job summary -- they only pile up in Actions storage.
+      DOCKER_BUILD_SUMMARY: 'false'
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -46,8 +51,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      # Prune stale versions after a publish: keep the few most recent
-      # (:latest + a couple of SHA tags), delete the rest.
+      # Prune stale GHCR versions after a publish: keep the few most
+      # recent (:latest + a couple of SHA tags), delete the rest.
       - if: env.PUBLISH == 'true'
         uses: actions/delete-package-versions@v5
         with:
@@ -55,3 +60,23 @@ jobs:
           package-type: container
           min-versions-to-keep: 5
           delete-only-pre-release-versions: false
+      # Prune old workflow-run history: keep the 25 most recent runs of
+      # each workflow, delete the rest (the current run is newest, safe).
+      - if: env.PUBLISH == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const keep = 25;
+            for (const wf of ['ci.yml', 'image.yml']) {
+              const runs = await github.paginate(
+                github.rest.actions.listWorkflowRuns,
+                { owner: context.repo.owner, repo: context.repo.repo,
+                  workflow_id: wf, per_page: 100 },
+              );
+              for (const run of runs.slice(keep)) {
+                await github.rest.actions.deleteWorkflowRun({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  run_id: run.id,
+                });
+              }
+            }
