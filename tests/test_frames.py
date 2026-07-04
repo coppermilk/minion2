@@ -24,27 +24,19 @@ def test_stride_is_hardcoded_to_five() -> None:
     assert STRIDE == 5
 
 
-def test_timecode_is_fixed_width() -> None:
-    """hour-minute-second-frame, every field zero-padded."""
-    assert _timecode(0, 0) == '0-00-00-000000'
-    assert _timecode(65, 325) == '0-01-05-000325'
-    assert _timecode(59, 295) == '0-00-59-000295'
-    assert _timecode(3661, 198000) == '1-01-01-198000'
-    assert _timecode(7325, 900000) == '2-02-05-900000'
+def test_timecode_omits_empty_leading_fields() -> None:
+    """Only the fields that exist: no zero-filled hours or minutes."""
+    assert _timecode(0, 0) == '0-0'  # 0s, frame 0
+    assert _timecode(25, 5) == '25-5'  # under a minute: S-frame
+    assert _timecode(65, 325) == '1-05-325'  # over a minute: M-SS-frame
+    assert _timecode(3661, 198000) == '1-01-01-198000'  # over an hour
 
 
-def test_timecode_sorts_chronologically() -> None:
-    """Alphabetical order in an editor IS the chronological order."""
-    times = [(9 * 60 + 59, 17970), (10 * 60, 18000), (3600, 108000)]
-    codes = [_timecode(sec, frame) for sec, frame in times]
-    assert sorted(codes) == codes
-
-
-def test_extract_names_frames_by_timecode(
+def test_extract_builds_folder_with_done(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The sequence becomes [hour-]min-sec-frame_<video> names."""
+    """Frames land in <MMDD> <clip>/; the clip is filed in _done/."""
     cfg = make_cfg(tmp_path / 'drive')
     clip = cfg.bot_dir('frames') / 'clip.mp4'
     clip.parent.mkdir(parents=True, exist_ok=True)
@@ -69,13 +61,16 @@ def test_extract_names_frames_by_timecode(
     verdict = ExtractFrames(cfg).process(job)
     assert verdict.disposition is Disposition.DELIVERED
     assert verdict.result is not None
-    names = sorted(p.name for p in verdict.result.iterdir())
-    # fps=5: frames 0, 5, 10 land at 0s, 1s, 2s; the video name rides
-    assert names == [
-        '0-00-00-000000_clip.jpg',
-        '0-00-01-000005_clip.jpg',
-        '0-00-02-000010_clip.jpg',
-    ]
+    folder = verdict.result
+    assert folder.parent == cfg.bot_done('frames')
+    assert folder.name.endswith('clip')  # MMDD clip
+    frames = sorted(p.name for p in folder.iterdir() if p.is_file())
+    # fps=5: frame 0@0s, frame 5@1s, frame 10@2s; compact, name rides
+    assert frames == ['0-0_clip.jpg', '1-5_clip.jpg', '2-10_clip.jpg']
+    assert (folder / '_done' / 'clip.mp4').is_file()  # clip shelved
+    assert not clip.exists()  # moved out of the work dir
+    assert verdict.reply is not None
+    assert 'frames' in verdict.reply  # summary, not the files
 
 
 def test_missing_fps_is_probe_failed(

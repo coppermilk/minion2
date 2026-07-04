@@ -46,6 +46,7 @@ __all__ = [
     'QuotaExceeded',
     'atomic_write',
     'blur_masked',
+    'dated_dir',
     'free_quota',
     'has_week',
     'hide_boxes',
@@ -94,10 +95,25 @@ def sanitize(name: str) -> str:
     return safe[:NAME_MAX].strip() or 'item'
 
 
+def _today() -> date:
+    """Local calendar date -- the naming intent (not a UTC instant)."""
+    return date.today()  # noqa: DTZ011 -- local date is the naming intent
+
+
 def stem(name: str, source: str, when: date | None = None) -> str:
     """Canonical stem ``MMDD_<source>_<name>`` (OPERATIONS 6)."""
-    day = date.today() if when is None else when  # noqa: DTZ011 -- local date is the naming intent
+    day = _today() if when is None else when
     return f'{day:%m%d}_{source}_{sanitize(name)}'
+
+
+def dated_dir(name: str, when: date | None = None) -> str:
+    """Per-task folder name ``MMDD <name>`` (OPERATIONS 6).
+
+    The output-folder convention: each processed item gets a dated
+    folder holding its results plus a ``_done/`` with the original.
+    """
+    day = _today() if when is None else when
+    return f'{day:%m%d} {sanitize(name)}'
 
 
 _NON_PRIM = re.compile(r'[^A-Za-z0-9]+')
