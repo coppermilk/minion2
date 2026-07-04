@@ -1,9 +1,10 @@
 # One image, N containers on one mount (BLUEPRINT 14).
-# 3.13, not 3.14: torch and numpy ship prebuilt cp313 wheels, so the
-# slim image needs no compiler; a bleeding-edge Python would force a
-# from-source numpy/torch build (no gcc in slim -> failure). The code
-# floor is 3.11 and the suite runs on 3.13 in CI, so this matches.
-FROM python:3.13-slim
+# 3.12, not 3.13/3.14: facenet-pytorch pins numpy<2, and numpy<2 has
+# no wheels past cp312 (cp313 wheels start at numpy 2.1). On a newer
+# Python pip would resolve numpy down to 1.26 and build it from
+# source -- but slim has no compiler, so the build fails. 3.12 gets a
+# prebuilt numpy 1.26 wheel; the code floor is 3.11, so this is fine.
+FROM python:3.12-slim
 
 # ffmpeg/ffprobe for the video adapter; cron supervises batch bots.
 RUN apt-get update \
