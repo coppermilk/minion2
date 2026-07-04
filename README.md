@@ -44,9 +44,9 @@ exactly one place.
 | censor-blur | streaming | photo -> people blurred -> chat or done dir (`CENSOR_BLUR_WATCH` adds a folder dock) |
 | censor-black | streaming | photo -> people blacked out -> chat or done dir (`CENSOR_BLACK_WATCH` adds a folder dock) |
 | restore | streaming | photo -> people blurred, then the LLM repaints the background (`RESTORE_WATCH` adds a folder dock) |
-| sort | batch | classifies images IN PLACE in `_inbox/` (Gemini JSON verdict -> OpenUSD prim name + fandom in EXIF); the working week stays in `_inbox/`, CLIP rescues `Unknown/` |
+| sort | batch | classifies images IN PLACE in `_inbox/` the moment they land (Gemini -> prim name + EXIF fandom + week tag; CLIP decides instantly when Gemini punts); the working week stays in `_inbox/` |
 | catch | streaming | new Downloads image -> prim-named copy straight into `pictures/<Fandom>/`; the original never leaves `CATCH_DIR` |
-| week-clean | batch | Monday: strip last week's EXIF tag, move the classified week from `_inbox/` into `pictures/<Fandom>/`; unclassified files stay for retry |
+| week-clean | batch | Monday, mechanical: strip the week tag, shelve each classified image into `pictures/<Fandom>/` per its EXIF; unclassified files stay for retry |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` (`PRINT_SPOOLER`: lp / SumatraPDF) |
 | kindle | outlier | Apps Script, `deploy/apps_script/` |
 

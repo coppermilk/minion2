@@ -33,8 +33,9 @@ software never branches on the host OS.
 
 ```
 DRIVE/
-  _inbox/                 ingest drop folder                         [MEDIA]
-  pictures/<Fandom>/      sorted library, carries weekly EXIF tag    [MEDIA]
+  _inbox/                 ingest drop + the classified working week
+                          (prim names, EXIF fandom, weekly tag)      [MEDIA]
+  pictures/<Fandom>/      sorted library (shelved Mondays, untagged) [MEDIA]
   print/  print/_done/    print queue + archive                      [MEDIA]
   Scripts/                weekly document archive (done__<name>)     [MEDIA]
   bots/
@@ -337,7 +338,7 @@ so originals are never recompressed.
 | restore | streaming | photo -> people blurred -> LLM repaints background (`_s1`/`_s2`) | `restore_watch` dock |
 | sort | batch | images classified in place (prim name + EXIF fandom); the week waits in `_inbox/` | `source_dirs`: `_inbox/` or `Downloads/`; `SORT_WATCH`: streaming trigger, instant classification |
 | catch | streaming | new Downloads image -> prim-named copy in `pictures/<Fandom>/` (same Gemini verdict as sort); the original is renamed in place, never moved | `catch_dir` |
-| week-clean | batch | Monday: strip last week's EXIF tag, shelve the classified week from `_inbox/` into `pictures/<Fandom>/` (fandom from EXIF); unclassified files stay for retry | - |
+| week-clean | batch | Monday, purely mechanical: strip the weekly tag and shelve each classified image from `_inbox/` into `pictures/<Fandom>/` per its EXIF fandom; unclassified files stay for retry | - |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` | `print_spooler`: lp / SumatraPDF argv |
 | kindle | outlier | Google Doc -> PDF -> `print/`; weekly archive | Apps Script (off-kernel, declared, not disguised) |
 
@@ -349,13 +350,15 @@ of section 8.
 Sort is three named passes: **Classify** (one Gemini JSON verdict per image
 decides BOTH the OpenUSD prim filename and the fandom; the weekly script
 hint from `adapters/scripts.py` rides into the prompt. The image is renamed
-IN PLACE and the fandom recorded in EXIF (`files.tag_fandom`) -- the working
-week stays visible in `_inbox/`; the Monday week-clean run shelves it into
-`pictures/<Fandom>/`) -> **Demote** (fandoms under `demote_min_count` ->
+IN PLACE, the fandom recorded in EXIF (`files.tag_fandom`) and the weekly
+tag applied -- the working week stays visible in `_inbox/`. When the model
+punts (Unknown), CLIP picks the nearest library fandom in the SAME run:
+everything is decided during the week, so the Monday week-clean run is
+purely mechanical) -> **Demote** (fandoms under `demote_min_count` ->
 `Unknown/`; vectors survive -- the cache is identity-keyed and the fandom
 mapping is never persisted, REQ-SORT-001) -> **Re-place** (vision re-matches
-`Unknown/` against the live layout at zero recompute cost -- the one
-surviving embedding consumer; Gemini never sees an image twice).
+`Unknown/` against the live layout at zero recompute cost; Gemini never
+sees an image twice).
 
 Library naming: files under `pictures/` are valid OpenUSD prim identifiers
 (UpperCamelCase, letters+digits, e.g. `FgSnapeOfficeAngry.jpg`); collisions

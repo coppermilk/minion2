@@ -136,14 +136,16 @@ Two naming domains, one file each:
   line) but changes nothing else.
 
 The working week: sort classifies IN PLACE -- the file is renamed to its
-prim in `_inbox/` and the fandom goes into EXIF ImageDescription
-(`files.tag_fandom`), because the prim name deliberately carries no fandom.
-The week's material stays in `_inbox/` for editing; Monday's week-clean run
-reads the EXIF fandom back and shelves everything classified into
-`pictures/<Fandom>/` (a non-JPEG loses the fandom and lands in `Unknown/`,
-where Re-place rescues it). Unclassified leftovers are never deleted --
-they wait for the next attempt. catch is the exception: its copy goes
-straight into the library (the original stays in Downloads anyway).
+prim in `_inbox/`, the fandom goes into EXIF ImageDescription
+(`files.tag_fandom`, because the prim name deliberately carries no fandom)
+and the weekly tag marks the working set. Everything is decided during the
+week: when Gemini punts (Unknown), CLIP picks the nearest library fandom in
+the same instant run. Monday's week-clean is purely mechanical -- strip the
+weekly tag, move each classified file into `pictures/<Fandom>/` per its
+EXIF (a non-JPEG cannot carry EXIF and lands in `Unknown/`, where Re-place
+rescues it). Unclassified leftovers are never deleted -- they wait for the
+next attempt. catch is the exception: its copy goes straight into the
+library (the original stays in Downloads anyway).
 
 Weekly script hints ride the same tree: drop the week's Google Doc `.gdoc`
 shortcut(s) into `_inbox/` (docs shared "anyone with the link"); the first

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
     from minion_core.adapters.llm import Classification
     from minion_core.adapters.vision import Embedder
+    from minion_core.adapters.vision import Vector
     from minion_core.settings import Settings
 
 _LOG = logging.getLogger('sort')
@@ -107,13 +108,16 @@ def _source_images(cfg: Settings) -> list[Path]:
 def classify_pass(cfg: Settings, deps: SortDeps, hint: str) -> None:
     """Pass 1: one JSON verdict; the image keeps waiting in place.
 
-    The name becomes the prim, the fandom goes into EXIF -- the file
-    itself stays in its source dir for the working week (the Monday
-    week-clean run moves it into the library). A failed
-    classification leaves the file untouched -- logged, retried on
-    the next run (the model is a frontier, not a gate). ``censored``
-    is telemetry only (operator decision).
+    The name becomes the prim, the fandom goes into EXIF, the weekly
+    tag marks the working set -- the file itself stays in its source
+    dir until the Monday mover. Everything is decided HERE, during
+    the week: when the model punts (Unknown), CLIP picks the nearest
+    library fandom immediately, so Monday is purely mechanical. A
+    failed classification leaves the file untouched -- logged,
+    retried on the next run (the model is a frontier, not a gate).
+    ``censored`` is telemetry only (operator decision).
     """
+    decide = _clip_fallback(cfg, deps)
     for path in _source_images(cfg):
         if not valid_image(path):
             _LOG.warning('rejected reason=bad_image src=%s', path)
@@ -125,14 +129,38 @@ def classify_pass(cfg: Settings, deps: SortDeps, hint: str) -> None:
             continue
         named = verdict.filename + path.suffix.lower()
         target = path.rename(next_free_prim(path.with_name(named)))
-        tag_fandom(target, verdict.fandom)
+        fandom, via = decide(verdict.fandom, target)
+        tag_fandom(target, fandom)
+        tag_week(target, cfg.week_tag)
         _LOG.info(
-            'classified src=%s fandom=%s confidence=%s censored=%s',
+            'classified src=%s fandom=%s via=%s confidence=%s censored=%s',
             target.name,
-            verdict.fandom,
+            fandom,
+            via,
             verdict.confidence,
             verdict.censored,
         )
+
+
+def _clip_fallback(
+    cfg: Settings, deps: SortDeps
+) -> Callable[[str, Path], tuple[str, str]]:
+    """A lazy nearest-fandom decider for verdicts the model punted.
+
+    CLIP (and the embedding cache) load only if some verdict is
+    Unknown; the library is refreshed at most once per pass.
+    """
+    library: dict[str, Vector] | None = None
+
+    def decide(fandom: str, path: Path) -> tuple[str, str]:
+        nonlocal library
+        if fandom != UNKNOWN:
+            return fandom, 'gemini'
+        if library is None:
+            library = EmbeddingCache(cfg).refresh(cfg.pictures, deps.embed)
+        return nearest_fandom(deps.embed(path), library) or UNKNOWN, 'clip'
+
+    return decide
 
 
 def demote_pass(cfg: Settings) -> None:
@@ -168,8 +196,8 @@ def _fandoms(pictures: Path) -> list[Path]:
 def replace_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
     """Pass 3: CLIP re-matches Unknown against the live layout.
 
-    The one surviving embedding consumer (BLUEPRINT 9): Gemini never
-    sees these images again, so the nearest labelled fandom decides.
+    Library hygiene, not week logic: whatever demote (or a lost EXIF
+    tag) parked in Unknown/ re-matches the nearest labelled fandom.
     """
     library = cache.refresh(cfg.pictures, deps.embed)
     if not library:
@@ -181,5 +209,4 @@ def replace_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
         target = move_atomic(
             path, next_free_prim(cfg.pictures / fandom / path.name)
         )
-        tag_week(target, cfg.week_tag)
         _LOG.info('placed src=%s fandom=%s', target.name, fandom)

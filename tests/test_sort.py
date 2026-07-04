@@ -67,7 +67,8 @@ def _seed_library(cfg: Settings) -> None:
 def test_classify_pass_renames_in_place_with_fandom_tag(
     tmp_path: Path,
 ) -> None:
-    """Pass 1: prim name + EXIF fandom; the file waits out its week."""
+    """Pass 1: prim name + EXIF fandom + week tag, all in place."""
+    from minion_core.adapters.files import has_week
     from minion_core.adapters.files import read_fandom
 
     cfg = make_cfg(tmp_path / 'drive')
@@ -77,6 +78,7 @@ def test_classify_pass_renames_in_place_with_fandom_tag(
     assert classified.exists()  # still in _inbox, not in pictures/
     assert not (cfg.pictures / 'Cats').exists()
     assert read_fandom(classified) == 'Cats'
+    assert has_week(classified, cfg.week_tag)  # the working set's mark
 
 
 def test_classify_pass_collision_gets_bare_digit(tmp_path: Path) -> None:
@@ -86,6 +88,32 @@ def test_classify_pass_collision_gets_bare_digit(tmp_path: Path) -> None:
     _jpeg(cfg.inbox / 'other_cat.jpg')
     classify_pass(cfg, DEPS, '')
     assert (cfg.inbox / 'FgCatsCalm2.jpg').exists()
+
+
+def test_gemini_unknown_is_decided_by_clip_immediately(
+    tmp_path: Path,
+) -> None:
+    """Nothing waits for Monday undecided: CLIP fills the EXIF now."""
+    from minion_core.adapters.files import read_fandom
+
+    cfg = make_cfg(tmp_path / 'drive')
+    _seed_library(cfg)
+
+    def punt(path: Path, hint: str) -> Classification:
+        return Classification(
+            fandom='Unknown',
+            filename='FgCatMystery',
+            censored=False,
+            confidence='low',
+            description='the model punted',
+        )
+
+    _jpeg(cfg.inbox / 'puzzling_cat.jpg')
+    deps = SortDeps(classify=punt, embed=_embed)
+    classify_pass(cfg, deps, '')
+    classified = cfg.inbox / 'FgCatMystery.jpg'
+    assert classified.exists()
+    assert read_fandom(classified) == 'Cats'  # decided during the week
 
 
 def test_classified_files_do_not_retrigger_the_model(
@@ -200,18 +228,22 @@ def test_replace_pass_rescues_unknown(tmp_path: Path) -> None:
 
 
 def test_full_week_end_to_end(tmp_path: Path) -> None:
-    """The week's cycle: classify in place, Monday moves to fandom."""
+    """The week's cycle: decide everything now, Monday just executes."""
     import minions.week_clean.main
+    from minion_core.adapters.files import has_week
     from tests.conftest import make_env
 
     cfg = make_cfg(tmp_path / 'drive')
     _seed_library(cfg)
     _jpeg(cfg.inbox / 'stray cat.jpg')
     run_passes(cfg, DEPS)
-    assert (cfg.inbox / 'FgCatsCalm.jpg').exists()  # the working week
+    working = cfg.inbox / 'FgCatsCalm.jpg'
+    assert working.exists()  # the working week, tagged
+    assert has_week(working, cfg.week_tag)
     assert minions.week_clean.main.main(make_env(tmp_path / 'drive')) == 0
-    cats = [p.name for p in (cfg.pictures / 'Cats').iterdir()]
-    assert 'FgCatsCalm.jpg' in cats  # Monday shelves it by EXIF fandom
+    shelved = cfg.pictures / 'Cats' / 'FgCatsCalm.jpg'
+    assert shelved.exists()  # Monday shelves it by EXIF fandom
+    assert not has_week(shelved, cfg.week_tag)  # and drops the tag
     assert list(cfg.inbox.iterdir()) == []
 
 

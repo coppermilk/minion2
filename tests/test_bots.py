@@ -141,12 +141,12 @@ def test_hide_boxes_blur_mode_smears(tmp_path: Path) -> None:
     assert center != (0, 0, 0)  # no longer pure detail
 
 
-def test_week_clean_strips_and_shelves(tmp_path: Path) -> None:
-    """week-clean: old tags gone, the classified week moves in.
+def test_week_clean_untags_and_shelves(tmp_path: Path) -> None:
+    """week-clean is mechanical: strip the week tag, move per EXIF.
 
-    A prim-named image with an EXIF fandom is shelved into
-    ``pictures/<Fandom>/`` with a fresh week tag; an unclassified
-    leftover STAYS for the next attempt (never deleted).
+    Every decision was made during the week (prim name, EXIF fandom,
+    week tag); Monday only executes them. An unclassified leftover
+    STAYS for the next attempt (never deleted).
     """
     from minion_core.adapters.files import has_week
     from minion_core.adapters.files import tag_fandom
@@ -154,20 +154,17 @@ def test_week_clean_strips_and_shelves(tmp_path: Path) -> None:
 
     drive = tmp_path / 'drive'
     cfg = make_cfg(drive)
-    pic = _jpeg(cfg.pictures / 'Cats' / 'cat.jpg')
-    tag_week(pic, cfg.week_tag)
     week = _jpeg(cfg.inbox / 'FgSnapeOfficeAngry.jpg')
     tag_fandom(week, 'HarryPotter')
+    tag_week(week, cfg.week_tag)
     (cfg.inbox / 'leftover.jpg').write_bytes(b'x')
     code = minions.week_clean.main.main(make_env(drive))
     assert code == 0
-    assert not has_week(pic, cfg.week_tag)
     shelved = cfg.pictures / 'HarryPotter' / 'FgSnapeOfficeAngry.jpg'
     assert shelved.exists()
-    assert has_week(shelved, cfg.week_tag)  # the fresh week's mark
+    assert not has_week(shelved, cfg.week_tag)  # tag ends with the week
     assert not week.exists()
     assert (cfg.inbox / 'leftover.jpg').exists()  # retried, not deleted
-    assert pic.exists()  # MEDIA itself is never deleted
 
 
 def test_week_clean_untagged_prim_goes_to_unknown(tmp_path: Path) -> None:
