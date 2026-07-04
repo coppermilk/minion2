@@ -1,10 +1,11 @@
 """fan-save bot: a link becomes a video parked for later work.
 
-Graph: TgLinks -> FetchLink -> ArchiveTo(bots/fan-save/done/) ->
-Reply -> DisposeSource. Drop a TikTok/YouTube/anything link in the
-chat and the file lands in the fan queue -- content collected now,
-processed separately later. The chat gets a text confirmation only;
-the file itself never goes back.
+Graph: TgLinks -> FetchLink -> Reply -> Shelve. Drop a
+TikTok/YouTube/anything link in the chat and the video lands in the
+fan queue under ``done/<MMDD> <title>/`` with the link spool filed in
+its ``_done/`` -- content collected now, processed separately later.
+The chat gets a text confirmation only; the file itself never goes
+back.
 
 Part of the one-identity-per-behaviour waiver (BLUEPRINT 9): the
 graph shape matches fetch with ``FETCH_SINK=queue``, but it runs as
@@ -18,6 +19,7 @@ import os
 from typing import TYPE_CHECKING
 
 from minion_core.adapters.fetch import FetchLink
+from minion_core.adapters.files import Shelve
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgApi
@@ -26,8 +28,6 @@ from minion_core.adapters.tg import TgLinks
 from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
-from minion_core.kernel import ArchiveTo
-from minion_core.kernel import DisposeSource
 from minion_core.kernel import Reply
 from minion_core.kernel import run
 from minion_core.settings import load
@@ -57,9 +57,8 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     return (
         TgLinks(api, spec)
         >> FetchLink(cfg)
-        >> ArchiveTo(cfg.bot_done(BOT))
         >> Reply(channel)
-        >> DisposeSource(spool_of)
+        >> Shelve(cfg.bot_done(BOT), spool_of, by_result=True)
     )
 
 

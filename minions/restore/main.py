@@ -1,7 +1,7 @@
 """restore bot: blur the people, then the LLM repaints the scene.
 
 Graph: (TgMedia | Folder) -> HidePersonBoxes -> RestoreBackground
--> RouteOrigin(chat / done dir) -> Reply -> DisposeSource. A
+-> RouteOrigin(chat / nothing) -> Reply -> Shelve. A
 two-step belt: HidePersonBoxes writes the ``_s1`` intermediate, the LLM
 repaint delivers ``_s2`` (OPERATIONS 6). One of the three
 censor-family bots (BLUEPRINT 9 waiver); ``RESTORE_WATCH`` adds the
@@ -14,6 +14,7 @@ import functools
 import os
 from typing import TYPE_CHECKING
 
+from minion_core.adapters.files import Shelve
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.llm import RestoreBackground
 from minion_core.adapters.llm import spec_from
@@ -27,9 +28,8 @@ from minion_core.adapters.tg import spool_of
 from minion_core.adapters.vision import IMAGE_EXTS
 from minion_core.adapters.vision import HidePersonBoxes
 from minion_core.adapters.vision import warm_detector
-from minion_core.kernel import ArchiveTo
-from minion_core.kernel import DisposeSource
 from minion_core.kernel import FolderSpec
+from minion_core.kernel import Null
 from minion_core.kernel import Reply
 from minion_core.kernel import RouteOrigin
 from minion_core.kernel import SeenPaths
@@ -71,16 +71,14 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     docks = merge_watch(
         TgMedia(api, spec), watch, SeenPaths(cfg.seen_paths_max)
     )
-    route = RouteOrigin(
-        tg=SendResult(channel), loc=ArchiveTo(cfg.bot_done(BOT))
-    )
+    route = RouteOrigin(tg=SendResult(channel), loc=Null())
     return (
         docks
         >> HidePersonBoxes()
         >> RestoreBackground(spec_from(env))
         >> route
         >> Reply(channel)
-        >> DisposeSource(spool_of)
+        >> Shelve(cfg.bot_done(BOT), spool_of)
     )
 
 

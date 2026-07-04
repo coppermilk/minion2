@@ -1,7 +1,7 @@
 """censor-blur bot: people's silhouettes are blurred before it returns.
 
-Graph: (TgMedia | Folder) -> BlurContour -> RouteOrigin(chat / done
-dir) -> Reply -> DisposeSource. Segmentation blur (not a box) so the
+Graph: (TgMedia | Folder) -> BlurContour -> RouteOrigin(chat /
+nothing) -> Reply -> Shelve. Segmentation blur (not a box) so the
 scene stays sharp. One of the three censor-family bots (BLUEPRINT 9
 waiver): one Telegram identity per behaviour; ``CENSOR_BLUR_WATCH``
 adds the local dock (REQ-DOCK-001).
@@ -13,6 +13,7 @@ import functools
 import os
 from typing import TYPE_CHECKING
 
+from minion_core.adapters.files import Shelve
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgApi
@@ -24,9 +25,8 @@ from minion_core.adapters.tg import spool_of
 from minion_core.adapters.vision import IMAGE_EXTS
 from minion_core.adapters.vision import BlurContour
 from minion_core.adapters.vision import warm_masks
-from minion_core.kernel import ArchiveTo
-from minion_core.kernel import DisposeSource
 from minion_core.kernel import FolderSpec
+from minion_core.kernel import Null
 from minion_core.kernel import Reply
 from minion_core.kernel import RouteOrigin
 from minion_core.kernel import SeenPaths
@@ -68,15 +68,13 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     docks = merge_watch(
         TgMedia(api, spec), watch, SeenPaths(cfg.seen_paths_max)
     )
-    route = RouteOrigin(
-        tg=SendResult(channel), loc=ArchiveTo(cfg.bot_done(BOT))
-    )
+    route = RouteOrigin(tg=SendResult(channel), loc=Null())
     return (
         docks
         >> BlurContour()
         >> route
         >> Reply(channel)
-        >> DisposeSource(spool_of)
+        >> Shelve(cfg.bot_done(BOT), spool_of)
     )
 
 

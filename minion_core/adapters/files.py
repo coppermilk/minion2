@@ -17,21 +17,28 @@ import re
 import socket
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 
 from minion_core.kernel import NAME_TRIES
 from minion_core.kernel import Disposition
+from minion_core.kernel import Sink
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
+from minion_core.kernel import _delivered
+from minion_core.kernel import _ref_path
+from minion_core.kernel import _result_files
 from minion_core.kernel import atomic_write
 from minion_core.kernel import move_atomic
 from minion_core.kernel import next_free_path
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Callable
 
+    from minion_core.kernel import Envelope
     from minion_core.kernel import Job
+    from minion_core.kernel import Origin
     from minion_core.settings import Settings
 
 __all__ = [
@@ -44,6 +51,7 @@ __all__ = [
     'HideSpec',
     'Mask',
     'QuotaExceeded',
+    'Shelve',
     'atomic_write',
     'blur_masked',
     'dated_dir',
@@ -445,3 +453,45 @@ class Deliver(Step):
         return Verdict(
             Disposition.DELIVERED, result=moved, reply=f'saved {moved.name}'
         )
+
+
+class Shelve(Sink):
+    """Archive a delivered result into a dated folder with its original.
+
+    The output-folder convention (OPERATIONS 6): each processed item
+    gets ``<into>/<MMDD> <name>/`` holding the result file(s), with the
+    consumed original filed under that folder's ``_done/`` -- kept, not
+    deleted. Replaces the ArchiveTo + DisposeSource tail: one folder
+    per task, the source preserved beside its output. ``by_result``
+    names the folder from the result (a fan-save video) rather than
+    the original (a photo).
+    """
+
+    def __init__(
+        self,
+        into: Path,
+        locate: Callable[[Origin], Path | None] = _ref_path,
+        *,
+        by_result: bool = False,
+    ) -> None:
+        self._into = into
+        self._locate = locate
+        self._by_result = by_result
+
+    def handle(self, env: Envelope) -> None:
+        """File the result and the original into one dated folder."""
+        if not _delivered(env) or env.verdict is None:
+            return
+        result = env.verdict.result
+        original = self._locate(env.job.origin)
+        named_after = result if self._by_result else (original or result)
+        folder = next_free_path(
+            self._into / dated_dir((named_after or Path('item')).stem)
+        )
+        folder.mkdir(parents=True, exist_ok=True)
+        for shot in _result_files(result) if result is not None else []:
+            move_atomic(shot, next_free_path(folder / shot.name))
+        if original is not None and original.is_file():
+            move_atomic(
+                original, next_free_path(folder / '_done' / original.name)
+            )

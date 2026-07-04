@@ -7,11 +7,10 @@ from typing import TYPE_CHECKING
 import minions.fan_save.main
 from minion_core.adapters import fetch
 from minion_core.adapters.fetch import FetchLink
+from minion_core.adapters.files import Shelve
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.tg import TgChannel
 from minion_core.adapters.tg import spool_of
-from minion_core.kernel import ArchiveTo
-from minion_core.kernel import DisposeSource
 from minion_core.kernel import Disposition
 from minion_core.kernel import Envelope
 from minion_core.kernel import Job
@@ -40,7 +39,7 @@ def test_link_lands_in_the_fan_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A spooled link ends up as a file in bots/fan-save/done/.
+    """A spooled link lands in bots/fan-save/done/<MMDD> <title>/.
 
     The belt tail is exercised directly (the bot's exact stages in
     the bot's exact order); the Telegram dock is covered by the
@@ -66,14 +65,17 @@ def test_link_lands_in_the_fan_queue(
     )
     tail = (
         FetchLink(cfg)
-        >> ArchiveTo(cfg.bot_done('fan-save'))
         >> Reply(TgChannel(TgApi('')))
-        >> DisposeSource(spool_of)
+        >> Shelve(cfg.bot_done('fan-save'), spool_of, by_result=True)
     )
     out = list(tail(iter([Envelope(job)])))
     assert len(out) == 1
     verdict = out[0].verdict
     assert verdict is not None
     assert verdict.disposition is Disposition.DELIVERED
-    assert (cfg.bot_done('fan-save') / 'clip.mp4').is_file()
-    assert not spool.exists()  # spool disposed after delivery
+    folders = [p for p in cfg.bot_done('fan-save').iterdir() if p.is_dir()]
+    assert len(folders) == 1
+    assert folders[0].name.endswith('clip')  # MMDD clip (named by video)
+    assert (folders[0] / 'clip.mp4').is_file()  # the parked video
+    assert (folders[0] / '_done' / 'link.url').is_file()  # spool kept
+    assert not spool.exists()  # moved into _done, not deleted

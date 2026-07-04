@@ -11,6 +11,7 @@ from minion_core.adapters.files import BatchLock
 from minion_core.adapters.files import BudgetWriter
 from minion_core.adapters.files import Deliver
 from minion_core.adapters.files import QuotaExceeded
+from minion_core.adapters.files import Shelve
 from minion_core.adapters.files import atomic_write
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.files import has_week
@@ -22,8 +23,10 @@ from minion_core.adapters.files import strip_week
 from minion_core.adapters.files import tag_week
 from minion_core.adapters.files import usd_prim
 from minion_core.kernel import Disposition
+from minion_core.kernel import Envelope
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
+from minion_core.kernel import Verdict
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:
@@ -58,6 +61,44 @@ def test_usd_prim_sanitizes_untrusted_names() -> None:
     assert usd_prim('') == 'Item'
     assert usd_prim('***') == 'Item'
     assert len(usd_prim('A' * 500)) <= 80
+
+
+def test_shelve_folders_result_and_keeps_original(tmp_path: Path) -> None:
+    """A delivered result -> <MMDD> <name>/ with the original in _done/."""
+    from minion_core.adapters.tg import spool_of
+
+    into = tmp_path / 'done'
+    result = tmp_path / 'work' / 'out.jpg'
+    result.parent.mkdir(parents=True)
+    result.write_bytes(b'censored')
+    original = tmp_path / 'spool' / 'photo.jpg'
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b'orig')
+    job = Job(
+        src=original,
+        dest=into,
+        stem='photo',
+        origin=Origin('tg', f'1:2:{original}'),
+    )
+    env = Envelope(job, Verdict(Disposition.DELIVERED, result=result))
+    Shelve(into, spool_of).handle(env)
+    folders = [p for p in into.iterdir() if p.is_dir()]
+    assert len(folders) == 1
+    folder = folders[0]
+    assert folder.name.endswith('photo')  # MMDD photo
+    assert (folder / 'out.jpg').is_file()  # the result
+    assert (folder / '_done' / 'photo.jpg').is_file()  # original kept
+    assert not original.exists()  # moved out of the spool
+
+
+def test_shelve_ignores_a_non_delivery(tmp_path: Path) -> None:
+    """A FAILED/SKIPPED verdict leaves everything untouched."""
+    into = tmp_path / 'done'
+    job = Job(
+        src=tmp_path / 'x', dest=into, stem='x', origin=Origin('loc', 'x')
+    )
+    Shelve(into).handle(Envelope(job, Verdict(Disposition.FAILED)))
+    assert not into.exists()
 
 
 def test_fandom_tag_round_trip(tmp_path: Path) -> None:

@@ -304,6 +304,13 @@ def _delivered(env: Envelope) -> bool:
     return env.verdict.disposition is Disposition.DELIVERED
 
 
+class Null(Sink):
+    """A sink that does nothing -- the unused side of a RouteOrigin."""
+
+    def handle(self, env: Envelope) -> None:
+        """No side effect (e.g. a loc-origin result reaches no chat)."""
+
+
 class Reply(Sink):
     """Send ``verdict.reply`` back through the bot's channel."""
 
