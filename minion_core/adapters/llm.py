@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import Protocol
 
 from minion_core.adapters.files import usd_prim
 from minion_core.kernel import Disposition
@@ -77,6 +78,60 @@ def _image_part(path: Path) -> Any:  # noqa: ANN401 -- vendor part handle
     return types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)
 
 
+def _generate_text(model: str, contents: list[Any], spec: LlmSpec) -> str:
+    """Generate and return the reply text; refusals become LlmError.
+
+    Every remote failure (bad model id, bad key, quota, network) is
+    an ``APIError`` subclass, mapped to ``LlmError`` here; text
+    extraction (which raises on a safety block) is the pure,
+    testable ``_text_of``. So the belt gets a stable FAILED with the
+    real reason logged, never a ``step_crashed`` that hides it (the
+    previous sort/restore failure).
+    """
+    from google.genai import errors
+
+    try:
+        response = _client(spec).models.generate_content(
+            model=model, contents=contents
+        )
+    except errors.APIError as exc:
+        raise LlmError(f'api_error: {exc}') from exc
+    return _text_of(response)
+
+
+class _TextResponse(Protocol):
+    """The text accessor of a generate-content response.
+
+    Reading ``text`` raises when the reply carries no usable
+    candidate (a safety block) -- typed so ``_text_of`` needs no
+    vendor ``Any`` and stays unit-testable without the SDK.
+    """
+
+    @property
+    def text(self) -> str | None: ...
+
+
+def _text_of(response: _TextResponse) -> str:
+    """Reply text, or an LlmError when the model returned none."""
+    try:
+        return (response.text or '').strip()
+    except (ValueError, AttributeError) as exc:
+        raise LlmError(f'no_text: {exc}') from exc
+
+
+def _generate_image(model: str, contents: list[Any], spec: LlmSpec) -> bytes:
+    """Generate and return the first inline image; refusals -> LlmError."""
+    from google.genai import errors
+
+    try:
+        response = _client(spec).models.generate_content(
+            model=model, contents=contents
+        )
+    except errors.APIError as exc:
+        raise LlmError(f'api_error: {exc}') from exc
+    return _first_image(response)
+
+
 def classify_image(path: Path, hint: str, spec: LlmSpec) -> Classification:
     """One JSON verdict per image: fandom, prim name, flags.
 
@@ -87,11 +142,8 @@ def classify_image(path: Path, hint: str, spec: LlmSpec) -> Classification:
     prompt = load_prompt('classify')
     if hint:
         prompt = f'{prompt}\n\n{load_prompt("script_hint")}\n\n{hint}'
-    response = _client(spec).models.generate_content(
-        model=spec.model,
-        contents=[prompt, _image_part(path)],
-    )
-    return _parse_classification(response.text or '')
+    text = _generate_text(spec.model, [prompt, _image_part(path)], spec)
+    return _parse_classification(text)
 
 
 def _parse_classification(text: str) -> Classification:
@@ -134,11 +186,8 @@ def _unfence(text: str) -> str:
 
 def restore_background(path: Path, spec: LlmSpec) -> Path:
     """Repaint hidden regions; writes the ``_s2`` sibling file."""
-    response = _client(spec).models.generate_content(
-        model=spec.restore_model,
-        contents=[load_prompt('restore_background'), _image_part(path)],
-    )
-    data = _first_image(response)
+    contents = [load_prompt('restore_background'), _image_part(path)]
+    data = _generate_image(spec.restore_model, contents, spec)
     out = path.with_stem(path.stem.removesuffix('_s1') + '_s2')
     out.write_bytes(data)
     return out

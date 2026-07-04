@@ -8,6 +8,7 @@ import pytest
 
 from minion_core.adapters.llm import LlmError
 from minion_core.adapters.llm import _parse_classification
+from minion_core.adapters.llm import _text_of
 from minion_core.adapters.llm import spec_from
 
 VERDICT = {
@@ -87,3 +88,28 @@ def test_spec_defaults() -> None:
     spec = spec_from({})
     assert spec.model == 'gemini-2.5-flash-lite'
     assert spec.restore_model == 'gemini-3-pro-image'
+
+
+class _Reply:
+    """A generate-content response double: .text may be set or raise."""
+
+    def __init__(self, text: str | None, *, blocked: bool = False) -> None:
+        self._text = text
+        self._blocked = blocked
+
+    @property
+    def text(self) -> str | None:
+        if self._blocked:
+            raise ValueError('response has no candidates (safety)')
+        return self._text
+
+
+def test_text_of_extracts_and_strips() -> None:
+    assert _text_of(_Reply('  hello  ')) == 'hello'
+    assert _text_of(_Reply(None)) == ''
+
+
+def test_text_of_blocked_response_is_llm_error() -> None:
+    """The safety-blocked reply that used to crash sort now FAILS clean."""
+    with pytest.raises(LlmError, match='no_text'):
+        _text_of(_Reply(None, blocked=True))
