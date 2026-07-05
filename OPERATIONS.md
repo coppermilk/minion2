@@ -36,7 +36,7 @@ reason code -- REQ-OBS-001).
 | `bad_config` | relative path override | process refuses to start, loud error | CT-C | make the override absolute (REQ-CFG-001); never relative |
 | `bad_update` | malformed Telegram payload | update skipped, logged; offset advances past it | CT-C | none; explicit boundary validation -- a poison update can neither crash the dock nor wedge it in a replay loop |
 | `hash_collision` | two coexisting images with equal digest+length but different bytes | both embedded on distinct keys; CRITICAL log | CT-B | none needed -- detected by direct byte comparison and split; correctness holds by construction |
-| `classify_failed` | the Gemini JSON classification crashed or returned garbage | catch job FAILED / sort leaves the file in its source dir | CT-B | none needed; the file is retried on the next run (REQ-CATCH-002) -- check `GEMINI_API_KEY`/model id if it persists |
+| `classify_failed` | the active backend (local Qwen or Gemini) crashed, was unreachable (`ollama_unreachable`), or returned garbage | catch job FAILED / sort leaves the file in its source dir | CT-B | none needed; the file is retried on the next run (REQ-CATCH-002) -- if it persists, check the model (`docker compose logs ollama`, or `GEMINI_API_KEY`/model id when switched to Gemini) |
 | `script_fetch_failed` | weekly script doc unreachable or not shared "anyone with the link" | classification proceeds without scene labels | CT-D | re-share the doc publicly and drop a fresh `.gdoc` shortcut into `_inbox/` |
 | `no_person` | censor-blur/restore detector found no person | job SKIPPED; the original is NOT sent back | CT-B | expected: a silent pass-through would leak an uncensored photo |
 | `no_face` | censor-black found no face | job SKIPPED; the original is NOT sent back | CT-B | expected (same leak-safety as `no_person`); if a face was clearly present, the angle/occlusion beat the detector -- re-send a clearer crop |
@@ -169,3 +169,29 @@ sort/catch run consumes them (fetch + delete) and archives the text under
 - **The suite is the flight path**: bots run through the same kernel with
   doubles only at adapter boundaries; offline (lazy ML imports -- no torch
   needed), hermetic (each test builds Settings over a tmp_path), and fast.
+
+## 8. Model backend (local Qwen / Gemini)
+
+Classification and the props bot run behind one adapter
+(`adapters/backend.py`) over interchangeable models; restore is Gemini-only
+(image generation) and never routes through the toggle.
+
+- **Default is local, offline.** The `ollama` container ("gem") runs
+  Qwen2.5-VL; `MODEL_BACKEND` defaults to `local`. One-time model pull:
+  `docker compose exec ollama ollama pull qwen2.5vl:7b`. Weights live under
+  `regen/ollama/` (CACHE class) so `nas-update`'s prune never touches them.
+- **Switch at runtime.** Message the `model-switch` bot `local`, `gemini`,
+  or `status`. It writes `state/model.backend`; sort/catch/props re-read it
+  per item, so the swap takes effect on the next image with no restart. The
+  toggle is per-machine (each host's own `DRIVE/state`).
+- **DS224+ latency.** The Celeron J4125 has no AVX2 and no GPU, so one local
+  classify runs in minutes. Fine for the trickle sort's watch daemon sees; a
+  model that is down (`ollama_unreachable`) just leaves images waiting in
+  `_inbox` (the existing punt), never a crash.
+- **Memory.** The 7B model stays resident (~6 GB on the 16 GB NAS). Keep the
+  sum of simultaneous peaks under ~14 GB -- the torch bots (censor/sort) load
+  their models only while working, so real concurrency is low.
+- **catch on Windows.** The `ollama` service is NAS-side. For catch (a
+  Windows bot) to classify locally, point `OLLAMA_URL` at the NAS's Ollama
+  (expose the port) or switch that host to Gemini; otherwise catch's images
+  wait until a backend is reachable.

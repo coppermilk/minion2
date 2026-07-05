@@ -142,7 +142,7 @@ Semantic, discharged by review + the traceability of section 3:
 | 6 | Smallest scope | frozen dataclasses passed down; no module-level env reads; the only shared state is Settings-as-value and the thread-safe dedup/offset stores |
 | 7 | Check returns, validate params | Disposition inspected by construction (kernel short-circuits); guard validates and sanitizes |
 | 8 | Limited preprocessor (analog) | no import-time side effects; no dynamic import except the sanctioned lazy vendor loads |
-| 9 | One level of indirection | exactly one adapter layer; no speculative Protocol port until a second concrete provider ships (then: a ~10-line factory, added that day) |
+| 9 | One level of indirection | exactly one adapter layer; no speculative Protocol port until a second concrete provider ships -- which it now has: a local Qwen alongside Gemini triggered the small `Backend` protocol + `select_backend` factory (`adapters/backend.py`), added that day, not before |
 | 10 | Zero warnings, daily static analysis | ruff ALL + mypy strict + ASCII gate, green on main; every waiver written down and localized (section 12) |
 
 ## 5. The kernel (`kernel.py`) -- one file, one algebra
@@ -226,17 +226,19 @@ minion_core/
   prompts/        LLM prompt texts as package-data + load_prompt
   adapters/       one file per external system; vendors import ONLY here
                   (each vendor's sanctioned sites are enumerated in the
-                  structural analysis; requests serves two boundaries)
+                  structural analysis; requests serves three boundaries)
     tg.py         Bot API, long-poll, media receive            (requests)
     fetch.py      link download: yt-dlp + timeout + quota + SSRF guard (yt-dlp)
-    llm.py        JSON image classification + background restore (google-genai)
+    llm.py        Backend protocol + GeminiBackend; classify/list_props/restore (google-genai)
+    ollama.py     OllamaBackend: local Qwen2.5-VL over HTTP     (requests)
+    backend.py    the toggle + select_backend (local <-> Gemini; no vendor)
     scripts.py    weekly Google Docs script text for the classify hint (requests)
-    vision.py     embeddings/nearest-fandom + person masks + faces (torch et al.)
+    vision.py     embeddings/nearest + text embed + person masks + faces (torch et al.)
     video.py      probe + frame extraction                     (ffmpeg/ffprobe)
     files.py      stem/usd_prim/next_free_path, EXIF, validate/sanitize, dedup, atomic, lock (Pillow, piexif)
 minions/
   sort/ censor_blur/ censor_black/ restore/ fetch/ frames/ inbox/
-  catch/ week-clean/ print/ _template/
+  catch/ week-clean/ model_switch/ props/ print/ _template/
 ```
 
 Import direction is strictly downward: bots -> adapters/kernel/settings;
@@ -352,8 +354,10 @@ that folder's `_done/` (files.Shelve).
 | censor-black | streaming | photo -> faces blacked out -> chat + done folder | `censor_black_watch` dock |
 | restore | streaming | photo -> people blurred -> LLM repaints scene (`_s1`/`_s2`) -> chat + done folder | `restore_watch` dock |
 | sort | batch | images classified in place (prim name + EXIF fandom); the week waits in `_inbox/` | `source_dirs`: `_inbox/` or `Downloads/`; `SORT_WATCH`: streaming trigger, instant classification |
-| catch | streaming | new Downloads image -> prim-named copy in `pictures/<Fandom>/` (same Gemini verdict as sort); the original is renamed in place, never moved | `catch_dir` |
+| catch | streaming | new Downloads image -> prim-named copy in `pictures/<Fandom>/` (same backend verdict as sort); the original is renamed in place, never moved | `catch_dir` |
 | week-clean | batch | Monday, purely mechanical: strip the weekly tag and shelve each classified image from `_inbox/` into `pictures/<Fandom>/` per its EXIF fandom; unclassified files stay for retry | - |
+| model-switch | streaming | Telegram command bot: `local`/`gemini`/`status` flips the classify+props backend at runtime (writes `state/model.backend`) | `TG_TOKEN_MODEL_SWITCH` |
+| props | streaming | scenario (pasted or the weekly script) -> the active model lists props -> matched against the `Pr*` library (name + CLIP text->image) -> have/need reply | `TG_TOKEN_PROPS` |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` | `print_spooler`: lp / SumatraPDF argv |
 | kindle | outlier | Google Doc -> PDF -> `print/`; weekly archive | Apps Script (off-kernel, declared, not disguised) |
 
@@ -362,8 +366,9 @@ Two honest kinds: **streaming** bots are per-file belts drained forever;
 belt algebra would be a poor fit), run one-shot under cron, and hold the lock
 of section 8.
 
-Sort is three named passes: **Classify** (one Gemini JSON verdict per image
-decides BOTH the OpenUSD prim filename and the fandom; the weekly script
+Sort is three named passes: **Classify** (one JSON verdict per image from the
+active backend -- local Qwen or Gemini, `adapters/backend.py` -- decides BOTH
+the OpenUSD prim filename and the fandom; the weekly script
 hint from `adapters/scripts.py` rides into the prompt. The image is renamed
 IN PLACE, the fandom recorded in EXIF (`files.tag_fandom`) and the weekly
 tag applied -- the working week stays visible in `_inbox/`. When the model
@@ -372,7 +377,7 @@ everything is decided during the week, so the Monday week-clean run is
 purely mechanical) -> **Demote** (fandoms under `demote_min_count` ->
 `Unknown/`; vectors survive -- the cache is identity-keyed and the fandom
 mapping is never persisted, REQ-SORT-001) -> **Re-place** (vision re-matches
-`Unknown/` against the live layout at zero recompute cost; Gemini never
+`Unknown/` against the live layout at zero recompute cost; the model never
 sees an image twice).
 
 Library naming: files under `pictures/` are valid OpenUSD prim identifiers

@@ -176,15 +176,28 @@ def _fandom_dirs(root: Path) -> list[Path]:
     )
 
 
-def nearest_fandom(vec: Vector, library: dict[str, Vector]) -> str | None:
-    """The fandom of the most similar library vector (cosine)."""
-    best_key: str | None = None
+def nearest_named(
+    vec: Vector, library: dict[str, Vector]
+) -> tuple[str, float]:
+    """The library key most similar to ``vec`` and its cosine.
+
+    Keeps the full key and the score (unlike ``nearest_fandom``), so
+    a caller can threshold on similarity -- the props bot's have/need
+    split. An empty library returns ``('', -2.0)``.
+    """
+    best_key = ''
     best_sim = -2.0
     for key, other in library.items():
         sim = _cosine(vec, other)
         if sim > best_sim:
             best_sim = sim
             best_key = key
+    return best_key, best_sim
+
+
+def nearest_fandom(vec: Vector, library: dict[str, Vector]) -> str | None:
+    """The fandom of the most similar library vector (cosine)."""
+    best_key, _ = nearest_named(vec, library)
     return best_key.split('|', 1)[0] if best_key else None
 
 
@@ -240,6 +253,25 @@ def embed_image(path: Path) -> Vector:
     batch = processor(images=load_rgb(path), return_tensors='pt')
     with torch.no_grad():
         feats = model.get_image_features(**batch)
+    vec: Vector = feats[0].numpy()
+    return vec
+
+
+def embed_text(query: str) -> Vector:
+    """CLIP text embedding, in the same space as ``embed_image``.
+
+    Both towers were trained together, so a phrase can be matched
+    against image vectors by cosine (props retrieval): "a wand" lands
+    near the picture of a wand.
+    """
+    import torch
+
+    model, processor = _clip()
+    batch = processor(
+        text=[query], return_tensors='pt', padding=True, truncation=True
+    )
+    with torch.no_grad():
+        feats = model.get_text_features(**batch)
     vec: Vector = feats[0].numpy()
     return vec
 

@@ -8,6 +8,7 @@ import numpy as np
 
 from minion_core.adapters.vision import EmbeddingCache
 from minion_core.adapters.vision import nearest_fandom
+from minion_core.adapters.vision import nearest_named
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:
@@ -22,6 +23,24 @@ if TYPE_CHECKING:
 def _vec(seed: int) -> Vector:
     rng = np.random.default_rng(seed)
     return rng.random(8)
+
+
+def test_nearest_named_returns_key_and_score() -> None:
+    """The props path needs the full key plus the cosine to threshold."""
+    library = {
+        'F|PrWand': np.array([1.0, 0.0], dtype=np.float32),
+        'F|PrBag': np.array([0.0, 1.0], dtype=np.float32),
+    }
+    key, sim = nearest_named(np.array([0.9, 0.1], dtype=np.float32), library)
+    assert key == 'F|PrWand'
+    assert sim > 0.9
+
+
+def test_nearest_named_empty_library() -> None:
+    """An empty library yields no key and a sentinel score."""
+    key, sim = nearest_named(np.array([1.0, 0.0], dtype=np.float32), {})
+    assert key == ''
+    assert sim == -2.0
 
 
 class CountingEmbedder:

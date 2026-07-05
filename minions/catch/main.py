@@ -12,7 +12,6 @@ Gemini JSON verdict decides both the prim name and the fandom.
 
 from __future__ import annotations
 
-import functools
 import logging
 import os
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from typing import TYPE_CHECKING
 from minion_core.adapters import llm
 from minion_core.adapters import scripts
 from minion_core.adapters import vision
+from minion_core.adapters.backend import select_backend
 from minion_core.adapters.files import PRIM_NAMED
 from minion_core.adapters.files import atomic_write
 from minion_core.adapters.files import next_free_prim
@@ -57,12 +57,18 @@ class CatchDeps:
     classify: Callable[[Path, str], Classification]
 
 
-def real_deps(env: Mapping[str, str]) -> CatchDeps:
-    """Wire the live adapter (tests inject doubles instead)."""
-    spec = llm.spec_from(env)
-    return CatchDeps(
-        classify=functools.partial(llm.classify_image, spec=spec),
-    )
+def real_deps(cfg: Settings, env: Mapping[str, str]) -> CatchDeps:
+    """Wire the live adapter (tests inject doubles instead).
+
+    ``classify`` resolves the backend per image via the toggle, like
+    sort. On the Windows deployment set ``OLLAMA_URL`` at the NAS (or
+    switch to Gemini) since the local ``ollama`` service is NAS-side.
+    """
+
+    def classify(path: Path, hint: str) -> Classification:
+        return llm.classify_image(path, hint, select_backend(cfg, env))
+
+    return CatchDeps(classify=classify)
 
 
 class ClassifyCopy(Step):
@@ -136,7 +142,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         log = bot_logger(BOT, cfg.logs)
         log.warning('skipped reason=bad_config catch_dir unset')
         return 0
-    return run(BOT, build(cfg, real_deps(mapping)), cfg.logs)
+    return run(BOT, build(cfg, real_deps(cfg, mapping)), cfg.logs)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -10,6 +11,9 @@ from minion_core.adapters.llm import LlmError
 from minion_core.adapters.llm import _parse_classification
 from minion_core.adapters.llm import _text_of
 from minion_core.adapters.llm import spec_from
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 VERDICT = {
     'fandom': 'HarryPotter',
@@ -113,3 +117,62 @@ def test_text_of_blocked_response_is_llm_error() -> None:
     """The safety-blocked reply that used to crash sort now FAILS clean."""
     with pytest.raises(LlmError, match='no_text'):
         _text_of(_Reply(None, blocked=True))
+
+
+class _FakeBackend:
+    """A Backend double: returns a canned reply, records the calls."""
+
+    name = 'fake'
+
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+        self.seen: list[tuple[str, ...]] = []
+
+    def vision_json(self, prompt: str, image: object) -> str:
+        self.seen.append(('vision', prompt, str(image)))
+        return self._reply
+
+    def text(self, prompt: str) -> str:
+        self.seen.append(('text', prompt))
+        return self._reply
+
+
+def test_classify_image_uses_the_backend(tmp_path: Path) -> None:
+    """classify_image is vendor-blind: it just calls vision_json."""
+    from minion_core.adapters.llm import classify_image
+
+    img = tmp_path / 'x.jpg'
+    img.write_bytes(b'x')
+    backend = _FakeBackend(json.dumps(VERDICT))
+    got = classify_image(img, '', backend)
+    assert got.filename == 'FgSnapeOfficeAngry'
+    assert backend.seen[0][0] == 'vision'
+
+
+def test_classify_image_folds_in_the_hint(tmp_path: Path) -> None:
+    """The weekly hint rides into the prompt when present."""
+    from minion_core.adapters.llm import classify_image
+
+    img = tmp_path / 'x.jpg'
+    img.write_bytes(b'x')
+    backend = _FakeBackend(json.dumps(VERDICT))
+    classify_image(img, 'WEEKTEXT', backend)
+    assert 'WEEKTEXT' in backend.seen[0][1]
+
+
+def test_list_props_parses_object_and_list() -> None:
+    from minion_core.adapters.llm import list_props
+
+    obj = _FakeBackend('{"props": ["Wand", "Bag"]}')
+    assert list_props('s', obj) == ['Wand', 'Bag']
+    bare = _FakeBackend('["Cup", "Hat"]')
+    assert list_props('s', bare) == ['Cup', 'Hat']
+
+
+def test_list_props_garbage_raises() -> None:
+    from minion_core.adapters.llm import list_props
+
+    with pytest.raises(LlmError):
+        list_props('s', _FakeBackend('the model rambled'))
+    with pytest.raises(LlmError):
+        list_props('s', _FakeBackend('{"nope": 1}'))

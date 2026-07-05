@@ -13,6 +13,7 @@ from minion_core.adapters.tg import OffsetStore
 from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.tg import TgChannel
+from minion_core.adapters.tg import TgCommands
 from minion_core.adapters.tg import TgError
 from minion_core.adapters.tg import TgLinks
 from minion_core.adapters.tg import TgMedia
@@ -255,6 +256,32 @@ def test_network_error_never_leaks_the_token(
     assert tk not in str(caught.value)
     assert '<token>' in str(caught.value)
     assert caught.value.__cause__ is None  # chain broken by `from None`
+
+
+def test_commands_replies_and_emits_nothing(tmp_path: Path) -> None:
+    """A command dock answers in chat and never feeds the belt."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    source = TgCommands(api, _spec(cfg, ('1',)), lambda text: f'got {text}')
+
+    def no_emit(_env: Any) -> None:
+        raise AssertionError('a command bot must not emit jobs')
+
+    source.accept(
+        {'chat': {'id': 1}, 'message_id': 9, 'text': 'hello'}, no_emit
+    )
+    assert api.messages == ['got hello']
+
+
+def test_commands_stay_silent_on_empty_reply(tmp_path: Path) -> None:
+    """An empty handler reply sends no message."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    source = TgCommands(api, _spec(cfg, ('1',)), lambda _text: '')
+    source.accept(
+        {'chat': {'id': 1}, 'message_id': 9, 'text': 'x'}, lambda _e: None
+    )
+    assert api.messages == []
 
 
 def test_chats_from_parses_csv() -> None:

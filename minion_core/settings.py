@@ -52,6 +52,9 @@ _DEFAULTS: dict[str, str] = {
     'RESTORE_WATCH': '',
     'FRAMES_WATCH': '',
     'CATCH_DIR': '',
+    'MODEL_BACKEND': 'local',
+    'OLLAMA_URL': 'http://ollama:11434',
+    'OLLAMA_MODEL': 'qwen2.5vl:7b',
 }
 
 
@@ -80,6 +83,9 @@ class Settings:
     restore_watch: Path | None
     frames_watch: Path | None
     catch_dir: Path | None
+    model_backend: str
+    ollama_url: str
+    ollama_model: str
 
     # Derived, never overridable separately (BLUEPRINT 1.2).
     @property
@@ -166,6 +172,9 @@ def load(env: Mapping[str, str]) -> Settings:
         restore_watch=_opt_dir('RESTORE_WATCH', get('RESTORE_WATCH')),
         frames_watch=_opt_dir('FRAMES_WATCH', get('FRAMES_WATCH')),
         catch_dir=_opt_dir('CATCH_DIR', get('CATCH_DIR')),
+        model_backend=get('MODEL_BACKEND'),
+        ollama_url=get('OLLAMA_URL'),
+        ollama_model=get('OLLAMA_MODEL'),
     )
 
 

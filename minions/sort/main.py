@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from minion_core.adapters import llm
 from minion_core.adapters import vision
+from minion_core.adapters.backend import select_backend
 from minion_core.adapters.files import BatchLock
 from minion_core.kernel import Disposition
 from minion_core.kernel import Folder
@@ -33,7 +34,9 @@ from minions.sort.passes import run_passes
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
+    from minion_core.adapters.llm import Classification
     from minion_core.kernel import Job
     from minion_core.kernel import Stage
     from minion_core.settings import Settings
@@ -43,13 +46,17 @@ BOT = 'sort'
 _LOG = logging.getLogger(BOT)
 
 
-def real_deps(env: Mapping[str, str]) -> SortDeps:
-    """Wire the live adapters (tests inject doubles instead)."""
-    spec = llm.spec_from(env)
-    return SortDeps(
-        classify=functools.partial(llm.classify_image, spec=spec),
-        embed=vision.embed_image,
-    )
+def real_deps(cfg: Settings, env: Mapping[str, str]) -> SortDeps:
+    """Wire the live adapters (tests inject doubles instead).
+
+    ``classify`` resolves the backend per image via the toggle, so
+    the switch bot takes effect on the next item with no restart.
+    """
+
+    def classify(path: Path, hint: str) -> Classification:
+        return llm.classify_image(path, hint, select_backend(cfg, env))
+
+    return SortDeps(classify=classify, embed=vision.embed_image)
 
 
 class SortTrigger(Step):
@@ -103,14 +110,14 @@ def main(env: Mapping[str, str] | None = None) -> int:
     cfg = load(mapping)
     if cfg.sort_watch:
         vision.warm_embedder()  # resources at init, never mid-flight
-        return run(BOT, build_watch(cfg, real_deps(mapping)), cfg.logs)
+        return run(BOT, build_watch(cfg, real_deps(cfg, mapping)), cfg.logs)
     log = bot_logger(BOT, cfg.logs)
     lock = BatchLock(cfg.state / f'{BOT}.lock')
     if not lock.acquire():
         log.warning('skipped reason=batch_locked')
         return 0
     try:
-        run_passes(cfg, real_deps(mapping))
+        run_passes(cfg, real_deps(cfg, mapping))
     finally:
         lock.release()
     log.info('sorted')

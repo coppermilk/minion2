@@ -65,6 +65,27 @@ class Classification:
     description: str
 
 
+class Backend(Protocol):
+    """A text/vision model endpoint the belt can talk to.
+
+    The one structural contract behind which Gemini, a local Qwen
+    (Ollama), or a future model are interchangeable: ``classify_image``
+    and ``list_props`` depend on this, never on a concrete vendor. A
+    ``Backend`` raises ``LlmError`` on any failure, so the belt's
+    existing ``except LlmError`` keeps its clean FAILED/punt behaviour.
+    """
+
+    name: str
+
+    def vision_json(self, prompt: str, image: Path) -> str:
+        """Reply text (expected JSON) for a prompt plus one image."""
+        ...
+
+    def text(self, prompt: str) -> str:
+        """Reply text for a text-only prompt."""
+        ...
+
+
 def _client(spec: LlmSpec) -> Any:  # noqa: ANN401 -- vendor client handle
     from google import genai
 
@@ -132,18 +153,41 @@ def _generate_image(model: str, contents: list[Any], spec: LlmSpec) -> bytes:
     return _first_image(response)
 
 
-def classify_image(path: Path, hint: str, spec: LlmSpec) -> Classification:
+class GeminiBackend:
+    """Backend over google-genai -- the cloud path (default fallback).
+
+    Wraps the existing ``_generate_text`` so a switch to Gemini reuses
+    every response-handling and error path already proven here.
+    """
+
+    name = 'gemini'
+
+    def __init__(self, spec: LlmSpec) -> None:
+        self._spec = spec
+
+    def vision_json(self, prompt: str, image: Path) -> str:
+        """Classify one image; refusals/vendor errors -> LlmError."""
+        return _generate_text(
+            self._spec.model, [prompt, _image_part(image)], self._spec
+        )
+
+    def text(self, prompt: str) -> str:
+        """Text-only completion; refusals/vendor errors -> LlmError."""
+        return _generate_text(self._spec.model, [prompt], self._spec)
+
+
+def classify_image(path: Path, hint: str, backend: Backend) -> Classification:
     """One JSON verdict per image: fandom, prim name, flags.
 
     ``hint`` is this week's script text (adapters.scripts); when
     present it rides into the prompt under the script_hint framing
-    so scene labels land after the layer prefix.
+    so scene labels land after the layer prefix. ``backend`` is the
+    live model (local Qwen or Gemini) -- this function is vendor-blind.
     """
     prompt = load_prompt('classify')
     if hint:
         prompt = f'{prompt}\n\n{load_prompt("script_hint")}\n\n{hint}'
-    text = _generate_text(spec.model, [prompt, _image_part(path)], spec)
-    return _parse_classification(text)
+    return _parse_classification(backend.vision_json(prompt, path))
 
 
 def _parse_classification(text: str) -> Classification:
@@ -167,6 +211,29 @@ def _parse_classification(text: str) -> Classification:
         confidence=_text_field(data, 'confidence'),
         description=_text_field(data, 'description'),
     )
+
+
+def list_props(script: str, backend: Backend) -> list[str]:
+    """The props a scenario calls for, as short UpperCamelCase labels.
+
+    A text task (no image), so any Backend serves it -- this is what
+    the switch also governs. The model is untrusted input (BLUEPRINT
+    4): the reply is fenced JSON, coerced to a bounded list of strings.
+    """
+    prompt = f'{load_prompt("props")}\n\n{script}'
+    return _parse_props(backend.text(prompt))
+
+
+def _parse_props(text: str) -> list[str]:
+    """Coerce the raw reply into a prop-name list (pure, testable)."""
+    try:
+        data = json.loads(_unfence(text))
+    except ValueError as exc:
+        raise LlmError(f'unparseable props response: {exc}') from exc
+    items = data.get('props') if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise LlmError('props response has no list')
+    return [s.strip() for s in items if isinstance(s, str) and s.strip()]
 
 
 def _text_field(data: dict[str, Any], key: str) -> str:

@@ -54,11 +54,20 @@ GHCR package public once for anonymous pulls (or `docker login`).
 | censor-blur | streaming | photo -> people's silhouettes blurred (segmentation) -> chat + `done/<MMDD> <name>/` with the original in `_done/` (`CENSOR_BLUR_WATCH` adds a folder dock) |
 | censor-black | streaming | photo -> faces blacked out -> chat + `done/<MMDD> <name>/` with the original in `_done/` (`CENSOR_BLACK_WATCH` adds a folder dock) |
 | restore | streaming | photo -> people blurred, then the LLM repaints the scene without them -> chat + a `done/` folder (`RESTORE_WATCH` adds a folder dock) |
-| sort | batch | classifies images IN PLACE in `_inbox/` the moment they land (Gemini -> prim name + EXIF fandom + week tag; CLIP decides instantly when Gemini punts); the working week stays in `_inbox/` |
+| sort | batch | classifies images IN PLACE in `_inbox/` the moment they land (the active backend -> prim name + EXIF fandom + week tag; CLIP decides instantly when it punts); the working week stays in `_inbox/` |
 | catch | streaming | new Downloads image -> prim-named copy straight into `pictures/<Fandom>/`; the original never leaves `CATCH_DIR` |
 | week-clean | batch | Monday, mechanical: strip the week tag, shelve each classified image into `pictures/<Fandom>/` per its EXIF; unclassified files stay for retry |
+| model-switch | streaming | Telegram command bot: `local` / `gemini` / `status` flips the classify+props backend at runtime (no restart) |
+| props | streaming | scenario (pasted, or the weekly script) -> recommended props, split into what the `Pr*` library has vs. still needs |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` (`PRINT_SPOOLER`: lp / SumatraPDF) |
 | kindle | outlier | Apps Script, `deploy/apps_script/` |
+
+Model backend: classification and the props bot run behind one adapter
+(`minion_core/adapters/backend.py`) over interchangeable models. The
+default is a **local Qwen2.5-VL** in an Ollama container ("gem") -- the NAS
+classifies with no cloud; the `model-switch` bot flips to **Gemini** and
+back at runtime. Background restore stays Gemini-only (image generation).
+One-time on the NAS: `docker compose exec ollama ollama pull qwen2.5vl:7b`.
 
 Telegram contract: each bot is its own Telegram identity
 (`TG_TOKEN_<BOT>`), and files cross Telegram as documents only, both

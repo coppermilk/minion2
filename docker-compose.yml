@@ -52,6 +52,26 @@ x-minion: &minion
       max-file: '3'
 
 services:
+  # "gem": the local model server (Qwen2.5-VL). sort and props reach it
+  # at http://ollama:11434 on the compose network; no host port is
+  # exposed. Weights live under the disposable regen cache, so
+  # nas-update's image prune never touches them. One-time model pull:
+  #   docker compose exec ollama ollama pull qwen2.5vl:7b
+  # Memory: the 7B model stays resident (~6 GB on the 16 GB NAS) --
+  # fine as long as the torch bots (censor/sort) do not all peak at
+  # once. On the DS224+ CPU (no AVX2) one classify runs in minutes; a
+  # model that is down just leaves images waiting in _inbox (the punt).
+  ollama:
+    image: ollama/ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: '-1'
+    volumes:
+      - ${DRIVE_NAS}/bots/_data/regen/ollama:/root/.ollama
+    mem_limit: 10g
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
   inbox:
     <<: *minion
     environment:
@@ -121,6 +141,30 @@ services:
       SORT_WATCH: '1'
     command: python -m minions.sort.main
     mem_limit: 4g
+    depends_on:
+      - ollama
+
+  # model-switch: flip the classify/props backend from chat (local Qwen
+  # <-> Gemini). No model of its own, so no ollama dependency.
+  model-switch:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_MODEL_SWITCH:-}
+    command: python -m minions.model_switch.main
+    mem_limit: 256m
+
+  # props: scenario -> recommended props, checked against the Pr* library
+  # (loads CLIP; asks the active backend to list props).
+  props:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_PROPS:-}
+    command: python -m minions.props.main
+    mem_limit: 4g
+    depends_on:
+      - ollama
 
   # week-clean rides cron; the foreground cron is the supervisor.
   batch:

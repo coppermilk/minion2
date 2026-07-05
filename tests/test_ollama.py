@@ -1,0 +1,88 @@
+"""ollama adapter tests: payload shape, JSON parse, error mapping."""
+
+from __future__ import annotations
+
+import base64
+
+import pytest
+
+from minion_core.adapters.llm import LlmError
+from minion_core.adapters.ollama import OllamaBackend
+
+
+class _Resp:
+    """A minimal requests.Response double."""
+
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._body
+
+
+def test_text_payload_and_parse(monkeypatch):
+    """A text call posts JSON-forced chat with no image, returns content."""
+    import requests
+
+    seen = {}
+
+    def fake_post(url, json, timeout):
+        seen['url'] = url
+        seen['json'] = json
+        return _Resp({'message': {'content': '{"props": ["Wand"]}'}})
+
+    monkeypatch.setattr(requests, 'post', fake_post)
+    out = OllamaBackend('http://ollama:11434/', 'qwen2.5vl:7b').text('hi')
+    assert out == '{"props": ["Wand"]}'
+    assert seen['url'] == 'http://ollama:11434/api/chat'
+    assert seen['json']['model'] == 'qwen2.5vl:7b'
+    assert seen['json']['format'] == 'json'
+    assert seen['json']['stream'] is False
+    assert 'images' not in seen['json']['messages'][0]
+
+
+def test_vision_includes_base64_image(monkeypatch, tmp_path):
+    """A vision call carries the image, base64-encoded."""
+    import requests
+
+    img = tmp_path / 'a.png'
+    img.write_bytes(b'\x89PNG\r\n')
+    seen = {}
+
+    def fake_post(url, json, timeout):
+        seen['json'] = json
+        return _Resp({'message': {'content': '{}'}})
+
+    monkeypatch.setattr(requests, 'post', fake_post)
+    OllamaBackend('http://x', 'm').vision_json('classify', img)
+    msg = seen['json']['messages'][0]
+    assert len(msg['images']) == 1
+    assert base64.b64decode(msg['images'][0]) == b'\x89PNG\r\n'
+
+
+def test_network_error_is_llm_error(monkeypatch):
+    """An unreachable model FAILS clean (the belt then punts)."""
+    import requests
+
+    def boom(url, json, timeout):
+        raise requests.ConnectionError('connection refused')
+
+    monkeypatch.setattr(requests, 'post', boom)
+    with pytest.raises(LlmError, match='ollama_unreachable'):
+        OllamaBackend('http://x', 'm').text('hi')
+
+
+def test_empty_content_is_llm_error(monkeypatch):
+    """A blank reply is a failure, not an empty classification."""
+    import requests
+
+    monkeypatch.setattr(
+        requests,
+        'post',
+        lambda url, json, timeout: _Resp({'message': {'content': ' '}}),
+    )
+    with pytest.raises(LlmError):
+        OllamaBackend('http://x', 'm').text('hi')

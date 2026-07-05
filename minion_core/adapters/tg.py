@@ -421,3 +421,29 @@ class TgAny(_TgSource):
         ctx = MsgCtx(msg, emit)
         if not _accept_link(self, ctx) and not _accept_media(self, ctx):
             self.offer_help(msg)
+
+
+class TgCommands(_TgSource):
+    """A text-command dock: answer each message, emit no belt jobs.
+
+    For control bots (model-switch) and query bots (props) that reply
+    in chat rather than feeding the belt. The injected ``handle`` maps
+    the message text to a reply string; an empty reply stays silent.
+    Reuses the long-poll, offset and chat-allowlist machinery of the
+    base source.
+    """
+
+    def __init__(
+        self, api: TgApi, spec: TgSpec, handle: Callable[[str], str]
+    ) -> None:
+        super().__init__(api, spec)
+        self._handle = handle
+
+    def accept(self, msg: dict[str, Any], _emit: Emit) -> None:
+        """Answer the message text; no envelope is produced."""
+        text = msg.get('text', '') or msg.get('caption', '')
+        reply = self._handle(text)
+        if reply:
+            self.api.call(
+                'sendMessage', {'chat_id': msg['chat']['id'], 'text': reply}
+            )
