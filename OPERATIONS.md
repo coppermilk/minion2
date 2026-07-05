@@ -178,8 +178,10 @@ Classification and the props bot run behind one adapter
 
 - **Default is local, offline.** The `ollama` container ("gem") runs
   Qwen2.5-VL; `MODEL_BACKEND` defaults to `local`. One-time model pull:
-  `docker compose exec ollama ollama pull qwen2.5vl:7b`. Weights live under
-  `regen/ollama/` (CACHE class) so `nas-update`'s prune never touches them.
+  `docker compose exec ollama ollama pull qwen2.5vl:7b`. Weights live in the
+  `ollama-models` named volume (Docker auto-creates it -- a bind to a missing
+  host subpath would fail the start); it is CACHE class (re-pullable) and
+  `nas-update`'s `image prune` never touches volumes.
 - **Switch at runtime.** Message the `model-switch` bot `local`, `gemini`,
   or `status`. It writes `state/model.backend`; sort/catch/props re-read it
   per item, so the swap takes effect on the next image with no restart. The

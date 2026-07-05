@@ -54,8 +54,10 @@ x-minion: &minion
 services:
   # "gem": the local model server (Qwen2.5-VL). sort and props reach it
   # at http://ollama:11434 on the compose network; no host port is
-  # exposed. Weights live under the disposable regen cache, so
-  # nas-update's image prune never touches them. One-time model pull:
+  # exposed. Weights live in the `ollama-models` named volume (declared
+  # at the bottom): Docker auto-creates it -- unlike a bind mount, which
+  # fails if the host subpath is missing -- and `image prune` never
+  # touches volumes, so the model persists across updates. One-time pull:
   #   docker compose exec ollama ollama pull qwen2.5vl:7b
   # Memory: the 7B model stays resident (~6 GB on the 16 GB NAS) --
   # fine as long as the torch bots (censor/sort) do not all peak at
@@ -66,7 +68,7 @@ services:
     environment:
       OLLAMA_KEEP_ALIVE: '-1'
     volumes:
-      - ${DRIVE_NAS}/bots/_data/regen/ollama:/root/.ollama
+      - ollama-models:/root/.ollama
     mem_limit: 10g
     restart: unless-stopped
     security_opt:
@@ -171,3 +173,9 @@ services:
     <<: *minion
     command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI" > /etc/minions.env; exec cron -f'
     mem_limit: 512m
+
+# Ollama's model blobs: a disposable, re-pullable CACHE. A named volume
+# (Docker auto-creates it) rather than a bind, so a missing host subpath
+# can never fail the start; `image prune` never touches volumes.
+volumes:
+  ollama-models:
