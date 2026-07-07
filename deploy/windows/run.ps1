@@ -98,6 +98,35 @@ if ($hash -ne $prev -or -not $importOk) {
     }
 }
 
+# Zero-config printing: if PRINT_SPOOLER is not set in .env, auto-locate
+# SumatraPDF (the Windows equivalent of the NAS's `lp`) and point the
+# print bot at it with the usual silent-print flags. An explicit
+# PRINT_SPOOLER in .env always wins; the core never reads the host OS
+# (REQ-PRT-001) -- the deployment (this launcher) chooses the spooler.
+if (-not $env:PRINT_SPOOLER) {
+    $bases = @(
+        $env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}
+    ) | Where-Object { $_ }
+    $sumatra = $null
+    foreach ($base in $bases) {
+        $candidate = Join-Path $base 'SumatraPDF\SumatraPDF.exe'
+        if (Test-Path $candidate) { $sumatra = $candidate; break }
+    }
+    if (-not $sumatra) {
+        $cmd = Get-Command 'SumatraPDF.exe' -ErrorAction SilentlyContinue
+        if ($cmd) { $sumatra = $cmd.Source }
+    }
+    if ($sumatra) {
+        [Environment]::SetEnvironmentVariable(
+            'PRINT_SPOOLER', "$sumatra;-print-to-default;-silent")
+        Write-Output "print spooler: $sumatra"
+    } else {
+        Write-Output ('SumatraPDF not found -- install it or set ' +
+            'PRINT_SPOOLER in .env; print will report printer_missing ' +
+            'until then')
+    }
+}
+
 # Start each bot as its own long-running process; the kernel
 # supervises the belt inside each one.
 foreach ($bot in @('print', 'catch')) {
