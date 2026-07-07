@@ -30,7 +30,10 @@ python -m minions.inbox.main
 Docker (NAS): set `DRIVE_NAS` in `.env`. Windows runs only print and
 catch -- double-click `deploy/windows/run.cmd` (it bypasses the
 PowerShell execution policy; don't run the `.ps1` directly) or point
-Task Scheduler at it. Each bot runs in exactly one place. The same
+Task Scheduler at it. On startup it refreshes the Python requirements
+and reinstalls `minion_core` (editable) whenever `pyproject.toml`
+changed, so a `git pull` never leaves the bots on a stale env; an
+unchanged env is a fast no-op. Each bot runs in exactly one place. The same
 `.env` file works on both machines verbatim (paths are validated
 against both OS flavors). `model-switch` and `props` need their own
 `TG_TOKEN_*` set, or those two containers idle-restart harmlessly.
