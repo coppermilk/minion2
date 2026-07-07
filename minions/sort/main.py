@@ -110,6 +110,10 @@ def main(env: Mapping[str, str] | None = None) -> int:
     cfg = load(mapping)
     if cfg.sort_watch:
         vision.warm_embedder()  # resources at init, never mid-flight
+        # This daemon is the sole sort runner; clear a lock a prior
+        # (recreated) container left under a foreign hostname, which
+        # would otherwise wedge every trigger as batch_locked.
+        BatchLock(cfg.state / f'{BOT}.lock').break_orphan()
         return run(BOT, build_watch(cfg, real_deps(cfg, mapping)), cfg.logs)
     log = bot_logger(BOT, cfg.logs)
     lock = BatchLock(cfg.state / f'{BOT}.lock')

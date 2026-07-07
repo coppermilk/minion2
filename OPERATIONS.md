@@ -31,7 +31,7 @@ reason code -- REQ-OBS-001).
 | `stale_extractor` | yt-dlp extractors rotted | downloads FAILED as sites change | CT-C | restart the container (`yt-dlp -U` runs on start) or refresh the pinned binary on schedule |
 | `download_timeout` | hung extractor/host | FAILED after `download_timeout_sec` | CT-C | none; the bound exists so the daemon never wedges (REQ-RES-001) |
 | `probe_failed` | ffmpeg/ffprobe missing or both probe paths failed | frame jobs FAILED | CT-C | ship binaries in `bin/` or let the image apt-install ffmpeg |
-| `batch_locked` | second batch invocation while one runs | second run exits immediately | CT-C | none; this is REQ-RES-003 working. A lock is auto-reaped only when its holder died on the same host; a lock orphaned by a RECREATED container names a foreign host -- delete `state/<bot>.lock` by hand |
+| `batch_locked` | second batch invocation while one runs | second run exits immediately | CT-C | none; this is REQ-RES-003 working. A lock is auto-reaped when its holder died on the same host; `sort` (the sole sort runner) also self-heals a foreign-host orphan from a recreated container at watch-daemon startup (`break_orphan`). For another batch bot orphaned that way, delete `state/<bot>.lock` by hand |
 | `cache_wiped_live` | `regen/` deleted mid-run | current run FAILED on model load | CT-C | re-run when idle; the cache rebuilds unattended |
 | `bad_config` | relative path override | process refuses to start, loud error | CT-C | make the override absolute (REQ-CFG-001); never relative |
 | `bad_update` | malformed Telegram payload | update skipped, logged; offset advances past it | CT-C | none; explicit boundary validation -- a poison update can neither crash the dock nor wedge it in a replay loop |

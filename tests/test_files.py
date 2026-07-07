@@ -206,6 +206,23 @@ def test_foreign_host_lock_is_never_stolen(tmp_path: Path) -> None:
     assert path.exists()
 
 
+def test_break_orphan_clears_a_recreated_containers_lock(
+    tmp_path: Path,
+) -> None:
+    """A single-instance daemon self-heals a foreign-host orphan.
+
+    ``acquire`` still respects the foreign lock; ``break_orphan``
+    explicitly clears it at startup so sort is not wedged forever.
+    """
+    path = tmp_path / 'sort.lock'
+    path.write_text('old-container:999999999', encoding='ascii')
+    lock = BatchLock(path)
+    assert not lock.acquire()  # foreign orphan wedges acquire
+    lock.break_orphan()
+    assert lock.acquire()  # ... but is cleared, so the run proceeds
+    lock.release()
+
+
 def test_stem_is_canonical(tmp_path: Path) -> None:
     """OPERATIONS 6: MMDD_<source>_<name>; the name is preserved."""
     when = date(2026, 7, 2)

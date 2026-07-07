@@ -249,6 +249,21 @@ class BatchLock:
             self._path.unlink(missing_ok=True)
             self._held = False
 
+    def break_orphan(self) -> None:
+        """Clear any lock left behind, a foreign host's included.
+
+        A recreated container (``compose down`` + ``up``) leaves a lock
+        under its OLD hostname that ``_reap`` never steals -- pid
+        liveness is meaningless across namespaces, so ``acquire`` would
+        skip forever (``batch_locked``). Safe ONLY for a bot that runs
+        as a single instance: the caller (the sort watch daemon at
+        startup) asserts no peer run is live, so any lock present is a
+        dead orphan. This is the self-healing counterpart to the manual
+        removal noted in OPERATIONS.
+        """
+        self._path.unlink(missing_ok=True)
+        self._held = False
+
     def _reap(self) -> None:
         try:
             host, _, raw_pid = self._path.read_text(
