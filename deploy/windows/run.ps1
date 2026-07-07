@@ -33,7 +33,19 @@ foreach ($line in Get-Content $EnvFile) {
     if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { continue }
     $pair = $trimmed.Split('=', 2)
     if ($pair.Count -eq 2) {
-        [Environment]::SetEnvironmentVariable($pair[0], $pair[1])
+        $name = $pair[0].Trim()
+        $value = $pair[1].Trim()
+        # Strip one layer of surrounding single or double quotes, so a
+        # path with spaces may be written quoted or bare -- both
+        # DRIVE=C:\Users\a\My Drive and DRIVE='C:\Users\a\My Drive' work
+        # (unquoted, the value would otherwise carry the quotes and read
+        # as a non-absolute path).
+        if ($value.Length -ge 2 -and
+            (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+             ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        [Environment]::SetEnvironmentVariable($name, $value)
     }
 }
 
