@@ -94,6 +94,13 @@ def test_spec_defaults() -> None:
     assert spec.restore_model == 'gemini-3-pro-image'
 
 
+def test_spec_thinking_budget() -> None:
+    """Reasoning is on (dynamic) by default; the budget is a knob."""
+    assert spec_from({}).thinking_budget == -1
+    assert spec_from({'GEMINI_THINKING_BUDGET': '512'}).thinking_budget == 512
+    assert spec_from({'GEMINI_THINKING_BUDGET': '0'}).thinking_budget == 0
+
+
 class _Reply:
     """A generate-content response double: .text may be set or raise."""
 

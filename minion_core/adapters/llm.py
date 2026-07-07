@@ -39,14 +39,22 @@ class LlmSpec:
     key: str
     model: str
     restore_model: str
+    thinking_budget: int
 
 
 def spec_from(env: Mapping[str, str]) -> LlmSpec:
-    """Build the spec from an explicitly passed mapping."""
+    """Build the spec from an explicitly passed mapping.
+
+    ``thinking_budget`` gates Gemini's reasoning on the text/classify
+    call: ``-1`` (the default) is dynamic thinking -- the model decides
+    how much to reason -- which flash-lite ships OFF unless a budget is
+    passed; ``0`` disables it; a positive value fixes the token budget.
+    """
     return LlmSpec(
         key=env.get('GEMINI_API_KEY', ''),
         model=env.get('GEMINI_MODEL', 'gemini-2.5-flash-lite'),
         restore_model=env.get('GEMINI_BG_RESTORE_MODEL', 'gemini-3-pro-image'),
+        thinking_budget=int(env.get('GEMINI_THINKING_BUDGET', '-1')),
     )
 
 
@@ -119,10 +127,18 @@ def _generate_text(model: str, contents: list[Any], spec: LlmSpec) -> str:
     previous sort/restore failure).
     """
     from google.genai import errors
+    from google.genai import types
 
+    # Turn on Gemini reasoning (flash-lite ships it off): a thinking
+    # budget must be passed for the model to reason before answering.
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(
+            thinking_budget=spec.thinking_budget
+        )
+    )
     try:
         response = _client(spec).models.generate_content(
-            model=model, contents=contents
+            model=model, contents=contents, config=config
         )
     except errors.APIError as exc:
         raise LlmError(f'api_error: {exc}') from exc
