@@ -3,8 +3,9 @@
 Graph: (TgMedia | Folder) -> BlurContour -> RouteOrigin(chat /
 nothing) -> Reply -> Shelve. Segmentation blur (not a box) so the
 scene stays sharp. One of the three censor-family bots (BLUEPRINT 9
-waiver): one Telegram identity per behaviour; ``CENSOR_BLUR_WATCH``
-adds the local dock (REQ-DOCK-001).
+waiver): one Telegram identity per behaviour. A folder dock is always
+present -- drop a photo into the bot's own dir and it is processed;
+``CENSOR_BLUR_WATCH`` overrides the watched dir (REQ-DOCK-001).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from minion_core.adapters.tg import TgChannel
 from minion_core.adapters.tg import TgMedia
 from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
-from minion_core.adapters.tg import spool_of
+from minion_core.adapters.tg import spooled_or_dropped
 from minion_core.adapters.vision import IMAGE_EXTS
 from minion_core.adapters.vision import BlurContour
 from minion_core.adapters.vision import warm_masks
@@ -47,24 +48,24 @@ BOT = 'censor-blur'
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the belt; secrets come from the passed mapping."""
     api = TgApi(env.get('TG_TOKEN', ''))
+    # Telegram downloads and _s1 results live in _spool (a subfolder),
+    # so the drop watcher over the bot's own folder never re-globs them.
+    spool = cfg.bot_dir(BOT) / '_spool'
     spec = TgSpec(
-        spool=SpoolSpec(
-            into=cfg.bot_dir(BOT), budget=functools.partial(free_quota, cfg)
-        ),
-        dest=cfg.bot_dir(BOT),
+        spool=SpoolSpec(into=spool, budget=functools.partial(free_quota, cfg)),
+        dest=spool,
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
-        help='Send a photo and I blur the people.',
+        help='Send or drop a photo and I blur the people.',
     )
     channel = TgChannel(api)
-    watch = None
-    if cfg.censor_blur_watch is not None:
-        watch = FolderSpec(
-            root=cfg.censor_blur_watch,
-            dest=cfg.bot_dir(BOT),
-            exts=IMAGE_EXTS,
-            poll_sec=cfg.poll_sec,
-        )
+    # Default drop folder is the bot's own dir; CENSOR_BLUR_WATCH overrides.
+    watch = FolderSpec(
+        root=cfg.censor_blur_watch or cfg.bot_dir(BOT),
+        dest=spool,
+        exts=IMAGE_EXTS,
+        poll_sec=cfg.poll_sec,
+    )
     docks = merge_watch(
         TgMedia(api, spec), watch, SeenPaths(cfg.seen_paths_max)
     )
@@ -74,7 +75,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         >> BlurContour()
         >> route
         >> Reply(channel)
-        >> Shelve(cfg.bot_done(BOT), spool_of)
+        >> Shelve(cfg.bot_done(BOT), spooled_or_dropped)
     )
 
 
@@ -82,8 +83,8 @@ def main(env: Mapping[str, str] | None = None) -> int:
     """Build Settings once, warm the model at init, drain the belt."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
-    if mapping.get('TG_TOKEN') or cfg.censor_blur_watch is not None:
-        warm_masks()  # resources at init, never mid-flight
+    (cfg.bot_dir(BOT) / '_spool').mkdir(parents=True, exist_ok=True)
+    warm_masks()  # a folder dock is always present; resources at init
     return run(BOT, build(cfg, mapping), cfg.logs)
 
 

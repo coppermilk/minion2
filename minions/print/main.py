@@ -8,6 +8,7 @@ SumatraPDF on Windows -- the software never branches on the host OS
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from typing import TYPE_CHECKING
@@ -52,6 +53,13 @@ class PrintPdf(Step):
                 check=False,
             )
         except FileNotFoundError:
+            spooler = self._cfg.print_spooler
+            argv0 = spooler[0] if spooler else '?'
+            logging.getLogger(BOT).warning(
+                'printer_missing spooler=%s -- install SumatraPDF or set '
+                'PRINT_SPOOLER',
+                argv0,
+            )
             return Verdict(Disposition.FAILED, reason='printer_missing')
         except subprocess.TimeoutExpired:
             return Verdict(Disposition.FAILED, reason='print_timeout')

@@ -7,6 +7,7 @@ suite and non-LLM bots never touch it. Prompts come from
 
 from __future__ import annotations
 
+import functools
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -86,7 +87,15 @@ class Backend(Protocol):
         ...
 
 
+@functools.lru_cache(maxsize=4)
 def _client(spec: LlmSpec) -> Any:  # noqa: ANN401 -- vendor client handle
+    """One reused client per spec.
+
+    Rebuilding ``genai.Client`` per image tore down the shared httpx
+    transport, so the next request hit a closed client
+    (``client has been closed``). ``LlmSpec`` is frozen/hashable, so a
+    per-key cache keeps one live client for the process.
+    """
     from google import genai
 
     return genai.Client(api_key=spec.key)

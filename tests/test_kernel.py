@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import threading
 import time
@@ -233,6 +234,10 @@ def test_bot_logger_mirrors_to_stdout_and_file(tmp_path: Path) -> None:
             handler.flush()
         text = (logs / 'probe-bot.log').read_text(encoding='ascii')
         assert 'probe-message' in text
+        # Every line is time-stamped (YYYY-MM-DD HH:MM:SS ...).
+        assert re.search(
+            r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.*probe-message', text
+        )
 
         # Idempotent: a second call stacks no duplicate root stdout handler.
         bot_logger('probe-bot', logs)

@@ -313,6 +313,19 @@ def test_two_whitelisted_users_served_without_crosstalk(
     assert chats == ['1', '22']  # each reply routes to its own chat
 
 
+def test_spooled_or_dropped_handles_both_origins() -> None:
+    """A tg spool comes from the ref; a folder drop's ref IS the file."""
+    from minion_core.adapters.tg import spooled_or_dropped
+
+    tg = spooled_or_dropped(Origin('tg', '5:6:/spool/x.jpg'))
+    assert tg is not None
+    assert str(tg).endswith('x.jpg')
+    loc = spooled_or_dropped(Origin('loc', '/data/bots/censor-blur/y.jpg'))
+    assert loc is not None
+    assert str(loc).endswith('y.jpg')
+    assert spooled_or_dropped(Origin('loc', '')) is None
+
+
 def test_spool_of_survives_windows_paths() -> None:
     """The third ref field may itself contain colons."""
     origin = Origin('tg', r'5:6:C:\Users\a\My Drive\bots\x.jpg')

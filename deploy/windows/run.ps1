@@ -103,7 +103,10 @@ if ($hash -ne $prev -or -not $importOk) {
 # print bot at it with the usual silent-print flags. An explicit
 # PRINT_SPOOLER in .env always wins; the core never reads the host OS
 # (REQ-PRT-001) -- the deployment (this launcher) chooses the spooler.
-if (-not $env:PRINT_SPOOLER) {
+$configuredExe = if ($env:PRINT_SPOOLER) {
+    ($env:PRINT_SPOOLER -split ';')[0]
+} else { $null }
+if (-not $configuredExe -or -not (Test-Path $configuredExe)) {
     $bases = @(
         $env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}
     ) | Where-Object { $_ }

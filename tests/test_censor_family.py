@@ -167,12 +167,17 @@ def test_restore_refusal_is_stable_code(
     assert s1.is_file()
 
 
-def test_all_three_tokenless_mains_run(tmp_path: Path) -> None:
-    """REQ-DEG-001 for the whole family."""
-    make_cfg(tmp_path / 'drive')
+def test_all_three_tokenless_build_a_folder_belt(tmp_path: Path) -> None:
+    """REQ-DEG-001: tokenless, each bot degrades to a folder-only belt.
+
+    A drop dock over the bot's own dir is always present, so a
+    tokenless bot watches for dropped files instead of exiting; the
+    belt still assembles with no token and no ``*_WATCH``.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
     env = make_env(tmp_path / 'drive')
     for bot in BOTS:
-        assert bot.main(env) == 0
+        assert bot.build(cfg, env) is not None
 
 
 def test_each_bot_owns_its_offset(tmp_path: Path) -> None:

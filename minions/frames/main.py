@@ -130,28 +130,29 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the belt; secrets come from the passed mapping.
 
     One token allows one getUpdates consumer, so links and chat
-    videos share the TgAny dock; ``frames_watch`` adds the local
-    dock (REQ-DOCK-001).
+    videos share the TgAny dock. A folder dock is always present --
+    drop a video into the bot's own dir and it is processed;
+    ``FRAMES_WATCH`` overrides the watched dir (REQ-DOCK-001).
     """
     api = TgApi(env.get('TG_TOKEN', ''))
+    # Telegram/link downloads live in _spool (a subfolder), so the drop
+    # watcher over the bot's own folder never re-globs them.
+    spool = cfg.bot_dir(BOT) / '_spool'
     spec = TgSpec(
-        spool=SpoolSpec(
-            into=cfg.bot_dir(BOT), budget=functools.partial(free_quota, cfg)
-        ),
-        dest=cfg.bot_dir(BOT),
+        spool=SpoolSpec(into=spool, budget=functools.partial(free_quota, cfg)),
+        dest=spool,
         offset=cfg.state / f'{BOT}.offset',
         chats=chats_from(env),
-        help='Send a video or a link and I extract frames.',
+        help='Send or drop a video (or a link) and I extract frames.',
     )
     channel = TgChannel(api)
-    watch = None
-    if cfg.frames_watch is not None:
-        watch = FolderSpec(
-            root=cfg.frames_watch,
-            dest=cfg.bot_dir(BOT),
-            exts=VIDEO_EXTS,
-            poll_sec=cfg.poll_sec,
-        )
+    # Default drop folder is the bot's own dir; FRAMES_WATCH overrides.
+    watch = FolderSpec(
+        root=cfg.frames_watch or cfg.bot_dir(BOT),
+        dest=spool,
+        exts=VIDEO_EXTS,
+        poll_sec=cfg.poll_sec,
+    )
     docks = merge_watch(TgAny(api, spec), watch, SeenPaths(cfg.seen_paths_max))
     return (
         docks
@@ -166,6 +167,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     """Build Settings once and drain the belt."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
+    (cfg.bot_dir(BOT) / '_spool').mkdir(parents=True, exist_ok=True)
     return run(BOT, build(cfg, mapping), cfg.logs)
 
 

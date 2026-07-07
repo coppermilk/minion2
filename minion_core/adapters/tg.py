@@ -226,6 +226,19 @@ def spool_of(origin: Origin) -> Path | None:
     return Path(parts[2])
 
 
+def spooled_or_dropped(origin: Origin) -> Path | None:
+    """The disposable input file for either transport.
+
+    A Telegram job carries its spool inside the ref (``spool_of``); a
+    folder drop is a ``loc`` origin whose ref IS the dropped file. Used
+    by Shelve so a dropped original is filed beside its output just like
+    a Telegram one, rather than lingering in the drop folder.
+    """
+    if origin.source == 'tg':
+        return spool_of(origin)
+    return Path(origin.ref) if origin.ref else None
+
+
 def chats_from(env: Mapping[str, str]) -> tuple[str, ...]:
     """The chat allow-list (primary control, OPERATIONS 3)."""
     raw = env.get('TG_CHATS', '')

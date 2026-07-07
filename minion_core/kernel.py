@@ -563,6 +563,10 @@ def move_atomic(src: Path, dst: Path) -> Path:
     return dst
 
 
+_LOG_FMT = logging.Formatter('%(asctime)s %(name)s %(message)s')
+"""Every line carries the time and the bot name (REQ-OBS-001)."""
+
+
 def bot_logger(name: str, logs: Path | None) -> logging.Logger:
     """One log to two places: the container stdout AND logs/<name>.log.
 
@@ -572,7 +576,8 @@ def bot_logger(name: str, logs: Path | None) -> logging.Logger:
     crash guards (``step_crashed``/``source_crashed``, logged under
     ``type(self).__name__``) alike. The named bot logger keeps only its
     FileHandler and propagates to root for stdout, so nothing prints
-    twice. Idempotent: each handler is installed once per process.
+    twice. Every line is time-stamped. Idempotent: each handler is
+    installed once per process.
     """
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -581,12 +586,16 @@ def bot_logger(name: str, logs: Path | None) -> logging.Logger:
         and not isinstance(h, logging.FileHandler)
         for h in root.handlers
     ):
-        root.addHandler(logging.StreamHandler(sys.stdout))
+        stream = logging.StreamHandler(sys.stdout)
+        stream.setFormatter(_LOG_FMT)
+        root.addHandler(stream)
     log = logging.getLogger(name)
     log.setLevel(logging.INFO)
     if logs is not None and not log.handlers:
         logs.mkdir(parents=True, exist_ok=True)
-        log.addHandler(logging.FileHandler(logs / f'{name}.log'))
+        handler = logging.FileHandler(logs / f'{name}.log')
+        handler.setFormatter(_LOG_FMT)
+        log.addHandler(handler)
     return log
 
 

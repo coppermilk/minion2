@@ -96,6 +96,20 @@ Extractors rot within weeks, so the volatile knobs are Settings, not code:
 - **No idle rewrites**: an unchanged tree writes nothing; the npz is only
   rewritten when a vector was computed or the key set changed, so the
   5-minute cron and Drive sync cost nothing while asleep.
+- **One-time after upgrading to pooled embeddings**: `embed_image` now pools
+  any stray multi-dim model output to a flat vector. If an older cache holds a
+  differently-shaped vector, delete `regen/_embeddings.npz` once (CACHE-class,
+  it rebuilds unattended) so every vector is consistent.
+
+## 4a. Folder drops (censor-blur / censor-black / restore / frames)
+
+Each of these bots always watches its OWN folder: drop a photo (or a video,
+for frames) straight into `bots/<bot>/` on the media share and it is processed
+into `bots/<bot>/done/<MMDD> <name>/`, no Telegram token and no config needed.
+`<BOT>_WATCH` still overrides the watched dir. Telegram downloads and
+intermediate `_s1`/`_s2` files live in `bots/<bot>/_spool/` (a subfolder the
+watcher ignores), so a dropped file is picked up exactly once and results are
+never re-processed.
 
 ## 5. Scheduling and liveness
 

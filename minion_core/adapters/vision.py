@@ -245,6 +245,21 @@ def _clip() -> tuple[Any, Any]:
     )
 
 
+def _pool1d(vec: Vector) -> Vector:
+    """Reduce a stray multi-dim embedding to a 1-D vector.
+
+    Some transformers builds return per-token features (a shape like
+    ``(tokens, dim)``) from ``get_*_features`` instead of a pooled
+    ``(dim,)`` vector, which breaks cosine (``np.dot`` shape mismatch).
+    Mean-pool the leading axes so every vector is 1-D and the same
+    length; a healthy ``(dim,)`` is returned unchanged.
+    """
+    if vec.ndim <= 1:
+        return vec
+    pooled: Vector = vec.reshape(-1, vec.shape[-1]).mean(axis=0)
+    return pooled
+
+
 def embed_image(path: Path) -> Vector:
     """CLIP image embedding (lazy torch + transformers load)."""
     import torch
@@ -253,8 +268,7 @@ def embed_image(path: Path) -> Vector:
     batch = processor(images=load_rgb(path), return_tensors='pt')
     with torch.no_grad():
         feats = model.get_image_features(**batch)
-    vec: Vector = feats[0].numpy()
-    return vec
+    return _pool1d(feats[0].numpy())
 
 
 def embed_text(query: str) -> Vector:
@@ -272,8 +286,7 @@ def embed_text(query: str) -> Vector:
     )
     with torch.no_grad():
         feats = model.get_text_features(**batch)
-    vec: Vector = feats[0].numpy()
-    return vec
+    return _pool1d(feats[0].numpy())
 
 
 _BOXES = 'fasterrcnn_resnet50_fpn'

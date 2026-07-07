@@ -36,6 +36,16 @@ def test_nearest_named_returns_key_and_score() -> None:
     assert sim > 0.9
 
 
+def test_pool1d_flattens_multidim_keeps_1d() -> None:
+    """A stray (tokens, dim) embedding pools to 1-D; a 1-D one is kept."""
+    from minion_core.adapters.vision import _pool1d
+
+    flat = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    assert _pool1d(flat).shape == (3,)
+    tokens = np.ones((50, 768), dtype=np.float32)
+    assert _pool1d(tokens).shape == (768,)
+
+
 def test_nearest_named_empty_library() -> None:
     """An empty library yields no key and a sentinel score."""
     key, sim = nearest_named(np.array([1.0, 0.0], dtype=np.float32), {})
