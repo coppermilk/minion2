@@ -262,6 +262,30 @@ def test_idle_run_exits_fast_and_writes_nothing(tmp_path: Path) -> None:
     assert not (cfg.regen / '_embeddings.npz').exists()
 
 
+def test_run_passes_contains_a_pass_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash in one pass is contained; classify's work still lands.
+
+    A failing re-place must not sink the whole trigger as an opaque
+    step_crashed -- the image is still classified in place, and
+    run_passes returns without raising.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    _seed_library(cfg)
+    _jpeg(cfg.inbox / 'cat_shot.jpg')
+
+    from minions.sort import passes
+
+    def boom(*_a: object) -> None:
+        raise RuntimeError('replace exploded')
+
+    monkeypatch.setattr(passes, 'replace_pass', boom)
+    run_passes(cfg, DEPS)  # must not raise despite the crash
+    assert not (cfg.inbox / 'cat_shot.jpg').exists()  # classify renamed it
+    assert (cfg.inbox / 'FgCatsCalm.jpg').exists()
+
+
 def test_source_dirs_axis(tmp_path: Path) -> None:
     """The Downloads axis: SOURCE_DIRS overrides _inbox."""
     downloads = tmp_path / 'Downloads'

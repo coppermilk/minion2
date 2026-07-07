@@ -2,15 +2,15 @@
 #
 # Windows runs exactly two bots: the printer (`print`) and the
 # Downloads watcher (`catch`); every other bot runs in Docker on the
-# NAS. Set up once in Task Scheduler:
+# NAS. It loads the same single .env the NAS uses (paths are validated
+# for either OS) and launches both bots.
 #
-#   Create Task -> Trigger: At log on -> Action: Start a program
-#     Program:   powershell
-#     Arguments: -NoProfile -ExecutionPolicy Bypass -File
-#                C:\path\to\minion2\deploy\windows\run.ps1
-#
-# That's all: this loads .env and launches both bots. It reads the
-# same single .env the NAS uses (paths are validated for either OS).
+# DON'T run this .ps1 directly -- PowerShell's execution policy blocks
+# it ("running scripts is disabled on this system"). Use the sibling
+# `run.cmd` instead: just double-click it, or in Task Scheduler ->
+# Create Task -> Trigger: At log on -> Action: Start a program ->
+# Program: C:\path\to\minion2\deploy\windows\run.cmd  (run.cmd calls
+# this script with the policy bypassed for that one process).
 
 param(
     [string]$EnvFile = (Join-Path $PSScriptRoot '..\..\.env')

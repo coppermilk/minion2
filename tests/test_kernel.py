@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 import threading
 import time
 from pathlib import Path
@@ -16,6 +18,7 @@ from minion_core.kernel import SeenPaths
 from minion_core.kernel import Source
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
+from minion_core.kernel import bot_logger
 from minion_core.kernel import run
 
 if TYPE_CHECKING:
@@ -187,3 +190,57 @@ def test_seen_paths_is_thread_safe(tmp_path: Path) -> None:
     wins: list[Path] = []
     _race(_adder(seen, tmp_path, wins))
     assert len(wins) == 100
+
+
+def _non_file_streams(logger: logging.Logger) -> list[logging.Handler]:
+    return [
+        h
+        for h in logger.handlers
+        if isinstance(h, logging.StreamHandler)
+        and not isinstance(h, logging.FileHandler)
+    ]
+
+
+def test_bot_logger_mirrors_to_stdout_and_file(tmp_path: Path) -> None:
+    """Every log reaches the docker stdout; the file keeps the bot's own.
+
+    The stdout handler lives on root (so the kernel's crash guards are
+    captured too), the named logger keeps only its file, and nothing
+    prints twice. Root's global handler state is saved/restored so the
+    assertions are isolated from pytest's own capture handlers.
+    """
+    root = logging.getLogger()
+    saved, saved_level = root.handlers[:], root.level
+    root.handlers.clear()
+    log = None
+    try:
+        logs = tmp_path / 'logs'
+        log = bot_logger('probe-bot', logs)
+
+        # Root got exactly one stdout stream that mirrors every logger.
+        streams = _non_file_streams(root)
+        assert len(streams) == 1
+        assert streams[0].stream is sys.stdout
+
+        # The named logger keeps only its file handler -- stdout comes
+        # from propagation to root, so no line is printed twice.
+        assert log.handlers
+        assert all(isinstance(h, logging.FileHandler) for h in log.handlers)
+
+        # The record still lands in the on-disk file.
+        log.info('probe-message')
+        for handler in log.handlers:
+            handler.flush()
+        text = (logs / 'probe-bot.log').read_text(encoding='ascii')
+        assert 'probe-message' in text
+
+        # Idempotent: a second call stacks no duplicate root stdout handler.
+        bot_logger('probe-bot', logs)
+        assert len(_non_file_streams(root)) == 1
+    finally:
+        if log is not None:
+            for handler in list(log.handlers):
+                handler.close()
+            log.handlers.clear()
+        root.handlers[:] = saved
+        root.setLevel(saved_level)

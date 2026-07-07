@@ -36,7 +36,8 @@ reason code -- REQ-OBS-001).
 | `bad_config` | relative path override | process refuses to start, loud error | CT-C | make the override absolute (REQ-CFG-001); never relative |
 | `bad_update` | malformed Telegram payload | update skipped, logged; offset advances past it | CT-C | none; explicit boundary validation -- a poison update can neither crash the dock nor wedge it in a replay loop |
 | `hash_collision` | two coexisting images with equal digest+length but different bytes | both embedded on distinct keys; CRITICAL log | CT-B | none needed -- detected by direct byte comparison and split; correctness holds by construction |
-| `classify_failed` | the active backend (local Qwen or Gemini) crashed, was unreachable (`ollama_unreachable`), or returned garbage | catch job FAILED / sort leaves the file in its source dir | CT-B | none needed; the file is retried on the next run (REQ-CATCH-002) -- if it persists, check the model (`docker compose logs ollama`, or `GEMINI_API_KEY`/model id when switched to Gemini) |
+| `classify_failed` | the active backend (local Qwen or Gemini) crashed, was unreachable (`ollama_unreachable`), had no model pulled (`model_not_pulled`), or returned garbage | catch job FAILED / sort leaves the file in its source dir | CT-B | none needed; the file is retried on the next run (REQ-CATCH-002) -- if it persists, check the model (`docker compose logs ollama`, or `GEMINI_API_KEY`/model id when switched to Gemini) |
+| `demote_failed` / `replace_failed` | a sort library-hygiene pass crashed (a corrupt image, a torch/CLIP load) | that pass is skipped for the run; classify's per-image results already landed | CT-B | none; contained by design and retried next run -- the full traceback is in `sort.log` (no longer an opaque `step_crashed`) |
 | `script_fetch_failed` | weekly script doc unreachable or not shared "anyone with the link" | classification proceeds without scene labels | CT-D | re-share the doc publicly and drop a fresh `.gdoc` shortcut into `_inbox/` |
 | `no_person` | censor-blur/restore detector found no person | job SKIPPED; the original is NOT sent back | CT-B | expected: a silent pass-through would leak an uncensored photo |
 | `no_face` | censor-black found no face | job SKIPPED; the original is NOT sent back | CT-B | expected (same leak-safety as `no_person`); if a face was clearly present, the angle/occlusion beat the detector -- re-send a clearer crop |
@@ -177,19 +178,27 @@ Classification and the props bot run behind one adapter
 (image generation) and never routes through the toggle.
 
 - **Default is local, offline.** The `ollama` container ("gem") runs
-  Qwen2.5-VL; `MODEL_BACKEND` defaults to `local`. One-time model pull:
-  `docker compose exec ollama ollama pull qwen2.5vl:7b`. Weights live in the
-  `ollama-models` named volume (Docker auto-creates it -- a bind to a missing
-  host subpath would fail the start); it is CACHE class (re-pullable) and
-  `nas-update`'s `image prune` never touches volumes.
+  Qwen2.5-VL; `MODEL_BACKEND` defaults to `local`. The model is pulled
+  automatically by `deploy/nas-update.sh` (it reads `OLLAMA_MODEL` and runs
+  `ollama pull` after the stack is up, idempotently) -- you never run it by
+  hand. Weights live in the `ollama-models` named volume (Docker auto-creates
+  it -- a bind to a missing host subpath would fail the start); it is CACHE
+  class (re-pullable) and `nas-update`'s `image prune` never touches volumes.
 - **Switch at runtime.** Message the `model-switch` bot `local`, `gemini`,
   or `status`. It writes `state/model.backend`; sort/catch/props re-read it
   per item, so the swap takes effect on the next image with no restart. The
-  toggle is per-machine (each host's own `DRIVE/state`).
+  toggle is per-machine (each host's own `DRIVE/state`). `model-switch` and
+  `props` each need their own `TG_TOKEN_*`; without it the tokenless dock
+  ends and the container idle-restarts (harmless, but that is the repeating
+  `drained` line in its log).
 - **DS224+ latency.** The Celeron J4125 has no AVX2 and no GPU, so one local
-  classify runs in minutes. Fine for the trickle sort's watch daemon sees; a
-  model that is down (`ollama_unreachable`) just leaves images waiting in
-  `_inbox` (the existing punt), never a crash.
+  classify runs in minutes. Fine for the trickle sort's watch daemon sees. A
+  model that is down (`ollama_unreachable`) or not yet pulled
+  (`model_not_pulled`, which names the exact `ollama pull` command) just
+  leaves images waiting in `_inbox` (the existing punt), never a crash. Every
+  bot's full log -- including kernel crash tracebacks -- is mirrored to the
+  container's stdout, so `docker compose logs <bot>` (Container Manager's Log
+  tab) is the complete view.
 - **Memory.** The 7B model stays resident (~6 GB on the 16 GB NAS). Keep the
   sum of simultaneous peaks under ~14 GB -- the torch bots (censor/sort) load
   their models only while working, so real concurrency is low.

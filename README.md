@@ -27,21 +27,30 @@ pytest                     # hermetic: no network, no models
 python -m minions.inbox.main
 ```
 
-Docker (NAS): set `DRIVE_NAS` in `.env`, then
-`docker compose up -d` -- Telegram bots, sort (watch daemon) and
-week-clean (cron in the `batch` container). Windows runs only print
-and catch via `deploy/windows/run.ps1`; each bot runs in
-exactly one place. The same `.env` file works on both machines
-verbatim (paths are validated against both OS flavors).
+Docker (NAS): set `DRIVE_NAS` in `.env`. Windows runs only print and
+catch -- double-click `deploy/windows/run.cmd` (it bypasses the
+PowerShell execution policy; don't run the `.ps1` directly) or point
+Task Scheduler at it. Each bot runs in exactly one place. The same
+`.env` file works on both machines verbatim (paths are validated
+against both OS flavors). `model-switch` and `props` need their own
+`TG_TOKEN_*` set, or those two containers idle-restart harmlessly.
 
 The image is built on GitHub and published to GHCR on every push to
 main (`.github/workflows/image.yml`); the NAS pulls it rather than
-compiling torch, so an update is a quick layer download. Auto-update
-with no shell access: point DSM Task Scheduler (root, weekly) at
-`deploy/nas-update.sh` -- it fetches `origin/main`, `docker compose
-pull`s the fresh image, and restarts the bots, pulling *before* it
-stops anything so a failed pull never takes them offline. Make the
-GHCR package public once for anonymous pulls (or `docker login`).
+compiling torch, so an update is a quick layer download. One
+self-healing command does everything -- point DSM Task Scheduler
+(root, weekly) at `deploy/nas-update.sh`:
+
+- force-syncs the checkout to `origin/main` even in a non-empty
+  folder (`git init` + hard reset, never `git clone`), keeping your
+  git-ignored `.env`;
+- pulls the fresh image *before* touching the bots, then recreates the
+  stack cleanly and prunes old images;
+- pulls the local Qwen model itself, so you never run `docker compose
+  exec ... ollama pull` by hand.
+
+Make the GHCR package public once for anonymous pulls (or `docker
+login`).
 
 ## The bots
 

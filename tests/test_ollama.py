@@ -13,11 +13,15 @@ from minion_core.adapters.ollama import OllamaBackend
 class _Resp:
     """A minimal requests.Response double."""
 
-    def __init__(self, body):
+    def __init__(self, body, status=200):
         self._body = body
+        self.status_code = status
 
     def raise_for_status(self):
-        return None
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(str(self.status_code))
 
     def json(self):
         return self._body
@@ -72,6 +76,33 @@ def test_network_error_is_llm_error(monkeypatch):
 
     monkeypatch.setattr(requests, 'post', boom)
     with pytest.raises(LlmError, match='ollama_unreachable'):
+        OllamaBackend('http://x', 'm').text('hi')
+
+
+def test_missing_model_is_model_not_pulled(monkeypatch):
+    """A 404 (server up, model absent) names the exact pull command."""
+    import requests
+
+    monkeypatch.setattr(
+        requests,
+        'post',
+        lambda url, json, timeout: _Resp({'error': 'not found'}, status=404),
+    )
+    with pytest.raises(LlmError, match='model_not_pulled') as caught:
+        OllamaBackend('http://x', 'qwen2.5vl:7b').text('hi')
+    assert 'qwen2.5vl:7b' in str(caught.value)
+
+
+def test_other_http_error_is_ollama_error(monkeypatch):
+    """A 5xx is distinct from both unreachable and model-not-pulled."""
+    import requests
+
+    monkeypatch.setattr(
+        requests,
+        'post',
+        lambda url, json, timeout: _Resp({}, status=500),
+    )
+    with pytest.raises(LlmError, match='ollama_error'):
         OllamaBackend('http://x', 'm').text('hi')
 
 

@@ -1,39 +1,38 @@
 #!/bin/sh
-# Synology NAS auto-update: pull the prebuilt image, restart the bots.
+# Synology NAS: the one self-healing deploy command. Run it and forget:
+# it force-syncs the repo to origin/main (even into a non-empty folder,
+# keeping your .env), recreates the stack from the freshly published
+# image, prunes old images, and pulls the local model itself -- so you
+# never run `docker compose exec ... ollama pull` by hand.
 #
-# The image is built on GitHub and published to GHCR (image.yml), so
-# the NAS never compiles torch -- it just downloads the ready image,
-# and thanks to the layer order only the small code layer changes.
+# The image is built on GitHub and published to GHCR (image.yml), so the
+# NAS never compiles torch -- it just downloads the ready image. The
+# GHCR package and the repo are public, so no credentials are needed.
 #
-# Runs from DSM Task Scheduler as a root user-defined script. The repo
-# and (once you flip its visibility) the GHCR package are public, so
-# both `git fetch` and `docker pull` need no credentials. Safe by
-# design: the new image is pulled BEFORE the running bots are touched,
-# so a failed fetch or pull never leaves the bots stopped -- they keep
-# serving the old image until a good one is in hand.
-#
-# One-time: make the GHCR package public so the pull is anonymous --
-# github.com/coppermilk?tab=packages -> minion2 -> Package settings ->
-# Change visibility -> Public. (Otherwise add a `docker login ghcr.io`
-# with a read:packages token before the pull below.)
-#
-# Setup (once): Control Panel -> Task Scheduler -> Create ->
-# Scheduled Task -> User-defined script; User: root; Schedule: e.g.
-# weekly Sunday 23:00 (before Monday's week-clean); Run command:
+# Setup (once): Control Panel -> Task Scheduler -> Create -> Scheduled
+# Task -> User-defined script; User: root; Schedule: e.g. weekly Sunday
+# 23:00 (before Monday's week-clean); Run command:
 #   sh /volume1/docker/minion2/deploy/nas-update.sh
 #
-# First-time checkout (also a one-shot Task Scheduler command):
-#   git clone https://github.com/coppermilk/minion2 /volume1/docker/minion2
-# then copy your single .env into that folder.
+# First-time install into a folder that already has files (this is what
+# `git clone` refuses with "destination path already exists / not
+# empty"): drop this repo's files there any way you like, then just run
+# the script -- it turns the folder into a proper checkout on the first
+# run (git init + fetch + hard reset) and keeps your .env. There is no
+# separate clone step.
 
 set -eu
 
-# --- EDIT ME: absolute path to the cloned repo on the NAS ----------
-REPO='/volume1/docker/minion2'
-# -------------------------------------------------------------------
+REPO_URL='https://github.com/coppermilk/minion2'
+
+# Locate the repo from THIS script's own path (deploy/nas-update.sh),
+# so there is nothing to edit: the checkout is the script's grandparent.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 LOG="$REPO/deploy/update.log"
 LOCKDIR="$REPO/deploy/.update.lock"
+IMAGE='ghcr.io/coppermilk/minion2:latest'
 
 # DSM Task Scheduler hands the script a minimal PATH; locate tools by
 # absolute path when `command -v` comes up empty.
@@ -57,46 +56,72 @@ fi
 exec >>"$LOG" 2>&1
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update start ====="
 
-# Single-flight: a slow build must not overlap the next schedule.
+# Single-flight: a slow model pull must not overlap the next schedule.
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
     echo 'another update is still running; skip'
     exit 0
 fi
 trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 
-# Fetch and hard-reset to origin/main (compose file + this script).
-# .env is git-ignored, so it is never touched; any accidental local
-# edit to a tracked file is discarded on purpose -- this is a deploy
-# checkout, not a workspace.
+# --- 1. Self-healing sync to origin/main -----------------------------
+# Works whether or not the folder is already a git repo, and never
+# needs an empty directory: `git init` + hard reset overwrites tracked
+# files in place where `git clone` would refuse. `.env` is git-ignored,
+# so it is preserved untouched across every run.
+if [ ! -d "$REPO/.git" ]; then
+    echo 'no .git: initialising the checkout in place'
+    "$GIT" init
+fi
+if "$GIT" remote get-url origin >/dev/null 2>&1; then
+    "$GIT" remote set-url origin "$REPO_URL"
+else
+    "$GIT" remote add origin "$REPO_URL"
+fi
 "$GIT" fetch --prune origin main
 "$GIT" reset --hard origin/main
 echo "at $("$GIT" rev-parse --short HEAD)"
 
-# Remember the current image before pulling, so we can drop exactly
-# that one afterwards if the pull brought a different digest.
-IMAGE='ghcr.io/coppermilk/minion2:latest'
-old_id="$("$DOCKER" images --no-trunc -q "$IMAGE" 2>/dev/null || true)"
-
-# Converge to the published image, idempotently. `pull` grabs the new
-# GHCR image (a fast no-op when the digest is unchanged); set -e
-# aborts here on a bad pull, before the running bots are touched.
+# --- 2. Pull the new image BEFORE touching the running bots ----------
+# set -e aborts here on a bad pull, while the bots still serve the old
+# image -- a failed pull never leaves them stopped.
 compose pull
 
-# `up -d` recreates only the containers whose image actually changed
-# and starts anything not yet running -- so the SAME task both does
-# the first-ever start after a clone and every later update, with no
-# needless restarts when nothing moved.
+# --- 3. Clean recreate -----------------------------------------------
+# down --remove-orphans drops containers (incl. any renamed/removed
+# service) for a clean slate; up -d recreates from the pulled image.
+# The ollama-models named volume and the /data weights survive `down`,
+# so nothing re-downloads and the gap is seconds.
+compose down --remove-orphans
 compose up -d
 
-# The old image is now untagged and unused (the containers were
-# recreated onto the new one). Remove it explicitly when the digest
-# changed, then sweep any other dangling layers so the NAS stays
-# bounded -- no pile of stale <none> images.
-new_id="$("$DOCKER" images --no-trunc -q "$IMAGE" 2>/dev/null || true)"
-if [ -n "$old_id" ] && [ "$old_id" != "$new_id" ]; then
-    echo "removing old image $old_id"
-    "$DOCKER" rmi "$old_id" 2>/dev/null || true
-fi
+# Remove now-dangling old layers so the NAS stays bounded.
 "$DOCKER" image prune -f
+
+# --- 4. Ensure the local model is present ----------------------------
+# Read OLLAMA_MODEL from .env (default qwen2.5vl:7b), wait for the
+# ollama service to answer, then pull. Idempotent: a no-op once the
+# blob is present. Best-effort -- a failed pull is logged and retried
+# next run, never aborting the deploy (so `set -e` is relaxed here).
+MODEL="$(sed -n 's/^[[:space:]]*OLLAMA_MODEL[[:space:]]*=[[:space:]]*//p' \
+    .env 2>/dev/null | tail -n1)"
+[ -n "$MODEL" ] || MODEL='qwen2.5vl:7b'
+
+echo "ensuring model $MODEL"
+i=0
+until compose exec -T ollama ollama list >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 30 ]; then
+        echo 'ollama did not become ready; skipping model pull this run'
+        break
+    fi
+    sleep 2
+done
+if [ "$i" -lt 30 ]; then
+    if compose exec -T ollama ollama pull "$MODEL"; then
+        echo "model ready: $MODEL"
+    else
+        echo "model pull failed; will retry next run"
+    fi
+fi
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ====="

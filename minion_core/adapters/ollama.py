@@ -24,6 +24,9 @@ CONNECT_TIMEOUT_SEC = 5
 READ_TIMEOUT_SEC = 600
 """One inference may take minutes on a CPU NAS (bounded, BLUEPRINT 10)."""
 
+HTTP_NOT_FOUND = 404
+"""Ollama's status for a request naming a model it has not pulled."""
+
 
 class OllamaBackend:
     """Backend over a local Ollama server -- the default offline path."""
@@ -45,8 +48,6 @@ class OllamaBackend:
 
     def _chat(self, prompt: str, images: list[str] | None) -> str:
         """One /api/chat round-trip; JSON-forced, non-streaming."""
-        import requests
-
         message: dict[str, object] = {'role': 'user', 'content': prompt}
         if images:
             message['images'] = images
@@ -56,17 +57,38 @@ class OllamaBackend:
             'format': 'json',
             'stream': False,
         }
+        return _content(self._send(payload))
+
+    def _send(self, payload: dict[str, object]) -> dict[str, object]:
+        """POST /api/chat; map every failure to a specific LlmError."""
+        import requests
+
         try:
             resp = requests.post(
                 f'{self._url}/api/chat',
                 json=payload,
                 timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC),
             )
+        except requests.RequestException as exc:
+            # No answer at all: server down, wrong URL, DNS failure.
+            raise LlmError(f'ollama_unreachable: {exc}') from exc
+        if resp.status_code == HTTP_NOT_FOUND:
+            # Server up, model absent -- the actionable one-time case.
+            raise LlmError(f'model_not_pulled: run: ollama pull {self._model}')
+        try:
             resp.raise_for_status()
             body = resp.json()
         except requests.RequestException as exc:
-            raise LlmError(f'ollama_unreachable: {exc}') from exc
-        content = body.get('message', {}).get('content', '')
-        if not isinstance(content, str) or not content.strip():
-            raise LlmError('ollama returned no content')
-        return content
+            raise LlmError(f'ollama_error: {exc}') from exc
+        if not isinstance(body, dict):
+            raise LlmError('ollama returned no object')
+        return body
+
+
+def _content(body: dict[str, object]) -> str:
+    """The assistant message text, or LlmError when absent."""
+    message = body.get('message')
+    text = message.get('content') if isinstance(message, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        raise LlmError('ollama returned no content')
+    return text

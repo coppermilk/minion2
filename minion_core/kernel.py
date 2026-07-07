@@ -19,6 +19,7 @@ import logging
 import os
 import queue
 import shutil
+import sys
 import tempfile
 import threading
 from abc import ABC
@@ -563,14 +564,29 @@ def move_atomic(src: Path, dst: Path) -> Path:
 
 
 def bot_logger(name: str, logs: Path | None) -> logging.Logger:
-    """Console plus ``logs/<name>.log``: telemetry as a service."""
+    """One log to two places: the container stdout AND logs/<name>.log.
+
+    The stdout handler sits on the ROOT logger, so EVERY logger reaches
+    ``docker logs`` (Container Manager's Log tab) as the complete,
+    authoritative view -- this bot's records and the kernel's per-class
+    crash guards (``step_crashed``/``source_crashed``, logged under
+    ``type(self).__name__``) alike. The named bot logger keeps only its
+    FileHandler and propagates to root for stdout, so nothing prints
+    twice. Idempotent: each handler is installed once per process.
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    if not any(
+        isinstance(h, logging.StreamHandler)
+        and not isinstance(h, logging.FileHandler)
+        for h in root.handlers
+    ):
+        root.addHandler(logging.StreamHandler(sys.stdout))
     log = logging.getLogger(name)
     log.setLevel(logging.INFO)
-    if not log.handlers:
-        log.addHandler(logging.StreamHandler())
-        if logs is not None:
-            logs.mkdir(parents=True, exist_ok=True)
-            log.addHandler(logging.FileHandler(logs / f'{name}.log'))
+    if logs is not None and not log.handlers:
+        logs.mkdir(parents=True, exist_ok=True)
+        log.addHandler(logging.FileHandler(logs / f'{name}.log'))
     return log
 
 

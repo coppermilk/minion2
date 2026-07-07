@@ -62,9 +62,28 @@ def run_passes(cfg: Settings, deps: SortDeps) -> None:
     if _idle(cfg):
         _LOG.info('idle: nothing to sort')
         return
-    classify_pass(cfg, deps, scripts.script_hint(cfg))
-    demote_pass(cfg)  # vectors survive: identity-keyed cache
-    replace_pass(cfg, deps, EmbeddingCache(cfg))
+    _best_effort(
+        'classify', lambda: classify_pass(cfg, deps, scripts.script_hint(cfg))
+    )
+    _best_effort('demote', lambda: demote_pass(cfg))
+    _best_effort(
+        'replace', lambda: replace_pass(cfg, deps, EmbeddingCache(cfg))
+    )
+
+
+def _best_effort(name: str, run: Callable[[], None]) -> None:
+    """Run one pass; contain and log any crash with its traceback.
+
+    A failure in one pass (a bad model, a corrupt image, a torch load)
+    must not sink the whole trigger as an opaque ``step_crashed``: the
+    other passes still run, classify's per-image work has already
+    landed, and the real cause is written to ``sort.log`` under a
+    ``<pass>_failed`` code instead of vanishing to stdout only.
+    """
+    try:
+        run()
+    except Exception:
+        logging.getLogger('sort').exception('%s_failed', name)
 
 
 def _idle(cfg: Settings) -> bool:
