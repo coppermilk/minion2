@@ -12,10 +12,10 @@ from tests.conftest import make_cfg
 from tests.conftest import make_env
 
 
-def test_toggle_defaults_to_local(tmp_path):
-    """A fresh deploy is offline-first with no setup."""
+def test_toggle_defaults_to_gemini(tmp_path):
+    """Default backend is Gemini (fast; local 7B is too slow on the NAS)."""
     cfg = make_cfg(tmp_path / 'drive')
-    assert BackendToggle(cfg).read() == LOCAL
+    assert BackendToggle(cfg).read() == GEMINI
 
 
 def test_toggle_round_trip(tmp_path):
@@ -38,20 +38,22 @@ def test_corrupt_toggle_reads_default(tmp_path):
     """A garbled toggle reads as the default, never crashes a pass."""
     cfg = make_cfg(tmp_path / 'drive')
     (cfg.state / 'model.backend').write_text('garbage', encoding='ascii')
-    assert BackendToggle(cfg).read() == LOCAL
+    assert BackendToggle(cfg).read() == GEMINI
 
 
 def test_select_backend_follows_toggle(tmp_path):
     """The live backend swaps with the toggle, no restart."""
     cfg = make_cfg(tmp_path / 'drive')
     env = make_env(tmp_path / 'drive')
+    assert select_backend(cfg, env).name == 'gemini'  # default
+    BackendToggle(cfg).write(LOCAL)
     assert select_backend(cfg, env).name == 'local'
     BackendToggle(cfg).write(GEMINI)
     assert select_backend(cfg, env).name == 'gemini'
 
 
 def test_env_default_backend_honoured(tmp_path):
-    """MODEL_BACKEND sets the default before any switch is written."""
-    cfg = make_cfg(tmp_path / 'drive', MODEL_BACKEND='gemini')
-    assert BackendToggle(cfg).read() == GEMINI
-    assert select_backend(cfg, make_env(tmp_path / 'drive')).name == 'gemini'
+    """MODEL_BACKEND overrides the default before any switch is written."""
+    cfg = make_cfg(tmp_path / 'drive', MODEL_BACKEND='local')
+    assert BackendToggle(cfg).read() == LOCAL
+    assert select_backend(cfg, make_env(tmp_path / 'drive')).name == 'local'

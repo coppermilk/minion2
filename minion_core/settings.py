@@ -52,7 +52,7 @@ _DEFAULTS: dict[str, str] = {
     'RESTORE_WATCH': '',
     'FRAMES_WATCH': '',
     'CATCH_DIR': '',
-    'MODEL_BACKEND': 'local',
+    'MODEL_BACKEND': 'gemini',
     'OLLAMA_URL': 'http://ollama:11434',
     'OLLAMA_MODEL': 'qwen2.5vl:7b',
 }

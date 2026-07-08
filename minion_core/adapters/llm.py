@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
@@ -129,6 +130,13 @@ def _generate_text(model: str, contents: list[Any], spec: LlmSpec) -> str:
     from google.genai import errors
     from google.genai import types
 
+    # Full visibility: the exact prompt text sent to Gemini goes to the
+    # log (the image part is not logged). It reaches docker logs via the
+    # root handler; grep 'gemini prompt' to audit what was asked.
+    prompts = [c for c in contents if isinstance(c, str)]
+    logging.getLogger('llm').info(
+        'gemini prompt model=%s\n%s', model, '\n'.join(prompts)
+    )
     # Turn on Gemini reasoning (flash-lite ships it off): a thinking
     # budget must be passed for the model to reason before answering.
     config = types.GenerateContentConfig(

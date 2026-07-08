@@ -76,10 +76,12 @@ login`).
 
 Model backend: classification and the props bot run behind one adapter
 (`minion_core/adapters/backend.py`) over interchangeable models. The
-default is a **local Qwen2.5-VL** in an Ollama container ("gem") -- the NAS
-classifies with no cloud; the `model-switch` bot flips to **Gemini** and
-back at runtime. Background restore stays Gemini-only (image generation).
-One-time on the NAS: `docker compose exec ollama ollama pull qwen2.5vl:7b`.
+default is **Gemini** (fast; a low-power NAS CPU can't run a 7B vision
+model at usable speed). The `model-switch` bot flips to a **local
+Qwen2.5-VL** (Ollama container "gem") and back at runtime; the exact
+prompts sent to the model are logged. Background restore stays
+Gemini-only (image generation). To use the local model, pull it once:
+`docker compose exec ollama ollama pull qwen2.5vl:7b` (or `:3b`).
 
 Telegram contract: each bot is its own Telegram identity
 (`TG_TOKEN_<BOT>`), and files cross Telegram as documents only, both

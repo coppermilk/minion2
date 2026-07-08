@@ -66,7 +66,10 @@ services:
   ollama:
     image: ollama/ollama
     environment:
-      OLLAMA_KEEP_ALIVE: '-1'
+      # Unload the model 5 min after its last use, freeing its RAM (the
+      # 7B is ~6 GB) whenever the backend is Gemini or the queue is idle.
+      # The first call after an idle stretch pays a cold reload.
+      OLLAMA_KEEP_ALIVE: '5m'
     volumes:
       - ollama-models:/root/.ollama
     mem_limit: 10g

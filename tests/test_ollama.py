@@ -93,6 +93,19 @@ def test_missing_model_is_model_not_pulled(monkeypatch):
     assert 'qwen2.5vl:7b' in str(caught.value)
 
 
+def test_timeout_is_distinct_from_unreachable(monkeypatch):
+    """A read timeout says 'too slow' + names the fix, not 'unreachable'."""
+    import requests
+
+    def slow(url, json, timeout):
+        raise requests.ReadTimeout('read timed out')
+
+    monkeypatch.setattr(requests, 'post', slow)
+    with pytest.raises(LlmError, match='ollama_timeout') as caught:
+        OllamaBackend('http://x', 'm').text('hi')
+    assert 'Gemini' in str(caught.value)
+
+
 def test_other_http_error_is_ollama_error(monkeypatch):
     """A 5xx is distinct from both unreachable and model-not-pulled."""
     import requests

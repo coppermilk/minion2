@@ -191,13 +191,17 @@ Classification and the props bot run behind one adapter
 (`adapters/backend.py`) over interchangeable models; restore is Gemini-only
 (image generation) and never routes through the toggle.
 
-- **Default is local, offline.** The `ollama` container ("gem") runs
-  Qwen2.5-VL; `MODEL_BACKEND` defaults to `local`. The model is pulled
-  automatically by `deploy/nas-update.sh` (it reads `OLLAMA_MODEL` and runs
-  `ollama pull` after the stack is up, idempotently) -- you never run it by
-  hand. Weights live in the `ollama-models` named volume (Docker auto-creates
-  it -- a bind to a missing host subpath would fail the start); it is CACHE
-  class (re-pullable) and `nas-update`'s `image prune` never touches volumes.
+- **Default is Gemini.** `MODEL_BACKEND` defaults to `gemini` because a
+  low-power NAS CPU (the DS224+ J4125 has no AVX2) runs a 7B vision model far
+  too slowly -- a single classify can exceed the 600s timeout
+  (`ollama_timeout`). Switch to local only on capable hardware. The exact
+  prompt sent to either backend is logged (grep `prompt model=`).
+- **Local option ("gem").** The `ollama` container runs Qwen2.5-VL; the model
+  is pulled automatically by `deploy/nas-update.sh` (idempotent). Weights live
+  in the `ollama-models` named volume (CACHE class; `image prune` never
+  touches volumes). `OLLAMA_KEEP_ALIVE=5m` unloads the model 5 min after last
+  use, so its ~6 GB is freed while the backend is Gemini or the queue is idle.
+  Prefer `OLLAMA_MODEL=qwen2.5vl:3b` on a slow CPU.
 - **Switch at runtime.** Message the `model-switch` bot `local`, `gemini`,
   or `status`. It writes `state/model.backend`; sort/catch/props re-read it
   per item, so the swap takes effect on the next image with no restart. The
