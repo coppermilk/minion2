@@ -1,9 +1,11 @@
 #!/bin/sh
 # Synology NAS: the one self-healing deploy command. Run it and forget:
 # it force-syncs the repo to origin/main (even into a non-empty folder,
-# keeping your .env), recreates the stack from the freshly published
-# image, prunes old images, and pulls the local model itself -- so you
-# never run `docker compose exec ... ollama pull` by hand.
+# keeping your .env), recreates the bot stack from the freshly published
+# image, prunes old images, pulls the local model itself -- so you never
+# run `docker compose exec ... ollama pull` by hand -- and (opt-in) brings
+# up the visual platform tier (services + MinIO, PLATFORM.md) from its own
+# published image, so one command deploys everything.
 #
 # The image is built on GitHub and published to GHCR (image.yml), so the
 # NAS never compiles torch -- it just downloads the ready image. The
@@ -122,6 +124,25 @@ if [ "$i" -lt 30 ]; then
     else
         echo "model pull failed; will retry next run"
     fi
+fi
+
+# --- 5. Visual platform tier (services + MinIO) ----------------------
+# Opt-in with PLATFORM=1 in .env. Rides its own compose file and its own
+# published image (minion2-service) + MinIO; the two stacks are separate
+# compose projects, so this never disturbs the bots above. Best-effort:
+# a platform hiccup is logged and never aborts the bot deploy (set -e is
+# relaxed with `|| echo`). The canvas is then at http://<nas>:8080/ui/.
+PLATFORM="$(sed -n 's/^[[:space:]]*PLATFORM[[:space:]]*=[[:space:]]*//p' \
+    .env 2>/dev/null | tail -n1)"
+PLATFORM_COMPOSE="$REPO/services/docker-compose.yml"
+if [ "$PLATFORM" = '1' ] && [ -f "$PLATFORM_COMPOSE" ]; then
+    echo 'bringing up the platform tier (services + MinIO)'
+    compose -f "$PLATFORM_COMPOSE" pull || echo 'platform pull failed'
+    compose -f "$PLATFORM_COMPOSE" up -d --remove-orphans \
+        || echo 'platform up failed'
+    "$DOCKER" image prune -f || true
+else
+    echo 'platform tier disabled (set PLATFORM=1 in .env to enable)'
 fi
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ====="
