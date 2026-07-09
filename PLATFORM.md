@@ -4,8 +4,9 @@ Document class: architecture decision record (ADR) with a staged roadmap.
 Companions: [ORCHESTRATION.md](ORCHESTRATION.md) (why our own visual pipeline,
 n8n as glue), [BLUEPRINT.md](BLUEPRINT.md) (kernel design + requirements),
 [OPERATIONS.md](OPERATIONS.md). Encoding: ASCII only (BLUEPRINT section 4).
-Status: decisions recorded; Phases 0-4 landed (1.5 event taps; 2 service skins;
-3 orchestrator; 4 multi-tenant API in `services/api.py`); Phases 5-6 deferred.
+Status: decisions recorded; Phases 0-5 landed (1.5 event taps; 2 service skins;
+3 orchestrator; 4 multi-tenant API; 5 canvas UI in `services/web/`); Phase 6
+(per-request time to the user, RU billing/dashboards) deferred.
 
 ## 1. Context
 
@@ -202,8 +203,13 @@ Two tiers with different rules; they must not blur:
   from an `X-Tenant-Id` header now, OIDC later (enforcement progressive). Runs
   are synchronous with SSE replay; a live event bus / background runs is the
   next refinement.
-- **Phase 5 -- React Flow UI.** Viewer -> live animation -> constructor (palette
-  from `/catalog`, drag, save `graph.json`).
+- **Phase 5 -- canvas UI. Done.** `services/web/` (served at `/ui` by the API):
+  a dependency-free SVG node editor -- the palette from `/catalog`, a pipeline
+  built from ready modules, saved via `/graphs`, run via `/runs`, and animated
+  live from the `/runs/{id}/events` SSE stream (nodes light up entered ->
+  delivered), with usage/RU shown. Zero external deps (offline-first, entirely
+  ours); the same React Flow node model, so React Flow drops in later over the
+  unchanged API. Verified end to end in headless Chromium.
 - **Phase 6 -- last.** Per-request time shown to the user; RU billing,
   dashboards, tariffs.
 

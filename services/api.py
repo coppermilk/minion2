@@ -26,6 +26,7 @@ from fastapi import FastAPI
 from fastapi import Header
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from minion_core.events import Collector
 from minion_core.graph import SINKS
@@ -209,6 +210,8 @@ def create_api(repo: InMemoryRepo, store: Store) -> FastAPI:
     def usage(tenant: Tenant) -> dict[str, float]:
         return _usage_summary(repo.list_usage(tenant))
 
+    web = Path(__file__).parent / 'web'
+    app.mount('/ui', StaticFiles(directory=web, html=True), name='ui')
     return app
 
 

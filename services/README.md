@@ -57,6 +57,20 @@ pip install -e '.[dev]'   # from services/, or: pip install fastapi httpx mcp bo
 python -m pytest services/tests
 ```
 
+## Canvas (Phase 5)
+
+The platform API (`SKIN=api`) serves a dependency-free SVG node editor at
+`/ui`: the palette comes from `/catalog`, a pipeline is built from ready
+modules, saved via `/graphs`, run via `/runs`, and animated live from the
+`/runs/{id}/events` SSE stream (nodes light up entered -> delivered), with
+usage/RU shown. Zero external deps (offline-first, entirely ours); the same
+node model as React Flow, which can drop in later over the unchanged API.
+
+```
+SKIN=api PORT=8100 STORE_ROOT=/tmp/store python -m services.serve
+# open http://127.0.0.1:8100/ui/
+```
+
 ## Not yet (follow-ups)
 
 - Directory results (frames): `services/store.py:child_refs` puts each file;
