@@ -15,7 +15,7 @@ import os
 
 def _serve_mcp(step: str) -> None:
     from services.mcp_server import create_server
-    from services.mcp_server import store_from_env
+    from services.store import store_from_env
 
     create_server(step, store_from_env()).run()
 

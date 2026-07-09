@@ -1,0 +1,72 @@
+# Distributed deployment (PLATFORM.md, Mode B): MinIO data plane + one
+# container per Step + the platform API, all on the S3 backend. Each Step is
+# its own image on its own port -- our orchestrator, n8n, and MCP agents call
+# them independently. Build once from the repo root:
+#   docker compose -f services/docker-compose.yml up --build
+# Then open the canvas at http://localhost:8080/ui/ and the MinIO console at
+# http://localhost:9001 (minioadmin / minioadmin by default).
+name: minion-platform
+
+x-service: &svc
+  build:
+    context: ..
+    dockerfile: services/Dockerfile
+  # S3Store auto-creates the bucket and boto3 retries, so a Step converges
+  # once MinIO is up (restart policy); no strict health gate needed here.
+  environment: &svc-env
+    STORE_BACKEND: s3
+    S3_ENDPOINT: http://minio:9000
+    S3_BUCKET: minion
+    S3_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+  depends_on:
+    - minio
+  restart: unless-stopped
+
+services:
+  # The object store -- self-hosted MinIO, the offline/on-prem S3 (swap the
+  # endpoint/creds for AWS or any S3-compatible service in the cloud).
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    restart: unless-stopped
+
+  # One Step, one container, one port (add more the same way).
+  deliver:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: deliver
+      SKIN: http
+    ports:
+      - "8081:8000"
+
+  frames:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: frames
+      SKIN: http
+    ports:
+      - "8082:8000"
+
+  # The multi-tenant platform API + the canvas UI (/ui).
+  api:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      SKIN: api
+    ports:
+      - "8080:8000"
+
+volumes:
+  minio-data:

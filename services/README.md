@@ -40,6 +40,25 @@ STEP=deliver SKIN=mcp  STORE_ROOT=/tmp/store python -m services.serve
 `POST /run` body `{"input_ref": "file:///path/to/input"}` returns
 `{"output_ref", "disposition", "reason", "ms"}`.
 
+## Storage backend (`store_from_env`)
+
+One image runs both backends, selected by env:
+
+- **Local (default)** -- `STORE_ROOT=/path`; refs are `file://...`. Offline,
+  hermetic, no cloud SDK.
+- **Object store (MinIO/AWS)** -- `STORE_BACKEND=s3`, `S3_ENDPOINT=http://
+  minio:9000`, `S3_BUCKET=minion`, `S3_REGION=us-east-1`, plus
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (the MinIO root user/pass).
+  Refs are `s3://bucket/key`. Path-style + SigV4 (MinIO-ready); the bucket is
+  auto-created on first write.
+
+The whole platform on MinIO, one container per Step:
+
+```
+docker compose -f services/docker-compose.yml up --build
+# canvas: http://localhost:8080/ui/   MinIO console: http://localhost:9001
+```
+
 ## n8n and agents, side by side
 
 Because every service publishes OpenAPI, n8n's HTTP Request node calls it on

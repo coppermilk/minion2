@@ -8,15 +8,12 @@ Step, and the IP never leaves our code).
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
 from services.core import ServiceRequest
 from services.core import run_service
-from services.store import LocalStore
 
 if TYPE_CHECKING:
     from services.store import Store
@@ -38,8 +35,3 @@ def create_server(step: str, store: Store) -> FastMCP:
         }
 
     return server
-
-
-def store_from_env() -> Store:
-    """A LocalStore rooted at STORE_ROOT (offline/dev default)."""
-    return LocalStore(Path(os.environ.get('STORE_ROOT', '/data/store')))

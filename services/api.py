@@ -46,7 +46,7 @@ from services.orchestrate import LocalCaller
 from services.orchestrate import RunRequest
 from services.orchestrate import run_graph
 from services.repo import InMemoryRepo
-from services.store import LocalStore
+from services.store import store_from_env
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -282,9 +282,8 @@ def create_api(repo: InMemoryRepo, store: Store) -> FastAPI:
 
 
 def _from_env() -> FastAPI:
-    """Build the app from env (STORE_ROOT); one process, one tenant space."""
-    store = LocalStore(Path(os.environ.get('STORE_ROOT', '/data/store')))
-    return create_api(InMemoryRepo(), store)
+    """Build the app from env (STORE_*); one process, one tenant space."""
+    return create_api(InMemoryRepo(), store_from_env())
 
 
 app = _from_env()

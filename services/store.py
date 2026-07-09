@@ -13,6 +13,7 @@ Refs are URLs: ``file://<abs-path>`` for the local store, ``s3://<bucket>/
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -59,16 +60,49 @@ class LocalStore:
 
 
 class S3Store:
-    """A Store over an S3-compatible bucket (MinIO/AWS; ``s3://`` refs)."""
+    """A Store over an S3-compatible bucket (MinIO/AWS; ``s3://`` refs).
 
-    def __init__(self, bucket: str, endpoint: str | None = None) -> None:
+    MinIO with a custom endpoint needs path-style addressing and SigV4;
+    credentials come from the environment (AWS_ACCESS_KEY_ID/SECRET, the
+    MinIO root user/password). The bucket is created on first ``put``.
+    """
+
+    def __init__(
+        self,
+        bucket: str,
+        endpoint: str | None = None,
+        region: str = 'us-east-1',
+    ) -> None:
         self._bucket = bucket
         self._endpoint = endpoint
+        self._region = region
+        self._cached: Any = None
 
     def _client(self) -> Any:  # noqa: ANN401 -- boto3 client is untyped
-        import boto3
+        if self._cached is None:
+            import boto3
+            from botocore.client import Config
 
-        return boto3.client('s3', endpoint_url=self._endpoint)
+            self._cached = boto3.client(
+                's3',
+                endpoint_url=self._endpoint,
+                region_name=self._region,
+                config=Config(
+                    signature_version='s3v4',
+                    s3={'addressing_style': 'path'},
+                ),
+            )
+        return self._cached
+
+    def _ensure_bucket(self) -> None:
+        """Create the bucket if it is missing (idempotent)."""
+        from botocore.exceptions import ClientError
+
+        client = self._client()
+        try:
+            client.head_bucket(Bucket=self._bucket)
+        except ClientError:
+            client.create_bucket(Bucket=self._bucket)
 
     def fetch(self, ref: str, into: Path) -> Path:
         """Download an ``s3://bucket/key`` object into ``into``."""
@@ -81,8 +115,25 @@ class S3Store:
 
     def put(self, key: str, src: Path) -> str:
         """Upload ``src`` to ``bucket/key``; return its ``s3://`` ref."""
+        self._ensure_bucket()
         self._client().upload_file(str(src), self._bucket, key)
         return f's3://{self._bucket}/{key}'
+
+
+def store_from_env() -> Store:
+    """Pick the Store backend from env: LocalStore (default) or S3Store.
+
+    ``STORE_BACKEND=s3`` selects the object store (MinIO/AWS) via
+    ``S3_ENDPOINT`` / ``S3_BUCKET`` / ``S3_REGION``; anything else is the
+    local filesystem at ``STORE_ROOT``. One image runs both, by env only.
+    """
+    if os.environ.get('STORE_BACKEND') == 's3':
+        return S3Store(
+            bucket=os.environ.get('S3_BUCKET', 'minion'),
+            endpoint=os.environ.get('S3_ENDPOINT') or None,
+            region=os.environ.get('S3_REGION', 'us-east-1'),
+        )
+    return LocalStore(Path(os.environ.get('STORE_ROOT', '/data/store')))
 
 
 def child_refs(store: Store, key: str, folder: Path) -> Iterator[str]:

@@ -225,8 +225,13 @@ Two tiers with different rules; they must not blur:
   cloud swap.
 - Directory results (frames): `services/store.py:child_refs` puts each file;
   `run_service` returns the ref set.
-- Postgres repository and S3Store against a live MinIO (both backends are
-  already abstracted; only an implementation is missing).
+- ~~S3Store against a live MinIO~~ **Done.** `services/store.py:S3Store` speaks
+  path-style + SigV4 with a custom endpoint and auto-creates the bucket;
+  `store_from_env` selects Local vs S3 by env, so one image runs offline or on
+  MinIO/AWS unchanged. `services/docker-compose.yml` runs the whole platform on
+  MinIO, one container per Step. Verified over a live S3-compatible HTTP
+  endpoint (unit-covered with moto).
+- Postgres repository (the repo is already abstracted; only an impl is missing).
 - Metered Memory/Storage/Network (only Compute is metered today).
 
 ## 12. Verification (per phase, not this document)

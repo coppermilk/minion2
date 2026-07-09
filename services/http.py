@@ -9,7 +9,6 @@ container probe. No host port in offline mode: the compose network only.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
@@ -17,7 +16,7 @@ from pydantic import BaseModel
 
 from services.core import ServiceRequest
 from services.core import run_service
-from services.store import LocalStore
+from services.store import store_from_env
 
 if TYPE_CHECKING:
     from services.store import Store
@@ -59,10 +58,5 @@ def create_app(step: str, store: Store) -> FastAPI:
     return app
 
 
-def store_from_env() -> Store:
-    """A LocalStore rooted at STORE_ROOT (offline/dev default)."""
-    return LocalStore(Path(os.environ.get('STORE_ROOT', '/data/store')))
-
-
 app = create_app(os.environ.get('STEP', 'deliver'), store_from_env())
-"""The module-level app uvicorn serves; STEP/STORE_ROOT pick behaviour."""
+"""The module-level app uvicorn serves; STEP/STORE_* pick behaviour."""
