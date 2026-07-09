@@ -29,6 +29,7 @@ def create_server(step: str, store: Store) -> FastMCP:
         result = run_service(ServiceRequest(step, input_ref), store)
         return {
             'output_ref': result.output_ref,
+            'outputs': result.outputs,
             'disposition': result.disposition,
             'reason': result.reason,
             'ms': result.ms,

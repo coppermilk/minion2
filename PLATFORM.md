@@ -223,8 +223,11 @@ Two tiers with different rules; they must not blur:
   thread-safe, buffered bus; `/runs/{id}/events` streams live (a late
   subscriber still gets the full history). A durable bus (Redis/NATS) is the
   cloud swap.
-- Directory results (frames): `services/store.py:child_refs` puts each file;
-  `run_service` returns the ref set.
+- ~~Directory results (frames)~~ **Done.** `services/core.py:_store_result` puts
+  a file result as one ref and a directory result (frames) file by file via
+  `services/store.py:child_refs`; `ServiceResult.outputs` carries the full ref
+  set (`output_ref` is the single object only when there is exactly one). The
+  HTTP and MCP skins return `outputs`.
 - ~~S3Store against a live MinIO~~ **Done.** `services/store.py:S3Store` speaks
   path-style + SigV4 with a custom endpoint and auto-creates the bucket;
   `store_from_env` selects Local vs S3 by env, so one image runs offline or on

@@ -29,9 +29,10 @@ class RunBody(BaseModel):
 
 
 class RunReply(BaseModel):
-    """The /run response: output ref, verdict, and Step timing."""
+    """The /run response: output ref(s), verdict, and Step timing."""
 
     output_ref: str | None
+    outputs: list[str]
     disposition: str
     reason: str
     ms: float
@@ -50,6 +51,7 @@ def create_app(step: str, store: Store) -> FastAPI:
         result = run_service(ServiceRequest(step, body.input_ref), store)
         return RunReply(
             output_ref=result.output_ref,
+            outputs=result.outputs,
             disposition=result.disposition,
             reason=result.reason,
             ms=result.ms,

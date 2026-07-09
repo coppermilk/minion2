@@ -98,6 +98,7 @@ class HttpCaller:
             disposition=data['disposition'],
             reason=data['reason'],
             ms=data['ms'],
+            outputs=data.get('outputs', []),
         )
 
 

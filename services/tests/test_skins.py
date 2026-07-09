@@ -42,6 +42,7 @@ def test_run_delivers_and_returns_ref(tmp_path: Path) -> None:
     body = reply.json()
     assert body['disposition'] == 'delivered'
     assert body['output_ref'].startswith('file://')
+    assert body['outputs'] == [body['output_ref']]  # single file -> one ref
     assert body['ms'] >= 0.0
 
 
