@@ -126,21 +126,27 @@ runs graphs (`run(name, graph)`).
   node, not a new watcher".
 - Adding Dropbox becomes "register a `DropboxSource`, reference it in YAML" --
   zero new pipeline code.
-- Migrate incrementally: start with one or two bots (`frames`, `_template`) as
-  the pilot; leave the rest on Python `build()`. No big-bang rewrite.
+- Migrate incrementally: start with one or two bots as the pilot; leave the
+  rest on Python `build()`. No big-bang rewrite.
 
-### Phase 2 -- A thin read-only visual viewer (our "mini n8n")
+**Status: landed.** `minion_core/graph.py` is the catalog-neutral loader (node
+registries for sources/sinks; Steps come from the injected Phase 0 catalog, so
+the kernel layer still imports no bot); `minions/graph.py` injects the catalog,
+reads a JSON spec, and drains it (`python -m minions.graph <graph.json>`). Specs
+use JSON (stdlib, no new dependency). Pilots `minions/frames/graph.json` and
+`minions/inbox/graph.json` are the same belts their `build()` assembles (test:
+`tests/test_graph.py` golden equivalence). No Step was moved.
 
-A tiny static web page that renders the graph YAML as a node diagram (nodes =
-sources/steps/sinks, edges = wiring) plus live status read from the existing
-per-bot logs (TELEMETRY is already structured with stable reason codes,
-REQ-OBS-001).
+### Phase 2 -- The visual platform (grew beyond a read-only viewer)
 
-- **Read-only first:** 90% of the perceived value of n8n's canvas (see the
-  pipeline, see what is flowing, see failures) at ~1% of the code, and it is
-  entirely ours and sellable.
-- An interactive editor (drag to rewire, write the YAML back) is a
-  clearly-scoped later step, taken only if the value proves out.
+The original Phase 2 was a static read-only viewer. New requirements -- a
+multi-user platform, a React Flow canvas, each service as its own Docker + API,
+MCP alongside HTTP, resource metering in RU, and real-time flow animation --
+widen it into a microservices platform. That design (one `invoke` core, two run
+modes, object-store data plane, event bus, metering, multi-tenant API, and the
+austerity boundary that keeps the kernel untouched) is recorded separately in
+**[PLATFORM.md](PLATFORM.md)**; the staged roadmap continues there (Phases
+1.5-6).
 
 ## 4. Optional bridge to n8n (honors the detach guarantee)
 
