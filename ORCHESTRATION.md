@@ -3,8 +3,8 @@
 Document class: architecture decision record (ADR) with a staged roadmap.
 Companions: [BLUEPRINT.md](BLUEPRINT.md) (design + requirements),
 [OPERATIONS.md](OPERATIONS.md) (operations + recovery). Encoding: ASCII only
-(BLUEPRINT section 4). Status: decision recorded; implementation deferred to
-its own change (this document ships no code).
+(BLUEPRINT section 4). Status: decision recorded; Phase 0 (the service seam)
+landed (section 3); Phases 1-2 deferred to their own changes.
 
 ## 1. Context and the decision
 
@@ -102,6 +102,16 @@ dispatcher that can invoke any registered step as a service:
 Result: the processing services become callable by **any** orchestrator -- the
 current Python graphs, a future canvas, or n8n over local HTTP -- without
 touching the IP. This is the infrastructure-vs-business-logic split.
+
+**Status: landed.** `minion_core/service.py` is the catalog-neutral dispatcher
+(`Call`, `job_of`, `invoke`); it wraps an input file as a synthetic `svc`-origin
+Job and drives it through a Step reusing the belt's own crash guard, so a
+service run decides exactly what the belt would (test: golden equivalence in
+`tests/test_service.py`). `minions/service.py` holds the catalog (names ->
+Step factories) and the CLI `python -m minions.service <step> <input> [dest]`;
+it lives at the top level because naming concrete Steps means importing bots,
+which the kernel layer may not do (import direction). No Step was moved or
+rewritten.
 
 ### Phase 1 -- Make the graph data, not code (the seed of visual nodes)
 
