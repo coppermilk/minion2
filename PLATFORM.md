@@ -4,9 +4,10 @@ Document class: architecture decision record (ADR) with a staged roadmap.
 Companions: [ORCHESTRATION.md](ORCHESTRATION.md) (why our own visual pipeline,
 n8n as glue), [BLUEPRINT.md](BLUEPRINT.md) (kernel design + requirements),
 [OPERATIONS.md](OPERATIONS.md). Encoding: ASCII only (BLUEPRINT section 4).
-Status: decisions recorded; Phases 0-5 landed (1.5 event taps; 2 service skins;
-3 orchestrator; 4 multi-tenant API; 5 canvas UI in `services/web/`); Phase 6
-(per-request time to the user, RU billing/dashboards) deferred.
+Status: decisions recorded; Phases 0-6 landed (1.5 event taps; 2 service skins;
+3 orchestrator; 4 multi-tenant API; 5 canvas UI; 6 per-request time + RU
+billing). The staged roadmap is complete; remaining items are the follow-ups
+noted below (live event bus, dir results, Postgres/MinIO backends).
 
 ## 1. Context
 
@@ -210,8 +211,20 @@ Two tiers with different rules; they must not blur:
   delivered), with usage/RU shown. Zero external deps (offline-first, entirely
   ours); the same React Flow node model, so React Flow drops in later over the
   unchanged API. Verified end to end in headless Chromium.
-- **Phase 6 -- last.** Per-request time shown to the user; RU billing,
-  dashboards, tariffs.
+- **Phase 6 -- last. Done.** The run reports its own `total_ms` (time to the
+  user), the canvas shows per-node ms; `services/billing.py` turns usage into
+  RU under a configurable `Tariff` (Compute metered from ms; Memory/Storage/
+  Network structured, zero until those meters land), and `/billing` aggregates
+  a tenant's RU over an optional `[since, until]` window. Verified in-browser.
+
+## 13. Follow-ups (beyond the roadmap)
+
+- Live event bus / background runs (runs are synchronous with SSE replay now).
+- Directory results (frames): `services/store.py:child_refs` puts each file;
+  `run_service` returns the ref set.
+- Postgres repository and S3Store against a live MinIO (both backends are
+  already abstracted; only an implementation is missing).
+- Metered Memory/Storage/Network (only Compute is metered today).
 
 ## 12. Verification (per phase, not this document)
 

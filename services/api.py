@@ -32,6 +32,9 @@ from minion_core.events import Collector
 from minion_core.graph import SINKS
 from minion_core.graph import SOURCES
 from minions.service import CATALOG
+from services.billing import DEFAULT_TARIFF
+from services.billing import Tariff
+from services.billing import resource_units
 from services.models import Graph
 from services.models import GraphCreate
 from services.models import Run
@@ -56,10 +59,30 @@ C_CPU = 0.05
 
 @dataclass(frozen=True)
 class Deps:
-    """The server's dependencies: the repository and the object store."""
+    """The server's dependencies: repository, object store, RU tariff."""
 
     repo: InMemoryRepo
     store: Store
+    tariff: Tariff
+
+
+def _tariff() -> Tariff:
+    """The RU tariff from env, falling back to the default rates."""
+    return Tariff(
+        c_cpu=float(os.environ.get('RU_CPU', DEFAULT_TARIFF.c_cpu)),
+        c_ram=float(os.environ.get('RU_RAM', DEFAULT_TARIFF.c_ram)),
+        c_disk=float(os.environ.get('RU_DISK', DEFAULT_TARIFF.c_disk)),
+        c_net=float(os.environ.get('RU_NET', DEFAULT_TARIFF.c_net)),
+    )
+
+
+def _within(
+    record: UsageRecord, since: float | None, until: float | None
+) -> bool:
+    """Whether a usage record falls in the [since, until] window."""
+    if since is not None and record.ts < since:
+        return False
+    return not (until is not None and record.ts > until)
 
 
 @dataclass(frozen=True)
@@ -124,6 +147,7 @@ def _record_usage(
                 step=item.step,
                 disposition=item.disposition,
                 ms=item.ms,
+                ts=time.time(),
             )
         )
 
@@ -133,8 +157,13 @@ def _execute(deps: Deps, job: _Job) -> Run:
     collector = Collector()
     request = RunRequest(job.graph.spec, job.input_ref)
     result = run_graph(request, LocalCaller(deps.store), collector)
+    total_ms = sum(item.ms for item in result.usage)
     done = job.run.model_copy(
-        update={'status': 'done', 'final_ref': result.final_ref}
+        update={
+            'status': 'done',
+            'final_ref': result.final_ref,
+            'total_ms': total_ms,
+        }
     )
     deps.repo.add_run(done)
     deps.repo.set_events(done.id, collector.events)
@@ -145,7 +174,7 @@ def _execute(deps: Deps, job: _Job) -> Run:
 def create_api(repo: InMemoryRepo, store: Store) -> FastAPI:
     """Build the multi-tenant platform API over a repo and a store."""
     app = FastAPI(title='minion-platform')
-    deps = Deps(repo=repo, store=store)
+    deps = Deps(repo=repo, store=store, tariff=_tariff())
 
     @app.get('/catalog')
     def catalog() -> dict[str, list[str]]:
@@ -209,6 +238,25 @@ def create_api(repo: InMemoryRepo, store: Store) -> FastAPI:
     @app.get('/usage')
     def usage(tenant: Tenant) -> dict[str, float]:
         return _usage_summary(repo.list_usage(tenant))
+
+    @app.get('/billing')
+    def billing(
+        tenant: Tenant,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> dict[str, float]:
+        records = [
+            r for r in repo.list_usage(tenant) if _within(r, since, until)
+        ]
+        units = resource_units(records, deps.tariff)
+        return {
+            'compute': units.compute,
+            'memory': units.memory,
+            'storage': units.storage,
+            'network': units.network,
+            'total': units.total,
+            'nodes': float(len(records)),
+        }
 
     web = Path(__file__).parent / 'web'
     app.mount('/ui', StaticFiles(directory=web, html=True), name='ui')

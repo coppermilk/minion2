@@ -139,8 +139,10 @@ async function run() {
   const run = await res.json();
   setStatus(`run ${run.id.slice(0, 8)} ...`);
   await streamEvents(run.id);
-  await loadUsage();
-  setStatus(`run ${run.id.slice(0, 8)} ${run.status}`);
+  await loadBilling();
+  setStatus(
+    `run ${run.id.slice(0, 8)} ${run.status} in ` +
+    `${run.total_ms.toFixed(2)} ms`);
 }
 
 async function streamEvents(runId) {
@@ -168,19 +170,21 @@ function handleEvent(ev) {
   if (!el) return;
   if (ev.phase === 'entered') {
     el.classList.add('active');
+    el.dataset.enter = ev.ts;
   } else {
     el.classList.remove('active');
     if (ev.disposition) el.classList.add(`done-${ev.disposition}`);
-    el.dataset.ts = ev.ts;
+    const ms = (ev.ts - (el.dataset.enter || ev.ts)) * 1000;
+    el.querySelector('.ms').textContent = `${ms.toFixed(1)} ms`;
   }
 }
 
-async function loadUsage() {
-  const res = await fetch('/usage', { headers: hdr() });
-  const u = await res.json();
+async function loadBilling() {
+  const res = await fetch('/billing', { headers: hdr() });
+  const b = await res.json();
   $('usage').textContent =
-    `usage: ${u.nodes} nodes, ${u.total_ms.toFixed(2)} ms, ` +
-    `${u.compute_ru.toExponential(2)} RU`;
+    `billing: ${b.nodes} nodes, ${b.total.toExponential(2)} RU ` +
+    `(compute ${b.compute.toExponential(2)})`;
 }
 
 // ---- boot ----------------------------------------------------------------

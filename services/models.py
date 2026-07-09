@@ -38,7 +38,7 @@ class RunStart(BaseModel):
 
 
 class Run(BaseModel):
-    """One run of a graph: its status and where the item ended."""
+    """One run of a graph: its status, where it ended, and its time."""
 
     id: str
     tenant_id: str
@@ -46,10 +46,11 @@ class Run(BaseModel):
     status: str
     final_ref: str | None
     created_at: float
+    total_ms: float = 0.0
 
 
 class UsageRecord(BaseModel):
-    """One node's resource use in a run (RU input; not billed yet)."""
+    """One node's resource use in a run (RU input; timestamped)."""
 
     id: str
     tenant_id: str
@@ -58,3 +59,4 @@ class UsageRecord(BaseModel):
     step: str
     disposition: str
     ms: float
+    ts: float
