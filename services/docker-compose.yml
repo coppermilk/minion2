@@ -8,6 +8,10 @@
 name: minion-platform
 
 x-service: &svc
+  # The NAS pulls the published image (never builds); `up --build` builds it
+  # locally from services/Dockerfile for dev.
+  image: ghcr.io/coppermilk/minion2-service:latest
+  pull_policy: missing
   build:
     context: ..
     dockerfile: services/Dockerfile

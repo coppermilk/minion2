@@ -51,12 +51,41 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The platform-service image rides ON the base above (FROM ...:latest),
+      # adding only the web layer, so every Step works as a service. On main
+      # the base was just pushed, so this pulls the fresh one; on a PR it
+      # pulls the last published base -- either way it proves it still builds.
+      - uses: docker/metadata-action@v5
+        id: meta-svc
+        with:
+          images: ghcr.io/${{ github.repository }}-service
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/Dockerfile
+          platforms: linux/amd64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta-svc.outputs.tags }}
+          labels: ${{ steps.meta-svc.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       # Prune stale GHCR versions after a publish: keep the few most
       # recent (:latest + a couple of SHA tags), delete the rest.
       - if: env.PUBLISH == 'true'
         uses: actions/delete-package-versions@v5
         with:
           package-name: minion2
+          package-type: container
+          min-versions-to-keep: 5
+          delete-only-pre-release-versions: false
+      - if: env.PUBLISH == 'true'
+        continue-on-error: true  # the package may not exist on the first push
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: minion2-service
           package-type: container
           min-versions-to-keep: 5
           delete-only-pre-release-versions: false

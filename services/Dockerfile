@@ -1,22 +1,21 @@
-# One image, N services (PLATFORM.md, section 3): STEP selects the Step,
-# SKIN the facade (http | mcp). Build from the REPO ROOT so the kernel and
-# the catalog are in the context:
+# The service wrapper rides ON the shared bots image (PLATFORM.md, Mode B):
+# torch, ffmpeg, yt-dlp, minion_core and minions are already baked in, so
+# EVERY Step works as a service -- we add only the web layer. Published by
+# .github/workflows/image.yml as ghcr.io/coppermilk/minion2-service, so the
+# NAS pulls it (it never compiles torch). One image, N services: STEP selects
+# the Step, SKIN the facade (http | mcp | api).
+#
+# Local build (from the repo root):
 #   docker build -t minion-service -f services/Dockerfile .
-# Run one service per container, each on its own port:
-#   docker run -e STEP=frames -e SKIN=http -p 8081:8000 minion-service
-FROM python:3.12-slim
-WORKDIR /app
+#   docker run -e STEP=frames -e SKIN=http -p 8082:8000 minion-service
+FROM ghcr.io/coppermilk/minion2:latest
 
-# The kernel + Steps (the IP) install as the bananaland package; the
-# service tier rides alongside on the working dir.
-COPY pyproject.toml README.md ./
-COPY minion_core ./minion_core
-COPY minions ./minions
-RUN pip install --no-cache-dir .
-
-COPY services ./services
+# Only the web layer on top of the shared image (pure-python wheels, seconds).
 RUN pip install --no-cache-dir \
     'fastapi>=0.115' 'uvicorn>=0.30' 'pydantic>=2.7' 'boto3>=1.34' 'mcp>=1.2'
+
+# The base image already has WORKDIR /app with minion_core + minions installed.
+COPY services ./services
 
 # Defaults are the offline/dev shape; compose overrides per service.
 ENV STEP=deliver SKIN=http PORT=8000 STORE_ROOT=/data/store
