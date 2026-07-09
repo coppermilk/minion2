@@ -276,8 +276,12 @@ def _ensure_id(node: Node, index: int) -> None:
     node['id'] = f'node#{index}'
 
 
-def _assign_ids(spec: Node) -> None:
-    """Number every graph node so taps and a canvas can key on it."""
+def assign_ids(spec: Node) -> None:
+    """Number every graph node (``kind:type#i``) unless it has an id.
+
+    Shared contract: the loader's taps (Mode A) and the orchestrator's
+    service calls (Mode B) must name a node identically (PLATFORM.md).
+    """
     index = 0
     for stage in spec['stages']:
         for node in stage.get('merge', [stage]):
@@ -287,7 +291,7 @@ def _assign_ids(spec: Node) -> None:
 
 def load(spec: Node, ctx: BuildContext, steps: StepCatalog) -> Stage:
     """Assemble the Stage a spec describes (graph as data)."""
-    _assign_ids(spec)
+    assign_ids(spec)
     stages = [_stage(ctx, s, steps) for s in spec['stages']]
     if not stages:
         raise BadGraph('empty graph')

@@ -4,8 +4,8 @@ Document class: architecture decision record (ADR) with a staged roadmap.
 Companions: [ORCHESTRATION.md](ORCHESTRATION.md) (why our own visual pipeline,
 n8n as glue), [BLUEPRINT.md](BLUEPRINT.md) (kernel design + requirements),
 [OPERATIONS.md](OPERATIONS.md). Encoding: ASCII only (BLUEPRINT section 4).
-Status: decisions recorded; Phases 0-2 landed (1.5 event taps; 2 service skins
-in `services/`); Phases 3-6 deferred to their own changes.
+Status: decisions recorded; Phases 0-3 landed (1.5 event taps; 2 service skins;
+3 orchestrator in `services/orchestrate.py`); Phases 4-6 deferred.
 
 ## 1. Context
 
@@ -188,9 +188,12 @@ Two tiers with different rules; they must not blur:
   object-store data plane with `input_ref`/`output_ref`; `ms` is captured at
   `invoke`. Hermetic core test in the kernel gate; skin tests in
   `services/tests`. The IP was not touched.
-- **Phase 3 -- orchestrator (Mode B).** Walk `graph.json` over HTTP/MCP with
-  object-store refs; event bus; collect `Usage` records (RU computed, not yet
-  billed).
+- **Phase 3 -- orchestrator (Mode B). Done.** `services/orchestrate.py` walks a
+  graph's Step nodes as service calls (a `Caller`: LocalCaller in-process, or
+  HttpCaller over each service's `/run`), threads each output ref into the next
+  input, emits the Phase 1.5 events (so Mode A and Mode B animate the same),
+  and records a `Usage` per node (`ms` toward RU, not yet billed). Proven with
+  two independent services orchestrated over real HTTP through a shared store.
 - **Phase 4 -- platform API.** FastAPI: multi-tenant schema, auth, `/catalog`,
   `/graphs`, `/runs`, `/events` (SSE). Enforcement progressive.
 - **Phase 5 -- React Flow UI.** Viewer -> live animation -> constructor (palette
