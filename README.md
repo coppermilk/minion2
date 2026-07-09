@@ -7,12 +7,15 @@ directory tree rooted at `DRIVE`.
 
 - Design, requirements, traceability: [BLUEPRINT.md](BLUEPRINT.md)
 - Operations, failure modes, recovery: [OPERATIONS.md](OPERATIONS.md)
+- Orchestration strategy (own visual pipeline vs n8n): [ORCHESTRATION.md](ORCHESTRATION.md)
+- Platform architecture (microservices, React Flow, MCP, metering): [PLATFORM.md](PLATFORM.md)
 
 ## Layout
 
 ```
 minion_core/   kernel (the belt), Settings, prompts, adapters
 minions/       one directory per bot; streaming or batch
+services/      platform tier: HTTP/OpenAPI + MCP skins over a Step (PLATFORM.md)
 tests/         requirement-based suite + structural analysis
 docker/        one image, N containers; docker-compose.yml at root
 deploy/        crontab example, kindle Apps Script (off-kernel)

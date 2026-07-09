@@ -100,6 +100,15 @@ convention = 'pep257'
 # and packaging rules do not apply to CT-E tooling.
 'tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
              'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
+# Platform tier (PLATFORM.md 9): lighter conventions than the kernel.
+# Lazy imports keep the entrypoint's skin and the cloud SDK optional
+# (the adapters' Power-of-10 rule 8 pattern).
+'services/*' = ['PLC0415']
+# A FastAPI app factory aggregates its route handlers, so its McCabe
+# score is route count, not branching complexity.
+'services/api.py' = ['PLC0415', 'C901']
+'services/tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
+                      'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]
