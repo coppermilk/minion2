@@ -1,0 +1,19 @@
+# Platform tier deps (PLATFORM.md, section 9). Separate from the kernel's
+# root pyproject: this tier carries a web stack and lighter conventions.
+# The kernel/Steps (minion_core, minions) stay stdlib-tight; this imports
+# their catalog but never the other way round.
+[project]
+name = 'minion-services'
+version = '0.1.0'
+description = 'HTTP/OpenAPI + MCP skins over the Phase 0 service core.'
+requires-python = '>=3.11'
+dependencies = [
+    'fastapi>=0.115',
+    'uvicorn>=0.30',
+    'pydantic>=2.7',
+    'boto3>=1.34',
+    'mcp>=1.2',
+]
+
+[project.optional-dependencies]
+dev = ['pytest>=8', 'httpx>=0.27']

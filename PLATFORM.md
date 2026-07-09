@@ -4,8 +4,8 @@ Document class: architecture decision record (ADR) with a staged roadmap.
 Companions: [ORCHESTRATION.md](ORCHESTRATION.md) (why our own visual pipeline,
 n8n as glue), [BLUEPRINT.md](BLUEPRINT.md) (kernel design + requirements),
 [OPERATIONS.md](OPERATIONS.md). Encoding: ASCII only (BLUEPRINT section 4).
-Status: decisions recorded; Phases 0-1 landed; platform tier (1.5+) deferred to
-its own changes (this document ships no platform code).
+Status: decisions recorded; Phases 0-2 landed (1.5 event taps; 2 service skins
+in `services/`); Phases 3-6 deferred to their own changes.
 
 ## 1. Context
 
@@ -177,13 +177,17 @@ Two tiers with different rules; they must not blur:
   (`minion_core/service.py`, `minions/service.py`).
 - **Phase 1 -- done.** Graph as data: JSON loader into existing Stages
   (`minion_core/graph.py`, `minions/graph.py`, pilots `frames`/`inbox`).
-- **Phase 1.5 -- event taps.** The loader wraps stages to emit
-  entered/left/verdict events in-process. Cheap; unlocks animation and metering
-  hooks; works offline.
-- **Phase 2 -- service skin.** One generic wrapper over `invoke` exposing
-  HTTP/OpenAPI AND MCP; per-service Docker images (`STEP` env) on their own
-  ports; `/healthz`, `/openapi.json`. Plus the `Store` (S3/MinIO) with
-  `input_ref`/`output_ref`. This is "each service its own Docker + API/MCP".
+- **Phase 1.5 -- event taps. Done.** The loader wraps stages to emit
+  entered/left/verdict events in-process (`minion_core/events.py`); `--events`
+  streams them. Cheap; unlocks animation and metering hooks; works offline.
+- **Phase 2 -- service skin. Done.** One core (`services/core.py:run_service`)
+  behind two facades -- HTTP/OpenAPI (`services/http.py`) and MCP
+  (`services/mcp_server.py`) -- selected by `STEP`/`SKIN` env
+  (`services/serve.py`, one image, N containers; `services/Dockerfile`). The
+  `Store` (`services/store.py`: LocalStore now, S3Store for MinIO/AWS) is the
+  object-store data plane with `input_ref`/`output_ref`; `ms` is captured at
+  `invoke`. Hermetic core test in the kernel gate; skin tests in
+  `services/tests`. The IP was not touched.
 - **Phase 3 -- orchestrator (Mode B).** Walk `graph.json` over HTTP/MCP with
   object-store refs; event bus; collect `Usage` records (RU computed, not yet
   billed).

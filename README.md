@@ -15,6 +15,7 @@ directory tree rooted at `DRIVE`.
 ```
 minion_core/   kernel (the belt), Settings, prompts, adapters
 minions/       one directory per bot; streaming or batch
+services/      platform tier: HTTP/OpenAPI + MCP skins over a Step (PLATFORM.md)
 tests/         requirement-based suite + structural analysis
 docker/        one image, N containers; docker-compose.yml at root
 deploy/        crontab example, kindle Apps Script (off-kernel)
