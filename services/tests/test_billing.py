@@ -61,6 +61,14 @@ def _seed(store: LocalStore, tmp_path: Path) -> str:
     return store.put('inbox/photo.jpg', src)
 
 
+def _run_and_wait(client: TestClient, graph_id: str, ref: str) -> dict:
+    started = client.post(
+        '/runs', headers=H1, json={'graph_id': graph_id, 'input_ref': ref}
+    ).json()
+    client.get(f'/runs/{started["id"]}/events', headers=H1)  # sync barrier
+    return client.get(f'/runs/{started["id"]}', headers=H1).json()
+
+
 def test_run_reports_total_ms(tmp_path: Path) -> None:
     """The run carries its own processing time (time to the user)."""
     client, store = _client(tmp_path)
@@ -68,10 +76,9 @@ def test_run_reports_total_ms(tmp_path: Path) -> None:
     graph = client.post(
         '/graphs', headers=H1, json={'name': 'd', 'spec': SPEC}
     ).json()
-    run = client.post(
-        '/runs', headers=H1, json={'graph_id': graph['id'], 'input_ref': ref}
-    ).json()
-    assert run['total_ms'] >= 0.0
+    done = _run_and_wait(client, graph['id'], ref)
+    assert done['status'] == 'done'
+    assert done['total_ms'] >= 0.0
 
 
 def test_billing_aggregates_and_windows(tmp_path: Path) -> None:
@@ -81,9 +88,7 @@ def test_billing_aggregates_and_windows(tmp_path: Path) -> None:
     graph = client.post(
         '/graphs', headers=H1, json={'name': 'd', 'spec': SPEC}
     ).json()
-    client.post(
-        '/runs', headers=H1, json={'graph_id': graph['id'], 'input_ref': ref}
-    )
+    _run_and_wait(client, graph['id'], ref)
     bill = client.get('/billing', headers=H1).json()
     assert bill['nodes'] == 1.0
     assert bill['total'] == bill['compute'] >= 0.0

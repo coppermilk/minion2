@@ -202,8 +202,7 @@ Two tiers with different rules; they must not blur:
   ms). Multi-tenant schema from day one (`services/models.py`, tenant_id on
   every entity; `services/repo.py` tenant-scoped, backend pluggable); tenant
   from an `X-Tenant-Id` header now, OIDC later (enforcement progressive). Runs
-  are synchronous with SSE replay; a live event bus / background runs is the
-  next refinement.
+  execute in the background and stream live over SSE (`services/bus.py`).
 - **Phase 5 -- canvas UI. Done.** `services/web/` (served at `/ui` by the API):
   a dependency-free SVG node editor -- the palette from `/catalog`, a pipeline
   built from ready modules, saved via `/graphs`, run via `/runs`, and animated
@@ -219,7 +218,11 @@ Two tiers with different rules; they must not blur:
 
 ## 13. Follow-ups (beyond the roadmap)
 
-- Live event bus / background runs (runs are synchronous with SSE replay now).
+- ~~Live event bus / background runs~~ **Done.** `services/bus.py` (RunBus):
+  runs execute in a background thread and publish onto an in-memory,
+  thread-safe, buffered bus; `/runs/{id}/events` streams live (a late
+  subscriber still gets the full history). A durable bus (Redis/NATS) is the
+  cloud swap.
 - Directory results (frames): `services/store.py:child_refs` puts each file;
   `run_service` returns the ref set.
 - Postgres repository and S3Store against a live MinIO (both backends are

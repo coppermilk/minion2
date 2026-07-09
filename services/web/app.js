@@ -136,13 +136,19 @@ async function run() {
     headers: { ...hdr(), 'content-type': 'application/json' },
     body: JSON.stringify({ graph_id: graphId, input_ref: inputRef }),
   });
-  const run = await res.json();
-  setStatus(`run ${run.id.slice(0, 8)} ...`);
-  await streamEvents(run.id);
+  const started = await res.json();
+  setStatus(`run ${started.id.slice(0, 8)} running ...`);
+  await streamEvents(started.id); // live: events arrive as they happen
+  const done = await getRun(started.id);
   await loadBilling();
   setStatus(
-    `run ${run.id.slice(0, 8)} ${run.status} in ` +
-    `${run.total_ms.toFixed(2)} ms`);
+    `run ${done.id.slice(0, 8)} ${done.status} in ` +
+    `${done.total_ms.toFixed(2)} ms`);
+}
+
+async function getRun(id) {
+  const res = await fetch(`/runs/${id}`, { headers: hdr() });
+  return res.json();
 }
 
 async function streamEvents(runId) {

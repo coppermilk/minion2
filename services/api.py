@@ -6,14 +6,16 @@ now (``X-Tenant-Id``); real auth (OIDC) is a progressive follow-up. Every
 access is tenant-scoped. ``/catalog`` is the palette a React Flow canvas
 builds nodes from (Phase 5).
 
-Runs execute synchronously and their events are captured for SSE replay;
-background execution with a live event bus is the next refinement.
+Runs execute in the background and their events stream live over SSE (a
+run publishes into an in-memory RunBus as it happens; a durable bus is the
+cloud swap).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -28,13 +30,13 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from minion_core.events import Collector
 from minion_core.graph import SINKS
 from minion_core.graph import SOURCES
 from minions.service import CATALOG
 from services.billing import DEFAULT_TARIFF
 from services.billing import Tariff
 from services.billing import resource_units
+from services.bus import RunBus
 from services.models import Graph
 from services.models import GraphCreate
 from services.models import Run
@@ -47,8 +49,10 @@ from services.repo import InMemoryRepo
 from services.store import LocalStore
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from collections.abc import Iterator
 
+    from minion_core.events import Emit
     from minion_core.events import Event
     from services.orchestrate import Usage
     from services.store import Store
@@ -59,11 +63,12 @@ C_CPU = 0.05
 
 @dataclass(frozen=True)
 class Deps:
-    """The server's dependencies: repository, object store, RU tariff."""
+    """The server's dependencies: repo, store, tariff, and event bus."""
 
     repo: InMemoryRepo
     store: Store
     tariff: Tariff
+    bus: RunBus
 
 
 def _tariff() -> Tariff:
@@ -111,7 +116,7 @@ def palette() -> dict[str, list[str]]:
     }
 
 
-def _sse(events: list[Event]) -> Iterator[str]:
+def _sse(events: Iterable[Event]) -> Iterator[str]:
     """Serialize a run's events as an SSE text stream."""
     for event in events:
         payload = {
@@ -152,29 +157,40 @@ def _record_usage(
         )
 
 
-def _execute(deps: Deps, job: _Job) -> Run:
-    """Run the graph, capture events and usage; return the done run."""
-    collector = Collector()
-    request = RunRequest(job.graph.spec, job.input_ref)
-    result = run_graph(request, LocalCaller(deps.store), collector)
-    total_ms = sum(item.ms for item in result.usage)
-    done = job.run.model_copy(
-        update={
-            'status': 'done',
-            'final_ref': result.final_ref,
-            'total_ms': total_ms,
-        }
-    )
-    deps.repo.add_run(done)
-    deps.repo.set_events(done.id, collector.events)
-    _record_usage(deps.repo, done, result.usage)
-    return done
+def _publisher(bus: RunBus, run_id: str) -> Emit:
+    """An emitter that publishes a run's events onto the live bus."""
+
+    def emit(event: Event) -> None:
+        bus.publish(run_id, event)
+
+    return emit
+
+
+def _run_bg(deps: Deps, job: _Job) -> None:
+    """Execute a run in the background, publishing events live."""
+    run_id = job.run.id
+    try:
+        request = RunRequest(job.graph.spec, job.input_ref)
+        emit = _publisher(deps.bus, run_id)
+        result = run_graph(request, LocalCaller(deps.store), emit)
+        total_ms = sum(item.ms for item in result.usage)
+        done = job.run.model_copy(
+            update={
+                'status': 'done',
+                'final_ref': result.final_ref,
+                'total_ms': total_ms,
+            }
+        )
+        deps.repo.add_run(done)
+        _record_usage(deps.repo, done, result.usage)
+    finally:
+        deps.bus.close(run_id)
 
 
 def create_api(repo: InMemoryRepo, store: Store) -> FastAPI:
     """Build the multi-tenant platform API over a repo and a store."""
     app = FastAPI(title='minion-platform')
-    deps = Deps(repo=repo, store=store, tariff=_tariff())
+    deps = Deps(repo=repo, store=store, tariff=_tariff(), bus=RunBus())
 
     @app.get('/catalog')
     def catalog() -> dict[str, list[str]]:
@@ -216,9 +232,11 @@ def create_api(repo: InMemoryRepo, store: Store) -> FastAPI:
             final_ref=None,
             created_at=time.time(),
         )
-        return _execute(
-            deps, _Job(run=run, graph=graph, input_ref=body.input_ref)
-        )
+        repo.add_run(run)
+        deps.bus.open(run.id)
+        job = _Job(run=run, graph=graph, input_ref=body.input_ref)
+        threading.Thread(target=_run_bg, args=(deps, job), daemon=True).start()
+        return run
 
     @app.get('/runs/{run_id}')
     def get_run(run_id: str, tenant: Tenant) -> Run:
@@ -232,7 +250,7 @@ def create_api(repo: InMemoryRepo, store: Store) -> FastAPI:
         if repo.get_run(tenant, run_id) is None:
             raise HTTPException(status_code=404, detail='run not found')
         return StreamingResponse(
-            _sse(repo.list_events(run_id)), media_type='text/event-stream'
+            _sse(deps.bus.stream(run_id)), media_type='text/event-stream'
         )
 
     @app.get('/usage')

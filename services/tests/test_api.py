@@ -66,26 +66,29 @@ def test_graphs_are_tenant_scoped(tmp_path: Path) -> None:
     assert client.get('/graphs', headers=H2).json() == []
 
 
-def test_run_executes_events_and_usage(tmp_path: Path) -> None:
+def test_run_streams_live_then_completes(tmp_path: Path) -> None:
     client, store = _client(tmp_path)
     ref = _seed(store, tmp_path)
     graph = client.post(
         '/graphs', headers=H1, json={'name': 'demo', 'spec': SPEC}
     ).json()
 
-    run = client.post(
+    # runs are async now: POST returns 'running' immediately
+    started = client.post(
         '/runs',
         headers=H1,
         json={'graph_id': graph['id'], 'input_ref': ref},
     ).json()
-    assert run['status'] == 'done'
-    assert run['final_ref'].startswith('file://')
+    assert started['status'] == 'running'
 
-    stream = client.get(f'/runs/{run["id"]}/events', headers=H1).text
+    # draining the live SSE blocks until the run closes
+    stream = client.get(f'/runs/{started["id"]}/events', headers=H1).text
     assert 'step:deliver#1' in stream
     assert 'left' in stream
 
+    done = client.get(f'/runs/{started["id"]}', headers=H1).json()
+    assert done['status'] == 'done'
+    assert done['final_ref'].startswith('file://')
+
     usage = client.get('/usage', headers=H1).json()
-    assert usage['total_ms'] >= 0.0
     assert usage['nodes'] == 1.0
-    assert usage['compute_ru'] >= 0.0

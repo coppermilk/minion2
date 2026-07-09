@@ -12,20 +12,18 @@ import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from minion_core.events import Event
     from services.models import Graph
     from services.models import Run
     from services.models import UsageRecord
 
 
 class InMemoryRepo:
-    """Tenant-scoped stores for graphs, runs, usage, and run events."""
+    """Tenant-scoped stores for graphs, runs, and usage."""
 
     def __init__(self) -> None:
         self._graphs: dict[str, Graph] = {}
         self._runs: dict[str, Run] = {}
         self._usage: list[UsageRecord] = []
-        self._events: dict[str, list[Event]] = {}
         self._lock = threading.Lock()
 
     def add_graph(self, graph: Graph) -> None:
@@ -68,13 +66,3 @@ class InMemoryRepo:
         """The tenant's usage records."""
         with self._lock:
             return [u for u in self._usage if u.tenant_id == tenant]
-
-    def set_events(self, run_id: str, events: list[Event]) -> None:
-        """Store the events a run emitted (for SSE replay)."""
-        with self._lock:
-            self._events[run_id] = list(events)
-
-    def list_events(self, run_id: str) -> list[Event]:
-        """The events a run emitted."""
-        with self._lock:
-            return list(self._events.get(run_id, []))
