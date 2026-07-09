@@ -37,6 +37,7 @@ from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spool_of
 from minion_core.adapters.tg import spooled_or_dropped
+from minion_core.events import tap
 from minion_core.kernel import ArchiveTo
 from minion_core.kernel import DisposeSource
 from minion_core.kernel import Folder
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
+    from minion_core.events import Emit
     from minion_core.kernel import Origin
     from minion_core.kernel import Sink
     from minion_core.kernel import Source
@@ -69,13 +71,19 @@ class BadGraph(ValueError):
 
 @dataclass(frozen=True)
 class BuildContext:
-    """The shared state a bot's nodes build against (one api/channel)."""
+    """The shared state a bot's nodes build against (one api/channel).
+
+    ``emit`` is optional: when set, the loader wraps every node in an
+    event tap (Phase 1.5); when None (the default), the belt is built
+    plain and the offline path is unchanged and zero-cost.
+    """
 
     cfg: Settings
     env: Mapping[str, str]
     bot: str
     api: TgApi
     channel: TgChannel
+    emit: Emit | None = None
 
 
 def context(cfg: Settings, env: Mapping[str, str], bot: str) -> BuildContext:
@@ -215,7 +223,7 @@ StepCatalog: TypeAlias = 'Mapping[str, Callable[[Settings], Step]]'
 """Name -> Step factory: the Phase 0 catalog, injected by the caller."""
 
 
-def _node(ctx: BuildContext, node: Node, steps: StepCatalog) -> Stage:
+def _build_node(ctx: BuildContext, node: Node, steps: StepCatalog) -> Stage:
     """Resolve one node dict to its Stage by kind."""
     if 'source' in node:
         return SOURCES[node['source']](ctx, node)
@@ -224,6 +232,14 @@ def _node(ctx: BuildContext, node: Node, steps: StepCatalog) -> Stage:
     if 'sink' in node:
         return SINKS[node['sink']](ctx, node)
     raise BadGraph(f'unknown node: {node}')
+
+
+def _node(ctx: BuildContext, node: Node, steps: StepCatalog) -> Stage:
+    """Build a node and, when an emitter is set, wrap it in a tap."""
+    stage = _build_node(ctx, node, steps)
+    if ctx.emit is None:
+        return stage
+    return tap(stage, node.get('id', 'node'), ctx.emit)
 
 
 def _merge(docks: list[Stage]) -> Stage:
@@ -249,8 +265,29 @@ def _chain(stages: list[Stage]) -> Stage:
     return belt
 
 
+def _ensure_id(node: Node, index: int) -> None:
+    """Give a node a stable id (``kind:type#i``) unless it has one."""
+    if 'id' in node:
+        return
+    for kind in ('source', 'step', 'sink'):
+        if kind in node:
+            node['id'] = f'{kind}:{node[kind]}#{index}'
+            return
+    node['id'] = f'node#{index}'
+
+
+def _assign_ids(spec: Node) -> None:
+    """Number every graph node so taps and a canvas can key on it."""
+    index = 0
+    for stage in spec['stages']:
+        for node in stage.get('merge', [stage]):
+            _ensure_id(node, index)
+            index += 1
+
+
 def load(spec: Node, ctx: BuildContext, steps: StepCatalog) -> Stage:
     """Assemble the Stage a spec describes (graph as data)."""
+    _assign_ids(spec)
     stages = [_stage(ctx, s, steps) for s in spec['stages']]
     if not stages:
         raise BadGraph('empty graph')
