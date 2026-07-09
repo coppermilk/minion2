@@ -1,10 +1,11 @@
-"""Service entrypoint: pick the skin by env and serve one Step.
+"""Service entrypoint: pick the skin by env and serve.
 
     STEP=frames SKIN=http python -m services.serve   # uvicorn + OpenAPI
     STEP=frames SKIN=mcp  python -m services.serve   # MCP (stdio)
+    SKIN=api              python -m services.serve   # platform API
 
 One image, N containers: STEP selects the Step, SKIN the facade, PORT the
-HTTP port. Kept tiny -- the logic is in core.py; this only starts a server.
+HTTP port. Kept tiny -- the logic is elsewhere; this only starts a server.
 """
 
 from __future__ import annotations
@@ -19,23 +20,22 @@ def _serve_mcp(step: str) -> None:
     create_server(step, store_from_env()).run()
 
 
-def _serve_http(step: str) -> None:
+def _serve_asgi(target: str) -> None:
     import uvicorn
 
-    from services.http import create_app
-    from services.http import store_from_env
-
     port = int(os.environ.get('PORT', '8000'))
-    uvicorn.run(create_app(step, store_from_env()), host='0.0.0.0', port=port)  # noqa: S104 -- bind all inside the container; expose per compose
+    uvicorn.run(target, host='0.0.0.0', port=port)  # noqa: S104 -- bind all inside the container; expose per compose
 
 
 def main() -> int:
-    """Serve the configured Step over the configured skin."""
-    step = os.environ.get('STEP', 'deliver')
-    if os.environ.get('SKIN', 'http') == 'mcp':
-        _serve_mcp(step)
+    """Serve the configured skin: a Step (http/mcp) or the platform api."""
+    skin = os.environ.get('SKIN', 'http')
+    if skin == 'mcp':
+        _serve_mcp(os.environ.get('STEP', 'deliver'))
+    elif skin == 'api':
+        _serve_asgi('services.api:app')
     else:
-        _serve_http(step)
+        _serve_asgi('services.http:app')
     return 0
 
 

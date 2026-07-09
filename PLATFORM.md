@@ -4,8 +4,8 @@ Document class: architecture decision record (ADR) with a staged roadmap.
 Companions: [ORCHESTRATION.md](ORCHESTRATION.md) (why our own visual pipeline,
 n8n as glue), [BLUEPRINT.md](BLUEPRINT.md) (kernel design + requirements),
 [OPERATIONS.md](OPERATIONS.md). Encoding: ASCII only (BLUEPRINT section 4).
-Status: decisions recorded; Phases 0-3 landed (1.5 event taps; 2 service skins;
-3 orchestrator in `services/orchestrate.py`); Phases 4-6 deferred.
+Status: decisions recorded; Phases 0-4 landed (1.5 event taps; 2 service skins;
+3 orchestrator; 4 multi-tenant API in `services/api.py`); Phases 5-6 deferred.
 
 ## 1. Context
 
@@ -194,8 +194,14 @@ Two tiers with different rules; they must not blur:
   input, emits the Phase 1.5 events (so Mode A and Mode B animate the same),
   and records a `Usage` per node (`ms` toward RU, not yet billed). Proven with
   two independent services orchestrated over real HTTP through a shared store.
-- **Phase 4 -- platform API.** FastAPI: multi-tenant schema, auth, `/catalog`,
-  `/graphs`, `/runs`, `/events` (SSE). Enforcement progressive.
+- **Phase 4 -- platform API. Done.** `services/api.py` (FastAPI): tenant-scoped
+  `/catalog` (the React Flow palette), `/graphs` CRUD, `/runs` (drives the
+  Phase 3 orchestrator), `/runs/{id}/events` (SSE), `/usage` (Compute RU from
+  ms). Multi-tenant schema from day one (`services/models.py`, tenant_id on
+  every entity; `services/repo.py` tenant-scoped, backend pluggable); tenant
+  from an `X-Tenant-Id` header now, OIDC later (enforcement progressive). Runs
+  are synchronous with SSE replay; a live event bus / background runs is the
+  next refinement.
 - **Phase 5 -- React Flow UI.** Viewer -> live animation -> constructor (palette
   from `/catalog`, drag, save `graph.json`).
 - **Phase 6 -- last.** Per-request time shown to the user; RU billing,
