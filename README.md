@@ -7,6 +7,7 @@ directory tree rooted at `DRIVE`.
 
 - Design, requirements, traceability: [BLUEPRINT.md](BLUEPRINT.md)
 - Operations, failure modes, recovery: [OPERATIONS.md](OPERATIONS.md)
+- Orchestration strategy (own visual pipeline vs n8n): [ORCHESTRATION.md](ORCHESTRATION.md)
 
 ## Layout
 
