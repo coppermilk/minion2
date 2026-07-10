@@ -5,6 +5,15 @@
 #   docker compose -f services/docker-compose.yml up --build
 # Then open the canvas at http://localhost:8080/ui/ and the MinIO console at
 # http://localhost:9001 (minioadmin / minioadmin by default).
+#
+# ALREADY HAVE A MinIO? Don't start the bundled one -- point the services at
+# yours and scale minio to 0:
+#   S3_ENDPOINT=http://<host>:9000 S3_BUCKET=<bucket> \
+#   MINIO_ROOT_USER=<key> MINIO_ROOT_PASSWORD=<secret> \
+#   docker compose -f services/docker-compose.yml up -d --build --scale minio=0
+# Or run the bundled MinIO on other host ports to avoid a clash:
+#   MINIO_API_PORT=9100 MINIO_CONSOLE_PORT=9101 docker compose ... up -d
+# All host ports are overridable (API_PORT, DELIVER_PORT, FRAMES_PORT).
 name: minion-platform
 
 x-service: &svc
@@ -16,21 +25,23 @@ x-service: &svc
     context: ..
     dockerfile: services/Dockerfile
   # S3Store auto-creates the bucket and boto3 retries, so a Step converges
-  # once MinIO is up (restart policy); no strict health gate needed here.
+  # once MinIO is reachable (restart policy) -- no depends_on / health gate,
+  # so a service can point at an external MinIO with the bundled one scaled
+  # to 0. S3_ENDPOINT/S3_BUCKET default to the bundled MinIO; override for AWS
+  # or an existing MinIO.
   environment: &svc-env
     STORE_BACKEND: s3
-    S3_ENDPOINT: http://minio:9000
-    S3_BUCKET: minion
-    S3_REGION: us-east-1
+    S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+    S3_BUCKET: ${S3_BUCKET:-minion}
+    S3_REGION: ${S3_REGION:-us-east-1}
     AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
     AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-  depends_on:
-    - minio
   restart: unless-stopped
 
 services:
   # The object store -- self-hosted MinIO, the offline/on-prem S3 (swap the
-  # endpoint/creds for AWS or any S3-compatible service in the cloud).
+  # endpoint/creds for AWS or any S3-compatible service in the cloud). Scale
+  # it to 0 (see the header) when you bring your own MinIO.
   minio:
     image: minio/minio
     command: server /data --console-address ":9001"
@@ -40,8 +51,8 @@ services:
     volumes:
       - minio-data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
     restart: unless-stopped
 
   # One Step, one container, one port (add more the same way).
@@ -52,7 +63,7 @@ services:
       STEP: deliver
       SKIN: http
     ports:
-      - "8081:8000"
+      - "${DELIVER_PORT:-8081}:8000"
 
   frames:
     <<: *svc
@@ -61,7 +72,7 @@ services:
       STEP: frames
       SKIN: http
     ports:
-      - "8082:8000"
+      - "${FRAMES_PORT:-8082}:8000"
 
   # The multi-tenant platform API + the canvas UI (/ui).
   api:
@@ -70,7 +81,7 @@ services:
       <<: *svc-env
       SKIN: api
     ports:
-      - "8080:8000"
+      - "${API_PORT:-8080}:8000"
 
 volumes:
   minio-data:
