@@ -5,6 +5,7 @@ in over two transports (Telegram, watched folders), each bot applies
 exactly one small transformation, and everything lands in one
 directory tree rooted at `DRIVE`.
 
+- Architecture at a glance (one diagram): [ARCHITECTURE.md](ARCHITECTURE.md)
 - Design, requirements, traceability: [BLUEPRINT.md](BLUEPRINT.md)
 - Operations, failure modes, recovery: [OPERATIONS.md](OPERATIONS.md)
 - Orchestration strategy (own visual pipeline vs n8n): [ORCHESTRATION.md](ORCHESTRATION.md)
