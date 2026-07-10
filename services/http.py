@@ -5,19 +5,29 @@ containers of one image. FastAPI serves /openapi.json for free -- what
 n8n's HTTP Request node and our orchestrator consume. /healthz is the
 container probe. No host port in offline mode: the compose network only.
 
-Two ways in:
+Ways in:
 - ``/run`` takes an object-store ref and returns a ref (the orchestrator
   and Mode B data plane).
 - ``/run-file`` takes an uploaded file and returns the result file (bytes
   in, bytes out) -- the frictionless path for n8n's HTTP Request node,
   which has the media as binary and wants binary back, no S3 node needed.
+  Synchronous: fine up to ~a minute (raise the client timeout).
+- ``/jobs`` (+ ``/jobs/file``) is the async path for slow Steps: submit
+  returns 202 + a job id at once, the Step runs in the background, and the
+  caller learns it is ready by polling ``/jobs/{id}`` or via a webhook
+  ``callback_url`` -- so no connection is held for a minute.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
+import threading
+import uuid
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +39,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from services.core import ServiceRequest
+from services.core import ServiceResult
 from services.core import run_service
 from services.store import LocalStore
 from services.store import store_from_env
@@ -51,6 +62,124 @@ class RunReply(BaseModel):
     disposition: str
     reason: str
     ms: float
+
+
+@dataclass
+class _Job:
+    """One async job's live state (in-memory, per service process)."""
+
+    id: str
+    status: str  # running | done | failed
+    disposition: str = ''
+    reason: str = ''
+    ms: float = 0.0
+    output_ref: str | None = None
+    outputs: list[str] = field(default_factory=list)
+    error: str = ''
+
+
+class JobStore:
+    """Thread-safe registry of a service's async jobs."""
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, _Job] = {}
+        self._lock = threading.Lock()
+
+    def create(self) -> str:
+        """Register a new running job; return its id."""
+        job_id = uuid.uuid4().hex
+        with self._lock:
+            self._jobs[job_id] = _Job(id=job_id, status='running')
+        return job_id
+
+    def get(self, job_id: str) -> _Job | None:
+        """The job by id, or None."""
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def finish(self, job_id: str, result: ServiceResult) -> None:
+        """Record a completed run's outcome on the job."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.status = 'done'
+            job.disposition = result.disposition
+            job.reason = result.reason
+            job.ms = result.ms
+            job.output_ref = result.output_ref
+            job.outputs = result.outputs
+
+    def fail(self, job_id: str, error: str) -> None:
+        """Mark a job failed with an error message."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.status = 'failed'
+                job.error = error
+
+
+@dataclass(frozen=True)
+class _JobSpec:
+    """What a background job needs to run and where to call back."""
+
+    step: str
+    store: Store
+    ref: str
+    callback: str | None
+
+
+def _summary(job: _Job) -> dict[str, object]:
+    """The public view of a job (status endpoint and webhook body)."""
+    return {
+        'job_id': job.id,
+        'status': job.status,
+        'disposition': job.disposition,
+        'reason': job.reason,
+        'ms': job.ms,
+        'output_ref': job.output_ref,
+        'outputs': job.outputs,
+        'error': job.error,
+    }
+
+
+def _callback(url: str, job: _Job) -> None:
+    """POST the finished job to a webhook (best-effort)."""
+    import httpx
+
+    with contextlib.suppress(httpx.HTTPError):
+        httpx.post(url, json=_summary(job), timeout=10.0)
+
+
+def _run_job(jobs: JobStore, job_id: str, spec: _JobSpec) -> None:
+    """Run one job in the background, then fire its callback if any."""
+    try:
+        result = run_service(ServiceRequest(spec.step, spec.ref), spec.store)
+        jobs.finish(job_id, result)
+    except Exception as exc:  # noqa: BLE001 -- a job failure is reported, not raised
+        jobs.fail(job_id, str(exc))
+    done = jobs.get(job_id)
+    if spec.callback and done is not None:
+        _callback(spec.callback, done)
+
+
+def _stash_to(store: Store, job_id: str, file: UploadFile) -> str:
+    """Save an upload into the store under the job's prefix; return its ref."""
+    work = Path(tempfile.mkdtemp())
+    name = file.filename or 'input'
+    src = work / name
+    with src.open('wb') as sink:
+        shutil.copyfileobj(file.file, sink)
+    ref = store.put(f'jobs-in/{job_id}/{name}', src)
+    shutil.rmtree(work, ignore_errors=True)
+    return ref
+
+
+def _spawn(jobs: JobStore, job_id: str, spec: _JobSpec) -> None:
+    """Start a job's background thread (daemon)."""
+    threading.Thread(
+        target=_run_job, args=(jobs, job_id, spec), daemon=True
+    ).start()
 
 
 def create_app(step: str, store: Store) -> FastAPI:
@@ -93,6 +222,51 @@ def create_app(step: str, store: Store) -> FastAPI:
                 'X-Disposition': result.disposition,
                 'X-Run-Ms': f'{result.ms:.3f}',
             },
+        )
+
+    jobs = JobStore()
+
+    @app.post('/jobs', status_code=202)
+    def submit_ref(
+        body: RunBody, callback_url: str | None = None
+    ) -> dict[str, str]:
+        job_id = jobs.create()
+        _spawn(
+            jobs, job_id, _JobSpec(step, store, body.input_ref, callback_url)
+        )
+        return {'job_id': job_id, 'status': 'running'}
+
+    @app.post('/jobs/file', status_code=202)
+    def submit_file(
+        file: UploadFile, callback_url: str | None = None
+    ) -> dict[str, str]:
+        job_id = jobs.create()
+        ref = _stash_to(store, job_id, file)
+        _spawn(jobs, job_id, _JobSpec(step, store, ref, callback_url))
+        return {'job_id': job_id, 'status': 'running'}
+
+    @app.get('/jobs/{job_id}')
+    def job_status(job_id: str) -> dict[str, object]:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail='job not found')
+        return _summary(job)
+
+    @app.get('/jobs/{job_id}/result')
+    def job_result(job_id: str) -> FileResponse:
+        job = jobs.get(job_id)
+        if job is None or job.status != 'done':
+            raise HTTPException(status_code=409, detail='job not done')
+        if job.output_ref is None:
+            raise HTTPException(
+                status_code=422, detail=f'{job.disposition}: {job.reason}'
+            )
+        work = Path(tempfile.mkdtemp())
+        out = store.fetch(job.output_ref, work / 'out')
+        return FileResponse(
+            out,
+            filename=out.name,
+            background=BackgroundTask(shutil.rmtree, work, ignore_errors=True),
         )
 
     return app
