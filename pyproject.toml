@@ -107,6 +107,7 @@ convention = 'pep257'
 # A FastAPI app factory aggregates its route handlers, so its McCabe
 # score is route count, not branching complexity.
 'services/api.py' = ['PLC0415', 'C901']
+'services/http.py' = ['PLC0415', 'C901']
 'services/tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
                       'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
 

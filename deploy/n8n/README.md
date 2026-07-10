@@ -42,6 +42,28 @@ curl -F "file=@photo.jpg;type=image/jpeg" \
   http://<host>:8081/run-file -o blurred.jpg
 ```
 
+### Long-running Steps (a minute or more): async `/jobs`
+
+`/run-file` is synchronous -- it holds the connection until the Step
+finishes. Fine up to ~a minute (raise the HTTP Request node's **Timeout**,
+e.g. 120000 ms). For slower or uncertain Steps, don't hold the connection --
+submit and check back:
+
+```
+POST /jobs/file  (multipart file [+ ?callback_url=...])  -> 202 { job_id }
+POST /jobs        (JSON { input_ref } [+ ?callback_url])  -> 202 { job_id }
+GET  /jobs/{id}          -> { status: running|done|failed, disposition, ms, ... }
+GET  /jobs/{id}/result   -> the result file, once done
+```
+
+The Step runs in the background; submit returns **at once** (202). Two ways
+to learn it is ready from n8n:
+- **Poll:** an HTTP Request node on `GET /jobs/{id}` in a loop (n8n's "Wait"
+  + IF on `status == "done"`), then `GET /jobs/{id}/result`.
+- **Webhook:** pass `?callback_url=<your n8n Webhook URL>`; the service POSTs
+  the finished job summary there when done -- n8n's Webhook node wakes the
+  rest of the flow. No polling, no held connection.
+
 ## 2. The ref way -- `POST /run` (the object-store data plane)
 
 When the media already lives in the shared object store (MinIO), pass a
