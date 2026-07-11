@@ -7,7 +7,7 @@ container probe.
 
 Ways in (bytes in, bytes out -- no shared object store):
 - ``/run-file`` takes an uploaded file and returns the result file. The
-  frictionless path for n8n's HTTP Request node, a Telegram relay, or any
+  frictionless path for n8n's HTTP Request node, a thin relay, or any
   caller with the media as binary. Synchronous: fine up to ~a minute.
 - ``/jobs/file`` is the async path for slow Steps: submit returns 202 + a
   job id at once, the Step runs in the background, and the caller learns it
