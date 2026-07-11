@@ -12,20 +12,20 @@ flowchart TB
   classDef ext  fill:#0c1120,stroke:#2d6cdf,color:#dfe6f5
 
   subgraph EXT["Consumers (separate containers, over the web)"]
-    TG["tg-* relay<br/>Telegram dock -> service"]:::ext
+    TG["telegram<br/>ONE container, all media docks<br/>(no processing IP)"]:::ext
     N8N["n8n<br/>HTTP node / MCP"]:::ext
     RF["React Flow canvas<br/>(placeholder)"]:::ext
     AG["MCP agents<br/>(Claude, ...)"]:::ext
   end
 
-  subgraph SVCS["Atomic services -- services/ (one Step each, bytes in/out)"]
-    SKINS["HTTP: /run-file, /jobs/file, /healthz, /openapi.json<br/>MCP: run(input_path)"]:::svc
-    CORE["core: invoke(Step) + timing (ms)"]:::svc
+  subgraph SVCS["Atomic services -- svc-* (one Step each, bytes in/out)"]
+    SKINS["HTTP: /run-file (zip for folders), /jobs/file,<br/>/healthz, /openapi.json  |  MCP: run(input_path)"]:::svc
+    CORE["core: invoke(Step or chain) + timing (ms)"]:::svc
   end
 
   subgraph KERN["Kernel tier -- minion_core / minions (the IP, untouched)"]
     CAT["Step catalog<br/>minions/service.py"]:::ip
-    STEPS["Steps: censor-blur, censor-black,<br/>restore-mark, deliver, frames, fetch, ..."]:::ip
+    STEPS["Steps/chains: censor-blur, censor-black,<br/>restore, frames, fetch, ..."]:::ip
     BELT["In-process belt: kernel.run<br/>(the monolith bots, offline)"]:::ip
   end
 
@@ -50,14 +50,15 @@ flowchart TB
 - **Bytes in, bytes out.** A service is stateless -- upload a file, get the
   result file back; a fresh temp store per request, no shared object store, no
   cloud SDK. Timing (`ms`) is captured around `invoke` (`X-Run-Ms`).
-- **The Telegram split.** A pixel-transform bot is a pair: `svc-<step>` does
-  the work, `tg-<step>` is a thin Telegram dock that POSTs the file to the
-  service and sends the bytes back (`CallService`). The heavy compute leaves
-  the transport.
-- **Consumers are equal.** The `tg-*` relays, n8n, React Flow and MCP agents
-  all call the same services over the same HTTP/MCP. Rip any consumer out; the
-  rest run. The IP never leaves the kernel.
-- **The monolith bots stay.** Bots whose work does not reduce to bytes in/out
-  (inbox's canonical naming, fetch's routing, frames' folder-of-frames output,
-  the command bots) keep running as single in-process belts -- functionality
-  untouched.
+- **Total Telegram split.** All media-bot processing (blur, frames, restore,
+  fetch, ...) runs as `svc-*` services; one `telegram` container owns every
+  media Telegram identity and holds no processing code -- each dock POSTs the
+  file to its service and sends the bytes back (`minions/telegram.py` ->
+  `minions.relay` -> `CallService`). A multi-step bot (restore, frames) is a
+  chain in the catalog, so the service does the bot's whole work.
+- **Consumers are equal.** The `telegram` container, n8n, React Flow and MCP
+  agents all call the same services over the same HTTP/MCP. Rip any consumer
+  out; the rest run. The IP never leaves the kernel.
+- **The remaining bots stay.** `inbox` (ingest), `model-switch`/`props` (chat
+  commands) and `sort`/`batch` (folder watch + cron) are not file-processors
+  coupled to Telegram, so they keep running as single in-process belts.

@@ -24,10 +24,12 @@ import shutil
 import tempfile
 import threading
 import uuid
+import zipfile
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -178,6 +180,19 @@ def create_app(step: str) -> FastAPI:
         cleanup = BackgroundTask(shutil.rmtree, work, ignore_errors=True)
         ref = _stash(work, file)
         result = run_service(ServiceRequest(step, ref), store_at(work))
+        headers = {
+            'X-Disposition': result.disposition,
+            'X-Run-Ms': f'{result.ms:.3f}',
+        }
+        if result.output_ref is None and result.outputs:
+            zpath = _zip_of(work, result.outputs)  # a folder result (frames)
+            return FileResponse(
+                zpath,
+                filename=zpath.name,
+                media_type='application/zip',
+                background=cleanup,
+                headers=headers,
+            )
         if result.output_ref is None:
             shutil.rmtree(work, ignore_errors=True)
             raise HTTPException(
@@ -186,13 +201,7 @@ def create_app(step: str) -> FastAPI:
             )
         out = store_at(work).fetch(result.output_ref, work / 'out')
         return FileResponse(
-            out,
-            filename=out.name,
-            background=cleanup,
-            headers={
-                'X-Disposition': result.disposition,
-                'X-Run-Ms': f'{result.ms:.3f}',
-            },
+            out, filename=out.name, background=cleanup, headers=headers
         )
 
     @app.post('/jobs/file', status_code=202)
@@ -229,6 +238,16 @@ def create_app(step: str) -> FastAPI:
         )
 
     return app
+
+
+def _zip_of(work: Path, refs: list[str]) -> Path:
+    """Zip a directory result's files (e.g. frames) into one archive."""
+    zpath = work / 'result.zip'
+    with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for ref in refs:
+            path = Path(urlparse(ref).path)
+            archive.write(path, arcname=path.name)
+    return zpath
 
 
 def store_at(work: Path) -> LocalStore:
