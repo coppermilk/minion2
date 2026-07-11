@@ -1,10 +1,10 @@
-"""The n8n-facing /run-file: bytes in, bytes out.
+"""The web-facing /run-file: bytes in, bytes out.
 
-Services tier. n8n's HTTP Request node has the media as binary and wants
-binary back; /run-file wraps the ref-based core so it is a single node, no
-S3 node. We check a file round-trips (deliver), a real blur comes back
-(censor-blur, segmentation stubbed so the PIL blur is genuine but torch is
-not needed), and a skip surfaces as 422.
+Services tier. A caller (n8n's HTTP Request node, a Telegram relay, ...)
+has the media as binary and wants binary back; /run-file is a single node,
+no object store. We check a file round-trips (deliver), a real blur comes
+back (censor-blur, segmentation stubbed so the PIL blur is genuine but
+torch is not needed), and a skip surfaces as 422.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from services.http import create_app
-from services.store import LocalStore
 
 
 def _sharp_jpeg(path: Path) -> Path:
@@ -29,7 +28,7 @@ def _sharp_jpeg(path: Path) -> Path:
 
 
 def test_run_file_round_trips_a_file(tmp_path: Path) -> None:
-    client = TestClient(create_app('deliver', LocalStore(tmp_path / 's')))
+    client = TestClient(create_app('deliver'))
     reply = client.post(
         '/run-file',
         files={'file': ('a.bin', b'hello', 'application/octet-stream')},
@@ -59,7 +58,7 @@ def test_run_file_blurs_via_the_censor_blur_service(
 
     monkeypatch.setattr(vision, 'person_masks', fake_masks)
     src = _sharp_jpeg(tmp_path / 'p.jpg')
-    client = TestClient(create_app('censor-blur', LocalStore(tmp_path / 's')))
+    client = TestClient(create_app('censor-blur'))
 
     reply = client.post(
         '/run-file', files={'file': ('p.jpg', src.read_bytes(), 'image/jpeg')}
@@ -79,7 +78,7 @@ def test_run_file_422_when_the_step_skips(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(vision, 'person_masks', lambda _p: None)
     src = _sharp_jpeg(tmp_path / 'p.jpg')
-    client = TestClient(create_app('censor-blur', LocalStore(tmp_path / 's')))
+    client = TestClient(create_app('censor-blur'))
     reply = client.post(
         '/run-file', files={'file': ('p.jpg', src.read_bytes(), 'image/jpeg')}
     )

@@ -6,10 +6,9 @@ Job, drives it through the given Step using the belt's own crash guard
 Steps lives at the top level (``minions/service.py``), so the kernel layer
 never imports a bot (import direction; test: adapters never import bots).
 
-This is the orchestrator-neutral seam: any front-end -- the current Python
-graphs, a future visual canvas, or an external trigger over local HTTP --
-reaches the same Step through ``invoke`` without the IP moving or changing
-(ORCHESTRATION.md, Phase 0).
+This is the transport-neutral seam: any front-end -- the in-process belt, a
+thin Telegram relay, n8n, or an MCP agent over HTTP -- reaches the same Step
+through ``invoke`` without the IP moving or changing.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from minion_core.kernel import Verdict
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from minion_core.kernel import Step
+    from minion_core.kernel import Stage
 
 SERVICE = 'svc'
 """``Origin.source`` for a job that entered through the service, not a dock."""
@@ -46,12 +45,14 @@ def job_of(call: Call) -> Job:
     return Job(src=call.src, dest=call.dest, stem=call.src.stem, origin=origin)
 
 
-def invoke(step: Step, call: Call) -> Verdict:
-    """Run one Step over one input, reusing the belt's crash guard.
+def invoke(step: Stage, call: Call) -> Verdict:
+    """Run one Step (or a Step chain) over one input, crash-guarded.
 
-    A Step yields exactly one advanced Envelope per input; its verdict is
-    the service result. A guard failure (REQ-KRN-001) already maps to
-    FAILED inside the belt, so no exception escapes here.
+    A Stage yields exactly one advanced Envelope per input; its verdict is
+    the service result. Passing a chain (``a >> b``) runs the steps in
+    order and returns the last verdict -- a short-circuit (SKIP/FAIL) at an
+    early step bypasses the rest (REQ-KRN-002). A guard failure
+    (REQ-KRN-001) already maps to FAILED inside the belt, so nothing escapes.
     """
     out = list(step(iter((Envelope(job_of(call)),))))
     return _verdict_of(out)

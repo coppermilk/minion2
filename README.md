@@ -8,18 +8,18 @@ directory tree rooted at `DRIVE`.
 - Architecture at a glance (one diagram): [ARCHITECTURE.md](ARCHITECTURE.md)
 - Design, requirements, traceability: [BLUEPRINT.md](BLUEPRINT.md)
 - Operations, failure modes, recovery: [OPERATIONS.md](OPERATIONS.md)
-- Orchestration strategy (own visual pipeline vs n8n): [ORCHESTRATION.md](ORCHESTRATION.md)
-- Platform architecture (microservices, React Flow, MCP, metering): [PLATFORM.md](PLATFORM.md)
+- Atomic web services (HTTP/OpenAPI + MCP over a Step): [services/README.md](services/README.md)
+- Driving the services from n8n: [deploy/n8n/README.md](deploy/n8n/README.md)
 
 ## Layout
 
 ```
 minion_core/   kernel (the belt), Settings, prompts, adapters
-minions/       one directory per bot; streaming or batch
-services/      platform tier: HTTP/OpenAPI + MCP skins over a Step (PLATFORM.md)
+minions/       one directory per bot; streaming or batch; relay/ = thin transport
+services/      atomic web services: HTTP/OpenAPI + MCP over a Step (bytes in/out)
 tests/         requirement-based suite + structural analysis
-docker/        one image, N containers; docker-compose.yml at root
-deploy/        crontab example, kindle Apps Script (off-kernel)
+docker/        base image; deploy/reactflow/ = canvas placeholder
+deploy/        nas-update.sh, n8n workflow, kindle Apps Script (off-kernel)
 ```
 
 ## Quick start
@@ -91,6 +91,22 @@ Telegram contract: each bot is its own Telegram identity
 (`TG_TOKEN_<BOT>`), and files cross Telegram as documents only, both
 directions -- compressed photos/videos are ignored with a logged
 reason, results come back via sendDocument (never recompressed).
+
+## Atomic services and the Telegram split
+
+Each Step can also run as its own tiny **web service** -- bytes in, bytes
+out over HTTP (`/run-file`, async `/jobs/file`) and MCP -- so a Telegram
+transport, n8n, a React Flow canvas or an MCP agent all call the same
+service the same way ([services/README.md](services/README.md)). It is all
+one `docker-compose.yml`.
+
+Where the split is lossless (the pixel transforms), a bot is two
+containers: `svc-<step>` does the work, and `tg-<step>` is a thin Telegram
+dock (`minions/relay/`) that POSTs the file to the service and sends the
+bytes back -- no torch in the transport. Done for **censor-blur**,
+**censor-black** and **restore**. Bots whose work does not reduce to
+bytes-in/bytes-out (inbox's naming, fetch's routing, frames' folder of
+frames, the command bots) stay single in-process belts, unchanged.
 
 ## CI gates
 

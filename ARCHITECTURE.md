@@ -1,53 +1,40 @@
 # Architecture at a glance
 
-Companion to [PLATFORM.md](PLATFORM.md) (the platform ADR) and
-[ORCHESTRATION.md](ORCHESTRATION.md). One picture of the whole system: the
-austere kernel (the IP), the platform tier around it, and the consumers.
+One picture of the whole system: the austere kernel (the IP), the atomic web
+services wrapped around each Step, and the consumers that call them over the
+web -- Telegram transports, n8n, a React Flow canvas, MCP agents. Everything
+is one docker-compose project.
 
 ```mermaid
 flowchart TB
   classDef ip   fill:#143024,stroke:#2ecc71,color:#dfe6f5
-  classDef plat fill:#171e2e,stroke:#7a5cff,color:#dfe6f5
+  classDef svc  fill:#171e2e,stroke:#7a5cff,color:#dfe6f5
   classDef ext  fill:#0c1120,stroke:#2d6cdf,color:#dfe6f5
-  classDef data fill:#30290f,stroke:#c9a227,color:#dfe6f5
 
-  subgraph EXT["Consumers"]
-    UI["React Flow canvas<br/>(/ui)"]:::ext
+  subgraph EXT["Consumers (separate containers, over the web)"]
+    TG["tg-* relay<br/>Telegram dock -> service"]:::ext
     N8N["n8n<br/>HTTP node / MCP"]:::ext
+    RF["React Flow canvas<br/>(placeholder)"]:::ext
     AG["MCP agents<br/>(Claude, ...)"]:::ext
   end
 
-  subgraph PLAT["Platform tier -- services/ (lighter conventions)"]
-    API["Platform API (FastAPI)<br/>/catalog /graphs /runs<br/>/events (SSE) /billing<br/>multi-tenant"]:::plat
-    ORCH["Orchestrator (Mode B)<br/>walks a graph -> service calls"]:::plat
-    subgraph SVC["Service = one Step, own container + port"]
-      SKINS["HTTP skin: /run, /run-file, /jobs (async)<br/>MCP skin: run()"]:::plat
-      CORE["core: invoke() + timing (ms)"]:::plat
-    end
+  subgraph SVCS["Atomic services -- services/ (one Step each, bytes in/out)"]
+    SKINS["HTTP: /run-file, /jobs/file, /healthz, /openapi.json<br/>MCP: run(input_path)"]:::svc
+    CORE["core: invoke(Step) + timing (ms)"]:::svc
   end
 
   subgraph KERN["Kernel tier -- minion_core / minions (the IP, untouched)"]
-    CAT["Step catalog"]:::ip
-    STEPS["Steps: deliver, censor-blur,<br/>frames, restore, fetch, ..."]:::ip
-    BELT["Mode A: in-process belt<br/>kernel.run (offline, no network)"]:::ip
+    CAT["Step catalog<br/>minions/service.py"]:::ip
+    STEPS["Steps: censor-blur, censor-black,<br/>restore-mark, deliver, frames, fetch, ..."]:::ip
+    BELT["In-process belt: kernel.run<br/>(the monolith bots, offline)"]:::ip
   end
 
-  GRAPH["graph.json<br/>one description, two run modes"]:::data
-  STORE["Store (data plane)<br/>LocalStore file://  |  S3Store -> MinIO / AWS"]:::data
-
-  UI --> API
-  AG --> SKINS
-  N8N --> SKINS
-  N8N -. optional .-> API
-  API --> ORCH
-  API -. live events (SSE) .-> UI
-  ORCH -- HTTP / MCP --> SKINS
-  ORCH -. events .-> API
+  TG -- "POST /run-file (bytes)" --> SKINS
+  N8N -- "HTTP / MCP" --> SKINS
+  RF -- "HTTP" --> SKINS
+  AG -- "MCP" --> SKINS
   SKINS --> CORE
   CORE --> CAT --> STEPS
-  CORE <--> STORE
-  GRAPH --> ORCH
-  GRAPH --> BELT
   BELT --> STEPS
 ```
 
@@ -55,20 +42,22 @@ flowchart TB
 
 - **Two tiers.** The **kernel** (green) is the IP -- the Steps and the belt,
   under the BLUEPRINT laws (ASCII, stdlib-only kernel, ruff ALL, mypy strict).
-  The **platform** (purple) wraps it with a web stack and lighter conventions.
-  The platform imports the kernel; never the other way round.
-- **One core, many skins.** Every Step runs through one seam, `invoke()`.
-  Around it sit thin skins: HTTP/OpenAPI (`/run`, `/run-file`, async `/jobs`)
-  and MCP. Adding a protocol never touches a Step.
-- **Two run modes over one `graph.json`.** *Mode A* is the in-process belt
-  (`kernel.run`) -- offline, single node, no network. *Mode B* is the
-  orchestrator walking the same graph as service calls. Same Steps; only the
-  runner differs. This is why the detach guarantee is structural.
-- **Data plane.** Services are stateless: they pass object references, not
-  bytes. `Store` is `LocalStore` (offline, `file://`) or `S3Store` (MinIO /
-  AWS, `s3://`) -- one image, picked by env.
-- **Consumers are equal.** The React Flow canvas, n8n, and MCP agents all call
-  the same services over the same APIs, each on its own port. n8n holds only
-  wiring; the IP stays in the kernel. Rip any consumer out; the rest run.
-- **Metering** rides at `invoke()` (the `ms` on every call) and rolls up into
-  Resource Units at `/billing`.
+  The **services** tier (purple) wraps a Step with a thin web skin and lighter
+  conventions. Services import the kernel; never the other way round.
+- **One core, two skins.** Every Step runs through one seam, `invoke()`.
+  Around it sit thin skins: HTTP/OpenAPI (`/run-file`, async `/jobs/file`) and
+  MCP. Adding a protocol never touches a Step.
+- **Bytes in, bytes out.** A service is stateless -- upload a file, get the
+  result file back; a fresh temp store per request, no shared object store, no
+  cloud SDK. Timing (`ms`) is captured around `invoke` (`X-Run-Ms`).
+- **The Telegram split.** A pixel-transform bot is a pair: `svc-<step>` does
+  the work, `tg-<step>` is a thin Telegram dock that POSTs the file to the
+  service and sends the bytes back (`CallService`). The heavy compute leaves
+  the transport.
+- **Consumers are equal.** The `tg-*` relays, n8n, React Flow and MCP agents
+  all call the same services over the same HTTP/MCP. Rip any consumer out; the
+  rest run. The IP never leaves the kernel.
+- **The monolith bots stay.** Bots whose work does not reduce to bytes in/out
+  (inbox's canonical naming, fetch's routing, frames' folder-of-frames output,
+  the command bots) keep running as single in-process belts -- functionality
+  untouched.

@@ -1,11 +1,11 @@
 #!/bin/sh
 # Synology NAS: the one self-healing deploy command. Run it and forget:
 # it force-syncs the repo to origin/main (even into a non-empty folder,
-# keeping your .env), recreates the bot stack from the freshly published
-# image, prunes old images, pulls the local model itself -- so you never
-# run `docker compose exec ... ollama pull` by hand -- and (opt-in) brings
-# up the visual platform tier (services + MinIO, PLATFORM.md) from its own
-# published image, so one command deploys everything.
+# keeping your .env), recreates the whole stack -- bots, atomic services,
+# thin transports, n8n and the canvas placeholder, all one compose project
+# -- from the freshly published images, prunes old images, and pulls the
+# local model itself so you never run `docker compose exec ... ollama pull`
+# by hand.
 #
 # The image is built on GitHub and published to GHCR (image.yml), so the
 # NAS never compiles torch -- it just downloads the ready image. The
@@ -124,40 +124,6 @@ if [ "$i" -lt 30 ]; then
     else
         echo "model pull failed; will retry next run"
     fi
-fi
-
-# --- 5. Visual platform tier (services + MinIO) ----------------------
-# Opt-in with PLATFORM=1 in .env. Rides its own compose file and its own
-# published image (minion2-service) + MinIO; the two stacks are separate
-# compose projects, so this never disturbs the bots above. Best-effort:
-# a platform hiccup is logged and never aborts the bot deploy (set -e is
-# relaxed with `|| echo`). The canvas is then at http://<nas>:8080/ui/.
-#
-# The platform compose reads the SAME repo-root .env via --env-file (else
-# compose would look beside services/docker-compose.yml and miss it), so
-# S3_*/MINIO_*/*_PORT overrides all live in one .env. If S3_ENDPOINT points
-# at your own MinIO (anything but the bundled http://minio:9000), the
-# bundled MinIO is scaled to 0 -- no port clash, your store is reused.
-PLATFORM="$(sed -n 's/^[[:space:]]*PLATFORM[[:space:]]*=[[:space:]]*//p' \
-    .env 2>/dev/null | tail -n1)"
-PLATFORM_COMPOSE="$REPO/services/docker-compose.yml"
-if [ "$PLATFORM" = '1' ] && [ -f "$PLATFORM_COMPOSE" ]; then
-    echo 'bringing up the platform tier (services + MinIO)'
-    S3EP="$(sed -n 's/^[[:space:]]*S3_ENDPOINT[[:space:]]*=[[:space:]]*//p' \
-        .env 2>/dev/null | tail -n1)"
-    SCALE=''
-    case "$S3EP" in
-        '' | http://minio:9000) : ;;  # bundled MinIO
-        *) SCALE='--scale minio=0'; echo "using your MinIO at $S3EP" ;;
-    esac
-    compose --env-file "$REPO/.env" -f "$PLATFORM_COMPOSE" pull \
-        || echo 'platform pull failed'
-    # shellcheck disable=SC2086 -- $SCALE is an intentional word split
-    compose --env-file "$REPO/.env" -f "$PLATFORM_COMPOSE" \
-        up -d --remove-orphans $SCALE || echo 'platform up failed'
-    "$DOCKER" image prune -f || true
-else
-    echo 'platform tier disabled (set PLATFORM=1 in .env to enable)'
 fi
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ====="
