@@ -2,21 +2,21 @@
 
 Every Step is a service with an HTTP API (and MCP), so n8n drives them like
 any other node -- on their own ports, independently. n8n holds only the
-wiring; the IP (the blur, restore, frames, ... code) stays in this repo. Rip
-n8n out any day and the same services still run under our own orchestrator.
+wiring; the IP (the blur, restore, ... code) stays in this repo. Rip n8n out
+any day and the same services still run.
 
-Below: the blur Step (`censor-blur`) from n8n, three ways.
+Below: the blur Step (`censor-blur`) from n8n, two ways.
 
 ## 1. The easy way -- `POST /run-file` (bytes in, bytes out)
 
 n8n already has the image as **binary**, and wants binary back. `/run-file`
 takes an uploaded file, runs the Step, and returns the result file -- one
-HTTP Request node, no S3 node needed.
+HTTP Request node, no object store needed.
 
 **HTTP Request node**
 - Method: `POST`
-- URL: `http://censor-blur:8000/run-file` (in the compose network) or
-  `http://<host>:8081/run-file` (published port)
+- URL: `http://svc-censor-blur:8000/run-file` (in the compose network) or
+  `http://<host>:8091/run-file` (published port)
 - Send Body: **on**; Body Content Type: **Form-Data (multipart)**
 - Body Parameters -> one entry:
   - Name: `file`
@@ -39,10 +39,10 @@ file; test it with:
 
 ```
 curl -F "file=@photo.jpg;type=image/jpeg" \
-  http://<host>:8081/run-file -o blurred.jpg
+  http://<host>:8091/run-file -o blurred.jpg
 ```
 
-### Long-running Steps (a minute or more): async `/jobs`
+### Long-running Steps (a minute or more): async `/jobs/file`
 
 `/run-file` is synchronous -- it holds the connection until the Step
 finishes. Fine up to ~a minute (raise the HTTP Request node's **Timeout**,
@@ -51,7 +51,6 @@ submit and check back:
 
 ```
 POST /jobs/file  (multipart file [+ ?callback_url=...])  -> 202 { job_id }
-POST /jobs        (JSON { input_ref } [+ ?callback_url])  -> 202 { job_id }
 GET  /jobs/{id}          -> { status: running|done|failed, disposition, ms, ... }
 GET  /jobs/{id}/result   -> the result file, once done
 ```
@@ -64,25 +63,11 @@ to learn it is ready from n8n:
   the finished job summary there when done -- n8n's Webhook node wakes the
   rest of the flow. No polling, no held connection.
 
-## 2. The ref way -- `POST /run` (the object-store data plane)
-
-When the media already lives in the shared object store (MinIO), pass a
-reference instead of bytes -- this is what our own orchestrator uses, and it
-avoids moving big media through n8n.
-
-- n8n **S3 node** (point it at MinIO): upload the image -> you have
-  `s3://minion/<key>`.
-- **HTTP Request node**: `POST http://censor-blur:8000/run`, JSON body
-  `{ "input_ref": "s3://minion/<key>" }`. Reply:
-  `{ "output_ref", "outputs", "disposition", "reason", "ms" }`.
-- n8n **S3 node**: download `output_ref` (or each of `outputs` for a
-  multi-file Step like frames).
-
-## 3. The MCP way -- for agent-style flows
+## 2. The MCP way -- for agent-style flows
 
 Each service also speaks MCP (`SKIN=mcp`), exposing a `run` tool. n8n's
 **MCP Client Tool** node connects to the `censor-blur` MCP server and calls
-`run(input_ref=...)`, returning the same `{output_ref, outputs, ...}`. Use
+`run(input_path=...)`, returning `{output_path, disposition, reason, ms}`. Use
 this when an AI Agent node should decide when to blur; use (1) for a plain
 media pipeline.
 

@@ -1,97 +1,77 @@
-# services -- HTTP/OpenAPI + MCP skins over the Step core
+# services -- atomic web services over a Step (HTTP/OpenAPI + MCP)
 
-Platform tier (PLATFORM.md, Phase 2). Each Step becomes **its own container
-with an API**, reachable independently by our orchestrator, by n8n, and by
-MCP agents -- on their own ports. One image, N services: `STEP` selects the
-Step, `SKIN` the facade.
+Each Step becomes **its own tiny container with an API**: bytes in, bytes out
+over the web. A Telegram transport, n8n, a React Flow canvas or an MCP agent
+all call the same service the same way. One image, N services: `STEP` selects
+the Step, `SKIN` the facade (`http` | `mcp`).
 
 ## The shape
 
 ```
         one core: services/core.py:run_service
-       (fetch input_ref -> invoke(Step) -> put output_ref, timed)
-        /                    |                     \
-   HTTP/OpenAPI            MCP                    Store
-   services/http.py    services/mcp_server.py   services/store.py
-   (orchestrator,      (Claude / agents)        (LocalStore | S3Store:
-    n8n HTTP node)                               MinIO / AWS)
+       (input file -> invoke(Step) -> output file, timed)
+        /                                        \
+   HTTP/OpenAPI                                 MCP
+   services/http.py                        services/mcp_server.py
+   (curl, n8n HTTP node, tg-* relay)       (Claude / agents)
 ```
 
 - **Nothing here touches the IP.** The Steps live in `minion_core` /
-  `minions`; this tier only fetches an input by reference, calls the Phase 0
-  dispatcher (`minion_core.service.invoke`), and puts the output back. Rip
-  out this tier and the kernel still runs offline (Mode A).
-- **Stateless.** Each request gets a fresh temp DRIVE; state lives in the
-  Store (an S3-compatible object store: MinIO self-hosted, or AWS/compatible
-  in cloud), never in the container.
-- **`ms` is the metering seam** (PLATFORM.md, section 6): timing is captured
-  around `invoke`, the one chokepoint every Step runs through.
+  `minions`; this tier only runs the file through the dispatcher
+  (`minion_core.service.invoke`) and returns the result. Rip out this tier
+  and the kernel still runs offline.
+- **Stateless, bytes in / bytes out.** No shared object store: each request
+  gets a fresh temp store, so the container holds nothing between calls.
+- **`ms` is the timing seam:** measured around `invoke`, the one chokepoint
+  every Step runs through (returned as the `X-Run-Ms` header).
 
 ## Run one service
 
 ```
 # HTTP (OpenAPI at /openapi.json, probe at /healthz):
-STEP=deliver SKIN=http STORE_ROOT=/tmp/store python -m services.serve
+STEP=censor-blur SKIN=http python -m services.serve
 
 # MCP (stdio):
-STEP=deliver SKIN=mcp  STORE_ROOT=/tmp/store python -m services.serve
+STEP=censor-blur SKIN=mcp python -m services.serve
 ```
 
-`POST /run` body `{"input_ref": "file:///path/to/input"}` returns
-`{"output_ref", "disposition", "reason", "ms"}`.
+## Ways in (no object store)
 
-## Storage backend (`store_from_env`)
+- **`POST /run-file`** -- upload a file, get the result file back
+  (`X-Disposition` / `X-Run-Ms` headers; `422` when the Step skips). The
+  frictionless path for n8n's HTTP Request node and the `tg-*` relays:
 
-One image runs both backends, selected by env:
+  ```
+  curl -F file=@photo.jpg http://localhost:8091/run-file --output blurred.jpg
+  ```
 
-- **Local (default)** -- `STORE_ROOT=/path`; refs are `file://...`. Offline,
-  hermetic, no cloud SDK.
-- **Object store (MinIO/AWS)** -- `STORE_BACKEND=s3`, `S3_ENDPOINT=http://
-  minio:9000`, `S3_BUCKET=minion`, `S3_REGION=us-east-1`, plus
-  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (the MinIO root user/pass).
-  Refs are `s3://bucket/key`. Path-style + SigV4 (MinIO-ready); the bucket is
-  auto-created on first write.
+- **`POST /jobs/file`** -- the async path for slow Steps: `202` + a job id at
+  once, then poll `GET /jobs/{id}` (and `GET /jobs/{id}/result`) or pass
+  `?callback_url=` for a webhook. Upload and result live in a per-process temp
+  store until fetched.
+- **`GET /healthz`**, **`GET /openapi.json`** -- probe and schema.
+- **MCP tool `run(input_path)`** -- the same Step for agents; returns the
+  output path + verdict.
 
-The whole platform on MinIO, one container per Step:
+## The Telegram <-> service split
 
-```
-docker compose -f services/docker-compose.yml up --build
-# canvas: http://localhost:8080/ui/   MinIO console: http://localhost:9001
-```
+A pixel-transform bot (`censor-blur`, `censor-black`) is two containers:
 
-## n8n and agents, side by side
+- `svc-censor-blur` -- this tier, `STEP=censor-blur`, does the actual blur.
+- `tg-censor-blur` -- a thin transport (`minions/relay/main.py`): a Telegram
+  dock that POSTs the photo to `svc-censor-blur/run-file` via
+  `minion_core/adapters/service_call.py:CallService` and sends the bytes back.
+  No torch in the transport; the heavy work is the service.
 
-Because every service publishes OpenAPI, n8n's HTTP Request node calls it on
-its own port with no glue; because every service also speaks MCP, an agent
-calls the very same Step as a tool. n8n holds only wiring, never IP -- the
-detach guarantee at the protocol level (PLATFORM.md, section 8).
+n8n and React Flow are just more web consumers of the same `/run-file`.
 
 ## Tests
 
-`tests/test_service_core.py` proves the core hermetically (LocalStore, in the
-kernel gate). The skin tests need the web stack and run off the gate:
+`tests/test_service_core.py` proves the core hermetically (in the kernel gate);
+`tests/test_service_call.py` proves the relay seam. The skin tests need the web
+stack and run off the gate:
 
 ```
-pip install -e '.[dev]'   # from services/, or: pip install fastapi httpx mcp boto3
+pip install -e '.[dev]'   # from services/, or: pip install fastapi httpx mcp
 python -m pytest services/tests
 ```
-
-## Canvas (Phase 5)
-
-The platform API (`SKIN=api`) serves a dependency-free SVG node editor at
-`/ui`: the palette comes from `/catalog`, a pipeline is built from ready
-modules, saved via `/graphs`, run via `/runs`, and animated live from the
-`/runs/{id}/events` SSE stream (nodes light up entered -> delivered), with
-usage/RU shown. Zero external deps (offline-first, entirely ours); the same
-node model as React Flow, which can drop in later over the unchanged API.
-
-```
-SKIN=api PORT=8100 STORE_ROOT=/tmp/store python -m services.serve
-# open http://127.0.0.1:8100/ui/
-```
-
-## Not yet (follow-ups)
-
-- Directory results (frames): `services/store.py:child_refs` puts each file;
-  `run_service` returns the first-level ref set. Wired in a later pass.
-- S3Store against a live MinIO (unit-covered by shape; integration later).

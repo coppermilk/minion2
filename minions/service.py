@@ -6,9 +6,9 @@ The kernel-level dispatcher (``minion_core.service``) does the mechanical
 run; this module is where concrete Steps are named, so it -- not the
 kernel -- imports the bots (import direction; REQ-ARC-001 skips top-level
 ``minions/*.py``). Steps that ignore Settings are adapted to the one
-factory shape by ``_ignoring_cfg``, so the dispatcher stays uniform. The
-catalog is the seed of the graph-as-data layer (ORCHESTRATION.md, Phase 1):
-a node is a name here, not a new watcher.
+factory shape by ``_ignoring_cfg``, so the dispatcher stays uniform; a
+multi-step bot (restore) is registered as a chain. A service is a name
+here, not a new watcher.
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from typing import TypeAlias
 
 from minion_core.adapters.fetch import FetchLink
 from minion_core.adapters.files import Deliver
+from minion_core.adapters.llm import RestoreBackground
+from minion_core.adapters.llm import spec_from
 from minion_core.adapters.vision import BlurContour
 from minion_core.adapters.vision import HideFaces
 from minion_core.adapters.vision import HidePersonBoxes
@@ -34,12 +36,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from collections.abc import Mapping
 
+    from minion_core.kernel import Stage
     from minion_core.kernel import Step
     from minion_core.kernel import Verdict
     from minion_core.settings import Settings
 
-Factory: TypeAlias = 'Callable[[Settings], Step]'
-"""A Step constructor over Settings -- the one shape the catalog holds."""
+Factory: TypeAlias = 'Callable[[Settings], Stage]'
+"""A Step (or Step chain) constructor over Settings -- the catalog shape."""
 
 _MIN_ARGV = 2
 """A step name plus an input path -- the least a run needs."""
@@ -54,19 +57,30 @@ def _ignoring_cfg(make: Callable[[], Step]) -> Callable[[Settings], Step]:
     return factory
 
 
+def _restore(_cfg: Settings) -> Stage:
+    """The full restore pipeline: blur people, then LLM-repaint the scene.
+
+    A two-step chain (the restore bot's whole belt, minus dock/sinks), so
+    ``svc-restore`` does the same work the monolith did. Gemini config comes
+    from the service's own env (``spec_from``).
+    """
+    return HidePersonBoxes() >> RestoreBackground(spec_from(os.environ))
+
+
 CATALOG: dict[str, Factory] = {
     'deliver': _ignoring_cfg(Deliver),
     'censor-black': _ignoring_cfg(HideFaces),
     'censor-blur': _ignoring_cfg(BlurContour),
     'restore-mark': _ignoring_cfg(HidePersonBoxes),
+    'restore': _restore,
     'fetch': FetchLink,
     'frames': ExtractFrames,
 }
-"""Every processing service the belt exposes, by name (Phase 0 catalog)."""
+"""Every processing service the belt exposes, by name."""
 
 
-def build(name: str, cfg: Settings) -> Step:
-    """Construct the named Step; KeyError names the unknown step."""
+def build(name: str, cfg: Settings) -> Stage:
+    """Construct the named Step (or chain); KeyError names the unknown step."""
     return CATALOG[name](cfg)
 
 

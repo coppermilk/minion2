@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>minion canvas (placeholder)</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 3rem auto; max-width: 40rem; padding: 0 1rem; color: #dfe6f5; background: #0c1120; }
+    code { background: #171e2e; padding: .1rem .35rem; border-radius: .25rem; }
+    a { color: #7a9cff; }
+    h1 { font-size: 1.4rem; }
+  </style>
+</head>
+<body>
+  <h1>minion canvas &mdash; React Flow placeholder</h1>
+  <p>This container is a stand-in for the visual canvas. It will call the
+     atomic services over the web, exactly like n8n does &mdash; one node per
+     service, wired on a graph.</p>
+  <p>The services are already live in this same project. Try one directly:</p>
+  <pre><code>curl -F file=@photo.jpg http://localhost:8091/run-file --output blurred.jpg</code></pre>
+  <p>Each service also serves <code>/healthz</code> and
+     <code>/openapi.json</code>. Swap this mounted folder
+     (<code>deploy/reactflow/</code>) for the built canvas app when it exists.</p>
+</body>
+</html>

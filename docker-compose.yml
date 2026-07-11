@@ -1,30 +1,27 @@
-# One image, N containers on one mount (BLUEPRINT 14).
-# DRIVE_NAS points at the media tree on the host; .env holds secrets.
-# Each Telegram bot runs its own identity (TG_TOKEN_<BOT>): Telegram
-# allows exactly one getUpdates consumer per token.
+# One project, three kinds of container (BLUEPRINT 14):
+#   1. Telegram bots (monoliths)  -- image minion2, one TG identity each.
+#   2. Atomic services (svc-*)    -- image minion2-service, one Step each,
+#      bytes in / bytes out over HTTP+MCP; stateless, no volume.
+#   3. Thin transports (tg-*)      -- image minion2, a Telegram dock that
+#      POSTs the file to its svc-* and sends the bytes back (no torch here).
+# Plus n8n and a React Flow placeholder: web consumers of the same svc-*.
 #
-# All containers share the same /data bind mount, so they share one
-# regen/_embeddings.npz -- writes are atomic (tmp + replace) and the
-# cache rebuilds its key set from the live tree, so concurrent
-# containers stay consistent (OPERATIONS 4).
+# The split (tg-* + svc-*) is applied only where it is lossless: the pixel
+# transforms censor-blur, censor-black and restore (the work IS the bytes,
+# identical OUT side; svc-restore runs the full blur + LLM-repaint chain).
+# inbox (canonical rename), fetch (chat/queue routing), fan-save (parking)
+# and frames (folder-of-frames output) do not reduce to bytes in / bytes out
+# without changing behaviour, so they stay monoliths.
 #
-# Idle economy: long-poll and folder waits block (no busy loops),
-# sort exits fast when idle, and the mem_limit below caps what a busy
-# model run may take. No cpus: caps -- the Synology kernel ships no
-# CFS bandwidth controller, so a NanoCPUs limit is rejected at create
-# ("kernel does not support CPU CFS scheduler"); memory is the cap
-# that matters for torch anyway. Logs rotate so TELEMETRY stays bounded.
+# DRIVE_NAS points at the media tree on the host; .env holds secrets. All
+# containers share the same /data bind mount (atomic writes; OPERATIONS 4).
+# print and catch are NOT here: they live on the Windows machine.
 #
-# print and catch are deliberately NOT services here: the printer
-# and the Downloads folder live on the Windows machine
-# (deploy/windows/). Each bot runs in exactly one place -- a second
-# print/ watcher would print every PDF twice.
-
-# The image is built on GitHub and published to GHCR (image.yml); the
-# NAS only `docker compose pull`s it -- there is deliberately no
-# `build:` here, so a project can ONLY run the published image and can
-# never start compiling torch on the NAS. To build locally for dev:
-# docker build -t ghcr.io/coppermilk/minion2:latest -f docker/Dockerfile .
+# The images are built on GitHub and published to GHCR (image.yml); the NAS
+# only `docker compose pull`s them. svc-* carry a `build:` for local dev
+# (`up --build`); pull_policy: missing means the NAS never builds. Base
+# image local build: docker build -t ghcr.io/coppermilk/minion2:latest \
+#   -f docker/Dockerfile .
 x-minion: &minion
   image: ghcr.io/coppermilk/minion2:latest
   pull_policy: missing
@@ -37,12 +34,27 @@ x-minion: &minion
     - ${DRIVE_NAS}:/data
   restart: unless-stopped
   init: true
-  # No container may gain more privilege than it starts with (blocks
-  # setuid escalation). We deliberately do NOT force a non-root USER or
-  # cap_drop here: the containers write into a Synology bind mount whose
-  # files are owned by the DSM user, and a fixed in-container uid would
-  # break those writes. Add `user:` + `cap_drop: [ALL]` per host once
-  # the mount's ownership is pinned.
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+
+# Atomic service: one Step, one container, bytes in / bytes out. Stateless
+# (a fresh temp store per request), so no /data mount. STEP picks the Step,
+# SKIN the facade (http | mcp). Rides the published minion2-service image.
+x-service: &svc
+  image: ghcr.io/coppermilk/minion2-service:latest
+  pull_policy: missing
+  build:
+    context: .
+    dockerfile: services/Dockerfile
+  environment: &svc-env
+    SKIN: http
+  restart: unless-stopped
+  init: true
   security_opt:
     - no-new-privileges:true
   logging:
@@ -52,23 +64,10 @@ x-minion: &minion
       max-file: '3'
 
 services:
-  # "gem": the local model server (Qwen2.5-VL). sort and props reach it
-  # at http://ollama:11434 on the compose network; no host port is
-  # exposed. Weights live in the `ollama-models` named volume (declared
-  # at the bottom): Docker auto-creates it -- unlike a bind mount, which
-  # fails if the host subpath is missing -- and `image prune` never
-  # touches volumes, so the model persists across updates. One-time pull:
-  #   docker compose exec ollama ollama pull qwen2.5vl:7b
-  # Memory: the 7B model stays resident (~6 GB on the 16 GB NAS) --
-  # fine as long as the torch bots (censor/sort) do not all peak at
-  # once. On the DS224+ CPU (no AVX2) one classify runs in minutes; a
-  # model that is down just leaves images waiting in _inbox (the punt).
+  # "gem": the local model server (Qwen2.5-VL) for sort and props.
   ollama:
     image: ollama/ollama
     environment:
-      # Unload the model 5 min after its last use, freeing its RAM (the
-      # 7B is ~6 GB) whenever the backend is Gemini or the queue is idle.
-      # The first call after an idle stretch pays a cold reload.
       OLLAMA_KEEP_ALIVE: '5m'
     volumes:
       - ollama-models:/root/.ollama
@@ -77,6 +76,7 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # --- Telegram bots (monoliths): work that does not reduce to bytes in/out
   inbox:
     <<: *minion
     environment:
@@ -85,7 +85,6 @@ services:
     command: python -m minions.inbox.main
     mem_limit: 512m
 
-  # Link bots refresh extractors on every start (OPERATIONS 3).
   fetch:
     <<: *minion
     environment:
@@ -102,7 +101,6 @@ services:
     command: sh -c 'yt-dlp -U; exec python -m minions.frames.main'
     mem_limit: 1g
 
-  # fan-save parks downloads in bots/fan-save/done/ for later work.
   fan-save:
     <<: *minion
     environment:
@@ -111,34 +109,6 @@ services:
     command: sh -c 'yt-dlp -U; exec python -m minions.fan_save.main'
     mem_limit: 1g
 
-  # The censor family: one Telegram identity per behaviour; the
-  # torch detector loads lazily on the first photo, hence the caps.
-  censor-blur:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_CENSOR_BLUR:-}
-    command: python -m minions.censor_blur.main
-    mem_limit: 4g
-
-  censor-black:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_CENSOR_BLACK:-}
-    command: python -m minions.censor_black.main
-    mem_limit: 4g
-
-  restore:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_RESTORE:-}
-    command: python -m minions.restore.main
-    mem_limit: 4g
-
-  # sort runs as a watch daemon: Downloads/_inbox sort instantly
-  # (SORT_WATCH axis); it may load CLIP when there is work.
   sort:
     <<: *minion
     environment:
@@ -149,8 +119,6 @@ services:
     depends_on:
       - ollama
 
-  # model-switch: flip the classify/props backend from chat (local Qwen
-  # <-> Gemini). No model of its own, so no ollama dependency.
   model-switch:
     <<: *minion
     environment:
@@ -159,8 +127,6 @@ services:
     command: python -m minions.model_switch.main
     mem_limit: 256m
 
-  # props: scenario -> recommended props, checked against the Pr* library
-  # (loads CLIP; asks the active backend to list props).
   props:
     <<: *minion
     environment:
@@ -171,14 +137,101 @@ services:
     depends_on:
       - ollama
 
-  # week-clean rides cron; the foreground cron is the supervisor.
   batch:
     <<: *minion
     command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI" > /etc/minions.env; exec cron -f'
     mem_limit: 512m
 
-# Ollama's model blobs: a disposable, re-pullable CACHE. A named volume
-# (Docker auto-creates it) rather than a bind, so a missing host subpath
-# can never fail the start; `image prune` never touches volumes.
+  # --- Atomic services (svc-*): bytes in / bytes out, callable by anything
+  svc-censor-blur:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: censor-blur
+    ports:
+      - "${SVC_CENSOR_BLUR_PORT:-8091}:8000"
+    mem_limit: 4g
+
+  svc-censor-black:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: censor-black
+    ports:
+      - "${SVC_CENSOR_BLACK_PORT:-8092}:8000"
+    mem_limit: 4g
+
+  # The full restore pipeline (blur people + LLM repaint). Needs Gemini, so
+  # it reads .env (GEMINI_API_KEY); unlike the offline services it calls out.
+  svc-restore:
+    <<: *svc
+    env_file: .env
+    environment:
+      <<: *svc-env
+      STEP: restore
+    ports:
+      - "${SVC_RESTORE_PORT:-8093}:8000"
+    mem_limit: 4g
+
+  # --- Thin Telegram transports (tg-*): dock -> svc-* over HTTP -> chat
+  tg-censor-blur:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_CENSOR_BLUR:-}
+      SERVICE_URL: http://svc-censor-blur:8000
+      RELAY_NAME: censor-blur
+    command: python -m minions.relay.main
+    mem_limit: 512m
+    depends_on:
+      - svc-censor-blur
+
+  tg-censor-black:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_CENSOR_BLACK:-}
+      SERVICE_URL: http://svc-censor-black:8000
+      RELAY_NAME: censor-black
+    command: python -m minions.relay.main
+    mem_limit: 512m
+    depends_on:
+      - svc-censor-black
+
+  tg-restore:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_RESTORE:-}
+      SERVICE_URL: http://svc-restore:8000
+      RELAY_NAME: restore
+    command: python -m minions.relay.main
+    mem_limit: 512m
+    depends_on:
+      - svc-restore
+
+  # --- Web consumers of the services (separate containers, one project)
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      N8N_SECURE_COOKIE: 'false'
+      N8N_RUNNERS_ENABLED: 'true'
+    volumes:
+      - n8n-data:/home/node/.n8n
+
+  # React Flow canvas placeholder: a static page that will call the svc-*
+  # over the web. Swap the mounted dir for the built app when it exists.
+  reactflow:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "${REACTFLOW_PORT:-8088}:80"
+    volumes:
+      - ./deploy/reactflow:/usr/share/nginx/html:ro
+
 volumes:
   ollama-models:
+  n8n-data:

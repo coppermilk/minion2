@@ -4,7 +4,7 @@ Both the HTTP and MCP skins call ``run_service``; it is the one place the
 data plane meets the Phase 0 dispatcher. Stateless: a fresh temp DRIVE per
 request, the input fetched in by reference, the Step run via ``invoke``,
 the result put back to the store. The Step (the IP) is never touched, and
-``ms`` is the metering point (PLATFORM.md, sections 3 and 6).
+``ms`` is the timing seam (measured around ``invoke``).
 """
 
 from __future__ import annotations

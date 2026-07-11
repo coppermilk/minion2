@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from minion_core.adapters.fetch import FetchLink
 from minion_core.kernel import Disposition
+from minion_core.kernel import Stage
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
 from minion_core.service import Call
@@ -88,7 +89,7 @@ def test_service_matches_direct_process(tmp_path: Path) -> None:
 
 
 def test_catalog_builds_every_registered_step(tmp_path: Path) -> None:
-    """Import direction + names resolve: each name builds a Step."""
+    """Import direction + names resolve: each name builds a Stage."""
     cfg = make_cfg(tmp_path / 'drive')
     for name in CATALOG:
-        assert isinstance(build(name, cfg), Step)
+        assert isinstance(build(name, cfg), Stage)

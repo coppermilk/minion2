@@ -18,7 +18,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://censor-blur:8000/run-file",
+        "url": "http://svc-censor-blur:8000/run-file",
         "sendBody": true,
         "contentType": "multipart-form-data",
         "bodyParameters": {
