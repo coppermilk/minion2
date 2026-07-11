@@ -94,19 +94,23 @@ reason, results come back via sendDocument (never recompressed).
 
 ## Atomic services and the Telegram split
 
-Each Step can also run as its own tiny **web service** -- bytes in, bytes
-out over HTTP (`/run-file`, async `/jobs/file`) and MCP -- so a Telegram
-transport, n8n, a React Flow canvas or an MCP agent all call the same
-service the same way ([services/README.md](services/README.md)). It is all
-one `docker-compose.yml`.
+The processing IP and the Telegram transport are **fully separated**, in one
+`docker-compose.yml`:
 
-Where the split is lossless (the pixel transforms), a bot is two
-containers: `svc-<step>` does the work, and `tg-<step>` is a thin Telegram
-dock (`minions/relay/`) that POSTs the file to the service and sends the
-bytes back -- no torch in the transport. Done for **censor-blur**,
-**censor-black** and **restore**. Bots whose work does not reduce to
-bytes-in/bytes-out (inbox's naming, fetch's routing, frames' folder of
-frames, the command bots) stay single in-process belts, unchanged.
+- **`svc-*`** -- one atomic web service per Step: bytes in, bytes out over
+  HTTP (`/run-file`, async `/jobs/file`) and MCP. No Telegram. A folder
+  result (frames) comes back as one zip. n8n, a React Flow canvas or an MCP
+  agent call these the same way ([services/README.md](services/README.md)).
+- **`telegram`** -- ONE clean container that owns every media bot's Telegram
+  identity and holds no processing code: each dock receives a file (or link),
+  POSTs it to its service over HTTP (`minions/telegram.py` ->
+  `minions.relay` -> `CallService`), and sends the bytes back.
+
+So `censor-blur`, `censor-black`, `restore`, `frames`, `fetch` and `fan-save`
+run as services (`svc-*`), and the `telegram` container is a thin router in
+front of them -- no torch, no IP. The rest are not file-processors coupled to
+Telegram, so they stay as they are: `inbox` (ingest), `model-switch`/`props`
+(chat commands), `sort`/`batch` (folder watch + cron), `ollama` (local model).
 
 ## CI gates
 

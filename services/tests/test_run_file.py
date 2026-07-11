@@ -73,6 +73,35 @@ def test_run_file_blurs_via_the_censor_blur_service(
     assert center not in {(0, 0, 0), (255, 255, 255)}  # the edge got blurred
 
 
+def test_run_file_zips_a_directory_result(tmp_path: Path, monkeypatch) -> None:
+    import io
+    import zipfile
+
+    from services import http as svc_http
+    from services.core import ServiceResult
+
+    frames = tmp_path / 'frames'
+    frames.mkdir()
+    refs = []
+    for name in ('a.jpg', 'b.jpg'):
+        path = frames / name
+        path.write_bytes(name.encode())
+        refs.append(f'file://{path}')
+
+    def fake_run(_req, _store) -> ServiceResult:
+        return ServiceResult(None, 'delivered', '', 1.0, refs)
+
+    monkeypatch.setattr(svc_http, 'run_service', fake_run)
+    client = TestClient(create_app('frames'))
+    reply = client.post(
+        '/run-file', files={'file': ('v.mp4', b'video', 'video/mp4')}
+    )
+    assert reply.status_code == 200
+    assert reply.headers['content-type'] == 'application/zip'
+    names = zipfile.ZipFile(io.BytesIO(reply.content)).namelist()
+    assert set(names) == {'a.jpg', 'b.jpg'}  # a folder result -> one zip
+
+
 def test_run_file_422_when_the_step_skips(tmp_path: Path, monkeypatch) -> None:
     from minion_core.adapters import vision
 

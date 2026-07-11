@@ -1,27 +1,25 @@
-# One project, three kinds of container (BLUEPRINT 14):
-#   1. Telegram bots (monoliths)  -- image minion2, one TG identity each.
-#   2. Atomic services (svc-*)    -- image minion2-service, one Step each,
-#      bytes in / bytes out over HTTP+MCP; stateless, no volume.
-#   3. Thin transports (tg-*)      -- image minion2, a Telegram dock that
-#      POSTs the file to its svc-* and sends the bytes back (no torch here).
-# Plus n8n and a React Flow placeholder: web consumers of the same svc-*.
+# One project, total separation of Telegram from the processing IP.
 #
-# The split (tg-* + svc-*) is applied only where it is lossless: the pixel
-# transforms censor-blur, censor-black and restore (the work IS the bytes,
-# identical OUT side; svc-restore runs the full blur + LLM-repaint chain).
-# inbox (canonical rename), fetch (chat/queue routing), fan-save (parking)
-# and frames (folder-of-frames output) do not reduce to bytes in / bytes out
-# without changing behaviour, so they stay monoliths.
+#   * telegram  -- ONE clean container that owns every media-bot's Telegram
+#     identity. It holds NO processing code: each dock just receives a file
+#     (or link) and POSTs it to a service over HTTP, then sends the bytes
+#     back (minions/telegram.py -> minions.relay -> CallService).
+#   * svc-*      -- the processing IP, one atomic web service per Step, bytes
+#     in / bytes out (image minion2-service). No Telegram here. Callable by
+#     the telegram container, by n8n, by React Flow, by any HTTP/MCP client.
+#   * n8n, reactflow -- more web consumers of the same svc-*.
 #
-# DRIVE_NAS points at the media tree on the host; .env holds secrets. All
-# containers share the same /data bind mount (atomic writes; OPERATIONS 4).
-# print and catch are NOT here: they live on the Windows machine.
+# The remaining bots are not file-processors coupled to Telegram, so they
+# stay as they are: inbox (ingest, no IP), model-switch/props (chat commands),
+# sort/batch (folder watch + cron), ollama (the local model).
 #
-# The images are built on GitHub and published to GHCR (image.yml); the NAS
-# only `docker compose pull`s them. svc-* carry a `build:` for local dev
-# (`up --build`); pull_policy: missing means the NAS never builds. Base
-# image local build: docker build -t ghcr.io/coppermilk/minion2:latest \
-#   -f docker/Dockerfile .
+# DRIVE_NAS points at the media tree on the host; .env holds secrets. print
+# and catch are NOT here: they live on the Windows machine.
+#
+# Images are built on GitHub and published to GHCR (image.yml); the NAS only
+# `docker compose pull`s. svc-* carry a `build:` for local dev (`up --build`);
+# pull_policy: missing means the NAS never builds. Base image local build:
+# docker build -t ghcr.io/coppermilk/minion2:latest -f docker/Dockerfile .
 x-minion: &minion
   image: ghcr.io/coppermilk/minion2:latest
   pull_policy: missing
@@ -76,7 +74,84 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # --- Telegram bots (monoliths): work that does not reduce to bytes in/out
+  # --- Atomic services (svc-*): the processing IP, pure web, no Telegram
+  svc-censor-blur:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: censor-blur
+    ports:
+      - "${SVC_CENSOR_BLUR_PORT:-8091}:8000"
+    mem_limit: 4g
+
+  svc-censor-black:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: censor-black
+    ports:
+      - "${SVC_CENSOR_BLACK_PORT:-8092}:8000"
+    mem_limit: 4g
+
+  # Full restore (blur people + LLM repaint); needs Gemini, so it reads .env.
+  svc-restore:
+    <<: *svc
+    env_file: .env
+    environment:
+      <<: *svc-env
+      STEP: restore
+    ports:
+      - "${SVC_RESTORE_PORT:-8093}:8000"
+    mem_limit: 4g
+
+  # Full frames (fetch a link or pass a file, then extract). A folder of
+  # frames comes back as one zip (see services/http.py).
+  svc-frames:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: frames
+    ports:
+      - "${SVC_FRAMES_PORT:-8094}:8000"
+    mem_limit: 2g
+
+  # Link -> video (yt-dlp). Serves both the fetch and fan-save docks.
+  svc-fetch:
+    <<: *svc
+    environment:
+      <<: *svc-env
+      STEP: fetch
+    ports:
+      - "${SVC_FETCH_PORT:-8095}:8000"
+    mem_limit: 1g
+
+  # --- The one Telegram container: all media docks, zero processing IP.
+  # Each bot in TELEGRAM_BOTS runs its own relay belt (own token) and calls
+  # its SERVICE_URL_* over HTTP. Tokens come from .env.
+  telegram:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TELEGRAM_BOTS: censor-blur,censor-black,restore,frames,fetch,fan-save
+      SERVICE_URL_CENSOR_BLUR: http://svc-censor-blur:8000
+      SERVICE_URL_CENSOR_BLACK: http://svc-censor-black:8000
+      SERVICE_URL_RESTORE: http://svc-restore:8000
+      SERVICE_URL_FRAMES: http://svc-frames:8000
+      SERVICE_URL_FETCH: http://svc-fetch:8000
+      SERVICE_URL_FAN_SAVE: http://svc-fetch:8000
+      RELAY_DOCK_FRAMES: any
+      RELAY_DOCK_FETCH: links
+      RELAY_DOCK_FAN_SAVE: links
+    command: python -m minions.telegram
+    mem_limit: 1g
+    depends_on:
+      - svc-censor-blur
+      - svc-censor-black
+      - svc-restore
+      - svc-frames
+      - svc-fetch
+
+  # --- Monolith bots (not file-processors coupled to Telegram)
   inbox:
     <<: *minion
     environment:
@@ -84,30 +159,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_INBOX:-}
     command: python -m minions.inbox.main
     mem_limit: 512m
-
-  fetch:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_FETCH:-}
-    command: sh -c 'yt-dlp -U; exec python -m minions.fetch.main'
-    mem_limit: 1g
-
-  frames:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_FRAMES:-}
-    command: sh -c 'yt-dlp -U; exec python -m minions.frames.main'
-    mem_limit: 1g
-
-  fan-save:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_FAN_SAVE:-}
-    command: sh -c 'yt-dlp -U; exec python -m minions.fan_save.main'
-    mem_limit: 1g
 
   sort:
     <<: *minion
@@ -141,74 +192,6 @@ services:
     <<: *minion
     command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI" > /etc/minions.env; exec cron -f'
     mem_limit: 512m
-
-  # --- Atomic services (svc-*): bytes in / bytes out, callable by anything
-  svc-censor-blur:
-    <<: *svc
-    environment:
-      <<: *svc-env
-      STEP: censor-blur
-    ports:
-      - "${SVC_CENSOR_BLUR_PORT:-8091}:8000"
-    mem_limit: 4g
-
-  svc-censor-black:
-    <<: *svc
-    environment:
-      <<: *svc-env
-      STEP: censor-black
-    ports:
-      - "${SVC_CENSOR_BLACK_PORT:-8092}:8000"
-    mem_limit: 4g
-
-  # The full restore pipeline (blur people + LLM repaint). Needs Gemini, so
-  # it reads .env (GEMINI_API_KEY); unlike the offline services it calls out.
-  svc-restore:
-    <<: *svc
-    env_file: .env
-    environment:
-      <<: *svc-env
-      STEP: restore
-    ports:
-      - "${SVC_RESTORE_PORT:-8093}:8000"
-    mem_limit: 4g
-
-  # --- Thin Telegram transports (tg-*): dock -> svc-* over HTTP -> chat
-  tg-censor-blur:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_CENSOR_BLUR:-}
-      SERVICE_URL: http://svc-censor-blur:8000
-      RELAY_NAME: censor-blur
-    command: python -m minions.relay.main
-    mem_limit: 512m
-    depends_on:
-      - svc-censor-blur
-
-  tg-censor-black:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_CENSOR_BLACK:-}
-      SERVICE_URL: http://svc-censor-black:8000
-      RELAY_NAME: censor-black
-    command: python -m minions.relay.main
-    mem_limit: 512m
-    depends_on:
-      - svc-censor-black
-
-  tg-restore:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_RESTORE:-}
-      SERVICE_URL: http://svc-restore:8000
-      RELAY_NAME: restore
-    command: python -m minions.relay.main
-    mem_limit: 512m
-    depends_on:
-      - svc-restore
 
   # --- Web consumers of the services (separate containers, one project)
   n8n:

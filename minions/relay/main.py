@@ -21,8 +21,10 @@ from minion_core.adapters.files import free_quota
 from minion_core.adapters.service_call import CallService
 from minion_core.adapters.service_call import ServiceCall
 from minion_core.adapters.tg import SpoolSpec
+from minion_core.adapters.tg import TgAny
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.tg import TgChannel
+from minion_core.adapters.tg import TgLinks
 from minion_core.adapters.tg import TgMedia
 from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
@@ -40,8 +42,12 @@ from minion_core.settings import load
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from minion_core.kernel import Source
     from minion_core.kernel import Stage
     from minion_core.settings import Settings
+
+_DOCKS = {'media': TgMedia, 'any': TgAny, 'links': TgLinks}
+"""RELAY_DOCK -> the Telegram dock: documents, links+documents, or links."""
 
 _DEFAULT_EXTS = (
     '.jpg',
@@ -73,6 +79,12 @@ def _exts(env: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(p if p.startswith('.') else f'.{p}' for p in parts if p)
 
 
+def _dock(env: Mapping[str, str], api: TgApi, spec: TgSpec) -> Source:
+    """The Telegram dock chosen by RELAY_DOCK (media | any | links)."""
+    make = _DOCKS.get(env.get('RELAY_DOCK', 'media'), TgMedia)
+    return make(api, spec)
+
+
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the relay belt; secrets come from the passed mapping."""
     api = TgApi(env.get('TG_TOKEN', ''))
@@ -93,7 +105,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         poll_sec=cfg.poll_sec,
     )
     seen = SeenPaths(cfg.seen_paths_max)
-    docks = merge_watch(TgMedia(api, spec), watch, seen)
+    docks = merge_watch(_dock(env, api, spec), watch, seen)
     call = CallService(ServiceCall(env.get('SERVICE_URL', '')))
     route = RouteOrigin(tg=SendResult(channel), loc=Null())
     return (

@@ -67,6 +67,16 @@ def _restore(_cfg: Settings) -> Stage:
     return HidePersonBoxes() >> RestoreBackground(spec_from(os.environ))
 
 
+def _frames(cfg: Settings) -> Stage:
+    """The full frames pipeline: fetch a link (or pass a file), extract.
+
+    ``svc-frames`` runs the frames bot's whole belt (minus dock/sinks), so a
+    link or a video both work: ``FetchLink`` downloads a ``.url``, passes a
+    media file through, and ``ExtractFrames`` yields the folder of frames.
+    """
+    return FetchLink(cfg) >> ExtractFrames(cfg)
+
+
 CATALOG: dict[str, Factory] = {
     'deliver': _ignoring_cfg(Deliver),
     'censor-black': _ignoring_cfg(HideFaces),
@@ -74,7 +84,7 @@ CATALOG: dict[str, Factory] = {
     'restore-mark': _ignoring_cfg(HidePersonBoxes),
     'restore': _restore,
     'fetch': FetchLink,
-    'frames': ExtractFrames,
+    'frames': _frames,
 }
 """Every processing service the belt exposes, by name."""
 
