@@ -3,12 +3,12 @@
     python -m minions.service <step> <input> [<dest>]
 
 The kernel-level dispatcher (``minion_core.service``) does the mechanical
-run; this module is where concrete Steps are named, so it -- not the
-kernel -- imports the bots (import direction; REQ-ARC-001 skips top-level
-``minions/*.py``). Steps that ignore Settings are adapted to the one
-factory shape by ``_ignoring_cfg``, so the dispatcher stays uniform; a
-multi-step bot (restore) is registered as a chain. A service is a name
-here, not a new watcher.
+run; this module names the concrete Steps. Every Step comes from a
+Telegram-free adapter (``minion_core/adapters/*``), so a service loads no
+transport code -- it has no idea where the bytes came from. Steps that
+ignore Settings are adapted to the one factory shape by ``_ignoring_cfg``,
+so the dispatcher stays uniform; a multi-step bot (restore, frames) is
+registered as a chain. A service is a name here, not a new watcher.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from typing import TypeAlias
 
 from minion_core.adapters.fetch import FetchLink
 from minion_core.adapters.files import Deliver
+from minion_core.adapters.frames import ExtractFrames
 from minion_core.adapters.llm import RestoreBackground
 from minion_core.adapters.llm import spec_from
 from minion_core.adapters.vision import BlurContour
@@ -30,7 +31,6 @@ from minion_core.kernel import Disposition
 from minion_core.service import Call
 from minion_core.service import invoke
 from minion_core.settings import load
-from minions.frames.main import ExtractFrames
 
 if TYPE_CHECKING:
     from collections.abc import Callable

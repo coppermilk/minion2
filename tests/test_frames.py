@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import video
+from minion_core.adapters.frames import STRIDE
+from minion_core.adapters.frames import ExtractFrames
+from minion_core.adapters.frames import _timecode
 from minion_core.kernel import Disposition
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
-from minions.frames.main import STRIDE
-from minions.frames.main import ExtractFrames
-from minions.frames.main import _timecode
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:
