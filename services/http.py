@@ -1,21 +1,19 @@
-"""HTTP/OpenAPI skin over the service core (PLATFORM.md, section 3).
+"""HTTP/OpenAPI skin over the service core.
 
 One generic app, parameterized by the STEP env var, so N services are N
 containers of one image. FastAPI serves /openapi.json for free -- what
-n8n's HTTP Request node and our orchestrator consume. /healthz is the
-container probe. No host port in offline mode: the compose network only.
+n8n's HTTP Request node and any web consumer read. /healthz is the
+container probe.
 
-Ways in:
-- ``/run`` takes an object-store ref and returns a ref (the orchestrator
-  and Mode B data plane).
-- ``/run-file`` takes an uploaded file and returns the result file (bytes
-  in, bytes out) -- the frictionless path for n8n's HTTP Request node,
-  which has the media as binary and wants binary back, no S3 node needed.
-  Synchronous: fine up to ~a minute (raise the client timeout).
-- ``/jobs`` (+ ``/jobs/file``) is the async path for slow Steps: submit
-  returns 202 + a job id at once, the Step runs in the background, and the
-  caller learns it is ready by polling ``/jobs/{id}`` or via a webhook
-  ``callback_url`` -- so no connection is held for a minute.
+Ways in (bytes in, bytes out -- no shared object store):
+- ``/run-file`` takes an uploaded file and returns the result file. The
+  frictionless path for n8n's HTTP Request node, a Telegram relay, or any
+  caller with the media as binary. Synchronous: fine up to ~a minute.
+- ``/jobs/file`` is the async path for slow Steps: submit returns 202 + a
+  job id at once, the Step runs in the background, and the caller learns it
+  is ready by polling ``/jobs/{id}`` or via a webhook ``callback_url`` -- so
+  no connection is held for a minute. The upload and result live in a
+  per-process temp store until fetched.
 """
 
 from __future__ import annotations
@@ -35,33 +33,15 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from services.core import ServiceRequest
 from services.core import ServiceResult
 from services.core import run_service
 from services.store import LocalStore
-from services.store import store_from_env
 
 if TYPE_CHECKING:
     from services.store import Store
-
-
-class RunBody(BaseModel):
-    """The /run request body: the input object's ref."""
-
-    input_ref: str
-
-
-class RunReply(BaseModel):
-    """The /run response: output ref(s), verdict, and Step timing."""
-
-    output_ref: str | None
-    outputs: list[str]
-    disposition: str
-    reason: str
-    ms: float
 
 
 @dataclass
@@ -182,24 +162,15 @@ def _spawn(jobs: JobStore, job_id: str, spec: _JobSpec) -> None:
     ).start()
 
 
-def create_app(step: str, store: Store) -> FastAPI:
+def create_app(step: str) -> FastAPI:
     """Build the one-Step service app (HTTP + OpenAPI)."""
     app = FastAPI(title=f'service:{step}')
+    jobs = JobStore()
+    job_store: Store = LocalStore(Path(tempfile.mkdtemp(prefix='svc-jobs-')))
 
     @app.get('/healthz')
     def healthz() -> dict[str, str]:
         return {'status': 'ok', 'step': step}
-
-    @app.post('/run')
-    def run(body: RunBody) -> RunReply:
-        result = run_service(ServiceRequest(step, body.input_ref), store)
-        return RunReply(
-            output_ref=result.output_ref,
-            outputs=result.outputs,
-            disposition=result.disposition,
-            reason=result.reason,
-            ms=result.ms,
-        )
 
     @app.post('/run-file')
     def run_file(file: UploadFile) -> FileResponse:
@@ -224,25 +195,13 @@ def create_app(step: str, store: Store) -> FastAPI:
             },
         )
 
-    jobs = JobStore()
-
-    @app.post('/jobs', status_code=202)
-    def submit_ref(
-        body: RunBody, callback_url: str | None = None
-    ) -> dict[str, str]:
-        job_id = jobs.create()
-        _spawn(
-            jobs, job_id, _JobSpec(step, store, body.input_ref, callback_url)
-        )
-        return {'job_id': job_id, 'status': 'running'}
-
     @app.post('/jobs/file', status_code=202)
     def submit_file(
         file: UploadFile, callback_url: str | None = None
     ) -> dict[str, str]:
         job_id = jobs.create()
-        ref = _stash_to(store, job_id, file)
-        _spawn(jobs, job_id, _JobSpec(step, store, ref, callback_url))
+        ref = _stash_to(job_store, job_id, file)
+        _spawn(jobs, job_id, _JobSpec(step, job_store, ref, callback_url))
         return {'job_id': job_id, 'status': 'running'}
 
     @app.get('/jobs/{job_id}')
@@ -262,7 +221,7 @@ def create_app(step: str, store: Store) -> FastAPI:
                 status_code=422, detail=f'{job.disposition}: {job.reason}'
             )
         work = Path(tempfile.mkdtemp())
-        out = store.fetch(job.output_ref, work / 'out')
+        out = job_store.fetch(job.output_ref, work / 'out')
         return FileResponse(
             out,
             filename=out.name,
@@ -287,5 +246,5 @@ def _stash(work: Path, file: UploadFile) -> str:
     return store_at(work).put(f'in/{name}', src)
 
 
-app = create_app(os.environ.get('STEP', 'deliver'), store_from_env())
-"""The module-level app uvicorn serves; STEP/STORE_* pick behaviour."""
+app = create_app(os.environ.get('STEP', 'deliver'))
+"""The module-level app uvicorn serves; STEP picks the Step."""

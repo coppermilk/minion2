@@ -17,6 +17,7 @@ VENDORS = {
         'minion_core/adapters/tg.py',
         'minion_core/adapters/scripts.py',
         'minion_core/adapters/ollama.py',
+        'minion_core/adapters/service_call.py',
     ),
     'yt_dlp': ('minion_core/adapters/fetch.py',),
     'PIL': ('minion_core/adapters/files.py',),

@@ -1,0 +1,87 @@
+"""Web-service boundary: POST a job's file to an atomic service (requests).
+
+A sanctioned ``requests`` import site (REQ-ARC-002), alongside tg/scripts/
+ollama. ``CallService`` is the seam that lets a thin Telegram relay (or any
+belt) delegate the transform to a service over HTTP -- bytes up, bytes back
+-- instead of loading the model in-process. The IP lives in the service;
+this Step only moves bytes, so the relay container stays light.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from minion_core.kernel import Disposition
+from minion_core.kernel import Step
+from minion_core.kernel import Verdict
+from minion_core.kernel import atomic_write
+from minion_core.kernel import next_free_path
+
+if TYPE_CHECKING:
+    import requests
+
+    from minion_core.kernel import Job
+
+HTTP_OK = 200
+HTTP_UNPROCESSABLE = 422
+CALL_TIMEOUT_SEC = 300.0
+"""Wall-time bound on one service call (bounded, BLUEPRINT 10)."""
+
+
+@dataclass(frozen=True)
+class ServiceCall:
+    """Which service to call and how long to wait for it."""
+
+    url: str
+    timeout: float = CALL_TIMEOUT_SEC
+
+
+class CallService(Step):
+    """Delegate one file to an atomic web service; write back its result.
+
+    POSTs ``job.src`` to ``<url>/run-file`` and writes the returned bytes
+    under ``job.dest``. A 200 is DELIVERED, a 422 is the service's own SKIP
+    (its reason surfaced), and anything else -- an unreachable service
+    included -- is FAILED. No model is loaded here; the service holds the IP.
+    """
+
+    def __init__(self, spec: ServiceCall) -> None:
+        self._spec = spec
+
+    def process(self, job: Job) -> Verdict:
+        """Call the service; map its HTTP outcome to a Verdict."""
+        import requests
+
+        try:
+            with job.src.open('rb') as fh:
+                resp = requests.post(
+                    f'{self._spec.url}/run-file',
+                    files={'file': (job.src.name, fh)},
+                    timeout=self._spec.timeout,
+                )
+        except requests.RequestException:
+            return Verdict(Disposition.FAILED, reason='service_unreachable')
+        return _verdict(job, resp)
+
+
+def _verdict(job: Job, resp: requests.Response) -> Verdict:
+    """Turn one HTTP response into a Verdict, writing any result bytes."""
+    if resp.status_code == HTTP_OK:
+        out = next_free_path(job.dest / job.src.name)
+        atomic_write(out, resp.content)
+        return Verdict(Disposition.DELIVERED, result=out)
+    if resp.status_code == HTTP_UNPROCESSABLE:
+        return Verdict(Disposition.SKIPPED, reason=_skip_reason(resp))
+    code = resp.status_code
+    return Verdict(Disposition.FAILED, reason=f'service_http_{code}')
+
+
+def _skip_reason(resp: requests.Response) -> str:
+    """The service's stable skip code, parsed from its 422 detail."""
+    try:
+        detail = resp.json().get('detail', '')
+    except ValueError:
+        return 'service_skip'
+    _, _, reason = str(detail).partition(': ')
+    return reason or 'service_skip'
