@@ -135,6 +135,17 @@ module = [
 ]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# The services tier carries its own web stack (fastapi, uvicorn, mcp) and its
+# own lighter conventions -- it is not part of the kernel's strict gate
+# (packages above are minion_core + minions). Each minion's service.py imports
+# its serve helper, so tell mypy not to follow into the services package (its
+# deps are not installed for the kernel gate). It is linted by ruff and proven
+# by services/tests.
+module = ['services.*']
+follow_imports = 'skip'
+ignore_missing_imports = true
+
 # -------------------------------------------------------------- pytest
 [tool.pytest.ini_options]
 testpaths = ['tests']

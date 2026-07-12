@@ -27,7 +27,8 @@ def _make(cfg: Settings) -> Stage:
 
 def main() -> int:
     """Serve the frames chain over the SKIN facade."""
-    return run_service_app('frames', _make)
+    code: int = run_service_app('frames', _make)
+    return code
 
 
 if __name__ == '__main__':
