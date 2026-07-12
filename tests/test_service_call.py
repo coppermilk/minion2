@@ -86,6 +86,7 @@ def test_422_surfaces_as_skipped(tmp_path: Path) -> None:
         verdict = CallService(ServiceCall(url)).process(_job(tmp_path))
     assert verdict.disposition is Disposition.SKIPPED
     assert verdict.reason == 'no_person'
+    assert verdict.reply  # the sender is told, not left in silence
 
 
 def test_unreachable_service_is_failed(tmp_path: Path) -> None:
@@ -95,3 +96,4 @@ def test_unreachable_service_is_failed(tmp_path: Path) -> None:
     )
     assert verdict.disposition is Disposition.FAILED
     assert verdict.reason == 'service_unreachable'
+    assert verdict.reply  # a failure is reported to the sender
