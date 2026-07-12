@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
@@ -18,8 +19,11 @@ from services.core import ServiceRequest
 from services.core import run_service
 from services.store import LocalStore
 
+if TYPE_CHECKING:
+    from services.core import Make
 
-def create_server(step: str) -> FastMCP:
+
+def create_server(step: str, make: Make) -> FastMCP:
     """Build the one-Step MCP server exposing a ``run`` tool."""
     server = FastMCP(f'service-{step}')
 
@@ -30,7 +34,7 @@ def create_server(step: str) -> FastMCP:
         store = LocalStore(work / 'store')
         src = Path(input_path)
         ref = store.put(src.name, src)
-        result = run_service(ServiceRequest(step, ref), store)
+        result = run_service(ServiceRequest(step, ref), store, make)
         out = (
             str(store.fetch(result.output_ref, work / 'out'))
             if result.output_ref is not None

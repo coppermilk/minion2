@@ -101,6 +101,10 @@ The processing IP and the Telegram transport are **fully separated**, in one
   HTTP (`/run-file`, async `/jobs/file`) and MCP. No Telegram. A folder
   result (frames) comes back as one zip. n8n, a React Flow canvas or an MCP
   agent call these the same way ([services/README.md](services/README.md)).
+  Each is its own self-contained minion (`minions/<name>/step.py` owns the
+  model, `minions/<name>/service.py` serves it); the container runs
+  `python -m minions.<name>.service` and imports **only its own Step** -- no
+  catalog, no sibling service, no Telegram.
 - **`telegram`** -- ONE clean container that owns every media bot's Telegram
   identity and holds no processing code: each dock receives a file (or link),
   POSTs it to its service over HTTP (`minions/telegram.py` ->

@@ -1,8 +1,8 @@
-"""Censor family tests: three bots, one shared step, documents only.
+"""Censor family tests: the three service Steps and the tg contract.
 
-Covers the split (BLUEPRINT 9 waiver): HidePeople per mode, the
-restore two-step belt, per-bot offsets, tokenless degradation
-(REQ-DEG-001) and the documents-only Telegram contract.
+Covers HideFaces / BlurContour / HidePersonBoxes (each now its own service
+minion), the restore two-step belt, and the documents-only Telegram contract
+(REQ-DEG-001 folder degradation now lives with the relay, not these Steps).
 """
 
 from __future__ import annotations
@@ -12,28 +12,21 @@ from typing import Any
 
 import pytest
 
-import minions.censor_black.main
-import minions.censor_blur.main
-import minions.restore.main
 from minion_core.adapters import llm
 from minion_core.adapters import tg
-from minion_core.adapters import vision
+from minion_core.adapters.files import Mask
 from minion_core.kernel import Disposition
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
+from minions.censor_black import step as black
+from minions.censor_blur import step as blur
+from minions.restore import step as boxes
 from tests.conftest import make_cfg
-from tests.conftest import make_env
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from minion_core.settings import Settings
-
-BOTS = (
-    minions.censor_blur.main,
-    minions.censor_black.main,
-    minions.restore.main,
-)
 
 
 def _jpeg(path: Path) -> Path:
@@ -53,9 +46,9 @@ def _job(cfg: Settings, bot: str, src: Path) -> Job:
     )
 
 
-def _full_mask(width: int, height: int) -> vision.Mask:
+def _full_mask(width: int, height: int) -> Mask:
     """A person mask covering the whole frame (all pixels hidden)."""
-    return vision.Mask(width, height, bytes([255]) * (width * height))
+    return Mask(width, height, bytes([255]) * (width * height))
 
 
 def test_hide_faces_delivers_s1(
@@ -65,8 +58,8 @@ def test_hide_faces_delivers_s1(
     """censor-black: black out the face, deliver the ``_s1`` copy."""
     cfg = make_cfg(tmp_path / 'drive')
     src = _jpeg(cfg.bot_dir('censor-black') / 'pic.jpg')
-    monkeypatch.setattr(vision, 'face_boxes', lambda p: ((8, 8, 24, 24),))
-    verdict = vision.HideFaces().process(_job(cfg, 'censor-black', src))
+    monkeypatch.setattr(black, 'face_boxes', lambda p: ((8, 8, 24, 24),))
+    verdict = black.HideFaces().process(_job(cfg, 'censor-black', src))
     assert verdict.disposition is Disposition.DELIVERED
     assert verdict.result is not None
     assert verdict.result.name == 'pic_s1.jpg'
@@ -81,8 +74,8 @@ def test_blur_contour_delivers_s1(
     """censor-blur: blur the person silhouette, deliver the ``_s1`` copy."""
     cfg = make_cfg(tmp_path / 'drive')
     src = _jpeg(cfg.bot_dir('censor-blur') / 'pic.jpg')
-    monkeypatch.setattr(vision, 'person_masks', lambda p: _full_mask(32, 32))
-    verdict = vision.BlurContour().process(_job(cfg, 'censor-blur', src))
+    monkeypatch.setattr(blur, 'person_masks', lambda p: _full_mask(32, 32))
+    verdict = blur.BlurContour().process(_job(cfg, 'censor-blur', src))
     assert verdict.disposition is Disposition.DELIVERED
     assert verdict.result is not None
     assert verdict.result.name == 'pic_s1.jpg'
@@ -97,8 +90,8 @@ def test_no_face_is_skip_never_passthrough(
     """CT-B: zero detections must not send the original back."""
     cfg = make_cfg(tmp_path / 'drive')
     src = _jpeg(cfg.bot_dir('censor-black') / 'pic.jpg')
-    monkeypatch.setattr(vision, 'face_boxes', lambda p: ())
-    verdict = vision.HideFaces().process(_job(cfg, 'censor-black', src))
+    monkeypatch.setattr(black, 'face_boxes', lambda p: ())
+    verdict = black.HideFaces().process(_job(cfg, 'censor-black', src))
     assert verdict.disposition is Disposition.SKIPPED
     assert verdict.reason == 'no_face'
     assert verdict.result is None
@@ -111,8 +104,8 @@ def test_no_person_contour_is_skip(
     """CT-B for the blur bot: no mask -> SKIP, not a pass-through."""
     cfg = make_cfg(tmp_path / 'drive')
     src = _jpeg(cfg.bot_dir('censor-blur') / 'pic.jpg')
-    monkeypatch.setattr(vision, 'person_masks', lambda p: None)
-    verdict = vision.BlurContour().process(_job(cfg, 'censor-blur', src))
+    monkeypatch.setattr(blur, 'person_masks', lambda p: None)
+    verdict = blur.BlurContour().process(_job(cfg, 'censor-blur', src))
     assert verdict.disposition is Disposition.SKIPPED
     assert verdict.reason == 'no_person'
     assert verdict.result is None
@@ -125,7 +118,7 @@ def test_restore_belt_delivers_s2(
     """The restore belt has two steps: blur ``_s1``, repaint ``_s2``."""
     cfg = make_cfg(tmp_path / 'drive')
     src = _jpeg(cfg.bot_dir('restore') / 'pic.jpg')
-    monkeypatch.setattr(vision, 'person_boxes', lambda p: ((8, 8, 24, 24),))
+    monkeypatch.setattr(boxes, 'person_boxes', lambda p: ((8, 8, 24, 24),))
 
     def fake_repaint(path: Path, spec: llm.LlmSpec) -> Path:
         out = path.with_stem(path.stem.removesuffix('_s1') + '_s2')
@@ -134,8 +127,7 @@ def test_restore_belt_delivers_s2(
 
     monkeypatch.setattr(llm, 'restore_background', fake_repaint)
     spec = llm.spec_from({})
-    hide = vision.HidePersonBoxes()
-    first = hide.process(_job(cfg, 'restore', src))
+    first = boxes.HidePersonBoxes().process(_job(cfg, 'restore', src))
     assert first.result is not None
     assert first.result.name == 'pic_s1.jpg'
     second = llm.RestoreBackground(spec).process(
@@ -165,28 +157,6 @@ def test_restore_refusal_is_stable_code(
     assert verdict.disposition is Disposition.FAILED
     assert verdict.reason == 'restore_failed'
     assert s1.is_file()
-
-
-def test_all_three_tokenless_build_a_folder_belt(tmp_path: Path) -> None:
-    """REQ-DEG-001: tokenless, each bot degrades to a folder-only belt.
-
-    A drop dock over the bot's own dir is always present, so a
-    tokenless bot watches for dropped files instead of exiting; the
-    belt still assembles with no token and no ``*_WATCH``.
-    """
-    cfg = make_cfg(tmp_path / 'drive')
-    env = make_env(tmp_path / 'drive')
-    for bot in BOTS:
-        assert bot.build(cfg, env) is not None
-
-
-def test_each_bot_owns_its_offset(tmp_path: Path) -> None:
-    """Three identities, three high-water marks (STATE)."""
-    cfg = make_cfg(tmp_path / 'drive')
-    graphs = [bot.build(cfg, {'TG_TOKEN': ''}) for bot in BOTS]
-    assert all(g is not None for g in graphs)
-    names = {bot.BOT for bot in BOTS}
-    assert names == {'censor-blur', 'censor-black', 'restore'}
 
 
 def _msg(payload: dict[str, Any]) -> dict[str, Any]:

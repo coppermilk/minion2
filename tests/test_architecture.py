@@ -22,11 +22,21 @@ VENDORS = {
     'yt_dlp': ('minion_core/adapters/fetch.py',),
     'PIL': ('minion_core/adapters/files.py',),
     'piexif': ('minion_core/adapters/files.py',),
-    'numpy': ('minion_core/adapters/vision.py',),
-    'torch': ('minion_core/adapters/vision.py',),
-    'torchvision': ('minion_core/adapters/vision.py',),
+    'numpy': (
+        'minion_core/adapters/vision.py',
+        'minions/censor_blur/step.py',
+    ),
+    'torch': (
+        'minion_core/adapters/vision.py',
+        'minions/censor_blur/step.py',
+        'minions/restore/step.py',
+    ),
+    'torchvision': (
+        'minions/censor_blur/step.py',
+        'minions/restore/step.py',
+    ),
     'transformers': ('minion_core/adapters/vision.py',),
-    'facenet_pytorch': ('minion_core/adapters/vision.py',),
+    'facenet_pytorch': ('minions/censor_black/step.py',),
     'google': ('minion_core/adapters/llm.py',),
 }
 """Each vendor and its sanctioned import sites (adapters only)."""

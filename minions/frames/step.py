@@ -1,9 +1,9 @@
-"""Frame extraction Step: a video -> a per-clip folder of frames.
+"""frames: a video -> a per-clip folder of frames. Knows only this.
 
-Telegram-free (like every processing adapter): it knows nothing about where
-the video came from, so it runs inside a service (``svc-frames``) with no
-transport code. The frames bot and the service both take ``ExtractFrames``
-from here; only the bot's dock/sinks live in ``minions/frames``.
+Owns the extraction Step; imports the ffmpeg boundary (``video``) and the
+file framework (``files``) as SDKs -- no sibling service, no Telegram. The
+link download that can precede it (FetchLink) is the shared yt-dlp adapter,
+wired in this minion's ``service.py``.
 """
 
 from __future__ import annotations

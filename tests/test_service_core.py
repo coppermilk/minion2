@@ -10,12 +10,25 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from minion_core.adapters.files import Deliver
+from minions.frames.step import ExtractFrames
 from services.core import ServiceRequest
 from services.core import run_service
 from services.store import LocalStore
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from minion_core.kernel import Stage
+    from minion_core.settings import Settings
+
+
+def _deliver(_cfg: Settings) -> Stage:
+    return Deliver()
+
+
+def _frames(cfg: Settings) -> Stage:
+    return ExtractFrames(cfg)
 
 
 def test_local_store_round_trips_bytes(tmp_path: Path) -> None:
@@ -38,7 +51,7 @@ def test_run_service_delivers_and_stores_output(tmp_path: Path) -> None:
     src.write_bytes(b'hello')
     ref = store.put('inbox/photo.jpg', src)
 
-    result = run_service(ServiceRequest('deliver', ref), store)
+    result = run_service(ServiceRequest('deliver', ref), store, _deliver)
 
     assert result.disposition == 'delivered'
     assert result.output_ref is not None
@@ -66,7 +79,7 @@ def test_directory_result_stores_each_file(tmp_path, monkeypatch) -> None:
     src.write_bytes(b'video')
     ref = store.put('inbox/clip.mp4', src)
 
-    result = run_service(ServiceRequest('frames', ref), store)
+    result = run_service(ServiceRequest('frames', ref), store, _frames)
 
     assert result.disposition == 'delivered'
     assert len(result.outputs) == 3  # one ref per frame
@@ -82,6 +95,6 @@ def test_run_service_is_stateless(tmp_path: Path) -> None:
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_bytes(b'x')
     ref = store.put('inbox/x.jpg', src)
-    first = run_service(ServiceRequest('deliver', ref), store)
-    second = run_service(ServiceRequest('deliver', ref), store)
+    first = run_service(ServiceRequest('deliver', ref), store, _deliver)
+    second = run_service(ServiceRequest('deliver', ref), store, _deliver)
     assert first.disposition == second.disposition == 'delivered'

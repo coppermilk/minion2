@@ -93,8 +93,11 @@ inline-quotes = 'single'
 convention = 'pep257'
 
 [tool.ruff.lint.per-file-ignores]
-# Sanctioned lazy vendor loads (BLUEPRINT 4, Power-of-10 rule 8).
+# Sanctioned lazy vendor loads (BLUEPRINT 4, Power-of-10 rule 8). The
+# processing minions (svc-* Steps) own their model and load torch lazily,
+# exactly like an adapter.
 'minion_core/adapters/*' = ['PLC0415']
+'minions/*/step.py' = ['PLC0415']
 # Tests: assert is the medium; magic values are fixtures; doubles
 # carry unused hook arguments; docstring ceremony, import-placement
 # and packaging rules do not apply to CT-E tooling.

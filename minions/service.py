@@ -21,16 +21,16 @@ from typing import TypeAlias
 
 from minion_core.adapters.fetch import FetchLink
 from minion_core.adapters.files import Deliver
-from minion_core.adapters.frames import ExtractFrames
 from minion_core.adapters.llm import RestoreBackground
 from minion_core.adapters.llm import spec_from
-from minion_core.adapters.vision import BlurContour
-from minion_core.adapters.vision import HideFaces
-from minion_core.adapters.vision import HidePersonBoxes
 from minion_core.kernel import Disposition
 from minion_core.service import Call
 from minion_core.service import invoke
 from minion_core.settings import load
+from minions.censor_black.step import HideFaces
+from minions.censor_blur.step import BlurContour
+from minions.frames.step import ExtractFrames
+from minions.restore.step import HidePersonBoxes
 
 if TYPE_CHECKING:
     from collections.abc import Callable

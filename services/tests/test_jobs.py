@@ -13,11 +13,12 @@ import time
 
 from fastapi.testclient import TestClient
 
+from minion_core.adapters.files import Deliver
 from services.http import create_app
 
 
 def _client() -> TestClient:
-    return TestClient(create_app('deliver'))
+    return TestClient(create_app('deliver', lambda _c: Deliver()))
 
 
 def _wait_done(client: TestClient, job_id: str) -> dict:
