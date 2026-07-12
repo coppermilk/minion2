@@ -19,7 +19,6 @@ Ways in (bytes in, bytes out -- no shared object store):
 from __future__ import annotations
 
 import contextlib
-import os
 import shutil
 import tempfile
 import threading
@@ -43,6 +42,7 @@ from services.core import run_service
 from services.store import LocalStore
 
 if TYPE_CHECKING:
+    from services.core import Make
     from services.store import Store
 
 
@@ -109,6 +109,7 @@ class _JobSpec:
     store: Store
     ref: str
     callback: str | None
+    make: Make
 
 
 def _summary(job: _Job) -> dict[str, object]:
@@ -136,7 +137,9 @@ def _callback(url: str, job: _Job) -> None:
 def _run_job(jobs: JobStore, job_id: str, spec: _JobSpec) -> None:
     """Run one job in the background, then fire its callback if any."""
     try:
-        result = run_service(ServiceRequest(spec.step, spec.ref), spec.store)
+        result = run_service(
+            ServiceRequest(spec.step, spec.ref), spec.store, spec.make
+        )
         jobs.finish(job_id, result)
     except Exception as exc:  # noqa: BLE001 -- a job failure is reported, not raised
         jobs.fail(job_id, str(exc))
@@ -164,8 +167,8 @@ def _spawn(jobs: JobStore, job_id: str, spec: _JobSpec) -> None:
     ).start()
 
 
-def create_app(step: str) -> FastAPI:
-    """Build the one-Step service app (HTTP + OpenAPI)."""
+def create_app(step: str, make: Make) -> FastAPI:
+    """Build the one-Step service app (HTTP + OpenAPI); ``make`` builds it."""
     app = FastAPI(title=f'service:{step}')
     jobs = JobStore()
     job_store: Store = LocalStore(Path(tempfile.mkdtemp(prefix='svc-jobs-')))
@@ -179,7 +182,7 @@ def create_app(step: str) -> FastAPI:
         work = Path(tempfile.mkdtemp())
         cleanup = BackgroundTask(shutil.rmtree, work, ignore_errors=True)
         ref = _stash(work, file)
-        result = run_service(ServiceRequest(step, ref), store_at(work))
+        result = run_service(ServiceRequest(step, ref), store_at(work), make)
         headers = {
             'X-Disposition': result.disposition,
             'X-Run-Ms': f'{result.ms:.3f}',
@@ -210,7 +213,11 @@ def create_app(step: str) -> FastAPI:
     ) -> dict[str, str]:
         job_id = jobs.create()
         ref = _stash_to(job_store, job_id, file)
-        _spawn(jobs, job_id, _JobSpec(step, job_store, ref, callback_url))
+        _spawn(
+            jobs,
+            job_id,
+            _JobSpec(step, job_store, ref, callback_url, make),
+        )
         return {'job_id': job_id, 'status': 'running'}
 
     @app.get('/jobs/{job_id}')
@@ -263,7 +270,3 @@ def _stash(work: Path, file: UploadFile) -> str:
     with src.open('wb') as sink:
         shutil.copyfileobj(file.file, sink)
     return store_at(work).put(f'in/{name}', src)
-
-
-app = create_app(os.environ.get('STEP', 'deliver'))
-"""The module-level app uvicorn serves; STEP picks the Step."""

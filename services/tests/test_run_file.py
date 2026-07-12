@@ -1,10 +1,11 @@
 """The web-facing /run-file: bytes in, bytes out.
 
-Services tier. A caller (n8n's HTTP Request node, a Telegram relay, ...)
-has the media as binary and wants binary back; /run-file is a single node,
-no object store. We check a file round-trips (deliver), a real blur comes
-back (censor-blur, segmentation stubbed so the PIL blur is genuine but
-torch is not needed), and a skip surfaces as 422.
+Services tier. A caller (n8n's HTTP Request node, a thin relay, ...) has the
+media as binary and wants binary back; /run-file is a single node, no object
+store. Each service is built with its own ``make`` -- no catalog. We check a
+file round-trips (deliver), a real blur comes back (censor-blur, segmentation
+stubbed so the PIL blur is genuine but torch is not needed), a folder result
+zips (frames), and a skip surfaces as 422.
 """
 
 from __future__ import annotations
@@ -13,7 +14,17 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from minion_core.adapters.files import Deliver
+from minions.censor_blur import step as blur
 from services.http import create_app
+
+
+def _deliver_app() -> TestClient:
+    return TestClient(create_app('deliver', lambda _c: Deliver()))
+
+
+def _blur_app() -> TestClient:
+    return TestClient(create_app('censor-blur', lambda _c: blur.BlurContour()))
 
 
 def _sharp_jpeg(path: Path) -> Path:
@@ -28,8 +39,7 @@ def _sharp_jpeg(path: Path) -> Path:
 
 
 def test_run_file_round_trips_a_file(tmp_path: Path) -> None:
-    client = TestClient(create_app('deliver'))
-    reply = client.post(
+    reply = _deliver_app().post(
         '/run-file',
         files={'file': ('a.bin', b'hello', 'application/octet-stream')},
     )
@@ -44,7 +54,6 @@ def test_run_file_blurs_via_the_censor_blur_service(
 ) -> None:
     from PIL import Image
 
-    from minion_core.adapters import vision
     from minion_core.adapters.files import Mask
 
     def fake_masks(path: Path) -> Mask:
@@ -56,11 +65,10 @@ def test_run_file_blurs_via_the_censor_blur_service(
         )
         return Mask(width=width, height=height, data=data)
 
-    monkeypatch.setattr(vision, 'person_masks', fake_masks)
+    monkeypatch.setattr(blur, 'person_masks', fake_masks)
     src = _sharp_jpeg(tmp_path / 'p.jpg')
-    client = TestClient(create_app('censor-blur'))
 
-    reply = client.post(
+    reply = _blur_app().post(
         '/run-file', files={'file': ('p.jpg', src.read_bytes(), 'image/jpeg')}
     )
     assert reply.status_code == 200
@@ -88,11 +96,11 @@ def test_run_file_zips_a_directory_result(tmp_path: Path, monkeypatch) -> None:
         path.write_bytes(name.encode())
         refs.append(f'file://{path}')
 
-    def fake_run(_req, _store) -> ServiceResult:
+    def fake_run(_req, _store, _make) -> ServiceResult:
         return ServiceResult(None, 'delivered', '', 1.0, refs)
 
     monkeypatch.setattr(svc_http, 'run_service', fake_run)
-    client = TestClient(create_app('frames'))
+    client = TestClient(create_app('frames', lambda _c: Deliver()))
     reply = client.post(
         '/run-file', files={'file': ('v.mp4', b'video', 'video/mp4')}
     )
@@ -103,12 +111,9 @@ def test_run_file_zips_a_directory_result(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_run_file_422_when_the_step_skips(tmp_path: Path, monkeypatch) -> None:
-    from minion_core.adapters import vision
-
-    monkeypatch.setattr(vision, 'person_masks', lambda _p: None)
+    monkeypatch.setattr(blur, 'person_masks', lambda _p: None)
     src = _sharp_jpeg(tmp_path / 'p.jpg')
-    client = TestClient(create_app('censor-blur'))
-    reply = client.post(
+    reply = _blur_app().post(
         '/run-file', files={'file': ('p.jpg', src.read_bytes(), 'image/jpeg')}
     )
     assert reply.status_code == 422

@@ -24,8 +24,8 @@ from minion_core.kernel import Verdict
 from minions.catch.main import CatchDeps
 from minions.catch.main import ClassifyCopy
 from minions.catch.main import build as build_catch
-from minions.censor_blur.main import build as build_censor_blur
 from minions.print.main import PrintPdf
+from minions.relay.main import build as build_relay
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:
@@ -175,13 +175,11 @@ def test_route_origin_serves_both_docks(tmp_path: Path) -> None:
     assert tg_file.exists()  # ArchiveTo never touched the tg job
 
 
-def test_censor_build_merges_watch_dock(tmp_path: Path) -> None:
-    """The merged, tokenless censor graph still assembles."""
-    watch = tmp_path / 'censor_watch'
-    watch.mkdir()
-    cfg = make_cfg(tmp_path / 'drive', CENSOR_BLUR_WATCH=str(watch))
-    assert cfg.censor_blur_watch == watch
-    assert build_censor_blur(cfg, {'TG_TOKEN': ''}) is not None
+def test_relay_build_merges_watch_dock(tmp_path: Path) -> None:
+    """REQ-DOCK-001: the tokenless relay merges a folder watch and builds."""
+    cfg = make_cfg(tmp_path / 'drive')
+    env = {'TG_TOKEN': '', 'RELAY_NAME': 'censor-blur', 'SERVICE_URL': ''}
+    assert build_relay(cfg, env) is not None
 
 
 # ------------------------------------------------- REQ-CATCH-001/2

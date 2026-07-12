@@ -79,7 +79,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-      STEP: censor-blur
+    command: python -m minions.censor_blur.service
     ports:
       - "${SVC_CENSOR_BLUR_PORT:-8091}:8000"
     mem_limit: 4g
@@ -88,7 +88,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-      STEP: censor-black
+    command: python -m minions.censor_black.service
     ports:
       - "${SVC_CENSOR_BLACK_PORT:-8092}:8000"
     mem_limit: 4g
@@ -99,7 +99,7 @@ services:
     env_file: .env
     environment:
       <<: *svc-env
-      STEP: restore
+    command: python -m minions.restore.service
     ports:
       - "${SVC_RESTORE_PORT:-8093}:8000"
     mem_limit: 4g
@@ -110,7 +110,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-      STEP: frames
+    command: python -m minions.frames.service
     ports:
       - "${SVC_FRAMES_PORT:-8094}:8000"
     mem_limit: 2g
@@ -120,7 +120,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-      STEP: fetch
+    command: python -m minions.fetch.service
     ports:
       - "${SVC_FETCH_PORT:-8095}:8000"
     mem_limit: 1g

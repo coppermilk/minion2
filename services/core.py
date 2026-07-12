@@ -1,10 +1,10 @@
 """Protocol-neutral service core: run one Step over a stored input.
 
-Both the HTTP and MCP skins call ``run_service``; it is the one place the
-data plane meets the Phase 0 dispatcher. Stateless: a fresh temp DRIVE per
-request, the input fetched in by reference, the Step run via ``invoke``,
-the result put back to the store. The Step (the IP) is never touched, and
-``ms`` is the timing seam (measured around ``invoke``).
+Both the HTTP and MCP skins call ``run_service`` with a ``make`` factory that
+builds the one Step (or chain) this service serves -- so the core imports no
+catalog and a service knows only its own Step. Stateless: a fresh temp DRIVE
+per request, the input fetched in by reference, the Step run via ``invoke``,
+the result put back to the store. ``ms`` is the timing seam.
 """
 
 from __future__ import annotations
@@ -15,17 +15,24 @@ from dataclasses import field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
+from typing import TypeAlias
 
 from minion_core.kernel import Disposition
 from minion_core.service import Call
 from minion_core.service import invoke
 from minion_core.settings import load
-from minions.service import build
 from services.store import child_refs
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from minion_core.kernel import Stage
     from minion_core.kernel import Verdict
+    from minion_core.settings import Settings
     from services.store import Store
+
+Make: TypeAlias = 'Callable[[Settings], Stage]'
+"""Builds the one Step (or chain) a service serves -- no catalog needed."""
 
 
 @dataclass(frozen=True)
@@ -52,27 +59,26 @@ class ServiceResult:
     outputs: list[str] = field(default_factory=list)
 
 
-def run_service(req: ServiceRequest, store: Store) -> ServiceResult:
-    """Fetch the input, run the Step, put the output; time the Step."""
+def run_service(
+    req: ServiceRequest, store: Store, make: Make
+) -> ServiceResult:
+    """Fetch the input, run the Step built by ``make``, put the output."""
     with TemporaryDirectory() as tmp:
-        return _run(req, store, Path(tmp))
-
-
-def _run(req: ServiceRequest, store: Store, work: Path) -> ServiceResult:
-    cfg = load({'DRIVE': str(work)})
-    into = cfg.bot_dir(req.step)
-    src = store.fetch(req.input_ref, into)
-    start = time.monotonic()
-    verdict = invoke(build(req.step, cfg), Call(src=src, dest=into))
-    ms = (time.monotonic() - start) * 1000.0
-    primary, outputs = _store_output(store, req, verdict)
-    return ServiceResult(
-        output_ref=primary,
-        disposition=verdict.disposition.value,
-        reason=verdict.reason,
-        ms=ms,
-        outputs=outputs,
-    )
+        work = Path(tmp)
+        cfg = load({'DRIVE': str(work)})
+        into = cfg.bot_dir(req.step)
+        src = store.fetch(req.input_ref, into)
+        start = time.monotonic()
+        verdict = invoke(make(cfg), Call(src=src, dest=into))
+        ms = (time.monotonic() - start) * 1000.0
+        primary, outputs = _store_output(store, req, verdict)
+        return ServiceResult(
+            output_ref=primary,
+            disposition=verdict.disposition.value,
+            reason=verdict.reason,
+            ms=ms,
+            outputs=outputs,
+        )
 
 
 def _store_output(

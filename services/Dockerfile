@@ -1,14 +1,15 @@
-# The service wrapper rides ON the shared bots image: torch, ffmpeg, yt-dlp,
-# minion_core and minions are already baked in, so EVERY Step works as a
-# service -- we add only the web layer. Published by
-# .github/workflows/image.yml as ghcr.io/coppermilk/minion2-service, so the
-# NAS pulls it (it never compiles torch). One image, N services: STEP selects
-# the Step, SKIN the facade (http | mcp). Bytes in, bytes out -- no object
-# store, so a service is stateless and needs no volume.
+# The service image rides ON the shared bots image: torch, ffmpeg, yt-dlp,
+# minion_core and minions are already baked in -- we add only the web layer.
+# Published by .github/workflows/image.yml as ghcr.io/coppermilk/minion2-service,
+# so the NAS pulls it (it never compiles torch). One image, N services: each
+# container runs its own minion (python -m minions.<name>.service), which
+# imports ONLY its Step. SKIN picks the facade (http | mcp). Bytes in, bytes
+# out -- stateless, no volume.
 #
-# Local build (from the repo root):
+# Local build + run one service (from the repo root):
 #   docker build -t minion-service -f services/Dockerfile .
-#   docker run -e STEP=frames -e SKIN=http -p 8082:8000 minion-service
+#   docker run -e SKIN=http -p 8091:8000 minion-service \
+#     python -m minions.censor_blur.service
 FROM ghcr.io/coppermilk/minion2:latest
 
 # Only the web layer on top of the shared image (pure-python wheels, seconds).
@@ -18,7 +19,7 @@ RUN pip install --no-cache-dir \
 # The base image already has WORKDIR /app with minion_core + minions installed.
 COPY services ./services
 
-# Defaults are the offline/dev shape; compose overrides per service.
-ENV STEP=deliver SKIN=http PORT=8000
+# Compose sets the command per service; this default just prints how to run.
+ENV SKIN=http PORT=8000
 EXPOSE 8000
-CMD ["python", "-m", "services.serve"]
+CMD ["python", "-c", "print('run: python -m minions.<name>.service')"]

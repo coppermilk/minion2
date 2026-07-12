@@ -1,39 +1,31 @@
-"""Service entrypoint: pick the skin by env and serve.
+"""Serve one Step as a web service (http | mcp), picked by SKIN.
 
-    STEP=frames SKIN=http python -m services.serve   # uvicorn + OpenAPI
-    STEP=frames SKIN=mcp  python -m services.serve   # MCP (stdio)
-
-One image, N containers: STEP selects the Step, SKIN the facade, PORT the
-HTTP port. Kept tiny -- the logic is elsewhere; this only starts a server.
+A minion's ``service.py`` calls ``run_service_app(step, make)``; ``make``
+builds the one Step it serves, so the process imports only that minion --
+never a catalog of every other service.
 """
 
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.core import Make
 
 
-def _serve_mcp(step: str) -> None:
-    from services.mcp_server import create_server
-
-    create_server(step).run()
-
-
-def _serve_asgi(target: str) -> None:
-    import uvicorn
-
-    port = int(os.environ.get('PORT', '8000'))
-    uvicorn.run(target, host='0.0.0.0', port=port)  # noqa: S104 -- bind all inside the container; expose per compose
-
-
-def main() -> int:
-    """Serve the configured skin over one Step: http (default) or mcp."""
+def run_service_app(step: str, make: Make) -> int:
+    """Serve the Step over the SKIN facade: http (default) or mcp."""
     skin = os.environ.get('SKIN', 'http')
     if skin == 'mcp':
-        _serve_mcp(os.environ.get('STEP', 'deliver'))
-    else:
-        _serve_asgi('services.http:app')
+        from services.mcp_server import create_server
+
+        create_server(step, make).run()
+        return 0
+    import uvicorn
+
+    from services.http import create_app
+
+    port = int(os.environ.get('PORT', '8000'))
+    uvicorn.run(create_app(step, make), host='0.0.0.0', port=port)  # noqa: S104 -- bind all inside the container; expose per compose
     return 0
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())
