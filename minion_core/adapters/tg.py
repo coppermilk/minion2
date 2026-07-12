@@ -258,6 +258,9 @@ class TgSpec:
     offset: Path
     chats: tuple[str, ...]
     help: str = ''
+    ack: str = ''
+    """Sent the moment a work message is seen (before the download). Empty
+    disables it; the caller sets the text (the relay keys it per bot)."""
 
 
 class _TgSource(Source):
@@ -333,6 +336,19 @@ class _TgSource(Source):
             'sendMessage', {'chat_id': msg['chat']['id'], 'text': text}
         )
 
+    def announce_start(self, msg: dict[str, Any]) -> None:
+        """Ack a work message the moment it is seen, before the download.
+
+        The sender learns the task began at once -- not after a slow link or
+        file download. Empty ``spec.ack`` disables it (the default).
+        """
+        if not self.api.live or not self.spec.ack:
+            return
+        self.api.call(
+            'sendMessage',
+            {'chat_id': msg['chat']['id'], 'text': self.spec.ack},
+        )
+
     def emit_spooled(self, spooled: Path, ctx: MsgCtx) -> None:
         """Emit a job addressed to the chat, disposing the spool."""
         ref = f'{_ref(ctx.msg)}:{spooled}'
@@ -362,6 +378,7 @@ def _accept_media(src: _TgSource, ctx: MsgCtx) -> bool:
     doc = _document(ctx.msg)
     if doc is None:
         return False
+    src.announce_start(ctx.msg)  # ack before the (maybe slow) download
     got = src.api.download(
         str(doc['file_id']), src.spec.spool, doc.get('file_name')
     )
@@ -375,6 +392,7 @@ def _accept_link(src: _TgSource, ctx: MsgCtx) -> bool:
     match = _URL.search(text)
     if match is None:
         return False
+    src.announce_start(ctx.msg)  # ack before the (maybe slow) fetch
     url = match.group(0)
     name = sanitize(url.rsplit('/', 1)[-1] or 'link') + '.url'
     spooled = next_free_path(src.spec.spool.into / name)

@@ -167,6 +167,30 @@ def test_document_original_name_is_preserved(tmp_path: Path) -> None:
     assert emitted[0].job.src.name == f'{klip} 5.mp4'
 
 
+def test_ack_is_sent_before_the_download(tmp_path: Path) -> None:
+    """A work message acks at once, before the (maybe slow) download."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    spec = TgSpec(
+        spool=SpoolSpec(
+            into=cfg.bot_dir('t'), budget=functools.partial(free_quota, cfg)
+        ),
+        dest=cfg.inbox,
+        offset=cfg.state / 't.offset',
+        chats=('1',),
+        ack='working on it',
+    )
+    source = TgMedia(api, spec)
+    msg = {
+        'chat': {'id': 1},
+        'message_id': 9,
+        'document': {'file_id': 'F', 'file_name': 'a.mp4'},
+    }
+    source.accept(msg, [].append)
+    assert api.messages == ['working on it']  # ack sent once
+    assert api.name_seen == 'a.mp4'  # and then the download ran
+
+
 def test_document_helper_refuses_compressed() -> None:
     """A photo/video payload is not a document: None (logged elsewhere)."""
     assert _document({'chat': {'id': 1}, 'photo': [{'file_id': 'x'}]}) is None
