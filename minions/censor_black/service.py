@@ -25,7 +25,8 @@ def _make(_cfg: Settings) -> Stage:
 
 def main() -> int:
     """Serve the face-blackout Step over the SKIN facade."""
-    return run_service_app('censor-black', _make)
+    code: int = run_service_app('censor-black', _make)
+    return code
 
 
 if __name__ == '__main__':

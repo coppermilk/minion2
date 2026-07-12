@@ -29,7 +29,8 @@ def _make(_cfg: Settings) -> Stage:
 
 def main() -> int:
     """Serve the restore chain over the SKIN facade."""
-    return run_service_app('restore', _make)
+    code: int = run_service_app('restore', _make)
+    return code
 
 
 if __name__ == '__main__':

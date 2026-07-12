@@ -26,7 +26,8 @@ def _make(cfg: Settings) -> Stage:
 
 def main() -> int:
     """Serve the link-fetch Step over the SKIN facade."""
-    return run_service_app('fetch', _make)
+    code: int = run_service_app('fetch', _make)
+    return code
 
 
 if __name__ == '__main__':
