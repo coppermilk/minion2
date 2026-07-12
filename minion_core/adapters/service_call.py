@@ -61,20 +61,37 @@ class CallService(Step):
                     timeout=self._spec.timeout,
                 )
         except requests.RequestException:
-            return Verdict(Disposition.FAILED, reason='service_unreachable')
+            return Verdict(
+                Disposition.FAILED,
+                reason='service_unreachable',
+                reply='Sorry, the service is offline right now. '
+                'Try again shortly.',
+            )
         return _verdict(job, resp)
 
 
 def _verdict(job: Job, resp: requests.Response) -> Verdict:
-    """Turn one HTTP response into a Verdict, writing any result bytes."""
+    """Turn one HTTP response into a Verdict, writing any result bytes.
+
+    A non-200 carries a ``reply``, so the belt's Reply sink tells the sender
+    what happened instead of leaving them in silence.
+    """
     if resp.status_code == HTTP_OK:
         out = next_free_path(job.dest / job.src.name)
         atomic_write(out, resp.content)
         return Verdict(Disposition.DELIVERED, result=out)
     if resp.status_code == HTTP_UNPROCESSABLE:
-        return Verdict(Disposition.SKIPPED, reason=_skip_reason(resp))
-    code = resp.status_code
-    return Verdict(Disposition.FAILED, reason=f'service_http_{code}')
+        reason = _skip_reason(resp)
+        return Verdict(
+            Disposition.SKIPPED,
+            reason=reason,
+            reply=f'Nothing to do here ({reason}).',
+        )
+    return Verdict(
+        Disposition.FAILED,
+        reason=f'service_http_{resp.status_code}',
+        reply='Sorry, that one failed. Give it another try in a bit.',
+    )
 
 
 def _skip_reason(resp: requests.Response) -> str:
