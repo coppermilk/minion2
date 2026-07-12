@@ -64,6 +64,19 @@ _DEFAULT_EXTS = (
 
 _DEFAULT_HELP = 'Send or drop a file and I run it through the service.'
 
+_ACKS = {
+    'censor-blur': 'Got it -- blurring the people in your photo...',
+    'censor-black': 'Got it -- blacking out the faces...',
+    'restore': 'Got it -- erasing the people and repainting the scene...',
+    'frames': 'Got it -- extracting the frames, back in a moment...',
+    'fetch': 'Got it -- fetching the video...',
+    'fan-save': 'Got it -- saving the video to your queue...',
+}
+"""Per-bot acknowledgement, sent the moment a message is seen (before the
+download). Keyed by RELAY_NAME; an unlisted bot falls back to a generic ack."""
+
+_DEFAULT_ACK = 'Got it -- working on it...'
+
 
 def _name(env: Mapping[str, str]) -> str:
     """The relay's identity: its work dir, offset, and done folder."""
@@ -96,6 +109,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         offset=cfg.state / f'{name}.offset',
         chats=chats_from(env),
         help=env.get('RELAY_HELP', _DEFAULT_HELP),
+        ack=_ACKS.get(name, _DEFAULT_ACK),
     )
     channel = TgChannel(api)
     watch = FolderSpec(
