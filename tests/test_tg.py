@@ -314,6 +314,36 @@ def test_chats_from_parses_csv() -> None:
     assert chats_from({}) == ()
 
 
+def _upd(chat: int, chat_type: str) -> dict[str, Any]:
+    return {
+        'update_id': 7,
+        'message': {
+            'chat': {'id': chat, 'type': chat_type},
+            'message_id': 9,
+            'text': 'hi',
+        },
+    }
+
+
+def test_denied_private_chat_is_told(tmp_path: Path) -> None:
+    """A DM from a chat off the allow-list gets a 'no access' reply."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    source._route(_upd(999, 'private'), lambda _e: None)
+    assert api.messages  # told, not left in silence
+    assert 'authorized' in api.messages[0].lower()
+
+
+def test_denied_group_chat_stays_silent(tmp_path: Path) -> None:
+    """An unauthorized group is rejected in silence (no spam/ban)."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    source._route(_upd(-100, 'supergroup'), lambda _e: None)
+    assert api.messages == []
+
+
 def test_two_whitelisted_users_served_without_crosstalk(
     tmp_path: Path,
 ) -> None:

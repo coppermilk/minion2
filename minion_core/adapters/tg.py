@@ -248,6 +248,9 @@ def chats_from(env: Mapping[str, str]) -> tuple[str, ...]:
 DOCS_ONLY = 'Send files as a document (not a compressed photo/video).'
 """The documents-only reminder appended to every bot's help line."""
 
+NO_ACCESS = 'Sorry, you are not authorized to use this bot.'
+"""Reply to a direct message from a chat outside the allow-list."""
+
 
 @dataclass(frozen=True)
 class TgSpec:
@@ -315,8 +318,25 @@ class _TgSource(Source):
         chat = str(msg['chat']['id'])
         if chat not in self.spec.chats:
             _LOG.warning('rejected reason=chat_not_allowed chat=%s', chat)
+            self._deny(msg)
             return
         self.accept(msg, emit)
+
+    def _deny(self, msg: dict[str, Any]) -> None:
+        """Tell a private sender outside the allow-list they lack access.
+
+        Only in a 1:1 chat: replying to every message in an unauthorized
+        group would spam it (and risk a Telegram ban), so a group is
+        still rejected in silence -- only the person who DMs the bot
+        directly is told. Tokenless docks stay silent (REQ-DEG-001).
+        """
+        if not self.api.live:
+            return
+        if msg.get('chat', {}).get('type') != 'private':
+            return
+        self.api.call(
+            'sendMessage', {'chat_id': msg['chat']['id'], 'text': NO_ACCESS}
+        )
 
     def accept(self, msg: dict[str, Any], emit: Emit) -> None:
         """Turn one allowed message into envelopes (per source)."""
