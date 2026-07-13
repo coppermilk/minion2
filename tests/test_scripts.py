@@ -1,4 +1,4 @@
-"""scripts adapter tests: .gdoc consumption, archive, degradation."""
+"""scripts adapter tests: .gdoc read-only hint, caching, degradation."""
 
 from __future__ import annotations
 
@@ -67,20 +67,37 @@ def test_bad_doc_id_never_reaches_the_network(
     assert not called
 
 
-def test_gdoc_shortcuts_consumed_and_combined(
+def test_gdoc_shortcuts_read_and_combined(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Several .gdoc at once: texts joined, shortcuts deleted."""
+    """Several .gdoc at once: texts joined, shortcuts left in place."""
     cfg = make_cfg(tmp_path / 'drive')
     _gdoc(cfg.inbox / 'a_script.gdoc', 'one')
     _gdoc(cfg.inbox / 'b_script.gdoc', 'two')
     calls = _fake_fetch(
         monkeypatch, {'one': 'SCENE CAKE', 'two': 'SCENE OFFICE'}
     )
-    text = scripts.read_scripts_from_inbox(cfg.inbox)
+    text = scripts.read_scripts_from_inbox(cfg.inbox, cfg.scripts)
     assert text == 'SCENE CAKE\n\nSCENE OFFICE'
     assert calls == ['one', 'two']
-    assert list(cfg.inbox.glob('*.gdoc')) == []
+    # Read-only: the sender's shortcuts are never deleted.
+    assert len(list(cfg.inbox.glob('*.gdoc'))) == 2
+
+
+def test_a_cached_doc_is_not_refetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A busy classifier serves the cache, not a fetch on every pass."""
+    cfg = make_cfg(tmp_path / 'drive')
+    _gdoc(cfg.inbox / 'week.gdoc', 'one')
+    calls = _fake_fetch(monkeypatch, {'one': 'SCENE CAKE'})
+    assert scripts.read_scripts_from_inbox(cfg.inbox, cfg.scripts) == (
+        'SCENE CAKE'
+    )
+    assert scripts.read_scripts_from_inbox(cfg.inbox, cfg.scripts) == (
+        'SCENE CAKE'
+    )
+    assert calls == ['one']  # fetched once, then served from cache
 
 
 def test_gdoc_id_from_url_field(tmp_path: Path) -> None:
@@ -93,30 +110,32 @@ def test_gdoc_id_from_url_field(tmp_path: Path) -> None:
     assert scripts._id_from_gdoc(shortcut) == 'xyz9'
 
 
-def test_dead_shortcut_is_still_consumed(
+def test_dead_shortcut_is_skipped_and_left(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A shortcut without an id must not wedge every later run."""
+    """A shortcut without an id is skipped -- and never deleted."""
     cfg = make_cfg(tmp_path / 'drive')
     bad = cfg.inbox / 'broken.gdoc'
     bad.parent.mkdir(parents=True, exist_ok=True)
     bad.write_text('not json', encoding='ascii')
     _fake_fetch(monkeypatch, {})
-    assert scripts.read_scripts_from_inbox(cfg.inbox) == ''
-    assert not bad.exists()
+    assert scripts.read_scripts_from_inbox(cfg.inbox, cfg.scripts) == ''
+    assert bad.exists()  # read-only: an unreadable file is left in place
 
 
-def test_hint_archived_and_served_after_consumption(
+def test_hint_cached_and_served_without_touching_the_gdoc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The week's text outlives its one-shot .gdoc shortcut."""
+    """The text is cached under Scripts/; the .gdoc is left untouched."""
     cfg = make_cfg(tmp_path / 'drive')
     _gdoc(cfg.inbox / 'week.gdoc', 'one')
     _fake_fetch(monkeypatch, {'one': 'SCENE CAKE DINNER'})
     assert scripts.script_hint(cfg) == 'SCENE CAKE DINNER'
-    assert list(cfg.inbox.glob('*.gdoc')) == []
-    assert list(cfg.scripts.glob('*.txt'))  # archived
-    # The next run (any machine) reads the archive, no shortcuts left.
+    assert list(cfg.inbox.glob('*.gdoc'))  # read-only: shortcut still there
+    assert list(cfg.scripts.glob('*.txt'))  # cached
+    # A later run with the shortcut removed still serves the cache.
+    for shortcut in cfg.inbox.glob('*.gdoc'):
+        shortcut.unlink()
     assert scripts.script_hint(cfg) == 'SCENE CAKE DINNER'
 
 
@@ -129,12 +148,12 @@ def test_no_shortcut_no_archive_is_empty(tmp_path: Path) -> None:
 def test_fetch_failure_degrades_to_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failing fetch consumes the shortcut and yields ''."""
+    """A failing fetch yields '' and leaves the shortcut in place."""
     cfg = make_cfg(tmp_path / 'drive')
     _gdoc(cfg.inbox / 'week.gdoc', 'one')
     _fake_fetch(monkeypatch, {})  # every fetch returns ''
     assert scripts.script_hint(cfg) == ''
-    assert list(cfg.inbox.glob('*.gdoc')) == []
+    assert list(cfg.inbox.glob('*.gdoc'))  # read-only: not deleted
 
 
 def test_export_response_must_be_plain_text(
