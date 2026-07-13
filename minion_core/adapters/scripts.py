@@ -4,14 +4,16 @@ Second sanctioned ``requests`` import site next to tg.py
 (REQ-ARC-002, BLUEPRINT 11). The weekly scripts arrive as ``.gdoc``
 shortcuts dropped into ``_inbox/`` (the docs are shared "anyone with
 the link", so the plain export URL works -- no credentials, no
-hardcoded document ids). A shortcut is consumed -- fetched then
-deleted -- by the first run that sees it, so the fetched text is
-archived under ``Scripts/`` where every later run (sort on the NAS,
-catch on Windows) reads it for the rest of the week.
+hardcoded document ids).
 
-Every failure degrades to an empty hint: classification proceeds
-without scene labels rather than stalling the belt (REQ-DEG-001
-spirit).
+A shortcut is a read-only hint: it is *read*, never moved or deleted
+-- the ``.gdoc`` in the inbox is the sender's file, not ours to
+consume. Each document's text is cached under ``Scripts/`` keyed by
+its id, so the always-on classifier serves the cache instead of
+re-fetching the same doc on every pass; a new or uncached shortcut is
+fetched once. Every failure degrades to an empty hint: classification
+proceeds without scene labels rather than stalling the belt
+(REQ-DEG-001 spirit).
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ import re
 from typing import TYPE_CHECKING
 
 from minion_core.adapters.files import atomic_write
-from minion_core.adapters.files import stem
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -48,40 +49,61 @@ retarget the request)."""
 
 
 def script_hint(cfg: Settings) -> str:
-    """This week's script text, or '' when there is none.
+    """This week's script text as a read-only classify hint, or ''.
 
-    Fresh ``.gdoc`` shortcuts in the inbox win and are archived;
-    otherwise the newest archived script is served.
+    Any ``.gdoc`` hint in the inbox is read (never modified) and its
+    text cached under ``Scripts/``; with no shortcut present, the newest
+    cached script is served.
     """
-    text = read_scripts_from_inbox(cfg.inbox)
-    if text:
-        name = stem('script', 'doc') + '.txt'
-        atomic_write(cfg.scripts / name, text.encode('utf-8'))
-        return text
-    return _newest_archived(cfg.scripts)
+    text = read_scripts_from_inbox(cfg.inbox, cfg.scripts)
+    return text or _newest_archived(cfg.scripts)
 
 
-def read_scripts_from_inbox(inbox: Path) -> str:
-    """Consume every ``.gdoc`` shortcut: fetch its text, delete it.
+def read_scripts_from_inbox(inbox: Path, archive: Path) -> str:
+    """Read every ``.gdoc`` hint in the inbox, read-only.
 
-    Several shortcuts at once are combined with blank lines; a
-    shortcut is deleted even when its fetch fails (a dead shortcut
-    must not wedge every later run).
+    The shortcut is a hint, never a one-shot: it is read, never moved or
+    deleted. Each document's text is cached under ``archive`` keyed by
+    its id, so a busy classifier serves the cache instead of re-fetching
+    the same doc every pass. A shortcut we cannot read (no id, failed
+    fetch) is skipped and left in place, never consumed.
     """
     if not inbox.is_dir():
         return ''
-    texts: list[str] = []
-    for shortcut in sorted(inbox.glob('*.gdoc')):
-        doc_id = _id_from_gdoc(shortcut)
-        if not doc_id:
-            _LOG.warning('script_skipped reason=no_doc_id src=%s', shortcut)
-        else:
-            text = read_script_doc(doc_id)
-            if text:
-                texts.append(text)
-        shortcut.unlink(missing_ok=True)
-        _LOG.info('script_consumed src=%s', shortcut.name)
-    return '\n\n'.join(texts)
+    texts = [
+        _hint_text(shortcut, archive)
+        for shortcut in sorted(inbox.glob('*.gdoc'))
+    ]
+    return '\n\n'.join(text for text in texts if text)
+
+
+def _hint_text(shortcut: Path, archive: Path) -> str:
+    """One shortcut's text: served from cache, else fetched once.
+
+    Read-only on the shortcut -- it is never deleted or moved. The
+    cache key is the document id, so re-dropping the same doc is free.
+    """
+    doc_id = _id_from_gdoc(shortcut)
+    if not _ID_OK.match(doc_id):
+        _LOG.warning('script_skipped reason=no_doc_id src=%s', shortcut.name)
+        return ''
+    cache = archive / f'{doc_id}.txt'
+    cached = _read_cache(cache)
+    if cached:
+        return cached
+    text = read_script_doc(doc_id)
+    if text:
+        atomic_write(cache, text.encode('utf-8'))
+    return text
+
+
+def _read_cache(cache: Path) -> str:
+    """The cached script text for a document, or '' when absent."""
+    try:
+        text = cache.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return ''
+    return text.strip()[:MAX_SCRIPT_CHARS]
 
 
 def read_script_doc(doc_id: str) -> str:
