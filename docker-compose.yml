@@ -52,6 +52,12 @@ x-service: &svc
     dockerfile: docker/Dockerfile
   environment: &svc-env
     SKIN: http
+  # A small logs-only volume (NOT /data): each service writes
+  # /logs/<step>.log, so svc logs are readable as files, not just via
+  # docker logs. Independent of DRIVE_NAS, so a missing media mount never
+  # takes a stateless service down.
+  volumes:
+    - svc-logs:/logs
   restart: unless-stopped
   init: true
   security_opt:
@@ -219,3 +225,4 @@ services:
 volumes:
   ollama-models:
   n8n-data:
+  svc-logs:
