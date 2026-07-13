@@ -568,35 +568,47 @@ _LOG_FMT = logging.Formatter('%(asctime)s %(name)s %(message)s')
 
 
 def bot_logger(name: str, logs: Path | None) -> logging.Logger:
-    """One log to two places: the container stdout AND logs/<name>.log.
+    """Mirror every log line to container stdout AND logs/<name>.log.
 
-    The stdout handler sits on the ROOT logger, so EVERY logger reaches
-    ``docker logs`` (Container Manager's Log tab) as the complete,
-    authoritative view -- this bot's records and the kernel's per-class
-    crash guards (``step_crashed``/``source_crashed``, logged under
-    ``type(self).__name__``) alike. The named bot logger keeps only its
-    FileHandler and propagates to root for stdout, so nothing prints
-    twice. Every line is time-stamped. Idempotent: each handler is
-    installed once per process.
+    BOTH handlers sit on the ROOT logger, so the two sinks are true
+    mirrors and each carries the COMPLETE process view -- this bot's
+    records, the kernel's per-class crash guards (logged under
+    ``type(self).__name__``), and the vendor adapters' (the Gemini
+    request/response under ``llm``) alike. That is what makes the file a
+    real duplicate of ``docker logs`` (Container Manager's Log tab), not a
+    subset. One file per process: the first call names it (a single-bot
+    container -> its name; the telegram container -> ``telegram``), later
+    calls reuse it. Idempotent; every line is time-stamped.
     """
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    if not any(
+    _ensure_stream(root)
+    if logs is not None:
+        _ensure_file(root, logs, name)
+    return logging.getLogger(name)
+
+
+def _ensure_stream(root: logging.Logger) -> None:
+    """Install the stdout mirror on root once (idempotent)."""
+    if any(
         isinstance(h, logging.StreamHandler)
         and not isinstance(h, logging.FileHandler)
         for h in root.handlers
     ):
-        stream = logging.StreamHandler(sys.stdout)
-        stream.setFormatter(_LOG_FMT)
-        root.addHandler(stream)
-    log = logging.getLogger(name)
-    log.setLevel(logging.INFO)
-    if logs is not None and not log.handlers:
-        logs.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(logs / f'{name}.log')
-        handler.setFormatter(_LOG_FMT)
-        log.addHandler(handler)
-    return log
+        return
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setFormatter(_LOG_FMT)
+    root.addHandler(stream)
+
+
+def _ensure_file(root: logging.Logger, logs: Path, name: str) -> None:
+    """Install the one per-process file mirror on root (first name wins)."""
+    if any(isinstance(h, logging.FileHandler) for h in root.handlers):
+        return
+    logs.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(logs / f'{name}.log')
+    handler.setFormatter(_LOG_FMT)
+    root.addHandler(handler)
 
 
 def run(name: str, graph: Stage, logs: Path | None = None) -> int:
@@ -606,6 +618,7 @@ def run(name: str, graph: Stage, logs: Path | None = None) -> int:
     (drain once, exit). Clean stop -> 0; fatal init -> non-zero.
     """
     log = bot_logger(name, logs)
+    log.info('started')  # a fresh container shows life even while idle
     try:
         stream = graph(iter(()))
     except Exception:
