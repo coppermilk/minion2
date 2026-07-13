@@ -177,7 +177,8 @@ def _clip_fallback(
             return fandom, 'gemini'
         if library is None:
             library = EmbeddingCache(cfg).refresh(cfg.pictures, deps.embed)
-        return nearest_fandom(deps.embed(path), library) or UNKNOWN, 'clip'
+        match = nearest_fandom(deps.embed(path), library, cfg.sort_tau)
+        return match or UNKNOWN, 'clip'
 
     return decide
 
@@ -222,7 +223,7 @@ def replace_pass(cfg: Settings, deps: SortDeps, cache: EmbeddingCache) -> None:
     if not library:
         return
     for path in _images(cfg.pictures / UNKNOWN, cfg.max_embedding_scan):
-        fandom = nearest_fandom(deps.embed(path), library)
+        fandom = nearest_fandom(deps.embed(path), library, cfg.sort_tau)
         if fandom is None:
             continue
         target = move_atomic(

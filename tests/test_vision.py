@@ -257,3 +257,11 @@ def test_nearest_fandom_by_cosine() -> None:
     }
     assert nearest_fandom(target, library) == 'Cats'
     assert nearest_fandom(target, {}) is None
+
+
+def test_nearest_fandom_below_tau_is_none() -> None:
+    """A weak best match is rejected, not forced into the nearest fandom."""
+    target = np.array([1.0, 0.0])
+    library = {'Cats|a.jpg': np.array([0.6, 0.8])}  # cosine ~0.6
+    assert nearest_fandom(target, library, tau=0.9) is None  # too unlike
+    assert nearest_fandom(target, library, tau=0.5) == 'Cats'  # close enough

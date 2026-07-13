@@ -9,7 +9,7 @@ Return ONLY JSON, no markdown:
 
 ```json
 {
-  "fandom": "Specific fandom/brand (e.g. HarryPotter, StarWars). Never null.",
+  "fandom": "Specific fandom/brand (e.g. HarryPotter, StarWars), or null when the image is a generic real-world photo not tied to any fandom or brand. Do NOT force a fandom -- a plain object, place or scene with no fandom is null.",
   "character": "character name if recognizable, or null",
   "layer": "Bg|Fg|Ov|Pr|Tx",
   "location": "specific location or null",
