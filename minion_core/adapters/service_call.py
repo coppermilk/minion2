@@ -10,8 +10,11 @@ this Step only moves bytes, so the relay container stays light.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from email.message import Message
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from minion_core.adapters.files import sanitize
 from minion_core.kernel import Disposition
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
@@ -77,7 +80,7 @@ def _verdict(job: Job, resp: requests.Response) -> Verdict:
     what happened instead of leaving them in silence.
     """
     if resp.status_code == HTTP_OK:
-        out = next_free_path(job.dest / job.src.name)
+        out = next_free_path(job.dest / _result_name(resp, job.src.name))
         atomic_write(out, resp.content)
         return Verdict(Disposition.DELIVERED, result=out)
     if resp.status_code == HTTP_UNPROCESSABLE:
@@ -92,6 +95,26 @@ def _verdict(job: Job, resp: requests.Response) -> Verdict:
         reason=f'service_http_{resp.status_code}',
         reply='Sorry, that one failed. Give it another try in a bit.',
     )
+
+
+def _result_name(resp: requests.Response, fallback: str) -> str:
+    """The service's own filename for the result, from Content-Disposition.
+
+    The relay uploads a ``.url`` (or spool) file, but the service names the
+    result itself: a fetched video is ``Some Title.mp4``, not ``link.url``.
+    That name rides back in Content-Disposition. Without it the bytes would
+    be written -- and sent -- under the request's name and reach the sender
+    with a wrong, unplayable extension. The basename is taken and sanitized:
+    the service is a boundary, so its filename is untrusted.
+    """
+    message = Message()
+    message['content-disposition'] = resp.headers.get(
+        'content-disposition', ''
+    )
+    got = message.get_filename()
+    if not got:
+        return fallback
+    return sanitize(Path(got).name)
 
 
 def _skip_reason(resp: requests.Response) -> str:
