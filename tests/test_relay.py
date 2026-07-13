@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from minions.relay.main import _ACKS
+from minions.telegram.relay import _ACKS
 
 
 def test_each_media_bot_has_its_own_ack() -> None:

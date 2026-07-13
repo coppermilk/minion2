@@ -1,6 +1,6 @@
 """fetch web service: a link -> a video, bytes in / bytes out.
 
-    python -m minions.fetch.service   (SKIN=http | mcp)
+    python -m minions.svc.fetch.service   (SKIN=http | mcp)
 
 The input is a ``.url`` file (the link); FetchLink downloads the video and
 passes a media file through untouched. Knows only itself -- no catalog, no

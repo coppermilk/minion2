@@ -1,6 +1,6 @@
 """Service catalog and CLI: run any Step by name over one input file.
 
-    python -m minions.service <step> <input> [<dest>]
+    python -m minions.catalog <step> <input> [<dest>]
 
 The kernel-level dispatcher (``minion_core.service``) does the mechanical
 run; this module names the concrete Steps. Every Step comes from a
@@ -27,10 +27,10 @@ from minion_core.kernel import Disposition
 from minion_core.service import Call
 from minion_core.service import invoke
 from minion_core.settings import load
-from minions.censor_black.step import HideFaces
-from minions.censor_blur.step import BlurContour
-from minions.frames.step import ExtractFrames
-from minions.restore.step import HidePersonBoxes
+from minions.svc.censor_black.step import HideFaces
+from minions.svc.censor_blur.step import BlurContour
+from minions.svc.frames.step import ExtractFrames
+from minions.svc.restore.step import HidePersonBoxes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -101,7 +101,7 @@ def run(name: str, call: Call, cfg: Settings) -> Verdict:
 
 def _usage() -> int:
     """Print usage and the known step names to stderr."""
-    sys.stderr.write('usage: python -m minions.service <step> <in> [dest]\n')
+    sys.stderr.write('usage: python -m minions.catalog <step> <in> [dest]\n')
     sys.stderr.write(f'steps: {", ".join(sorted(CATALOG))}\n')
     return 2
 

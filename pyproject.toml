@@ -97,7 +97,7 @@ convention = 'pep257'
 # processing minions (svc-* Steps) own their model and load torch lazily,
 # exactly like an adapter.
 'minion_core/adapters/*' = ['PLC0415']
-'minions/*/step.py' = ['PLC0415']
+'minions/svc/*/step.py' = ['PLC0415']
 # Tests: assert is the medium; magic values are fixtures; doubles
 # carry unused hook arguments; docstring ceremony, import-placement
 # and packaging rules do not apply to CT-E tooling.

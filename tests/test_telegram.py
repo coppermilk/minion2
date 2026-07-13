@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from minions import telegram
+from minions.telegram import main as telegram
 
 
 def test_next_delay_resets_after_a_healthy_run() -> None:

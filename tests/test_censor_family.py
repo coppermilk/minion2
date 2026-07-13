@@ -18,9 +18,9 @@ from minion_core.adapters.files import Mask
 from minion_core.kernel import Disposition
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
-from minions.censor_black import step as black
-from minions.censor_blur import step as blur
-from minions.restore import step as boxes
+from minions.svc.censor_black import step as black
+from minions.svc.censor_blur import step as blur
+from minions.svc.restore import step as boxes
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:

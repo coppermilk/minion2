@@ -1,4 +1,8 @@
-# One image, N containers on one mount (BLUEPRINT 14).
+# One image, N containers (BLUEPRINT 14): the bots (on a /data mount) and
+# the atomic web services (stateless) run from this same image. The bots'
+# heavy stack (torch, ffmpeg, yt-dlp) and the services' web layer (fastapi,
+# uvicorn, mcp) are both baked in; compose picks which minion each container
+# runs. There is no separate service image.
 # 3.12, not 3.13/3.14: facenet-pytorch pins numpy<2, and numpy<2 has
 # no wheels past cp312 (cp313 wheels start at numpy 2.1). On a newer
 # Python pip would resolve numpy down to 1.26 and build it from
@@ -28,12 +32,19 @@ print('\n'.join(p['dependencies'] + extras))" > /tmp/requirements.txt \
         -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
+# The services' web layer on top of the heavy stack (pure-python wheels,
+# seconds). Its own layer so a torch/pyproject change need not re-fetch it,
+# and a web-layer bump need not touch torch.
+RUN pip install --no-cache-dir \
+    'fastapi>=0.115' 'uvicorn>=0.30' 'pydantic>=2.7' 'mcp>=1.2'
+
 # CPU-only torch from the PyTorch index (BLUEPRINT 12); heavy extras
 # are baked into the one shared image. The code layer installs in
 # seconds: every dependency is already satisfied above.
 COPY README.md ./
 COPY minion_core ./minion_core
 COPY minions ./minions
+COPY services ./services
 RUN pip install --no-cache-dir --no-deps .
 
 COPY docker/crontab /etc/cron.d/minions

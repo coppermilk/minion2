@@ -136,7 +136,7 @@ foreach ($bot in @('print', 'catch')) {
     $package = $bot.Replace('-', '_')
     $log = Join-Path $logDir "$bot.launcher.log"
     Start-Process -FilePath 'python' `
-        -ArgumentList '-m', "minions.$package.main" `
+        -ArgumentList '-m', "minions.bots.$package.main" `
         -WorkingDirectory $repo `
         -RedirectStandardOutput $log `
         -RedirectStandardError "$log.err" `

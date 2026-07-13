@@ -1,15 +1,15 @@
 """One Telegram container: all bot docks, each calling a web service.
 
-    python -m minions.telegram
+    python -m minions.telegram.main
 
 Total separation: no processor IP lives here. Every belt is a Telegram dock
 that POSTs the file to its service over HTTP (``CallService``) and sends the
 bytes back. The Telegram identities all live in this one clean container; the
 blur/frames/... code lives in the ``svc-*`` services it talks to over the web.
 
-A top-level module (not a bot package), so it may compose the relay belt
-(``minions.relay``) the way ``minions/service.py`` names the Steps -- the
-import-direction rule only fences bot-to-bot imports (REQ-ARC-001).
+It composes its own package's ``relay`` belt (``minions.telegram.relay``):
+that is the same minion, so the sibling-import fence (REQ-ARC-001) is not
+crossed -- transport and belt are one container's two files.
 
 Config (env): ``TELEGRAM_BOTS`` is a csv of bot names; for each name ``X``
 (upper-cased, ``-`` -> ``_``) it reads ``TG_TOKEN_X``, ``SERVICE_URL_X`` and
@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from minion_core.kernel import run
 from minion_core.settings import load
-from minions.relay.main import build
+from minions.telegram.relay import build
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

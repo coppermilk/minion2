@@ -24,19 +24,19 @@ VENDORS = {
     'piexif': ('minion_core/adapters/files.py',),
     'numpy': (
         'minion_core/adapters/vision.py',
-        'minions/censor_blur/step.py',
+        'minions/svc/censor_blur/step.py',
     ),
     'torch': (
         'minion_core/adapters/vision.py',
-        'minions/censor_blur/step.py',
-        'minions/restore/step.py',
+        'minions/svc/censor_blur/step.py',
+        'minions/svc/restore/step.py',
     ),
     'torchvision': (
-        'minions/censor_blur/step.py',
-        'minions/restore/step.py',
+        'minions/svc/censor_blur/step.py',
+        'minions/svc/restore/step.py',
     ),
     'transformers': ('minion_core/adapters/vision.py',),
-    'facenet_pytorch': ('minions/censor_black/step.py',),
+    'facenet_pytorch': ('minions/svc/censor_black/step.py',),
     'google': ('minion_core/adapters/llm.py',),
 }
 """Each vendor and its sanctioned import sites (adapters only)."""
@@ -62,19 +62,36 @@ def _imports(path: Path) -> list[str]:
     return names
 
 
+def _identity(parts: tuple[str, ...]) -> tuple[str, ...] | None:
+    """The minion a path or import belongs to, or None if it is not one.
+
+    minions/ groups by container logic: svc/<name> and bots/<name> are
+    each a distinct minion (both segments identify it, so svc-a importing
+    svc-b is a sibling breach), telegram is one package, and top-level
+    modules (the catalog aggregator, the package __init__) belong to no
+    single minion -- the aggregator names every Step by design.
+    """
+    if not parts or parts[0] != 'minions':
+        return None
+    rest = parts[1:]
+    if rest[:1] == ('svc',) or rest[:1] == ('bots',):
+        return tuple(rest[:2]) if len(rest) >= 2 else None
+    if rest[:1] == ('telegram',):
+        return ('telegram',)
+    return None
+
+
 def test_no_bot_imports_a_sibling_bot() -> None:
-    """REQ-ARC-001: minions/<a> never imports minions/<b>."""
+    """REQ-ARC-001: one minion never imports a sibling minion."""
     for path in _sources():
         rel = path.relative_to(REPO)
-        if rel.parts[0] != 'minions' or len(rel.parts) < 3:
+        me = _identity(rel.parts)
+        if me is None:
             continue
-        me = rel.parts[1]
         for name in _imports(path):
-            parts = name.split('.')
-            if parts[0] != 'minions' or len(parts) < 2:
-                continue
-            assert parts[1] == me, (
-                f'{rel}: bot {me!r} imports sibling {parts[1]!r}'
+            them = _identity(tuple(name.split('.')))
+            assert them is None or them == me, (
+                f'{rel}: minion {me} imports sibling {them}'
             )
 
 

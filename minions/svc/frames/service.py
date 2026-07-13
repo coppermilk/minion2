@@ -1,6 +1,6 @@
 """frames web service: a video (or link) -> a zip of frames, bytes in/out.
 
-    python -m minions.frames.service   (SKIN=http | mcp)
+    python -m minions.svc.frames.service   (SKIN=http | mcp)
 
 Owns the extraction Step; the link download that can precede it is the shared
 yt-dlp adapter. The full pipeline (fetch -> extract) is the chain served here.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from minion_core.adapters.fetch import FetchLink
-from minions.frames.step import ExtractFrames
+from minions.svc.frames.step import ExtractFrames
 from services.serve import run_service_app
 
 if TYPE_CHECKING:
