@@ -116,6 +116,35 @@ def test_gemini_unknown_is_decided_by_clip_immediately(
     assert read_fandom(classified) == 'Cats'  # decided during the week
 
 
+def test_gemini_unknown_below_tau_stays_unknown(tmp_path: Path) -> None:
+    """An image unlike every library fandom is left in Unknown, not forced.
+
+    The fix for mislabelling: a punted image whose nearest fandom is too
+    far (here a cat against a Dogs-only library, cosine 0) is not dragged
+    into that fandom -- it stays Unknown for a later, closer match.
+    """
+    from minion_core.adapters.files import read_fandom
+
+    cfg = make_cfg(tmp_path / 'drive')
+    for i in range(3):
+        _jpeg(cfg.pictures / 'Dogs' / f'dog_{i}.jpg')  # no Cats in library
+
+    def punt(path: Path, hint: str) -> Classification:
+        return Classification(
+            fandom='Unknown',
+            filename='FgCatMystery',
+            censored=False,
+            confidence='low',
+            description='the model punted',
+        )
+
+    _jpeg(cfg.inbox / 'puzzling_cat.jpg')
+    classify_pass(cfg, SortDeps(classify=punt, embed=_embed), '')
+    classified = cfg.inbox / 'FgCatMystery.jpg'
+    assert classified.exists()
+    assert read_fandom(classified) == 'Unknown'  # not forced into Dogs
+
+
 def test_classified_files_do_not_retrigger_the_model(
     tmp_path: Path,
 ) -> None:

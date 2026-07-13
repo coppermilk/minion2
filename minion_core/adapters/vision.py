@@ -174,10 +174,22 @@ def nearest_named(
     return best_key, best_sim
 
 
-def nearest_fandom(vec: Vector, library: dict[str, Vector]) -> str | None:
-    """The fandom of the most similar library vector (cosine)."""
-    best_key, _ = nearest_named(vec, library)
-    return best_key.split('|', 1)[0] if best_key else None
+def nearest_fandom(
+    vec: Vector, library: dict[str, Vector], tau: float = 0.0
+) -> str | None:
+    """The fandom of the most similar library vector above ``tau``.
+
+    ``tau`` is the minimum cosine to accept a match. Below it the image
+    is too unlike anything in the library to belong to a fandom, so it
+    returns None (-> Unknown) instead of being forced into the nearest
+    one -- the difference between "this is Harry Potter" and "this is the
+    closest of several fandoms, none of them close". tau=0.0 keeps the
+    old always-match behaviour.
+    """
+    best_key, best_sim = nearest_named(vec, library)
+    if not best_key or best_sim < tau:
+        return None
+    return best_key.split('|', 1)[0]
 
 
 def _cosine(a: Vector, b: Vector) -> float:

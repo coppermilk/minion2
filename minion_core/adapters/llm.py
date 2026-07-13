@@ -130,13 +130,7 @@ def _generate_text(model: str, contents: list[Any], spec: LlmSpec) -> str:
     from google.genai import errors
     from google.genai import types
 
-    # Full visibility: the exact prompt text sent to Gemini goes to the
-    # log (the image part is not logged). It reaches docker logs via the
-    # root handler; grep 'gemini prompt' to audit what was asked.
-    prompts = [c for c in contents if isinstance(c, str)]
-    logging.getLogger('llm').info(
-        'gemini prompt model=%s\n%s', model, '\n'.join(prompts)
-    )
+    _log_prompt(model, contents)
     # Turn on Gemini reasoning (flash-lite ships it off): a thinking
     # budget must be passed for the model to reason before answering.
     config = types.GenerateContentConfig(
@@ -150,7 +144,22 @@ def _generate_text(model: str, contents: list[Any], spec: LlmSpec) -> str:
         )
     except errors.APIError as exc:
         raise LlmError(f'api_error: {exc}') from exc
-    return _text_of(response)
+    text = _text_of(response)
+    logging.getLogger('llm').info('gemini response model=%s\n%s', model, text)
+    return text
+
+
+def _log_prompt(model: str, contents: list[Any]) -> None:
+    """Log the exact prompt text sent to Gemini (image parts excluded).
+
+    Full visibility (the operator's audit trail): it reaches docker logs
+    via the root handler. grep 'gemini prompt' for what was asked and
+    'gemini response' for what came back.
+    """
+    prompts = [c for c in contents if isinstance(c, str)]
+    logging.getLogger('llm').info(
+        'gemini prompt model=%s\n%s', model, '\n'.join(prompts)
+    )
 
 
 class _TextResponse(Protocol):
@@ -177,13 +186,18 @@ def _generate_image(model: str, contents: list[Any], spec: LlmSpec) -> bytes:
     """Generate and return the first inline image; refusals -> LlmError."""
     from google.genai import errors
 
+    _log_prompt(model, contents)
     try:
         response = _client(spec).models.generate_content(
             model=model, contents=contents
         )
     except errors.APIError as exc:
         raise LlmError(f'api_error: {exc}') from exc
-    return _first_image(response)
+    image = _first_image(response)
+    logging.getLogger('llm').info(
+        'gemini response model=%s image_bytes=%d', model, len(image)
+    )
+    return image
 
 
 class GeminiBackend:

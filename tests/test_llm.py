@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from minion_core.adapters.llm import LlmError
+from minion_core.adapters.llm import _log_prompt
 from minion_core.adapters.llm import _parse_classification
 from minion_core.adapters.llm import _text_of
 from minion_core.adapters.llm import spec_from
@@ -26,6 +27,19 @@ VERDICT = {
     'confidence': 'high',
     'censored': False,
 }
+
+
+def test_log_prompt_records_the_prompt_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Full visibility: the exact prompt to Gemini lands in the log."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger='llm'):
+        _log_prompt('flash', ['classify this', object()])
+    assert 'gemini prompt' in caplog.text
+    assert 'model=flash' in caplog.text
+    assert 'classify this' in caplog.text  # the image part is not logged
 
 
 def test_parse_happy_path() -> None:
