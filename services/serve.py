@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 
 def run_service_app(step: str, make: Make) -> int:
     """Serve the Step over the SKIN facade: http (default) or mcp."""
+    from minion_core.kernel import bot_logger
+
+    # A service is stateless (no /data), so stdout is its only log sink:
+    # put the mirror on root so the Step's own records and the vendor
+    # adapters' (Gemini request/response under 'llm', for svc-restore)
+    # reach docker logs, not just uvicorn's access lines.
+    bot_logger(step, None).info('started')
     skin = os.environ.get('SKIN', 'http')
     if skin == 'mcp':
         from services.mcp_server import create_server

@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from minion_core.kernel import bot_logger
 from minion_core.kernel import run
 from minion_core.settings import load
 from minions.telegram.relay import build
@@ -107,6 +108,9 @@ def main(env: Mapping[str, str] | None = None) -> int:
     """Run one supervised relay belt per configured bot; block forever."""
     base = os.environ if env is None else env
     cfg = load(base)
+    # Name the container's one log file 'telegram' up front (first call
+    # wins), so every belt's records mirror to telegram.log + stdout.
+    bot_logger('telegram', cfg.logs).info('started bots=%s', _names(base))
     stop = threading.Event()
     bots = [_Bot(cfg, name, _bot_env(base, name)) for name in _names(base)]
     threads = [

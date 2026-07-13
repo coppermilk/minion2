@@ -17,6 +17,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Unbuffered stdout/stderr so `docker logs` (Container Manager's Log tab)
+# shows every line as it happens, not in delayed blocks.
+ENV PYTHONUNBUFFERED=1
+
 # Dependencies first, code second: a code-only change must not
 # re-download torch. This layer re-runs only when pyproject.toml
 # changes; the runtime extras are pinned here (dev stays out).
