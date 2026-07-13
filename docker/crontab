@@ -2,4 +2,4 @@
 # the bots (BLUEPRINT 11). sort is NOT here: it runs as a watch
 # daemon (SORT_WATCH=1, the `sort` compose service) so new images
 # sort instantly.
-0 6 * * 1 root . /etc/minions.env && python -m minions.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1
+0 6 * * 1 root . /etc/minions.env && python -m minions.bots.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1

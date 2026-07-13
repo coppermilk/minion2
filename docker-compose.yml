@@ -3,9 +3,9 @@
 #   * telegram  -- ONE clean container that owns every media-bot's Telegram
 #     identity. It holds NO processing code: each dock just receives a file
 #     (or link) and POSTs it to a service over HTTP, then sends the bytes
-#     back (minions/telegram.py -> minions.relay -> CallService).
+#     back (minions/telegram/main.py -> minions.telegram.relay -> CallService).
 #   * svc-*      -- the processing IP, one atomic web service per Step, bytes
-#     in / bytes out (image minion2-service). No Telegram here. Callable by
+#     in / bytes out (the same one image). No Telegram here. Callable by
 #     the telegram container, by n8n, by React Flow, by any HTTP/MCP client.
 #   * n8n, reactflow -- more web consumers of the same svc-*.
 #
@@ -41,14 +41,15 @@ x-minion: &minion
       max-file: '3'
 
 # Atomic service: one Step, one container, bytes in / bytes out. Stateless
-# (a fresh temp store per request), so no /data mount. STEP picks the Step,
-# SKIN the facade (http | mcp). Rides the published minion2-service image.
+# (a fresh temp store per request), so no /data mount. The command picks the
+# Step (python -m minions.svc.<name>.service), SKIN the facade (http | mcp).
+# Rides the same one image as the bots -- the web layer is baked in.
 x-service: &svc
-  image: ghcr.io/coppermilk/minion2-service:latest
+  image: ghcr.io/coppermilk/minion2:latest
   pull_policy: missing
   build:
     context: .
-    dockerfile: services/Dockerfile
+    dockerfile: docker/Dockerfile
   environment: &svc-env
     SKIN: http
   restart: unless-stopped
@@ -79,7 +80,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-    command: python -m minions.censor_blur.service
+    command: python -m minions.svc.censor_blur.service
     ports:
       - "${SVC_CENSOR_BLUR_PORT:-8091}:8000"
     mem_limit: 4g
@@ -88,7 +89,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-    command: python -m minions.censor_black.service
+    command: python -m minions.svc.censor_black.service
     ports:
       - "${SVC_CENSOR_BLACK_PORT:-8092}:8000"
     mem_limit: 4g
@@ -99,7 +100,7 @@ services:
     env_file: .env
     environment:
       <<: *svc-env
-    command: python -m minions.restore.service
+    command: python -m minions.svc.restore.service
     ports:
       - "${SVC_RESTORE_PORT:-8093}:8000"
     mem_limit: 4g
@@ -110,7 +111,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-    command: python -m minions.frames.service
+    command: python -m minions.svc.frames.service
     ports:
       - "${SVC_FRAMES_PORT:-8094}:8000"
     mem_limit: 2g
@@ -120,7 +121,7 @@ services:
     <<: *svc
     environment:
       <<: *svc-env
-    command: python -m minions.fetch.service
+    command: python -m minions.svc.fetch.service
     ports:
       - "${SVC_FETCH_PORT:-8095}:8000"
     mem_limit: 1g
@@ -142,7 +143,7 @@ services:
       RELAY_DOCK_FRAMES: any
       RELAY_DOCK_FETCH: links
       RELAY_DOCK_FAN_SAVE: links
-    command: python -m minions.telegram
+    command: python -m minions.telegram.main
     mem_limit: 1g
     depends_on:
       - svc-censor-blur
@@ -157,7 +158,7 @@ services:
     environment:
       <<: *minion-env
       TG_TOKEN: ${TG_TOKEN_INBOX:-}
-    command: python -m minions.inbox.main
+    command: python -m minions.bots.inbox.main
     mem_limit: 512m
 
   sort:
@@ -165,7 +166,7 @@ services:
     environment:
       <<: *minion-env
       SORT_WATCH: '1'
-    command: python -m minions.sort.main
+    command: python -m minions.bots.sort.main
     mem_limit: 4g
     depends_on:
       - ollama
@@ -175,7 +176,7 @@ services:
     environment:
       <<: *minion-env
       TG_TOKEN: ${TG_TOKEN_MODEL_SWITCH:-}
-    command: python -m minions.model_switch.main
+    command: python -m minions.bots.model_switch.main
     mem_limit: 256m
 
   props:
@@ -183,7 +184,7 @@ services:
     environment:
       <<: *minion-env
       TG_TOKEN: ${TG_TOKEN_PROPS:-}
-    command: python -m minions.props.main
+    command: python -m minions.bots.props.main
     mem_limit: 4g
     depends_on:
       - ollama

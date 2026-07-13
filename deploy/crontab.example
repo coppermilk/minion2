@@ -3,4 +3,4 @@
 # images in _inbox/Downloads sort instantly; only week-clean keeps
 # a calendar cadence (the wall clock lives in cron, BLUEPRINT 11).
 
-0 6 * * 1 cd /opt/bananaland && python -m minions.week_clean.main >> "$DRIVE/bots/_data/logs/week-clean.cron.log" 2>&1
+0 6 * * 1 cd /opt/bananaland && python -m minions.bots.week_clean.main >> "$DRIVE/bots/_data/logs/week-clean.cron.log" 2>&1

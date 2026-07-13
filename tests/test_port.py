@@ -21,11 +21,11 @@ from minion_core.kernel import SeenPaths
 from minion_core.kernel import SendResult
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
-from minions.catch.main import CatchDeps
-from minions.catch.main import ClassifyCopy
-from minions.catch.main import build as build_catch
-from minions.print.main import PrintPdf
-from minions.relay.main import build as build_relay
+from minions.bots.catch.main import CatchDeps
+from minions.bots.catch.main import ClassifyCopy
+from minions.bots.catch.main import build as build_catch
+from minions.bots.print.main import PrintPdf
+from minions.telegram.relay import build as build_relay
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:

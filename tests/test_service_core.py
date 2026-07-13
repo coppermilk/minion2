@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from minion_core.adapters.files import Deliver
-from minions.frames.step import ExtractFrames
+from minions.svc.frames.step import ExtractFrames
 from services.core import ServiceRequest
 from services.core import run_service
 from services.store import LocalStore

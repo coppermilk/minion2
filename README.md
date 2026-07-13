@@ -28,7 +28,7 @@ deploy/        nas-update.sh, n8n workflow, kindle Apps Script (off-kernel)
 cp .env.example .env       # DRIVE (absolute), TG_TOKEN_<BOT>, TG_CHATS
 pip install -e '.[dev]'
 pytest                     # hermetic: no network, no models
-python -m minions.inbox.main
+python -m minions.bots.inbox.main
 ```
 
 Docker (NAS): set `DRIVE_NAS` in `.env`. Windows runs only print and
@@ -107,8 +107,8 @@ The processing IP and the Telegram transport are **fully separated**, in one
   catalog, no sibling service, no Telegram.
 - **`telegram`** -- ONE clean container that owns every media bot's Telegram
   identity and holds no processing code: each dock receives a file (or link),
-  POSTs it to its service over HTTP (`minions/telegram.py` ->
-  `minions.relay` -> `CallService`), and sends the bytes back.
+  POSTs it to its service over HTTP (`minions/telegram/main.py` ->
+  `minions.telegram.relay` -> `CallService`), and sends the bytes back.
 
 So `censor-blur`, `censor-black`, `restore`, `frames`, `fetch` and `fan-save`
 run as services (`svc-*`), and the `telegram` container is a thin router in

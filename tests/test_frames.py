@@ -8,9 +8,9 @@ from minion_core.adapters import video
 from minion_core.kernel import Disposition
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
-from minions.frames.step import STRIDE
-from minions.frames.step import ExtractFrames
-from minions.frames.step import _timecode
+from minions.svc.frames.step import STRIDE
+from minions.svc.frames.step import ExtractFrames
+from minions.svc.frames.step import _timecode
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:

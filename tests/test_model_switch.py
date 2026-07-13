@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from minion_core.adapters.backend import BackendToggle
-from minions.model_switch.main import reply_for
+from minions.bots.model_switch.main import reply_for
 from tests.conftest import make_cfg
 
 

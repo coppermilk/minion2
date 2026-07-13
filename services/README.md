@@ -58,7 +58,7 @@ STEP=censor-blur SKIN=mcp python -m services.serve
 A pixel-transform bot (`censor-blur`, `censor-black`) is two containers:
 
 - `svc-censor-blur` -- this tier, `STEP=censor-blur`, does the actual blur.
-- `tg-censor-blur` -- a thin transport (`minions/relay/main.py`): a Telegram
+- `tg-censor-blur` -- a thin transport (`minions/telegram/relay.py`): a Telegram
   dock that POSTs the photo to `svc-censor-blur/run-file` via
   `minion_core/adapters/service_call.py:CallService` and sends the bytes back.
   No torch in the transport; the heavy work is the service.

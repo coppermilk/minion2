@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from minion_core.adapters.files import Deliver
-from minions.censor_blur import step as blur
+from minions.svc.censor_blur import step as blur
 from services.http import create_app
 
 

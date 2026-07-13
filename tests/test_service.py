@@ -18,9 +18,9 @@ from minion_core.kernel import Verdict
 from minion_core.service import Call
 from minion_core.service import invoke
 from minion_core.service import job_of
-from minions.service import CATALOG
-from minions.service import build
-from minions.service import run
+from minions.catalog import CATALOG
+from minions.catalog import build
+from minions.catalog import run
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:

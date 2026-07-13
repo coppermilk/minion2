@@ -29,8 +29,8 @@ from minion_core.kernel import Verdict
 from minion_core.kernel import bot_logger
 from minion_core.kernel import run
 from minion_core.settings import load
-from minions.sort.passes import SortDeps
-from minions.sort.passes import run_passes
+from minions.bots.sort.passes import SortDeps
+from minions.bots.sort.passes import run_passes
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

@@ -24,7 +24,7 @@ flowchart TB
   end
 
   subgraph KERN["Kernel tier -- minion_core / minions (the IP, untouched)"]
-    CAT["Step catalog<br/>minions/service.py"]:::ip
+    CAT["Step catalog<br/>minions/catalog.py"]:::ip
     STEPS["Steps/chains: censor-blur, censor-black,<br/>restore, frames, fetch, ..."]:::ip
     BELT["In-process belt: kernel.run<br/>(the monolith bots, offline)"]:::ip
   end
@@ -53,8 +53,8 @@ flowchart TB
 - **Total Telegram split.** All media-bot processing (blur, frames, restore,
   fetch, ...) runs as `svc-*` services; one `telegram` container owns every
   media Telegram identity and holds no processing code -- each dock POSTs the
-  file to its service and sends the bytes back (`minions/telegram.py` ->
-  `minions.relay` -> `CallService`). A multi-step bot (restore, frames) is a
+  file to its service and sends the bytes back (`minions/telegram/main.py` ->
+  `minions.telegram.relay` -> `CallService`). A multi-step bot (restore, frames) is a
   chain in the catalog, so the service does the bot's whole work.
 - **Consumers are equal.** The `telegram` container, n8n, React Flow and MCP
   agents all call the same services over the same HTTP/MCP. Rip any consumer
