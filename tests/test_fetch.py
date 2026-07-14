@@ -194,6 +194,43 @@ def test_stale_extractor_is_failed(
     assert verdict.reason == 'stale_extractor'
 
 
+_PROGRESS_YTDLP = (
+    '#!/usr/bin/env python3\n'
+    'import sys, os\n'
+    'a = sys.argv\n'
+    'into = a[a.index("-P") + 1]\n'
+    'path = os.path.join(into, "video.mp4")\n'
+    'open(path, "wb").write(b"video")\n'
+    'sys.stderr.write("PROGRESS:  10.0%\\n")\n'
+    'sys.stderr.write("PROGRESS:  55.5%\\n")\n'
+    'sys.stderr.write("PROGRESS: 100%\\n")\n'
+    'sys.stderr.flush()\n'
+    'print(path)\n'
+)
+"""A fake yt-dlp: percents to stderr, the output path to stdout."""
+
+
+def test_download_streams_progress_to_the_sink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """yt-dlp's percent reaches the installed progress sink, live."""
+    from minion_core import progress
+
+    cfg = make_cfg(tmp_path / 'drive')
+    fake = tmp_path / 'bin' / 'yt-dlp'
+    fake.parent.mkdir()
+    fake.write_text(_PROGRESS_YTDLP, encoding='ascii')
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(fetch, 'YTDLP', str(fake))
+    seen: list[int] = []
+    with progress.reporting_to(seen.append):
+        got = fetch.download(
+            'http://93.184.216.34/v', cfg.bot_dir('fetch'), cfg
+        )
+    assert got.name == 'video.mp4'
+    assert seen == [10, 55, 100]  # parsed percents, in order
+
+
 def test_youtube_gets_player_client_args(tmp_path: Path) -> None:
     """The player_client arg attaches only on YouTube hosts."""
     cfg = make_cfg(tmp_path / 'drive', YTDLP_PLAYER_CLIENTS='web,android')

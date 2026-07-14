@@ -45,6 +45,30 @@ def test_async_file_job() -> None:
     assert client.get(f'/jobs/{job_id}/result').content == b'bytes'
 
 
+def test_job_reports_live_progress() -> None:
+    """A Step's live percent (via the sink) is visible on /jobs/{id}."""
+    from minion_core import progress
+    from minion_core.kernel import Disposition
+    from minion_core.kernel import Step
+    from minion_core.kernel import Verdict
+
+    class _Prog(Step):
+        def process(self, job):
+            sink = progress.current()
+            if sink is not None:
+                sink(42)
+            return Verdict(Disposition.DELIVERED, result=job.src)
+
+    client = TestClient(create_app('prog', lambda _c: _Prog()))
+    submit = client.post(
+        '/jobs/file',
+        files={'file': ('a.bin', b'x', 'application/octet-stream')},
+    )
+    done = _wait_done(client, submit.json()['job_id'])
+    assert done['status'] == 'done'
+    assert done['progress'] == 42  # the reported percent survived
+
+
 def test_unknown_job_is_404() -> None:
     client = _client()
     assert client.get('/jobs/nope').status_code == 404

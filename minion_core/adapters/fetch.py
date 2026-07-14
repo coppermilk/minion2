@@ -11,9 +11,12 @@ Invariants deliberately not knobs: one link -> one file
 
 from __future__ import annotations
 
+import re
 import socket
 import subprocess
+import threading
 import urllib.request
+from collections import deque
 from ipaddress import IPv4Address
 from ipaddress import IPv6Address
 from ipaddress import ip_address
@@ -23,6 +26,7 @@ from typing import TYPE_CHECKING
 from typing import Protocol
 from urllib.parse import urlsplit
 
+from minion_core import progress
 from minion_core.adapters.files import BudgetWriter
 from minion_core.adapters.files import QuotaExceeded
 from minion_core.adapters.files import free_quota
@@ -32,6 +36,7 @@ from minion_core.kernel import Step
 from minion_core.kernel import Verdict
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from http.client import HTTPMessage
     from typing import IO
 
@@ -88,8 +93,10 @@ def _addresses(host: str) -> list[IPv4Address | IPv6Address]:
 
 
 def download(url: str, into: Path, cfg: Settings) -> Path:
-    """One link -> one file via yt-dlp, fully bounded.
+    """One link -> one file via yt-dlp, fully bounded, live progress.
 
+    Streams yt-dlp's percent to the progress sink (minion_core.progress)
+    while it runs, so a caller (svc-fetch's job) can show a live bar.
     Raises Blocked / QuotaExceeded / subprocess.TimeoutExpired /
     FetchFailed; the FetchLink step maps each to its reason code.
     """
@@ -97,16 +104,71 @@ def download(url: str, into: Path, cfg: Settings) -> Path:
     if free_quota(cfg) <= 0:
         raise QuotaExceeded('quota_exceeded: pre-transfer')
     into.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(  # noqa: S603 -- fixed binary, no shell
-        _argv(url, into, cfg),
-        capture_output=True,
-        text=True,
-        timeout=cfg.download_timeout_sec,  # REQ-RES-001
-        check=False,
+    return _run_ytdlp(_argv(url, into, cfg), cfg.download_timeout_sec)
+
+
+_PCT = re.compile(r'PROGRESS:\s*([0-9.]+)%')
+"""The percent from a --progress-template line (our PROGRESS: prefix)."""
+
+
+class _Pump:
+    """Reads yt-dlp's stderr live: percents to the sink, a tail for errors."""
+
+    def __init__(self, report: Callable[[int], None]) -> None:
+        self._report = report
+        self.tail: deque[str] = deque(maxlen=20)
+
+    def run(self, stream: IO[str]) -> None:
+        """Drain the stream until EOF (the process closing it)."""
+        for line in stream:
+            match = _PCT.search(line)
+            if match is not None:
+                self._report(int(float(match.group(1))))
+            else:
+                self.tail.append(line.rstrip())
+
+
+def _run_ytdlp(argv: list[str], timeout: float) -> Path:
+    """Run yt-dlp bounded; stream progress; return the output path.
+
+    The total wall-time bound is ``proc.wait(timeout)`` (survives a silent
+    hang, REQ-RES-001); a reader thread drains stderr for progress so the
+    tiny ``--print`` filepath on stdout cannot deadlock either pipe.
+    """
+    pump = _Pump(progress.current() or _ignore)
+    proc = subprocess.Popen(  # noqa: S603 -- fixed binary, no shell
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
+    reader = threading.Thread(
+        target=pump.run, args=(proc.stderr,), daemon=True
+    )
+    reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        reader.join(timeout=1.0)
     if proc.returncode != 0:
-        raise FetchFailed(f'stale_extractor: {proc.stderr[-500:]}')
-    got = Path(proc.stdout.strip().splitlines()[-1])
+        raise FetchFailed(f'stale_extractor: {" | ".join(pump.tail)[-500:]}')
+    return _output_path(proc.stdout)
+
+
+def _ignore(_pct: int) -> None:
+    """The sink when nobody is listening (a bare download)."""
+
+
+def _output_path(stream: IO[str] | None) -> Path:
+    """The last non-progress stdout line (the --print filepath)."""
+    out = stream.read() if stream is not None else ''
+    paths = [
+        line
+        for line in out.strip().splitlines()
+        if not line.startswith('PROGRESS:')
+    ]
+    got = Path(paths[-1]) if paths else Path()
     if not got.is_file():
         raise FetchFailed('stale_extractor: no output file')
     return got
@@ -118,6 +180,9 @@ def _argv(url: str, into: Path, cfg: Settings) -> list[str]:
         YTDLP,
         '--no-playlist',
         '--no-simulate',
+        '--newline',
+        '--progress-template',
+        'PROGRESS:%(progress._percent_str)s',
         '--print',
         'after_move:filepath',
         '-f',
