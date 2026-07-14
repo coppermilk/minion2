@@ -43,8 +43,15 @@ _DEFAULTS: dict[str, str] = {
     # raise it if unrelated photos get mislabelled, lower it if real
     # fandom images pile up in Unknown.
     'SORT_TAU': '0.75',
-    'YTDLP_FORMAT': 'bestvideo*+bestaudio/best',
-    'YTDLP_CONTAINER': 'mkv',
+    # mp4 by default: H.264+AAC muxes into mp4 with no re-encode and plays
+    # inline everywhere -- Telegram, iOS, browsers. (mkv accepts VP9/AV1+Opus
+    # at slightly higher quality but Telegram shows it as a file, no inline
+    # preview.) Override both for max quality: YTDLP_CONTAINER=mkv +
+    # YTDLP_FORMAT=bestvideo*+bestaudio/best.
+    'YTDLP_FORMAT': (
+        'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+    ),
+    'YTDLP_CONTAINER': 'mp4',
     'YTDLP_PLAYER_CLIENTS': 'default',
     'SOURCE_DIRS': '',
     'SORT_WATCH': '',
