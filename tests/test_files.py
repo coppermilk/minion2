@@ -78,7 +78,7 @@ def test_shelve_folders_result_and_keeps_original(tmp_path: Path) -> None:
         src=original,
         dest=into,
         stem='photo',
-        origin=Origin('tg', f'1:2:{original}'),
+        origin=Origin('tg', f'1:2::{original}'),
     )
     env = Envelope(job, Verdict(Disposition.DELIVERED, result=result))
     Shelve(into, spool_of).handle(env)
