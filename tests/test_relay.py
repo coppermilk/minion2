@@ -1,8 +1,20 @@
-"""relay: each media bot gets its own start-acknowledgement text."""
+"""relay: per-bot ack text, and the one self-editing status message."""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from minion_core.kernel import Disposition
+from minion_core.kernel import Envelope
+from minion_core.kernel import Job
+from minion_core.kernel import Origin
+from minion_core.kernel import Verdict
+from minions.telegram.progress_style import STYLES
 from minions.telegram.relay import _ACKS
+from minions.telegram.relay import TgStatus
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_each_media_bot_has_its_own_ack() -> None:
@@ -17,3 +29,65 @@ def test_each_media_bot_has_its_own_ack() -> None:
     }
     assert all(_ACKS.values())  # none empty
     assert len(set(_ACKS.values())) == len(_ACKS)  # each distinct
+
+
+class _FakeChannel:
+    """Records edits and file sends instead of touching Telegram."""
+
+    def __init__(self) -> None:
+        self.edits: list[str] = []
+        self.files: list[Path] = []
+
+    def edit_text(self, _origin: Origin, text: str) -> None:
+        self.edits.append(text)
+
+    def send_file(self, _origin: Origin, path: Path) -> None:
+        self.files.append(path)
+
+
+def _job(tmp_path: Path) -> Job:
+    src = tmp_path / 'in.url'
+    src.write_bytes(b'x')
+    return Job(
+        src=src,
+        dest=tmp_path,
+        stem='in',
+        origin=Origin('tg', '1:2:9:/spool/in.url'),
+    )
+
+
+def test_status_delivers_then_marks_done(tmp_path: Path) -> None:
+    """On delivery: edit to sending, upload the file, edit to done."""
+    channel = _FakeChannel()
+    result = tmp_path / 'out.mp4'
+    result.write_bytes(b'video')
+    env = Envelope(
+        _job(tmp_path), Verdict(Disposition.DELIVERED, result=result)
+    )
+    TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
+    assert channel.files == [result]  # the video was sent
+    assert len(channel.edits) == 2  # sending, then done
+    assert channel.edits[-1]  # a non-empty terminal 'done'
+
+
+def test_status_reports_failure_in_the_same_message(tmp_path: Path) -> None:
+    """A failure edits the ack to the reason -- never silent, no file."""
+    channel = _FakeChannel()
+    env = Envelope(
+        _job(tmp_path),
+        Verdict(Disposition.FAILED, reason='boom', reply='Sorry, offline.'),
+    )
+    TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
+    assert channel.files == []  # nothing delivered
+    assert channel.edits == ['Sorry, offline.']  # terminal error, always
+
+
+def test_status_failure_without_reply_still_tells_the_sender(
+    tmp_path: Path,
+) -> None:
+    """Even a reply-less failure edits the ack to a default apology."""
+    channel = _FakeChannel()
+    env = Envelope(_job(tmp_path), Verdict(Disposition.FAILED, reason='x'))
+    TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
+    assert len(channel.edits) == 1
+    assert channel.edits[0]  # a non-empty apology, not silence

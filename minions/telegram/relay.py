@@ -1,10 +1,12 @@
 """relay bot: a thin Telegram transport in front of an atomic service.
 
-Graph: (TgMedia | Folder) -> CallService -> RouteOrigin(chat / nothing) ->
-Reply -> Shelve. The heavy transform (blur, frames, ...) lives in a
-separate service container; this container only receives a document over
-Telegram (or a folder drop), POSTs it to ``SERVICE_URL/run-file``, and
-sends the bytes back -- no model, no torch. One generic module, N
+Graph: (TgMedia | Folder) -> CallService -> RouteOrigin(TgStatus / nothing)
+-> Shelve. TgStatus drives one self-editing Telegram message through the
+job's life (sending -> done, or a plain error), so the sender never gets a
+pile of messages and is always told the outcome. The heavy transform
+(blur, frames, ...) lives in a separate service container; this container
+only receives a document over Telegram (or a folder drop), POSTs it to
+``SERVICE_URL/run-file``, and sends the bytes back -- no model, no torch. N
 containers: ``SERVICE_URL`` picks the service and ``RELAY_NAME`` the work
 dir / offset, so ``tg-censor-blur`` and ``tg-frames`` are the same image
 with different env (the Telegram <-> service split).
@@ -29,22 +31,29 @@ from minion_core.adapters.tg import TgMedia
 from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spooled_or_dropped
+from minion_core.kernel import Disposition
 from minion_core.kernel import FolderSpec
 from minion_core.kernel import Null
-from minion_core.kernel import Reply
 from minion_core.kernel import RouteOrigin
 from minion_core.kernel import SeenPaths
-from minion_core.kernel import SendResult
+from minion_core.kernel import Sink
 from minion_core.kernel import merge_watch
 from minion_core.kernel import run
 from minion_core.settings import load
+from minions.telegram.progress_style import DONE
+from minions.telegram.progress_style import SENDING
+from minions.telegram.progress_style import style_for
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
+    from minion_core.kernel import Envelope
+    from minion_core.kernel import Origin
     from minion_core.kernel import Source
     from minion_core.kernel import Stage
     from minion_core.settings import Settings
+    from minions.telegram.progress_style import ProgressStyle
 
 _DOCKS = {'media': TgMedia, 'any': TgAny, 'links': TgLinks}
 """RELAY_DOCK -> the Telegram dock: documents, links+documents, or links."""
@@ -76,6 +85,40 @@ _ACKS = {
 download). Keyed by RELAY_NAME; an unlisted bot falls back to a generic ack."""
 
 _DEFAULT_ACK = 'Got it -- working on it...'
+
+_DEFAULT_FAIL = 'Sorry, that did not work. Give it another try in a bit.'
+
+
+class TgStatus(Sink):
+    """Drive one self-editing Telegram message through a job's life.
+
+    Replaces SendResult+Reply on the tg side: on delivery it edits the ack
+    to 'sending', uploads the file, then edits to 'done'; on any
+    non-delivery it edits the ack to the failure reason. The sender is
+    always told, in the same message, never left on the opening ack.
+    """
+
+    def __init__(self, channel: TgChannel, style: ProgressStyle) -> None:
+        self._channel = channel
+        self._style = style
+
+    def handle(self, env: Envelope) -> None:
+        """Edit the ack toward the outcome (delivered file or error)."""
+        verdict = env.verdict
+        if verdict is None:
+            return
+        origin = env.job.origin
+        result = verdict.result
+        if verdict.disposition is Disposition.DELIVERED and result is not None:
+            self._deliver(origin, result)
+            return
+        self._channel.edit_text(origin, verdict.reply or _DEFAULT_FAIL)
+
+    def _deliver(self, origin: Origin, result: Path) -> None:
+        """Announce sending, upload the file, then mark done."""
+        self._channel.edit_text(origin, self._style.render(SENDING, 100))
+        self._channel.send_file(origin, result)
+        self._channel.edit_text(origin, self._style.render(DONE, 100))
 
 
 def _name(env: Mapping[str, str]) -> str:
@@ -121,12 +164,11 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     seen = SeenPaths(cfg.seen_paths_max)
     docks = merge_watch(_dock(env, api, spec), watch, seen)
     call = CallService(ServiceCall(env.get('SERVICE_URL', '')))
-    route = RouteOrigin(tg=SendResult(channel), loc=Null())
+    route = RouteOrigin(tg=TgStatus(channel, style_for(env)), loc=Null())
     return (
         docks
         >> call
         >> route
-        >> Reply(channel)
         >> Shelve(cfg.bot_done(name), spooled_or_dropped)
     )
 
