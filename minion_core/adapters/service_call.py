@@ -9,10 +9,12 @@ this Step only moves bytes, so the relay container stays light.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from email.message import Message
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import Any
 
 from minion_core.adapters.files import sanitize
 from minion_core.kernel import Disposition
@@ -22,6 +24,8 @@ from minion_core.kernel import atomic_write
 from minion_core.kernel import next_free_path
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import requests
 
     from minion_core.kernel import Job
@@ -30,6 +34,16 @@ HTTP_OK = 200
 HTTP_UNPROCESSABLE = 422
 CALL_TIMEOUT_SEC = 300.0
 """Wall-time bound on one service call (bounded, BLUEPRINT 10)."""
+
+POLL_INTERVAL_SEC = 1.0
+"""Seconds between /jobs/{id} polls -- live, but rate-friendly."""
+
+_FALLBACK_NAME = 'result'
+"""Output name when the service returns no Content-Disposition (rare)."""
+
+_OFFLINE = 'Sorry, the service is offline right now. Try again shortly.'
+_FAILED = 'Sorry, that one failed. Give it another try in a bit.'
+_TIMED_OUT = 'Sorry, that took too long. Give it another try.'
 
 
 @dataclass(frozen=True)
@@ -125,3 +139,83 @@ def _skip_reason(resp: requests.Response) -> str:
         return 'service_skip'
     _, _, reason = str(detail).partition(': ')
     return reason or 'service_skip'
+
+
+class JobClient:
+    """Run a file through a service's async /jobs path, streaming progress.
+
+    Submits to ``<url>/jobs/file``, polls ``<url>/jobs/{id}`` feeding each
+    percent to ``on_progress``, then fetches the result. Maps the outcome to
+    a Verdict just like CallService, so a live-progress belt is a drop-in for
+    the synchronous one -- the model still lives in the service.
+    """
+
+    def __init__(self, spec: ServiceCall) -> None:
+        self._spec = spec
+
+    def run(
+        self, src: Path, dest: Path, on_progress: Callable[[int], None]
+    ) -> Verdict:
+        """Submit, watch to completion, deliver -- or a spoken failure."""
+        import requests
+
+        try:
+            job_id = self._submit(src)
+            done = self._watch(job_id, on_progress)
+            return self._collect(job_id, done, dest)
+        except requests.RequestException:
+            return Verdict(
+                Disposition.FAILED,
+                reason='service_unreachable',
+                reply=_OFFLINE,
+            )
+        except TimeoutError:
+            return Verdict(
+                Disposition.FAILED,
+                reason='service_timeout',
+                reply=_TIMED_OUT,
+            )
+
+    def _submit(self, src: Path) -> str:
+        import requests
+
+        with src.open('rb') as fh:
+            resp = requests.post(
+                f'{self._spec.url}/jobs/file',
+                files={'file': (src.name, fh)},
+                timeout=self._spec.timeout,
+            )
+        resp.raise_for_status()
+        return str(resp.json()['job_id'])
+
+    def _watch(
+        self, job_id: str, on_progress: Callable[[int], None]
+    ) -> dict[str, Any]:
+        import requests
+
+        deadline = time.monotonic() + self._spec.timeout
+        url = f'{self._spec.url}/jobs/{job_id}'
+        while time.monotonic() < deadline:
+            body = requests.get(url, timeout=self._spec.timeout).json()
+            if body.get('status') != 'running':
+                return dict(body)
+            on_progress(int(body.get('progress', 0)))
+            time.sleep(POLL_INTERVAL_SEC)
+        raise TimeoutError
+
+    def _collect(
+        self, job_id: str, done: dict[str, Any], dest: Path
+    ) -> Verdict:
+        import requests
+
+        if done.get('status') == 'failed' or done.get('output_ref') is None:
+            reason = str(done.get('reason') or 'service_error')
+            return Verdict(Disposition.FAILED, reason=reason, reply=_FAILED)
+        resp = requests.get(
+            f'{self._spec.url}/jobs/{job_id}/result',
+            timeout=self._spec.timeout,
+        )
+        resp.raise_for_status()
+        out = next_free_path(dest / _result_name(resp, _FALLBACK_NAME))
+        atomic_write(out, resp.content)
+        return Verdict(Disposition.DELIVERED, result=out)

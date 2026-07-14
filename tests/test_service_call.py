@@ -16,7 +16,11 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from typing import TYPE_CHECKING
 
+import pytest
+
+from minion_core.adapters import service_call
 from minion_core.adapters.service_call import CallService
+from minion_core.adapters.service_call import JobClient
 from minion_core.adapters.service_call import ServiceCall
 from minion_core.kernel import Disposition
 from minion_core.kernel import Job
@@ -121,3 +125,89 @@ def test_unreachable_service_is_failed(tmp_path: Path) -> None:
     assert verdict.disposition is Disposition.FAILED
     assert verdict.reason == 'service_unreachable'
     assert verdict.reply  # a failure is reported to the sender
+
+
+class _JobHandler(BaseHTTPRequestHandler):
+    """A loopback /jobs service: submit, poll (running->done), result."""
+
+    polls = 0
+
+    def do_POST(self) -> None:  # /jobs/file
+        self.rfile.read(int(self.headers.get('Content-Length', '0')))
+        self._json(202, {'job_id': 'j1'})
+
+    def do_GET(self) -> None:  # /jobs/j1 and /jobs/j1/result
+        if self.path.endswith('/result'):
+            self.send_response(200)
+            self.send_header(
+                'Content-Disposition', 'attachment; filename="Clip.mp4"'
+            )
+            self.end_headers()
+            self.wfile.write(b'VIDEO')
+            return
+        type(self).polls += 1
+        if type(self).polls < 2:  # first poll: still downloading
+            self._json(200, {'status': 'running', 'progress': 50})
+        else:  # second poll: delivered
+            self._json(
+                200,
+                {
+                    'status': 'done',
+                    'disposition': 'delivered',
+                    'output_ref': 'r1',
+                    'progress': 100,
+                },
+            )
+
+    def _json(self, code: int, obj: dict[str, object]) -> None:
+        body = json.dumps(obj).encode('ascii')
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args: object) -> None:
+        """Silence the default access log."""
+
+
+@contextmanager
+def _job_service() -> Iterator[str]:
+    _JobHandler.polls = 0
+    srv = ThreadingHTTPServer(('127.0.0.1', 0), _JobHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f'http://127.0.0.1:{srv.server_address[1]}'
+    finally:
+        srv.shutdown()
+
+
+def test_job_client_streams_progress_then_delivers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Async path: percents reach the callback; the named result lands."""
+    monkeypatch.setattr(service_call, 'POLL_INTERVAL_SEC', 0.0)
+    src = tmp_path / 'in.url'
+    src.write_bytes(b'http://example.com/v')
+    dest = tmp_path / 'out'
+    dest.mkdir()
+    seen: list[int] = []
+    with _job_service() as url:
+        verdict = JobClient(ServiceCall(url)).run(src, dest, seen.append)
+    assert verdict.disposition is Disposition.DELIVERED
+    assert verdict.result is not None
+    assert verdict.result.name == 'Clip.mp4'  # named by Content-Disposition
+    assert verdict.result.read_bytes() == b'VIDEO'
+    assert 50 in seen  # the live percent was observed
+
+
+def test_job_client_unreachable_is_failed(tmp_path: Path) -> None:
+    """A dead service is a spoken failure, not a crash."""
+    src = tmp_path / 'in.url'
+    src.write_bytes(b'x')
+    dest = tmp_path / 'out'
+    dest.mkdir()
+    verdict = JobClient(ServiceCall('http://127.0.0.1:1')).run(
+        src, dest, lambda _p: None
+    )
+    assert verdict.disposition is Disposition.FAILED
+    assert verdict.reply

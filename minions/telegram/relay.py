@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import functools
 import os
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from minion_core.adapters.files import Shelve
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.service_call import CallService
+from minion_core.adapters.service_call import JobClient
 from minion_core.adapters.service_call import ServiceCall
 from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgAny
@@ -37,10 +39,12 @@ from minion_core.kernel import Null
 from minion_core.kernel import RouteOrigin
 from minion_core.kernel import SeenPaths
 from minion_core.kernel import Sink
+from minion_core.kernel import Step
 from minion_core.kernel import merge_watch
 from minion_core.kernel import run
 from minion_core.settings import load
 from minions.telegram.progress_style import DONE
+from minions.telegram.progress_style import DOWNLOADING
 from minions.telegram.progress_style import SENDING
 from minions.telegram.progress_style import style_for
 
@@ -49,9 +53,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from minion_core.kernel import Envelope
+    from minion_core.kernel import Job
     from minion_core.kernel import Origin
     from minion_core.kernel import Source
     from minion_core.kernel import Stage
+    from minion_core.kernel import Verdict
     from minion_core.settings import Settings
     from minions.telegram.progress_style import ProgressStyle
 
@@ -121,6 +127,61 @@ class TgStatus(Sink):
         self._channel.edit_text(origin, self._style.render(DONE, 100))
 
 
+_PROGRESS_STEP = 5
+"""Only redraw the bar when the percent crosses a 5% boundary."""
+
+_MIN_EDIT_SEC = 3.0
+"""...and at most this often, to stay under Telegram's edit rate limit."""
+
+
+class _Throttle:
+    """An adequate edit cadence: a new STEP bucket, and MIN_EDIT_SEC apart."""
+
+    def __init__(self, step: int, min_sec: float) -> None:
+        self._step = step
+        self._min_sec = min_sec
+        self._shown = -1
+        self._last = 0.0
+
+    def due(self, pct: int) -> bool:
+        """Whether the bar should be redrawn for this percent, now."""
+        bucket = pct // self._step
+        now = monotonic()
+        if bucket > self._shown and now - self._last >= self._min_sec:
+            self._shown = bucket
+            self._last = now
+            return True
+        return False
+
+
+class CallServiceLive(Step):
+    """Delegate to a service's async /jobs path, editing a live progress bar.
+
+    For slow downloads (the links dock): submit, poll, and edit the ack with
+    the styled percent at an adequate step, then return the Verdict (TgStatus
+    does sending/done/error). The model still lives in the service.
+    """
+
+    def __init__(
+        self, spec: ServiceCall, channel: TgChannel, style: ProgressStyle
+    ) -> None:
+        self._client = JobClient(spec)
+        self._channel = channel
+        self._style = style
+
+    def process(self, job: Job) -> Verdict:
+        """Run the job, streaming a throttled progress bar to the ack."""
+        throttle = _Throttle(_PROGRESS_STEP, _MIN_EDIT_SEC)
+        origin = job.origin
+
+        def on_progress(pct: int) -> None:
+            if throttle.due(pct):
+                text = self._style.render(DOWNLOADING, pct)
+                self._channel.edit_text(origin, text)
+
+        return self._client.run(job.src, job.dest, on_progress)
+
+
 def _name(env: Mapping[str, str]) -> str:
     """The relay's identity: its work dir, offset, and done folder."""
     return env.get('RELAY_NAME', 'relay')
@@ -139,6 +200,20 @@ def _dock(env: Mapping[str, str], api: TgApi, spec: TgSpec) -> Source:
     """The Telegram dock chosen by RELAY_DOCK (media | any | links)."""
     make = _DOCKS.get(env.get('RELAY_DOCK', 'media'), TgMedia)
     return make(api, spec)
+
+
+def _call(
+    env: Mapping[str, str], channel: TgChannel, style: ProgressStyle
+) -> Step:
+    """The service caller for this dock's speed.
+
+    A live progress bar for links (slow downloads); the plain synchronous
+    call otherwise (fast pixel services need no bar).
+    """
+    spec = ServiceCall(env.get('SERVICE_URL', ''))
+    if env.get('RELAY_DOCK', 'media') == 'links':
+        return CallServiceLive(spec, channel, style)
+    return CallService(spec)
 
 
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
@@ -163,8 +238,9 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     )
     seen = SeenPaths(cfg.seen_paths_max)
     docks = merge_watch(_dock(env, api, spec), watch, seen)
-    call = CallService(ServiceCall(env.get('SERVICE_URL', '')))
-    route = RouteOrigin(tg=TgStatus(channel, style_for(env)), loc=Null())
+    style = style_for(env)
+    call = _call(env, channel, style)
+    route = RouteOrigin(tg=TgStatus(channel, style), loc=Null())
     return (
         docks
         >> call

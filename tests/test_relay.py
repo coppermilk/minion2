@@ -91,3 +91,51 @@ def test_status_failure_without_reply_still_tells_the_sender(
     TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
     assert len(channel.edits) == 1
     assert channel.edits[0]  # a non-empty apology, not silence
+
+
+def test_throttle_limits_edits_to_a_new_step_bucket() -> None:
+    """An edit fires only when the percent crosses a STEP boundary."""
+    from minions.telegram.relay import _Throttle
+
+    throttle = _Throttle(step=5, min_sec=0.0)  # interval never blocks
+    assert throttle.due(0)  # first bucket
+    assert not throttle.due(3)  # same bucket (0)
+    assert throttle.due(5)  # new bucket (1)
+    assert not throttle.due(6)  # same bucket (1)
+    assert throttle.due(10)  # new bucket (2)
+
+
+def test_throttle_respects_the_minimum_interval() -> None:
+    """Even a new bucket waits out the minimum edit interval."""
+    from minions.telegram.relay import _Throttle
+
+    throttle = _Throttle(step=5, min_sec=999.0)
+    assert throttle.due(0)
+    assert not throttle.due(50)  # new bucket, but too soon
+
+
+def test_call_service_live_edits_the_bar_on_progress(tmp_path: Path) -> None:
+    """The live step edits the ack as the download reports progress."""
+    from minion_core.adapters.service_call import ServiceCall
+    from minions.telegram.relay import CallServiceLive
+
+    channel = _FakeChannel()
+    live = CallServiceLive(ServiceCall('http://x'), channel, STYLES['blocks'])  # type: ignore[arg-type]
+
+    class _FakeClient:
+        def run(self, src, _dest, on_progress):
+            on_progress(50)
+            return Verdict(Disposition.DELIVERED, result=src)
+
+    live._client = _FakeClient()  # type: ignore[assignment]
+    src = tmp_path / 'in.url'
+    src.write_bytes(b'x')
+    job = Job(
+        src=src,
+        dest=tmp_path,
+        stem='in',
+        origin=Origin('tg', '1:2:9:/spool/in.url'),
+    )
+    verdict = live.process(job)
+    assert verdict.disposition is Disposition.DELIVERED
+    assert channel.edits  # the progress bar was drawn at least once
