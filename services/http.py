@@ -36,6 +36,7 @@ from fastapi import UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
+from minion_core import progress
 from services.core import ServiceRequest
 from services.core import ServiceResult
 from services.core import run_service
@@ -55,6 +56,7 @@ class _Job:
     disposition: str = ''
     reason: str = ''
     ms: float = 0.0
+    progress: int = 0  # 0..100 while running (a fetch reports it live)
     output_ref: str | None = None
     outputs: list[str] = field(default_factory=list)
     error: str = ''
@@ -100,6 +102,13 @@ class JobStore:
                 job.status = 'failed'
                 job.error = error
 
+    def progress(self, job_id: str, pct: int) -> None:
+        """Record a running job's live percent (clamped 0..100)."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.progress = max(0, min(100, pct))
+
 
 @dataclass(frozen=True)
 class _JobSpec:
@@ -120,6 +129,7 @@ def _summary(job: _Job) -> dict[str, object]:
         'disposition': job.disposition,
         'reason': job.reason,
         'ms': job.ms,
+        'progress': job.progress,
         'output_ref': job.output_ref,
         'outputs': job.outputs,
         'error': job.error,
@@ -135,11 +145,16 @@ def _callback(url: str, job: _Job) -> None:
 
 
 def _run_job(jobs: JobStore, job_id: str, spec: _JobSpec) -> None:
-    """Run one job in the background, then fire its callback if any."""
+    """Run one job in the background, then fire its callback if any.
+
+    The Step's live percent (a fetch's download) is routed into the job
+    via the progress sink, so ``/jobs/{id}`` can report it.
+    """
     try:
-        result = run_service(
-            ServiceRequest(spec.step, spec.ref), spec.store, spec.make
-        )
+        with progress.reporting_to(lambda pct: jobs.progress(job_id, pct)):
+            result = run_service(
+                ServiceRequest(spec.step, spec.ref), spec.store, spec.make
+            )
         jobs.finish(job_id, result)
     except Exception as exc:  # noqa: BLE001 -- a job failure is reported, not raised
         jobs.fail(job_id, str(exc))
