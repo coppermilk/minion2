@@ -178,3 +178,32 @@ def style_for(env: Mapping[str, str] | None = None) -> ProgressStyle:
     name = src.get('RELAY_PROGRESS_STYLE', _DEFAULT)
     chosen = STYLES.get(name)
     return chosen if chosen is not None else STYLES[_DEFAULT]
+
+
+# Checklist glyphs: check, down-arrow, outbox tray, party, cross.
+_DONE_G = chr(0x2705)
+_DL_G = chr(0x2B07)
+_UP_G = chr(0x1F4E4)
+_PARTY_G = chr(0x1F389)
+_FAIL_G = chr(0x274C)
+_RECEIVED = f'{_DONE_G} Link received'
+
+
+def checklist(style: ProgressStyle, phase: str, pct: int) -> str:
+    """The growing checklist: done steps stay, the current one is live.
+
+    The relay edits ONE message with this, so the user watches a list fill
+    in -- received, downloading (a live bar), sending, done -- instead of a
+    pile of messages. ``pct`` styles only the downloading line.
+    """
+    if phase == DOWNLOADING:
+        return f'{_RECEIVED}\n{_DL_G} {style.render(DOWNLOADING, pct)}'
+    downloaded = f'{_RECEIVED}\n{_DONE_G} Downloaded'
+    if phase == SENDING:
+        return f'{downloaded}\n{_UP_G} Sending...'
+    return f'{downloaded}\n{_DONE_G} Sent\n{_PARTY_G} Done'
+
+
+def checklist_error(detail: str) -> str:
+    """The checklist with the current step failed -- received, then why."""
+    return f'{_RECEIVED}\n{_FAIL_G} {detail}'

@@ -79,7 +79,8 @@ def test_status_reports_failure_in_the_same_message(tmp_path: Path) -> None:
     )
     TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
     assert channel.files == []  # nothing delivered
-    assert channel.edits == ['Sorry, offline.']  # terminal error, always
+    assert len(channel.edits) == 1  # one terminal edit, always
+    assert 'Sorry, offline.' in channel.edits[0]  # the reason is shown
 
 
 def test_status_failure_without_reply_still_tells_the_sender(
@@ -91,6 +92,27 @@ def test_status_failure_without_reply_still_tells_the_sender(
     TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
     assert len(channel.edits) == 1
     assert channel.edits[0]  # a non-empty apology, not silence
+
+
+def test_status_reports_a_failed_upload_instead_of_hanging(
+    tmp_path: Path,
+) -> None:
+    """A >50 MB upload that raises is reported, not left on 'Sending...'."""
+    from minion_core.adapters.tg import TgError
+
+    class _FailSend(_FakeChannel):
+        def send_file(self, _origin: Origin, _path: Path) -> None:
+            raise TgError('file is too big')
+
+    channel = _FailSend()
+    result = tmp_path / 'big.mp4'
+    result.write_bytes(b'x')
+    env = Envelope(
+        _job(tmp_path), Verdict(Disposition.DELIVERED, result=result)
+    )
+    TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
+    assert channel.files == []  # the send raised
+    assert 'could not send' in channel.edits[-1].lower()  # told, not stuck
 
 
 def test_throttle_limits_edits_to_a_new_step_bucket() -> None:

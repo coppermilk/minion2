@@ -28,6 +28,7 @@ from minion_core.adapters.tg import SpoolSpec
 from minion_core.adapters.tg import TgAny
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.tg import TgChannel
+from minion_core.adapters.tg import TgError
 from minion_core.adapters.tg import TgLinks
 from minion_core.adapters.tg import TgMedia
 from minion_core.adapters.tg import TgSpec
@@ -46,6 +47,8 @@ from minion_core.settings import load
 from minions.telegram.progress_style import DONE
 from minions.telegram.progress_style import DOWNLOADING
 from minions.telegram.progress_style import SENDING
+from minions.telegram.progress_style import checklist
+from minions.telegram.progress_style import checklist_error
 from minions.telegram.progress_style import style_for
 
 if TYPE_CHECKING:
@@ -94,14 +97,20 @@ _DEFAULT_ACK = 'Got it -- working on it...'
 
 _DEFAULT_FAIL = 'Sorry, that did not work. Give it another try in a bit.'
 
+_SEND_FAIL = (
+    'Downloaded, but could not send it -- the file may be over the '
+    'Telegram 50 MB limit for bots.'
+)
+
 
 class TgStatus(Sink):
     """Drive one self-editing Telegram message through a job's life.
 
-    Replaces SendResult+Reply on the tg side: on delivery it edits the ack
-    to 'sending', uploads the file, then edits to 'done'; on any
-    non-delivery it edits the ack to the failure reason. The sender is
-    always told, in the same message, never left on the opening ack.
+    Replaces SendResult+Reply on the tg side: it edits ONE message as a
+    growing checklist -- sending, then done -- and, crucially, tells the
+    sender when the UPLOAD itself fails (a >50 MB video), instead of
+    leaving the message stuck on 'Sending...'. Every path is terminal:
+    the sender is always told, in the same message, never left hanging.
     """
 
     def __init__(self, channel: TgChannel, style: ProgressStyle) -> None:
@@ -109,7 +118,7 @@ class TgStatus(Sink):
         self._style = style
 
     def handle(self, env: Envelope) -> None:
-        """Edit the ack toward the outcome (delivered file or error)."""
+        """Edit the checklist toward the outcome (delivered file or error)."""
         verdict = env.verdict
         if verdict is None:
             return
@@ -118,13 +127,23 @@ class TgStatus(Sink):
         if verdict.disposition is Disposition.DELIVERED and result is not None:
             self._deliver(origin, result)
             return
-        self._channel.edit_text(origin, verdict.reply or _DEFAULT_FAIL)
+        self._channel.edit_text(
+            origin, checklist_error(verdict.reply or _DEFAULT_FAIL)
+        )
 
     def _deliver(self, origin: Origin, result: Path) -> None:
-        """Announce sending, upload the file, then mark done."""
-        self._channel.edit_text(origin, self._style.render(SENDING, 100))
-        self._channel.send_file(origin, result)
-        self._channel.edit_text(origin, self._style.render(DONE, 100))
+        """Announce sending, upload the file, then mark done -- or report.
+
+        A failed upload (over the 50 MB bot limit, a timeout) is caught and
+        shown, so the message never freezes on 'Sending...'.
+        """
+        self._channel.edit_text(origin, checklist(self._style, SENDING, 100))
+        try:
+            self._channel.send_file(origin, result)
+        except TgError:
+            self._channel.edit_text(origin, checklist_error(_SEND_FAIL))
+            return
+        self._channel.edit_text(origin, checklist(self._style, DONE, 100))
 
 
 _PROGRESS_STEP = 5
@@ -144,14 +163,20 @@ class _Throttle:
         self._last = 0.0
 
     def due(self, pct: int) -> bool:
-        """Whether the bar should be redrawn for this percent, now."""
+        """Whether the bar should be redrawn for this percent, now.
+
+        The first draw always fires (nothing shown yet); later draws need
+        both a new bucket and the minimum interval since the last one.
+        """
         bucket = pct // self._step
+        if bucket <= self._shown:
+            return False
         now = monotonic()
-        if bucket > self._shown and now - self._last >= self._min_sec:
-            self._shown = bucket
-            self._last = now
-            return True
-        return False
+        if self._shown >= 0 and now - self._last < self._min_sec:
+            return False
+        self._shown = bucket
+        self._last = now
+        return True
 
 
 class CallServiceLive(Step):
@@ -176,7 +201,7 @@ class CallServiceLive(Step):
 
         def on_progress(pct: int) -> None:
             if throttle.due(pct):
-                text = self._style.render(DOWNLOADING, pct)
+                text = checklist(self._style, DOWNLOADING, pct)
                 self._channel.edit_text(origin, text)
 
         return self._client.run(job.src, job.dest, on_progress)
