@@ -227,18 +227,26 @@ def _dock(env: Mapping[str, str], api: TgApi, spec: TgSpec) -> Source:
     return make(api, spec)
 
 
+_LINKS_TIMEOUT_SEC = 1800.0
+"""How long the relay waits on a download job -- longer than the service's
+own download bound (DOWNLOAD_TIMEOUT_SEC, 900s), so a slow but healthy
+download is never dropped as 'lost' before the service finishes it."""
+
+
 def _call(
     env: Mapping[str, str], channel: TgChannel, style: ProgressStyle
 ) -> Step:
     """The service caller for this dock's speed.
 
-    A live progress bar for links (slow downloads); the plain synchronous
-    call otherwise (fast pixel services need no bar).
+    A live progress bar for links (slow downloads), with a generous wait so
+    a long download is not dropped; the plain synchronous call otherwise
+    (fast pixel services need no bar).
     """
-    spec = ServiceCall(env.get('SERVICE_URL', ''))
+    url = env.get('SERVICE_URL', '')
     if env.get('RELAY_DOCK', 'media') == 'links':
+        spec = ServiceCall(url, _LINKS_TIMEOUT_SEC)
         return CallServiceLive(spec, channel, style)
-    return CallService(spec)
+    return CallService(ServiceCall(url))
 
 
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
