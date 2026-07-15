@@ -112,7 +112,13 @@ _PCT = re.compile(r'PROGRESS:\s*([0-9.]+)%')
 
 
 class _Pump:
-    """Reads yt-dlp's stderr live: percents to the sink, a tail for errors."""
+    """Reads one yt-dlp stream live: percents to the sink, the rest kept.
+
+    Both stdout and stderr are pumped, because a build may emit the
+    ``--progress-template`` line on either -- reading both means the bar
+    animates whichever stream carries it. The kept non-progress lines are
+    the error tail (stderr) or the ``--print`` filepath (stdout).
+    """
 
     def __init__(self, report: Callable[[int], None]) -> None:
         self._report = report
@@ -125,24 +131,33 @@ class _Pump:
             if match is not None:
                 self._report(int(float(match.group(1))))
             else:
-                self.tail.append(line.rstrip())
+                kept = line.rstrip()
+                if kept:
+                    self.tail.append(kept)
 
 
 def _run_ytdlp(argv: list[str], timeout: float) -> Path:
     """Run yt-dlp bounded; stream progress; return the output path.
 
     The total wall-time bound is ``proc.wait(timeout)`` (survives a silent
-    hang, REQ-RES-001); a reader thread drains stderr for progress so the
-    tiny ``--print`` filepath on stdout cannot deadlock either pipe.
+    hang, REQ-RES-001); a reader thread per pipe drains both, so neither can
+    deadlock and progress is caught whichever stream yt-dlp writes it to.
     """
-    pump = _Pump(progress.current() or _ignore)
+    report = progress.current() or _ignore
+    out_pump, err_pump = _Pump(report), _Pump(report)
     proc = subprocess.Popen(  # noqa: S603 -- fixed binary, no shell
         argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
-    reader = threading.Thread(
-        target=pump.run, args=(proc.stderr,), daemon=True
-    )
-    reader.start()
+    readers = [
+        threading.Thread(
+            target=out_pump.run, args=(proc.stdout,), daemon=True
+        ),
+        threading.Thread(
+            target=err_pump.run, args=(proc.stderr,), daemon=True
+        ),
+    ]
+    for reader in readers:
+        reader.start()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -150,25 +165,21 @@ def _run_ytdlp(argv: list[str], timeout: float) -> Path:
         proc.wait()
         raise
     finally:
-        reader.join(timeout=1.0)
+        for reader in readers:
+            reader.join(timeout=1.0)
     if proc.returncode != 0:
-        raise FetchFailed(f'stale_extractor: {" | ".join(pump.tail)[-500:]}')
-    return _output_path(proc.stdout)
+        tail = ' | '.join(err_pump.tail) or ' | '.join(out_pump.tail)
+        raise FetchFailed(f'stale_extractor: {tail[-500:]}')
+    return _output_path(out_pump.tail)
 
 
 def _ignore(_pct: int) -> None:
     """The sink when nobody is listening (a bare download)."""
 
 
-def _output_path(stream: IO[str] | None) -> Path:
-    """The last non-progress stdout line (the --print filepath)."""
-    out = stream.read() if stream is not None else ''
-    paths = [
-        line
-        for line in out.strip().splitlines()
-        if not line.startswith('PROGRESS:')
-    ]
-    got = Path(paths[-1]) if paths else Path()
+def _output_path(lines: deque[str]) -> Path:
+    """The last stdout line (the --print filepath)."""
+    got = Path(lines[-1]) if lines else Path()
     if not got.is_file():
         raise FetchFailed('stale_extractor: no output file')
     return got

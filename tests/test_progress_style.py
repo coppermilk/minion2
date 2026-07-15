@@ -8,6 +8,8 @@ from minions.telegram.progress_style import ERROR
 from minions.telegram.progress_style import SENDING
 from minions.telegram.progress_style import STYLES
 from minions.telegram.progress_style import BarStyle
+from minions.telegram.progress_style import checklist
+from minions.telegram.progress_style import checklist_error
 from minions.telegram.progress_style import style_for
 
 
@@ -45,6 +47,27 @@ def test_bar_clamps_out_of_range_percent() -> None:
     style = BarStyle(fill=chr(0x25B0), empty=chr(0x25B1), segments=10)
     assert '0%' in style.render(DOWNLOADING, -5)
     assert '100%' in style.render(DOWNLOADING, 250)
+
+
+def test_checklist_accumulates_completed_steps() -> None:
+    """The list grows: received stays, later steps mark done."""
+    style = STYLES['blocks']
+    dl = checklist(style, DOWNLOADING, 40)
+    assert 'Link received' in dl
+    assert '40%' in dl  # the live bar is on the downloading line
+    done = checklist(style, DONE, 100)
+    # By done, every earlier step is present and checked off.
+    assert 'Link received' in done
+    assert 'Downloaded' in done
+    assert 'Sent' in done
+    assert done.count('\n') >= 3  # a multi-line checklist, not one line
+
+
+def test_checklist_error_keeps_the_first_step_and_shows_why() -> None:
+    """A failure keeps 'received' and appends the reason -- never silent."""
+    text = checklist_error('the service is offline')
+    assert 'Link received' in text
+    assert 'the service is offline' in text
 
 
 def test_style_for_picks_by_env_and_falls_back() -> None:
