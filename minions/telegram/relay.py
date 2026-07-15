@@ -15,7 +15,10 @@ with different env (the Telegram <-> service split).
 from __future__ import annotations
 
 import functools
+import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -35,6 +38,7 @@ from minion_core.adapters.tg import TgSpec
 from minion_core.adapters.tg import chats_from
 from minion_core.adapters.tg import spooled_or_dropped
 from minion_core.kernel import Disposition
+from minion_core.kernel import Envelope
 from minion_core.kernel import FolderSpec
 from minion_core.kernel import Null
 from minion_core.kernel import RouteOrigin
@@ -55,7 +59,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
-    from minion_core.kernel import Envelope
     from minion_core.kernel import Job
     from minion_core.kernel import Origin
     from minion_core.kernel import Source
@@ -249,12 +252,64 @@ def _call(
     return CallService(ServiceCall(url))
 
 
-def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
-    """Assemble the relay belt; secrets come from the passed mapping."""
-    api = TgApi(env.get('TG_TOKEN', ''))
-    name = _name(env)
+_WORKERS_DEFAULT = 4
+"""Concurrent downloads on a links belt (bounded; many links, many users)."""
+
+
+def _workers(env: Mapping[str, str]) -> int:
+    """RELAY_WORKERS (>=1), or the default concurrency."""
+    try:
+        return max(1, int(env.get('RELAY_WORKERS', str(_WORKERS_DEFAULT))))
+    except ValueError:
+        return _WORKERS_DEFAULT
+
+
+@dataclass(frozen=True)
+class _Tail:
+    """One job's whole tail: call the service, report, dispose the spool.
+
+    Run off the belt on a worker thread, so several downloads (and several
+    users) progress at once instead of queueing behind one. The steps are
+    stateless, so sharing them across workers is safe.
+    """
+
+    call: Step
+    route: Sink
+    shelve: Sink
+
+    def run(self, env: Envelope) -> None:
+        """Process one envelope end to end; a crash is logged, not lost."""
+        try:
+            done = Envelope(env.job, self.call.process(env.job))
+            self.route.handle(done)
+            self.shelve.handle(done)
+        except Exception:
+            logging.getLogger('relay').exception(
+                'worker_crashed src=%s', env.job.src
+            )
+
+
+class Dispatch(Sink):
+    """Hand each job to a bounded worker pool; never block the belt.
+
+    The belt keeps reading updates (so every sender is acked at once) while
+    downloads run concurrently, up to the pool size -- the multi-user,
+    many-links path.
+    """
+
+    def __init__(self, pool: ThreadPoolExecutor, tail: _Tail) -> None:
+        self._pool = pool
+        self._tail = tail
+
+    def handle(self, env: Envelope) -> None:
+        """Submit the job to the pool and return at once."""
+        self._pool.submit(self._tail.run, env)
+
+
+def _spec(cfg: Settings, name: str, env: Mapping[str, str]) -> TgSpec:
+    """The Telegram dock spec for this bot (spool, offset, chats, ack)."""
     spool = cfg.bot_dir(name) / '_spool'
-    spec = TgSpec(
+    return TgSpec(
         spool=SpoolSpec(into=spool, budget=functools.partial(free_quota, cfg)),
         dest=spool,
         offset=cfg.state / f'{name}.offset',
@@ -262,24 +317,36 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         help=env.get('RELAY_HELP', _DEFAULT_HELP),
         ack=_ACKS.get(name, _DEFAULT_ACK),
     )
+
+
+def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
+    """Assemble the relay belt; secrets come from the passed mapping."""
+    api = TgApi(env.get('TG_TOKEN', ''))
+    name = _name(env)
+    spool = cfg.bot_dir(name) / '_spool'
+    docks = merge_watch(
+        _dock(env, api, _spec(cfg, name, env)),
+        FolderSpec(
+            root=cfg.bot_dir(name),
+            dest=spool,
+            exts=_exts(env),
+            poll_sec=cfg.poll_sec,
+        ),
+        SeenPaths(cfg.seen_paths_max),
+    )
     channel = TgChannel(api)
-    watch = FolderSpec(
-        root=cfg.bot_dir(name),
-        dest=spool,
-        exts=_exts(env),
-        poll_sec=cfg.poll_sec,
-    )
-    seen = SeenPaths(cfg.seen_paths_max)
-    docks = merge_watch(_dock(env, api, spec), watch, seen)
     style = style_for(env)
-    call = _call(env, channel, style)
-    route = RouteOrigin(tg=TgStatus(channel, style), loc=Null())
-    return (
-        docks
-        >> call
-        >> route
-        >> Shelve(cfg.bot_done(name), spooled_or_dropped)
+    tail = _Tail(
+        call=_call(env, channel, style),
+        route=RouteOrigin(tg=TgStatus(channel, style), loc=Null()),
+        shelve=Shelve(cfg.bot_done(name), spooled_or_dropped),
     )
+    if env.get('RELAY_DOCK', 'media') == 'links':
+        pool = ThreadPoolExecutor(
+            max_workers=_workers(env), thread_name_prefix=f'{name}-dl'
+        )
+        return docks >> Dispatch(pool, tail)
+    return docks >> tail.call >> tail.route >> tail.shelve
 
 
 def main(env: Mapping[str, str] | None = None) -> int:
