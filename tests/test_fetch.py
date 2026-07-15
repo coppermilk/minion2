@@ -231,6 +231,14 @@ def test_download_streams_progress_to_the_sink(
     assert seen == [10, 55, 100]  # parsed percents, in order
 
 
+def test_argv_forces_progress_output(tmp_path: Path) -> None:
+    """--progress makes yt-dlp emit percents even without a TTY (container)."""
+    cfg = make_cfg(tmp_path / 'drive')
+    argv = fetch._argv('http://example.com/v', tmp_path, cfg)
+    assert '--progress' in argv  # else the live bar never animates
+    assert '--progress-template' in argv
+
+
 def test_youtube_gets_player_client_args(tmp_path: Path) -> None:
     """The player_client arg attaches only on YouTube hosts."""
     cfg = make_cfg(tmp_path / 'drive', YTDLP_PLAYER_CLIENTS='web,android')

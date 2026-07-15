@@ -191,6 +191,10 @@ def _argv(url: str, into: Path, cfg: Settings) -> list[str]:
         YTDLP,
         '--no-playlist',
         '--no-simulate',
+        # Force progress even without a TTY (a container has none), on its
+        # own lines, in our parseable form -- else yt-dlp prints no percent
+        # and the live bar never moves.
+        '--progress',
         '--newline',
         '--progress-template',
         'PROGRESS:%(progress._percent_str)s',
