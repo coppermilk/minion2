@@ -136,6 +136,69 @@ def test_throttle_respects_the_minimum_interval() -> None:
     assert not throttle.due(50)  # new bucket, but too soon
 
 
+class _RecCall:
+    """A fake service call that records jobs and delivers them."""
+
+    def __init__(self) -> None:
+        self.seen: list[Job] = []
+
+    def process(self, job: Job) -> Verdict:
+        self.seen.append(job)
+        return Verdict(Disposition.DELIVERED, result=job.src)
+
+
+class _RecSink:
+    """A fake sink that records the envelopes it handled."""
+
+    def __init__(self) -> None:
+        self.seen: list[Envelope] = []
+
+    def handle(self, env: Envelope) -> None:
+        self.seen.append(env)
+
+
+def test_tail_runs_call_then_route_then_shelve(tmp_path: Path) -> None:
+    """One worker runs a job's whole tail: call, deliver, dispose."""
+    from minions.telegram.relay import _Tail
+
+    call, route, shelve = _RecCall(), _RecSink(), _RecSink()
+    tail = _Tail(call, route, shelve)  # type: ignore[arg-type]
+    job = _job(tmp_path)
+    tail.run(Envelope(job))
+    assert call.seen == [job]
+    assert len(route.seen) == 1
+    assert route.seen[0].verdict is not None
+    assert len(shelve.seen) == 1  # spool disposed
+
+
+def test_tail_worker_crash_is_contained(tmp_path: Path) -> None:
+    """A crashing worker is logged, never propagated (the pool survives)."""
+    from minions.telegram.relay import _Tail
+
+    class _Boom:
+        def process(self, _job: Job) -> Verdict:
+            raise RuntimeError('boom')
+
+    tail = _Tail(_Boom(), _RecSink(), _RecSink())  # type: ignore[arg-type]
+    tail.run(Envelope(_job(tmp_path)))  # must not raise
+
+
+def test_dispatch_runs_many_jobs_concurrently(tmp_path: Path) -> None:
+    """The belt hands jobs to a pool; all complete, none block the others."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from minions.telegram.relay import Dispatch
+    from minions.telegram.relay import _Tail
+
+    call, route, shelve = _RecCall(), _RecSink(), _RecSink()
+    pool = ThreadPoolExecutor(max_workers=3)
+    dispatch = Dispatch(pool, _Tail(call, route, shelve))  # type: ignore[arg-type]
+    for _ in range(5):
+        dispatch.handle(Envelope(_job(tmp_path)))
+    pool.shutdown(wait=True)  # let every worker finish
+    assert len(shelve.seen) == 5  # all five processed off the belt
+
+
 def test_call_service_live_edits_the_bar_on_progress(tmp_path: Path) -> None:
     """The live step edits the ack as the download reports progress."""
     from minion_core.adapters.service_call import ServiceCall

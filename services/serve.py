@@ -27,11 +27,12 @@ def run_service_app(step: str, make: Make) -> int:
     # request/response under 'llm' -- are readable as a file too, not only
     # via docker logs. Both handlers sit on root (bot_logger), so uvicorn's
     # access lines and the adapters' records land in both sinks.
-    bot_logger(step, _log_dir()).info('started')
+    bot_logger(step, _log_dir())
     skin = os.environ.get('SKIN', 'http')
     if skin == 'mcp':
         from services.mcp_server import create_server
 
+        print(f'service {step} starting (mcp)', flush=True)  # noqa: T201
         create_server(step, make).run()
         return 0
     import uvicorn
@@ -39,7 +40,17 @@ def run_service_app(step: str, make: Make) -> int:
     from services.http import create_app
 
     port = int(os.environ.get('PORT', '8000'))
-    uvicorn.run(create_app(step, make), host='0.0.0.0', port=port)  # noqa: S104 -- bind all inside the container; expose per compose
+    # A guaranteed, unbuffered first line so `docker logs` is never blank,
+    # even if a logging handler is misconfigured. log_config=None hands
+    # uvicorn's own access/error logs to our root stdout handler (from
+    # bot_logger) instead of uvicorn's, so everything lands in one place.
+    print(f'service {step} starting on :{port}', flush=True)  # noqa: T201
+    uvicorn.run(
+        create_app(step, make),
+        host='0.0.0.0',  # noqa: S104 -- bound inside the container; expose per compose
+        port=port,
+        log_config=None,
+    )
     return 0
 
 
