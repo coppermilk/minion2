@@ -190,14 +190,14 @@ def test_job_client_streams_progress_then_delivers(
     src.write_bytes(b'http://example.com/v')
     dest = tmp_path / 'out'
     dest.mkdir()
-    seen: list[int] = []
+    seen: list[object] = []
     with _job_service() as url:
         verdict = JobClient(ServiceCall(url)).run(src, dest, seen.append)
     assert verdict.disposition is Disposition.DELIVERED
     assert verdict.result is not None
     assert verdict.result.name == 'Clip.mp4'  # named by Content-Disposition
     assert verdict.result.read_bytes() == b'VIDEO'
-    assert 50 in seen  # the live percent was observed
+    assert 50 in [r.pct for r in seen]  # the live percent was observed
 
 
 def test_job_client_unreachable_is_failed(tmp_path: Path) -> None:

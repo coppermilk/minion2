@@ -47,12 +47,14 @@ from minion_core.kernel import Sink
 from minion_core.kernel import Step
 from minion_core.kernel import merge_watch
 from minion_core.kernel import run
+from minion_core.progress import Report
 from minion_core.settings import load
 from minions.telegram.progress_style import DONE
 from minions.telegram.progress_style import DOWNLOADING
+from minions.telegram.progress_style import ERROR
+from minions.telegram.progress_style import RECEIVED
 from minions.telegram.progress_style import SENDING
-from minions.telegram.progress_style import checklist
-from minions.telegram.progress_style import checklist_error
+from minions.telegram.progress_style import Style
 from minions.telegram.progress_style import style_for
 
 if TYPE_CHECKING:
@@ -65,7 +67,6 @@ if TYPE_CHECKING:
     from minion_core.kernel import Stage
     from minion_core.kernel import Verdict
     from minion_core.settings import Settings
-    from minions.telegram.progress_style import ProgressStyle
 
 _DOCKS = {'media': TgMedia, 'any': TgAny, 'links': TgLinks}
 """RELAY_DOCK -> the Telegram dock: documents, links+documents, or links."""
@@ -116,37 +117,42 @@ class TgStatus(Sink):
     the sender is always told, in the same message, never left hanging.
     """
 
-    def __init__(self, channel: TgChannel, style: ProgressStyle) -> None:
+    def __init__(self, channel: TgChannel, style: Style) -> None:
         self._channel = channel
         self._style = style
 
     def handle(self, env: Envelope) -> None:
-        """Edit the checklist toward the outcome (delivered file or error)."""
+        """Edit the status toward the outcome (delivered file or error)."""
         verdict = env.verdict
         if verdict is None:
             return
         origin = env.job.origin
         result = verdict.result
         if verdict.disposition is Disposition.DELIVERED and result is not None:
-            self._deliver(origin, result)
+            self._deliver(origin, result, verdict.reply)
             return
-        self._channel.edit_text(
-            origin, checklist_error(verdict.reply or _DEFAULT_FAIL)
-        )
+        self._edit(origin, ERROR, verdict.reply or _DEFAULT_FAIL)
 
-    def _deliver(self, origin: Origin, result: Path) -> None:
+    def _deliver(self, origin: Origin, result: Path, detail: str) -> None:
         """Announce sending, upload the file, then mark done -- or report.
 
         A failed upload (over the 50 MB bot limit, a timeout) is caught and
-        shown, so the message never freezes on 'Sending...'.
+        shown, so the message never freezes on 'sending'. ``detail`` is the
+        done line (size and elapsed) the caller measured.
         """
-        self._channel.edit_text(origin, checklist(self._style, SENDING, 100))
+        self._edit(origin, SENDING, '')
         try:
             self._channel.send_file(origin, result)
         except TgError:
-            self._channel.edit_text(origin, checklist_error(_SEND_FAIL))
+            self._edit(origin, ERROR, _SEND_FAIL)
             return
-        self._channel.edit_text(origin, checklist(self._style, DONE, 100))
+        self._edit(origin, DONE, detail)
+
+    def _edit(self, origin: Origin, phase: str, detail: str) -> None:
+        """Render one status block for the phase and edit the message."""
+        self._channel.edit_text(
+            origin, self._style.render(phase, Report(100), detail)
+        )
 
 
 _PROGRESS_STEP = 5
@@ -191,7 +197,7 @@ class CallServiceLive(Step):
     """
 
     def __init__(
-        self, spec: ServiceCall, channel: TgChannel, style: ProgressStyle
+        self, spec: ServiceCall, channel: TgChannel, style: Style
     ) -> None:
         self._client = JobClient(spec)
         self._channel = channel
@@ -201,10 +207,13 @@ class CallServiceLive(Step):
         """Run the job, streaming a throttled progress bar to the ack."""
         throttle = _Throttle(_PROGRESS_STEP, _MIN_EDIT_SEC)
         origin = job.origin
+        self._channel.edit_text(
+            origin, self._style.render(RECEIVED, Report(0))
+        )
 
-        def on_progress(pct: int) -> None:
-            if throttle.due(pct):
-                text = checklist(self._style, DOWNLOADING, pct)
+        def on_progress(report: Report) -> None:
+            if throttle.due(report.pct):
+                text = self._style.render(DOWNLOADING, report)
                 self._channel.edit_text(origin, text)
 
         return self._client.run(job.src, job.dest, on_progress)
@@ -236,9 +245,7 @@ own download bound (DOWNLOAD_TIMEOUT_SEC, 900s), so a slow but healthy
 download is never dropped as 'lost' before the service finishes it."""
 
 
-def _call(
-    env: Mapping[str, str], channel: TgChannel, style: ProgressStyle
-) -> Step:
+def _call(env: Mapping[str, str], channel: TgChannel, style: Style) -> Step:
     """The service caller for this dock's speed.
 
     A live progress bar for links (slow downloads), with a generous wait so
