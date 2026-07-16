@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from dataclasses import replace
 from email.message import Message
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 
+from minion_core import progress
 from minion_core.adapters.files import sanitize
 from minion_core.kernel import Disposition
 from minion_core.kernel import Step
@@ -154,27 +156,24 @@ class JobClient:
         self._spec = spec
 
     def run(
-        self, src: Path, dest: Path, on_progress: Callable[[int], None]
+        self,
+        src: Path,
+        dest: Path,
+        on_progress: Callable[[progress.Report], None],
     ) -> Verdict:
         """Submit, watch to completion, deliver -- or a spoken failure."""
         import requests
 
+        start = time.monotonic()
         try:
             job_id = self._submit(src)
             done = self._watch(job_id, on_progress)
-            return self._collect(job_id, done, dest)
+            verdict = self._collect(job_id, done, dest)
         except requests.RequestException:
-            return Verdict(
-                Disposition.FAILED,
-                reason='service_unreachable',
-                reply=_OFFLINE,
-            )
+            return _failed('service_unreachable', _OFFLINE)
         except TimeoutError:
-            return Verdict(
-                Disposition.FAILED,
-                reason='service_timeout',
-                reply=_TIMED_OUT,
-            )
+            return _failed('service_timeout', _TIMED_OUT)
+        return _with_detail(verdict, int(time.monotonic() - start))
 
     def _submit(self, src: Path) -> str:
         import requests
@@ -189,7 +188,7 @@ class JobClient:
         return str(resp.json()['job_id'])
 
     def _watch(
-        self, job_id: str, on_progress: Callable[[int], None]
+        self, job_id: str, on_progress: Callable[[progress.Report], None]
     ) -> dict[str, Any]:
         import requests
 
@@ -199,7 +198,7 @@ class JobClient:
             body = requests.get(url, timeout=self._spec.timeout).json()
             if body.get('status') != 'running':
                 return dict(body)
-            on_progress(int(body.get('progress', 0)))
+            on_progress(_report_of(body))
             time.sleep(POLL_INTERVAL_SEC)
         raise TimeoutError
 
@@ -219,3 +218,32 @@ class JobClient:
         out = next_free_path(dest / _result_name(resp, _FALLBACK_NAME))
         atomic_write(out, resp.content)
         return Verdict(Disposition.DELIVERED, result=out)
+
+
+def _report_of(body: dict[str, Any]) -> progress.Report:
+    """A live job-status body as a progress Report (percent, bytes, ETA)."""
+    return progress.Report(
+        int(body.get('progress', 0)),
+        int(body.get('done_bytes', 0)),
+        int(body.get('total_bytes', 0)),
+        int(body.get('eta_sec', 0)),
+    )
+
+
+def _failed(reason: str, reply: str) -> Verdict:
+    """A spoken failure verdict (the sender is always told what went wrong)."""
+    return Verdict(Disposition.FAILED, reason=reason, reply=reply)
+
+
+def _with_detail(verdict: Verdict, elapsed_sec: int) -> Verdict:
+    """Stamp a delivered verdict's reply with the done detail (size . time).
+
+    The reply carries the final ``47.6 MB . 47s`` line for the status sink to
+    show on the 'done' step; a non-delivery is returned untouched.
+    """
+    if verdict.disposition is not Disposition.DELIVERED:
+        return verdict
+    if verdict.result is None:
+        return verdict
+    size = verdict.result.stat().st_size
+    return replace(verdict, reply=progress.done_detail(size, elapsed_sec))

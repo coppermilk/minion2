@@ -11,7 +11,6 @@ Invariants deliberately not knobs: one link -> one file
 
 from __future__ import annotations
 
-import re
 import socket
 import subprocess
 import threading
@@ -107,12 +106,30 @@ def download(url: str, into: Path, cfg: Settings) -> Path:
     return _run_ytdlp(_argv(url, into, cfg), cfg.download_timeout_sec)
 
 
-_PCT = re.compile(r'PROGRESS:\s*([0-9.]+)%')
-"""The percent from a --progress-template line (our PROGRESS: prefix)."""
+def _int(field: str) -> int:
+    """A yt-dlp numeric template field, or 0 when it prints ``NA``."""
+    text = field.strip()
+    return int(text) if text.isdigit() else 0
+
+
+def _parse(line: str) -> progress.Report | None:
+    """Parse a ``PROGRESS:pct;done;total;eta`` line into a Report, or None."""
+    if not line.startswith('PROGRESS:'):
+        return None
+    parts = line[len('PROGRESS:') :].split(';')
+    if len(parts) != _FIELDS:
+        return None
+    pct, done, total, eta = parts
+    pct_num = _int(pct.strip().rstrip('%').split('.')[0])
+    return progress.Report(pct_num, _int(done), _int(total), _int(eta))
+
+
+_FIELDS = 4
+"""pct ; downloaded ; total ; eta -- the progress-template fields."""
 
 
 class _Pump:
-    """Reads one yt-dlp stream live: percents to the sink, the rest kept.
+    """Reads one yt-dlp stream live: progress to the sink, the rest kept.
 
     Both stdout and stderr are pumped, because a build may emit the
     ``--progress-template`` line on either -- reading both means the bar
@@ -120,16 +137,16 @@ class _Pump:
     the error tail (stderr) or the ``--print`` filepath (stdout).
     """
 
-    def __init__(self, report: Callable[[int], None]) -> None:
+    def __init__(self, report: Callable[[progress.Report], None]) -> None:
         self._report = report
         self.tail: deque[str] = deque(maxlen=20)
 
     def run(self, stream: IO[str]) -> None:
         """Drain the stream until EOF (the process closing it)."""
         for line in stream:
-            match = _PCT.search(line)
-            if match is not None:
-                self._report(int(float(match.group(1))))
+            report = _parse(line)
+            if report is not None:
+                self._report(report)
             else:
                 kept = line.rstrip()
                 if kept:
@@ -173,7 +190,7 @@ def _run_ytdlp(argv: list[str], timeout: float) -> Path:
     return _output_path(out_pump.tail)
 
 
-def _ignore(_pct: int) -> None:
+def _ignore(_report: progress.Report) -> None:
     """The sink when nobody is listening (a bare download)."""
 
 
@@ -197,7 +214,12 @@ def _argv(url: str, into: Path, cfg: Settings) -> list[str]:
         '--progress',
         '--newline',
         '--progress-template',
-        'PROGRESS:%(progress._percent_str)s',
+        (
+            'PROGRESS:%(progress._percent_str)s'
+            ';%(progress.downloaded_bytes)s'
+            ';%(progress.total_bytes,progress.total_bytes_estimate)s'
+            ';%(progress.eta)s'
+        ),
         '--print',
         'after_move:filepath',
         '-f',

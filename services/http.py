@@ -57,6 +57,9 @@ class _Job:
     reason: str = ''
     ms: float = 0.0
     progress: int = 0  # 0..100 while running (a fetch reports it live)
+    done_bytes: int = 0
+    total_bytes: int = 0
+    eta_sec: int = 0
     output_ref: str | None = None
     outputs: list[str] = field(default_factory=list)
     error: str = ''
@@ -102,12 +105,15 @@ class JobStore:
                 job.status = 'failed'
                 job.error = error
 
-    def progress(self, job_id: str, pct: int) -> None:
-        """Record a running job's live percent (clamped 0..100)."""
+    def record(self, job_id: str, report: progress.Report) -> None:
+        """Record a running job's live percent, bytes and ETA."""
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
-                job.progress = max(0, min(100, pct))
+                job.progress = max(0, min(100, report.pct))
+                job.done_bytes = report.done_bytes
+                job.total_bytes = report.total_bytes
+                job.eta_sec = report.eta_sec
 
 
 @dataclass(frozen=True)
@@ -130,6 +136,9 @@ def _summary(job: _Job) -> dict[str, object]:
         'reason': job.reason,
         'ms': job.ms,
         'progress': job.progress,
+        'done_bytes': job.done_bytes,
+        'total_bytes': job.total_bytes,
+        'eta_sec': job.eta_sec,
         'output_ref': job.output_ref,
         'outputs': job.outputs,
         'error': job.error,
@@ -151,7 +160,7 @@ def _run_job(jobs: JobStore, job_id: str, spec: _JobSpec) -> None:
     via the progress sink, so ``/jobs/{id}`` can report it.
     """
     try:
-        with progress.reporting_to(lambda pct: jobs.progress(job_id, pct)):
+        with progress.reporting_to(lambda report: jobs.record(job_id, report)):
             result = run_service(
                 ServiceRequest(spec.step, spec.ref), spec.store, spec.make
             )

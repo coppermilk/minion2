@@ -56,7 +56,7 @@ def test_job_reports_live_progress() -> None:
         def process(self, job):
             sink = progress.current()
             if sink is not None:
-                sink(42)
+                sink(progress.Report(42))
             return Verdict(Disposition.DELIVERED, result=job.src)
 
     client = TestClient(create_app('prog', lambda _c: _Prog()))

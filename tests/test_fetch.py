@@ -201,19 +201,19 @@ _PROGRESS_YTDLP = (
     'into = a[a.index("-P") + 1]\n'
     'path = os.path.join(into, "video.mp4")\n'
     'open(path, "wb").write(b"video")\n'
-    'sys.stderr.write("PROGRESS:  10.0%\\n")\n'
-    'sys.stderr.write("PROGRESS:  55.5%\\n")\n'
-    'sys.stderr.write("PROGRESS: 100%\\n")\n'
+    'sys.stderr.write("PROGRESS:  10.0%;100;1000;9\\n")\n'
+    'sys.stderr.write("PROGRESS:  55.5%;555;1000;4\\n")\n'
+    'sys.stderr.write("PROGRESS: 100%;1000;1000;0\\n")\n'
     'sys.stderr.flush()\n'
     'print(path)\n'
 )
-"""A fake yt-dlp: percents to stderr, the output path to stdout."""
+"""A fake yt-dlp: PROGRESS:pct;done;total;eta to stderr, the path to stdout."""
 
 
 def test_download_streams_progress_to_the_sink(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """yt-dlp's percent reaches the installed progress sink, live."""
+    """yt-dlp's percent, bytes and ETA reach the progress sink, live."""
     from minion_core import progress
 
     cfg = make_cfg(tmp_path / 'drive')
@@ -222,13 +222,16 @@ def test_download_streams_progress_to_the_sink(
     fake.write_text(_PROGRESS_YTDLP, encoding='ascii')
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(fetch, 'YTDLP', str(fake))
-    seen: list[int] = []
+    seen: list[progress.Report] = []
     with progress.reporting_to(seen.append):
         got = fetch.download(
             'http://93.184.216.34/v', cfg.bot_dir('fetch'), cfg
         )
     assert got.name == 'video.mp4'
-    assert seen == [10, 55, 100]  # parsed percents, in order
+    assert [r.pct for r in seen] == [10, 55, 100]  # parsed, in order
+    assert seen[0].done_bytes == 100
+    assert seen[0].total_bytes == 1000
+    assert seen[0].eta_sec == 9
 
 
 def test_argv_forces_progress_output(tmp_path: Path) -> None:

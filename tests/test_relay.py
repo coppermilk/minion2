@@ -209,7 +209,9 @@ def test_call_service_live_edits_the_bar_on_progress(tmp_path: Path) -> None:
 
     class _FakeClient:
         def run(self, src, _dest, on_progress):
-            on_progress(50)
+            from minion_core.progress import Report
+
+            on_progress(Report(50))
             return Verdict(Disposition.DELIVERED, result=src)
 
     live._client = _FakeClient()  # type: ignore[assignment]
