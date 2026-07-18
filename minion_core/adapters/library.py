@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from minion_core.adapters.files import PRIM_NAMED
 from minion_core.adapters.files import BatchLock
 from minion_core.adapters.files import move_atomic
+from minion_core.adapters.files import next_free_path
 from minion_core.adapters.files import next_free_prim
 from minion_core.adapters.files import read_fandom
 from minion_core.adapters.files import strip_week
@@ -65,11 +66,28 @@ def shelve_week(cfg: Settings, log: logging.Logger) -> None:
         log.info('shelved src=%s fandom=%s', target.name, fandom)
 
 
+def shelve_scripts(cfg: Settings, log: logging.Logger) -> None:
+    """Archive the week's ``.gdoc`` script pointers into ``Scripts/``.
+
+    During the week a ``.gdoc`` is a read-only hint (adapters.scripts); the
+    Monday run moves the pointer out of the inbox into ``Scripts/`` -- never
+    deleted -- so the inbox starts the next week clean and the doc is kept.
+    """
+    if not cfg.inbox.is_dir():
+        return
+    cfg.scripts.mkdir(parents=True, exist_ok=True)
+    for gdoc in sorted(cfg.inbox.glob('*.gdoc')):
+        target = move_atomic(gdoc, next_free_path(cfg.scripts / gdoc.name))
+        log.info('script_shelved src=%s', target.name)
+
+
 def clean_week(cfg: Settings, log: logging.Logger) -> bool:
     """One scan-act-exit clean under the batch lock; overlap-safe.
 
-    Returns whether the clean ran (``False`` when another run holds the
-    lock), so a caller can tell the operator "already running".
+    Shelves the classified week into ``pictures/`` and archives the week's
+    ``.gdoc`` scripts into ``Scripts/``. Returns whether the clean ran
+    (``False`` when another run holds the lock), so a caller can tell the
+    operator "already running".
     """
     lock = BatchLock(cfg.state / LOCK_NAME)
     if not lock.acquire():
@@ -77,6 +95,7 @@ def clean_week(cfg: Settings, log: logging.Logger) -> bool:
         return False
     try:
         shelve_week(cfg, log)
+        shelve_scripts(cfg, log)
     finally:
         lock.release()
     log.info('cleaned')
