@@ -176,6 +176,19 @@ def test_week_clean_untagged_prim_goes_to_unknown(tmp_path: Path) -> None:
     assert (cfg.pictures / 'Unknown' / 'PrWand.jpg').exists()
 
 
+def test_week_clean_archives_scripts_not_deletes(tmp_path: Path) -> None:
+    """The Monday run moves a week's .gdoc into Scripts/, never deletes it."""
+    import json
+
+    drive = tmp_path / 'drive'
+    cfg = make_cfg(drive)
+    gdoc = cfg.inbox / 'week.gdoc'
+    gdoc.write_text(json.dumps({'doc_id': 'abc'}), encoding='ascii')
+    assert minions.bots.week_clean.main.main(make_env(drive)) == 0
+    assert not gdoc.exists()  # moved out of the inbox
+    assert (cfg.scripts / 'week.gdoc').exists()  # archived, not deleted
+
+
 def test_week_clean_respects_batch_lock(tmp_path: Path) -> None:
     """REQ-RES-003 at bot level: a held lock skips the run."""
     from minion_core.adapters.files import BatchLock
