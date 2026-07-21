@@ -71,6 +71,7 @@ login`).
 | week-clean | batch | Monday, mechanical: strip the week tag, shelve each classified image into `pictures/<Fandom>/` per its EXIF; unclassified files stay for retry |
 | model-switch | streaming | Telegram command bot: `local` / `gemini` / `status` flips the classify+props backend at runtime (no restart) |
 | props | streaming | scenario (pasted, or the weekly script) -> recommended props, split into what the `Pr*` library has vs. still needs |
+| donations | streaming | polls a donation platform (Streamlabs; the feed is platform-agnostic) -> a Russian alert (who gave, how much, their question) posted to `DONATION_CHAT` |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` (`PRINT_SPOOLER`: lp / SumatraPDF) |
 | kindle | outlier | Apps Script, `deploy/apps_script/` |
 

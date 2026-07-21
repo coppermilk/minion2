@@ -159,6 +159,19 @@ services:
     command: python -m minions.model_switch.main
     mem_limit: 256m
 
+  # donations: poll a donation platform (Streamlabs today; the feed is
+  # platform-agnostic, so Revolut and others slot in later) and post each
+  # new donor alert -- who gave, how much, and their question -- to
+  # DONATION_CHAT, in Russian. No model of its own, so no ollama
+  # dependency; unconfigured (no token/chat) it idles harmlessly.
+  donations:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      TG_TOKEN: ${TG_TOKEN_DONATIONS:-}
+    command: python -m minions.donations.main
+    mem_limit: 256m
+
   # props: scenario -> recommended props, checked against the Pr* library
   # (loads CLIP; asks the active backend to list props).
   props:

@@ -42,6 +42,9 @@ include = ['minion_core*', 'minions*']
 
 [tool.setuptools.package-data]
 minion_core = ['py.typed', 'prompts/*.md']
+# The donations bot's Russian alert templates: UTF-8, deliberately not
+# an ASCII-checked source (BLUEPRINT 4), shipped with the wheel.
+'minions.donations' = ['messages.json']
 
 # ---------------------------------------------------------------- ruff
 [tool.ruff]
