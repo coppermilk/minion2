@@ -181,6 +181,21 @@ class TgChannel:
             return
         self._api.call('sendMessage', {'chat_id': _chat(origin), 'text': text})
 
+    def edit_text(self, origin: Origin, text: str) -> None:
+        """Edit the job's ack message in place; no-op if there is none.
+
+        The seam for one self-editing status message: the belt moves the
+        same message through downloading/sending/done/error instead of
+        sending a new one each time. No ack id (or no token) -> no-op.
+        """
+        ack = _ack_id(origin)
+        if not self._api.live or ack is None:
+            return
+        self._api.call(
+            'editMessageText',
+            {'chat_id': _chat(origin), 'message_id': int(ack), 'text': text},
+        )
+
     def send_file(self, origin: Origin, path: Path) -> None:
         """Upload toward the origin chat, always as a document.
 
@@ -210,20 +225,26 @@ class TgChannel:
 
 
 def _chat(origin: Origin) -> str:
-    """The chat part of a ``chat:message:spool`` origin ref."""
+    """The chat part of a ``chat:message:ack:spool`` origin ref."""
     return origin.ref.split(':', 1)[0]
 
 
-_REF_PARTS = 3
-"""chat : message : spool -- the three fields of a tg ref."""
+_REF_PARTS = 4
+"""chat : message : ack : spool -- the four fields of a tg ref."""
+
+
+def _ack_id(origin: Origin) -> str | None:
+    """The ack message id in a tg ref, or None when there is none."""
+    parts = origin.ref.split(':', _REF_PARTS - 1)
+    return parts[2] if len(parts) >= _REF_PARTS - 1 and parts[2] else None
 
 
 def spool_of(origin: Origin) -> Path | None:
     """DisposeSource locator: the spool part of a tg ref."""
     parts = origin.ref.split(':', _REF_PARTS - 1)
-    if len(parts) < _REF_PARTS or not parts[2]:
+    if len(parts) < _REF_PARTS or not parts[3]:
         return None
-    return Path(parts[2])
+    return Path(parts[3])
 
 
 def spooled_or_dropped(origin: Origin) -> Path | None:
@@ -248,6 +269,9 @@ def chats_from(env: Mapping[str, str]) -> tuple[str, ...]:
 DOCS_ONLY = 'Send files as a document (not a compressed photo/video).'
 """The documents-only reminder appended to every bot's help line."""
 
+NO_ACCESS = 'Sorry, you are not authorized to use this bot.'
+"""Reply to a direct message from a chat outside the allow-list."""
+
 
 @dataclass(frozen=True)
 class TgSpec:
@@ -258,6 +282,9 @@ class TgSpec:
     offset: Path
     chats: tuple[str, ...]
     help: str = ''
+    ack: str = ''
+    """Sent the moment a work message is seen (before the download). Empty
+    disables it; the caller sets the text (the relay keys it per bot)."""
 
 
 class _TgSource(Source):
@@ -312,8 +339,25 @@ class _TgSource(Source):
         chat = str(msg['chat']['id'])
         if chat not in self.spec.chats:
             _LOG.warning('rejected reason=chat_not_allowed chat=%s', chat)
+            self._deny(msg)
             return
         self.accept(msg, emit)
+
+    def _deny(self, msg: dict[str, Any]) -> None:
+        """Tell a private sender outside the allow-list they lack access.
+
+        Only in a 1:1 chat: replying to every message in an unauthorized
+        group would spam it (and risk a Telegram ban), so a group is
+        still rejected in silence -- only the person who DMs the bot
+        directly is told. Tokenless docks stay silent (REQ-DEG-001).
+        """
+        if not self.api.live:
+            return
+        if msg.get('chat', {}).get('type') != 'private':
+            return
+        self.api.call(
+            'sendMessage', {'chat_id': msg['chat']['id'], 'text': NO_ACCESS}
+        )
 
     def accept(self, msg: dict[str, Any], emit: Emit) -> None:
         """Turn one allowed message into envelopes (per source)."""
@@ -333,9 +377,32 @@ class _TgSource(Source):
             'sendMessage', {'chat_id': msg['chat']['id'], 'text': text}
         )
 
-    def emit_spooled(self, spooled: Path, ctx: MsgCtx) -> None:
-        """Emit a job addressed to the chat, disposing the spool."""
-        ref = f'{_ref(ctx.msg)}:{spooled}'
+    def announce_start(self, msg: dict[str, Any]) -> int | None:
+        """Ack a work message at once; return the ack's message id.
+
+        The sender learns the task began before any slow download. The
+        returned id lets the belt EDIT this one message through the task's
+        life (downloading %, sending, done/error) instead of piling up new
+        messages. Empty ``spec.ack`` or no transport -> None.
+        """
+        if not self.api.live or not self.spec.ack:
+            return None
+        result = self.api.call(
+            'sendMessage',
+            {'chat_id': msg['chat']['id'], 'text': self.spec.ack},
+        )
+        got = result.get('message_id') if isinstance(result, dict) else None
+        return got if isinstance(got, int) else None
+
+    def emit_spooled(
+        self, spooled: Path, ctx: MsgCtx, ack: int | None
+    ) -> None:
+        """Emit a job addressed to the chat, disposing the spool.
+
+        The ack message id rides in the ref so the belt can edit that one
+        message as the task progresses (``_ack_id``).
+        """
+        ref = f'{_ref(ctx.msg)}:{ack if ack is not None else ""}:{spooled}'
         job = Job(
             src=spooled,
             dest=self.spec.dest,
@@ -362,10 +429,11 @@ def _accept_media(src: _TgSource, ctx: MsgCtx) -> bool:
     doc = _document(ctx.msg)
     if doc is None:
         return False
+    ack = src.announce_start(ctx.msg)  # ack before the (maybe slow) download
     got = src.api.download(
         str(doc['file_id']), src.spec.spool, doc.get('file_name')
     )
-    src.emit_spooled(got, ctx)
+    src.emit_spooled(got, ctx, ack)
     return True
 
 
@@ -375,11 +443,12 @@ def _accept_link(src: _TgSource, ctx: MsgCtx) -> bool:
     match = _URL.search(text)
     if match is None:
         return False
+    ack = src.announce_start(ctx.msg)  # ack before the (maybe slow) fetch
     url = match.group(0)
     name = sanitize(url.rsplit('/', 1)[-1] or 'link') + '.url'
     spooled = next_free_path(src.spec.spool.into / name)
     atomic_write(spooled, url.encode('ascii', 'replace'))
-    src.emit_spooled(spooled, ctx)
+    src.emit_spooled(spooled, ctx, ack)
     return True
 
 

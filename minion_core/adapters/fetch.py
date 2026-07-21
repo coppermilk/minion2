@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import socket
 import subprocess
+import threading
 import urllib.request
+from collections import deque
 from ipaddress import IPv4Address
 from ipaddress import IPv6Address
 from ipaddress import ip_address
@@ -23,6 +25,7 @@ from typing import TYPE_CHECKING
 from typing import Protocol
 from urllib.parse import urlsplit
 
+from minion_core import progress
 from minion_core.adapters.files import BudgetWriter
 from minion_core.adapters.files import QuotaExceeded
 from minion_core.adapters.files import free_quota
@@ -32,6 +35,7 @@ from minion_core.kernel import Step
 from minion_core.kernel import Verdict
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from http.client import HTTPMessage
     from typing import IO
 
@@ -88,8 +92,10 @@ def _addresses(host: str) -> list[IPv4Address | IPv6Address]:
 
 
 def download(url: str, into: Path, cfg: Settings) -> Path:
-    """One link -> one file via yt-dlp, fully bounded.
+    """One link -> one file via yt-dlp, fully bounded, live progress.
 
+    Streams yt-dlp's percent to the progress sink (minion_core.progress)
+    while it runs, so a caller (svc-fetch's job) can show a live bar.
     Raises Blocked / QuotaExceeded / subprocess.TimeoutExpired /
     FetchFailed; the FetchLink step maps each to its reason code.
     """
@@ -97,16 +103,100 @@ def download(url: str, into: Path, cfg: Settings) -> Path:
     if free_quota(cfg) <= 0:
         raise QuotaExceeded('quota_exceeded: pre-transfer')
     into.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(  # noqa: S603 -- fixed binary, no shell
-        _argv(url, into, cfg),
-        capture_output=True,
-        text=True,
-        timeout=cfg.download_timeout_sec,  # REQ-RES-001
-        check=False,
+    return _run_ytdlp(_argv(url, into, cfg), cfg.download_timeout_sec)
+
+
+def _int(field: str) -> int:
+    """A yt-dlp numeric template field, or 0 when it prints ``NA``."""
+    text = field.strip()
+    return int(text) if text.isdigit() else 0
+
+
+def _parse(line: str) -> progress.Report | None:
+    """Parse a ``PROGRESS:pct;done;total;eta`` line into a Report, or None."""
+    if not line.startswith('PROGRESS:'):
+        return None
+    parts = line[len('PROGRESS:') :].split(';')
+    if len(parts) != _FIELDS:
+        return None
+    pct, done, total, eta = parts
+    pct_num = _int(pct.strip().rstrip('%').split('.')[0])
+    return progress.Report(pct_num, _int(done), _int(total), _int(eta))
+
+
+_FIELDS = 4
+"""pct ; downloaded ; total ; eta -- the progress-template fields."""
+
+
+class _Pump:
+    """Reads one yt-dlp stream live: progress to the sink, the rest kept.
+
+    Both stdout and stderr are pumped, because a build may emit the
+    ``--progress-template`` line on either -- reading both means the bar
+    animates whichever stream carries it. The kept non-progress lines are
+    the error tail (stderr) or the ``--print`` filepath (stdout).
+    """
+
+    def __init__(self, report: Callable[[progress.Report], None]) -> None:
+        self._report = report
+        self.tail: deque[str] = deque(maxlen=20)
+
+    def run(self, stream: IO[str]) -> None:
+        """Drain the stream until EOF (the process closing it)."""
+        for line in stream:
+            report = _parse(line)
+            if report is not None:
+                self._report(report)
+            else:
+                kept = line.rstrip()
+                if kept:
+                    self.tail.append(kept)
+
+
+def _run_ytdlp(argv: list[str], timeout: float) -> Path:
+    """Run yt-dlp bounded; stream progress; return the output path.
+
+    The total wall-time bound is ``proc.wait(timeout)`` (survives a silent
+    hang, REQ-RES-001); a reader thread per pipe drains both, so neither can
+    deadlock and progress is caught whichever stream yt-dlp writes it to.
+    """
+    report = progress.current() or _ignore
+    out_pump, err_pump = _Pump(report), _Pump(report)
+    proc = subprocess.Popen(  # noqa: S603 -- fixed binary, no shell
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
+    readers = [
+        threading.Thread(
+            target=out_pump.run, args=(proc.stdout,), daemon=True
+        ),
+        threading.Thread(
+            target=err_pump.run, args=(proc.stderr,), daemon=True
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=1.0)
     if proc.returncode != 0:
-        raise FetchFailed(f'stale_extractor: {proc.stderr[-500:]}')
-    got = Path(proc.stdout.strip().splitlines()[-1])
+        tail = ' | '.join(err_pump.tail) or ' | '.join(out_pump.tail)
+        raise FetchFailed(f'stale_extractor: {tail[-500:]}')
+    return _output_path(out_pump.tail)
+
+
+def _ignore(_report: progress.Report) -> None:
+    """The sink when nobody is listening (a bare download)."""
+
+
+def _output_path(lines: deque[str]) -> Path:
+    """The last stdout line (the --print filepath)."""
+    got = Path(lines[-1]) if lines else Path()
     if not got.is_file():
         raise FetchFailed('stale_extractor: no output file')
     return got
@@ -118,6 +208,18 @@ def _argv(url: str, into: Path, cfg: Settings) -> list[str]:
         YTDLP,
         '--no-playlist',
         '--no-simulate',
+        # Force progress even without a TTY (a container has none), on its
+        # own lines, in our parseable form -- else yt-dlp prints no percent
+        # and the live bar never moves.
+        '--progress',
+        '--newline',
+        '--progress-template',
+        (
+            'PROGRESS:%(progress._percent_str)s'
+            ';%(progress.downloaded_bytes)s'
+            ';%(progress.total_bytes,progress.total_bytes_estimate)s'
+            ';%(progress.eta)s'
+        ),
         '--print',
         'after_move:filepath',
         '-f',

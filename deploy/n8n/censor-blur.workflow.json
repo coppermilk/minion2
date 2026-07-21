@@ -1,0 +1,73 @@
+{
+  "name": "censor-blur (blur a photo)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "blur",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1a7c0e2-0001-4a00-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "webhookId": "censor-blur-demo"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://svc-censor-blur:8000/run-file",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "b1a7c0e2-0002-4a00-8000-000000000002",
+      "name": "Blur (censor-blur /run-file)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "binary",
+        "options": {}
+      },
+      "id": "b1a7c0e2-0003-4a00-8000-000000000003",
+      "name": "Respond (blurred image)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [780, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "Blur (censor-blur /run-file)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Blur (censor-blur /run-file)": {
+      "main": [
+        [{ "node": "Respond (blurred image)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {},
+  "active": false
+}

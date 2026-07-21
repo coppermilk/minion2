@@ -15,10 +15,10 @@ from minion_core.adapters.donations import DonationAlerts
 from minion_core.adapters.donations import StreamlabsFeed
 from minion_core.adapters.donations import _parse
 from minion_core.adapters.donations import feed_for
-from minions.donations.main import build
-from minions.donations.main import load_messages
-from minions.donations.main import main
-from minions.donations.main import render
+from minions.bots.donations.main import build
+from minions.bots.donations.main import load_messages
+from minions.bots.donations.main import main
+from minions.bots.donations.main import render
 from tests.conftest import make_cfg
 from tests.conftest import make_env
 

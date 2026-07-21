@@ -68,7 +68,7 @@ def test_tokenless_source_ends_immediately(tmp_path: Path) -> None:
 def test_tokenless_channel_is_a_noop(tmp_path: Path) -> None:
     """REQ-DEG-001: replies vanish silently without a token."""
     channel = TgChannel(TgApi(''))
-    origin = Origin('tg', '1:2:/spool/x')
+    origin = Origin('tg', '1:2::/spool/x')
     channel.send_text(origin, 'hello')  # must not raise, must not call
     channel.send_file(origin, tmp_path / 'x.bin')
 
@@ -165,6 +165,30 @@ def test_document_original_name_is_preserved(tmp_path: Path) -> None:
     assert api.name_seen == f'{klip} 5.mp4'  # original passed through
     assert len(emitted) == 1
     assert emitted[0].job.src.name == f'{klip} 5.mp4'
+
+
+def test_ack_is_sent_before_the_download(tmp_path: Path) -> None:
+    """A work message acks at once, before the (maybe slow) download."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    spec = TgSpec(
+        spool=SpoolSpec(
+            into=cfg.bot_dir('t'), budget=functools.partial(free_quota, cfg)
+        ),
+        dest=cfg.inbox,
+        offset=cfg.state / 't.offset',
+        chats=('1',),
+        ack='working on it',
+    )
+    source = TgMedia(api, spec)
+    msg = {
+        'chat': {'id': 1},
+        'message_id': 9,
+        'document': {'file_id': 'F', 'file_name': 'a.mp4'},
+    }
+    source.accept(msg, [].append)
+    assert api.messages == ['working on it']  # ack sent once
+    assert api.name_seen == 'a.mp4'  # and then the download ran
 
 
 def test_document_helper_refuses_compressed() -> None:
@@ -290,6 +314,36 @@ def test_chats_from_parses_csv() -> None:
     assert chats_from({}) == ()
 
 
+def _upd(chat: int, chat_type: str) -> dict[str, Any]:
+    return {
+        'update_id': 7,
+        'message': {
+            'chat': {'id': chat, 'type': chat_type},
+            'message_id': 9,
+            'text': 'hi',
+        },
+    }
+
+
+def test_denied_private_chat_is_told(tmp_path: Path) -> None:
+    """A DM from a chat off the allow-list gets a 'no access' reply."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    source._route(_upd(999, 'private'), lambda _e: None)
+    assert api.messages  # told, not left in silence
+    assert 'authorized' in api.messages[0].lower()
+
+
+def test_denied_group_chat_stays_silent(tmp_path: Path) -> None:
+    """An unauthorized group is rejected in silence (no spam/ban)."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _RecordApi()
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    source._route(_upd(-100, 'supergroup'), lambda _e: None)
+    assert api.messages == []
+
+
 def test_two_whitelisted_users_served_without_crosstalk(
     tmp_path: Path,
 ) -> None:
@@ -317,7 +371,7 @@ def test_spooled_or_dropped_handles_both_origins() -> None:
     """A tg spool comes from the ref; a folder drop's ref IS the file."""
     from minion_core.adapters.tg import spooled_or_dropped
 
-    tg = spooled_or_dropped(Origin('tg', '5:6:/spool/x.jpg'))
+    tg = spooled_or_dropped(Origin('tg', '5:6::/spool/x.jpg'))
     assert tg is not None
     assert str(tg).endswith('x.jpg')
     loc = spooled_or_dropped(Origin('loc', '/data/bots/censor-blur/y.jpg'))
@@ -327,9 +381,68 @@ def test_spooled_or_dropped_handles_both_origins() -> None:
 
 
 def test_spool_of_survives_windows_paths() -> None:
-    """The third ref field may itself contain colons."""
-    origin = Origin('tg', r'5:6:C:\Users\a\My Drive\bots\x.jpg')
+    """The last (spool) ref field may itself contain colons."""
+    origin = Origin('tg', r'5:6::C:\Users\a\My Drive\bots\x.jpg')
     got = spool_of(origin)
     assert got is not None
     assert str(got).endswith('x.jpg')
     assert spool_of(Origin('tg', '5:6')) is None
+
+
+class _CallApi(TgApi):
+    """API double recording every (method, params); returns a message id."""
+
+    def __init__(self) -> None:
+        super().__init__(token='t')  # noqa: S106 -- double, not a secret
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def call(self, method: str, params: dict[str, Any]) -> Any:
+        self.calls.append((method, params))
+        return {'message_id': 4242}
+
+
+def test_announce_start_returns_the_ack_message_id(tmp_path: Path) -> None:
+    """The ack's id comes back so the belt can edit that one message."""
+    cfg = make_cfg(tmp_path / 'drive')
+    spec = TgSpec(
+        spool=SpoolSpec(
+            into=cfg.bot_dir('t'), budget=functools.partial(free_quota, cfg)
+        ),
+        dest=cfg.inbox,
+        offset=cfg.state / 't.offset',
+        chats=('1',),
+        ack='working on it',
+    )
+    api = _CallApi()
+    source = TgMedia(api, spec)
+    got = source.announce_start({'chat': {'id': 1}, 'message_id': 9})
+    assert got == 4242
+    assert api.calls[0][0] == 'sendMessage'
+
+
+def test_announce_start_without_ack_text_is_silent(tmp_path: Path) -> None:
+    """No ack text -> no message, no id (the default)."""
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _CallApi()
+    source = TgMedia(api, _spec(cfg, ('1',)))
+    assert source.announce_start({'chat': {'id': 1}, 'message_id': 9}) is None
+    assert api.calls == []
+
+
+def test_edit_text_edits_the_ack_message() -> None:
+    """edit_text drives editMessageText with the ack id from the ref."""
+    api = _CallApi()
+    TgChannel(api).edit_text(Origin('tg', '5:6:77:/spool/x'), 'hello')
+    assert api.calls == [
+        (
+            'editMessageText',
+            {'chat_id': '5', 'message_id': 77, 'text': 'hello'},
+        )
+    ]
+
+
+def test_edit_text_noop_without_ack_id() -> None:
+    """No ack id in the ref -> nothing to edit, no call."""
+    api = _CallApi()
+    TgChannel(api).edit_text(Origin('tg', '5:6::/spool/x'), 'hi')
+    assert api.calls == []

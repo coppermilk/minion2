@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from minions.props import main as props
+from minions.bots.props import main as props
 from tests.conftest import make_cfg
 
 

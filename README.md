@@ -5,17 +5,21 @@ in over two transports (Telegram, watched folders), each bot applies
 exactly one small transformation, and everything lands in one
 directory tree rooted at `DRIVE`.
 
+- Architecture at a glance (one diagram): [ARCHITECTURE.md](ARCHITECTURE.md)
 - Design, requirements, traceability: [BLUEPRINT.md](BLUEPRINT.md)
 - Operations, failure modes, recovery: [OPERATIONS.md](OPERATIONS.md)
+- Atomic web services (HTTP/OpenAPI + MCP over a Step): [services/README.md](services/README.md)
+- Driving the services from n8n: [deploy/n8n/README.md](deploy/n8n/README.md)
 
 ## Layout
 
 ```
 minion_core/   kernel (the belt), Settings, prompts, adapters
-minions/       one directory per bot; streaming or batch
+minions/       one directory per bot; streaming or batch; relay/ = thin transport
+services/      atomic web services: HTTP/OpenAPI + MCP over a Step (bytes in/out)
 tests/         requirement-based suite + structural analysis
-docker/        one image, N containers; docker-compose.yml at root
-deploy/        crontab example, kindle Apps Script (off-kernel)
+docker/        base image; deploy/reactflow/ = canvas placeholder
+deploy/        nas-update.sh, n8n workflow, kindle Apps Script (off-kernel)
 ```
 
 ## Quick start
@@ -24,7 +28,7 @@ deploy/        crontab example, kindle Apps Script (off-kernel)
 cp .env.example .env       # DRIVE (absolute), TG_TOKEN_<BOT>, TG_CHATS
 pip install -e '.[dev]'
 pytest                     # hermetic: no network, no models
-python -m minions.inbox.main
+python -m minions.bots.inbox.main
 ```
 
 Docker (NAS): set `DRIVE_NAS` in `.env`. Windows runs only print and
@@ -89,6 +93,30 @@ Telegram contract: each bot is its own Telegram identity
 (`TG_TOKEN_<BOT>`), and files cross Telegram as documents only, both
 directions -- compressed photos/videos are ignored with a logged
 reason, results come back via sendDocument (never recompressed).
+
+## Atomic services and the Telegram split
+
+The processing IP and the Telegram transport are **fully separated**, in one
+`docker-compose.yml`:
+
+- **`svc-*`** -- one atomic web service per Step: bytes in, bytes out over
+  HTTP (`/run-file`, async `/jobs/file`) and MCP. No Telegram. A folder
+  result (frames) comes back as one zip. n8n, a React Flow canvas or an MCP
+  agent call these the same way ([services/README.md](services/README.md)).
+  Each is its own self-contained minion (`minions/<name>/step.py` owns the
+  model, `minions/<name>/service.py` serves it); the container runs
+  `python -m minions.<name>.service` and imports **only its own Step** -- no
+  catalog, no sibling service, no Telegram.
+- **`telegram`** -- ONE clean container that owns every media bot's Telegram
+  identity and holds no processing code: each dock receives a file (or link),
+  POSTs it to its service over HTTP (`minions/telegram/main.py` ->
+  `minions.telegram.relay` -> `CallService`), and sends the bytes back.
+
+So `censor-blur`, `censor-black`, `restore`, `frames`, `fetch` and `fan-save`
+run as services (`svc-*`), and the `telegram` container is a thin router in
+front of them -- no torch, no IP. The rest are not file-processors coupled to
+Telegram, so they stay as they are: `inbox` (ingest), `model-switch`/`props`
+(chat commands), `sort`/`batch` (folder watch + cron), `ollama` (local model).
 
 ## CI gates
 

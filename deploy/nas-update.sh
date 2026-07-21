@@ -1,9 +1,11 @@
 #!/bin/sh
 # Synology NAS: the one self-healing deploy command. Run it and forget:
 # it force-syncs the repo to origin/main (even into a non-empty folder,
-# keeping your .env), recreates the stack from the freshly published
-# image, prunes old images, and pulls the local model itself -- so you
-# never run `docker compose exec ... ollama pull` by hand.
+# keeping your .env), recreates the whole stack -- bots, atomic services,
+# thin transports, n8n and the canvas placeholder, all one compose project
+# -- from the freshly published images, prunes old images, and pulls the
+# local model itself so you never run `docker compose exec ... ollama pull`
+# by hand.
 #
 # The image is built on GitHub and published to GHCR (image.yml), so the
 # NAS never compiles torch -- it just downloads the ready image. The

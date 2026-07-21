@@ -5,8 +5,8 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING
 
-import minions.inbox.main
-import minions.week_clean.main
+import minions.bots.inbox.main
+import minions.bots.week_clean.main
 from minion_core.adapters.files import HideSpec
 from minion_core.adapters.files import hide_boxes
 from minion_core.kernel import Disposition
@@ -15,9 +15,9 @@ from minion_core.kernel import FolderSpec
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
 from minion_core.kernel import SeenPaths
-from minions.inbox.main import build as build_inbox
-from minions.print.main import PrintPdf
-from minions.print.main import build as build_print
+from minions.bots.inbox.main import build as build_inbox
+from minions.bots.print.main import PrintPdf
+from minions.bots.print.main import build as build_print
 from tests.conftest import make_cfg
 from tests.conftest import make_env
 
@@ -31,7 +31,7 @@ def test_tokenless_inbox_graph_runs(tmp_path: Path) -> None:
     """REQ-DEG-001: a token-less bot runs with zero code branches."""
     make_cfg(tmp_path / 'drive')
     env = make_env(tmp_path / 'drive')
-    code = minions.inbox.main.main(env)
+    code = minions.bots.inbox.main.main(env)
     assert code == 0
 
 
@@ -158,7 +158,7 @@ def test_week_clean_untags_and_shelves(tmp_path: Path) -> None:
     tag_fandom(week, 'HarryPotter')
     tag_week(week, cfg.week_tag)
     (cfg.inbox / 'leftover.jpg').write_bytes(b'x')
-    code = minions.week_clean.main.main(make_env(drive))
+    code = minions.bots.week_clean.main.main(make_env(drive))
     assert code == 0
     shelved = cfg.pictures / 'HarryPotter' / 'FgSnapeOfficeAngry.jpg'
     assert shelved.exists()
@@ -172,8 +172,21 @@ def test_week_clean_untagged_prim_goes_to_unknown(tmp_path: Path) -> None:
     drive = tmp_path / 'drive'
     cfg = make_cfg(drive)
     _jpeg(cfg.inbox / 'PrWand.jpg')  # prim-named, no fandom tag
-    assert minions.week_clean.main.main(make_env(drive)) == 0
+    assert minions.bots.week_clean.main.main(make_env(drive)) == 0
     assert (cfg.pictures / 'Unknown' / 'PrWand.jpg').exists()
+
+
+def test_week_clean_archives_scripts_not_deletes(tmp_path: Path) -> None:
+    """The Monday run moves a week's .gdoc into Scripts/, never deletes it."""
+    import json
+
+    drive = tmp_path / 'drive'
+    cfg = make_cfg(drive)
+    gdoc = cfg.inbox / 'week.gdoc'
+    gdoc.write_text(json.dumps({'doc_id': 'abc'}), encoding='ascii')
+    assert minions.bots.week_clean.main.main(make_env(drive)) == 0
+    assert not gdoc.exists()  # moved out of the inbox
+    assert (cfg.scripts / 'week.gdoc').exists()  # archived, not deleted
 
 
 def test_week_clean_respects_batch_lock(tmp_path: Path) -> None:
@@ -186,7 +199,7 @@ def test_week_clean_respects_batch_lock(tmp_path: Path) -> None:
     lock = BatchLock(cfg.state / 'week-clean.lock')
     assert lock.acquire()
     try:
-        code = minions.week_clean.main.main(make_env(drive))
+        code = minions.bots.week_clean.main.main(make_env(drive))
     finally:
         lock.release()
     assert code == 0

@@ -194,6 +194,54 @@ def test_stale_extractor_is_failed(
     assert verdict.reason == 'stale_extractor'
 
 
+_PROGRESS_YTDLP = (
+    '#!/usr/bin/env python3\n'
+    'import sys, os\n'
+    'a = sys.argv\n'
+    'into = a[a.index("-P") + 1]\n'
+    'path = os.path.join(into, "video.mp4")\n'
+    'open(path, "wb").write(b"video")\n'
+    'sys.stderr.write("PROGRESS:  10.0%;100;1000;9\\n")\n'
+    'sys.stderr.write("PROGRESS:  55.5%;555;1000;4\\n")\n'
+    'sys.stderr.write("PROGRESS: 100%;1000;1000;0\\n")\n'
+    'sys.stderr.flush()\n'
+    'print(path)\n'
+)
+"""A fake yt-dlp: PROGRESS:pct;done;total;eta to stderr, the path to stdout."""
+
+
+def test_download_streams_progress_to_the_sink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """yt-dlp's percent, bytes and ETA reach the progress sink, live."""
+    from minion_core import progress
+
+    cfg = make_cfg(tmp_path / 'drive')
+    fake = tmp_path / 'bin' / 'yt-dlp'
+    fake.parent.mkdir()
+    fake.write_text(_PROGRESS_YTDLP, encoding='ascii')
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(fetch, 'YTDLP', str(fake))
+    seen: list[progress.Report] = []
+    with progress.reporting_to(seen.append):
+        got = fetch.download(
+            'http://93.184.216.34/v', cfg.bot_dir('fetch'), cfg
+        )
+    assert got.name == 'video.mp4'
+    assert [r.pct for r in seen] == [10, 55, 100]  # parsed, in order
+    assert seen[0].done_bytes == 100
+    assert seen[0].total_bytes == 1000
+    assert seen[0].eta_sec == 9
+
+
+def test_argv_forces_progress_output(tmp_path: Path) -> None:
+    """--progress makes yt-dlp emit percents even without a TTY (container)."""
+    cfg = make_cfg(tmp_path / 'drive')
+    argv = fetch._argv('http://example.com/v', tmp_path, cfg)
+    assert '--progress' in argv  # else the live bar never animates
+    assert '--progress-template' in argv
+
+
 def test_youtube_gets_player_client_args(tmp_path: Path) -> None:
     """The player_client arg attaches only on YouTube hosts."""
     cfg = make_cfg(tmp_path / 'drive', YTDLP_PLAYER_CLIENTS='web,android')

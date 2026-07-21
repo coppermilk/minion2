@@ -9,11 +9,11 @@ import numpy as np
 from minion_core.adapters.llm import Classification
 from minion_core.adapters.llm import LlmError
 from minion_core.adapters.vision import EmbeddingCache
-from minions.sort.passes import SortDeps
-from minions.sort.passes import classify_pass
-from minions.sort.passes import demote_pass
-from minions.sort.passes import replace_pass
-from minions.sort.passes import run_passes
+from minions.bots.sort.passes import SortDeps
+from minions.bots.sort.passes import classify_pass
+from minions.bots.sort.passes import demote_pass
+from minions.bots.sort.passes import replace_pass
+from minions.bots.sort.passes import run_passes
 from tests.conftest import make_cfg
 
 if TYPE_CHECKING:
@@ -114,6 +114,35 @@ def test_gemini_unknown_is_decided_by_clip_immediately(
     classified = cfg.inbox / 'FgCatMystery.jpg'
     assert classified.exists()
     assert read_fandom(classified) == 'Cats'  # decided during the week
+
+
+def test_gemini_unknown_below_tau_stays_unknown(tmp_path: Path) -> None:
+    """An image unlike every library fandom is left in Unknown, not forced.
+
+    The fix for mislabelling: a punted image whose nearest fandom is too
+    far (here a cat against a Dogs-only library, cosine 0) is not dragged
+    into that fandom -- it stays Unknown for a later, closer match.
+    """
+    from minion_core.adapters.files import read_fandom
+
+    cfg = make_cfg(tmp_path / 'drive')
+    for i in range(3):
+        _jpeg(cfg.pictures / 'Dogs' / f'dog_{i}.jpg')  # no Cats in library
+
+    def punt(path: Path, hint: str) -> Classification:
+        return Classification(
+            fandom='Unknown',
+            filename='FgCatMystery',
+            censored=False,
+            confidence='low',
+            description='the model punted',
+        )
+
+    _jpeg(cfg.inbox / 'puzzling_cat.jpg')
+    classify_pass(cfg, SortDeps(classify=punt, embed=_embed), '')
+    classified = cfg.inbox / 'FgCatMystery.jpg'
+    assert classified.exists()
+    assert read_fandom(classified) == 'Unknown'  # not forced into Dogs
 
 
 def test_classified_files_do_not_retrigger_the_model(
@@ -229,7 +258,7 @@ def test_replace_pass_rescues_unknown(tmp_path: Path) -> None:
 
 def test_full_week_end_to_end(tmp_path: Path) -> None:
     """The week's cycle: decide everything now, Monday just executes."""
-    import minions.week_clean.main
+    import minions.bots.week_clean.main
     from minion_core.adapters.files import has_week
     from tests.conftest import make_env
 
@@ -240,7 +269,7 @@ def test_full_week_end_to_end(tmp_path: Path) -> None:
     working = cfg.inbox / 'FgCatsCalm.jpg'
     assert working.exists()  # the working week, tagged
     assert has_week(working, cfg.week_tag)
-    assert minions.week_clean.main.main(make_env(tmp_path / 'drive')) == 0
+    assert minions.bots.week_clean.main.main(make_env(tmp_path / 'drive')) == 0
     shelved = cfg.pictures / 'Cats' / 'FgCatsCalm.jpg'
     assert shelved.exists()  # Monday shelves it by EXIF fandom
     assert not has_week(shelved, cfg.week_tag)  # and drops the tag
@@ -275,7 +304,7 @@ def test_run_passes_contains_a_pass_crash(
     _seed_library(cfg)
     _jpeg(cfg.inbox / 'cat_shot.jpg')
 
-    from minions.sort import passes
+    from minions.bots.sort import passes
 
     def boom(*_a: object) -> None:
         raise RuntimeError('replace exploded')
@@ -312,7 +341,7 @@ def test_watch_belt_sorts_on_arrival(tmp_path: Path) -> None:
     from minion_core.kernel import Folder
     from minion_core.kernel import FolderSpec
     from minion_core.kernel import SeenPaths
-    from minions.sort.main import SortTrigger
+    from minions.bots.sort.main import SortTrigger
 
     cfg = make_cfg(tmp_path / 'drive')
     _seed_library(cfg)
@@ -334,7 +363,7 @@ def test_watch_trigger_respects_lock(tmp_path: Path) -> None:
     from minion_core.kernel import Disposition
     from minion_core.kernel import Job
     from minion_core.kernel import Origin
-    from minions.sort.main import SortTrigger
+    from minions.bots.sort.main import SortTrigger
 
     cfg = make_cfg(tmp_path / 'drive')
     pic = _jpeg(cfg.inbox / 'busy_cat.jpg')
@@ -357,7 +386,7 @@ def test_watch_trigger_respects_lock(tmp_path: Path) -> None:
 
 def test_build_watch_covers_all_source_dirs(tmp_path: Path) -> None:
     """One dock per source dir, folded into one belt."""
-    from minions.sort.main import build_watch
+    from minions.bots.sort.main import build_watch
 
     a = tmp_path / 'a'
     b = tmp_path / 'b'

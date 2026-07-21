@@ -37,8 +37,21 @@ _DEFAULTS: dict[str, str] = {
     'MAX_EMBEDDING_SCAN': '5000',
     'SEEN_PATHS_MAX': '4096',
     'DEMOTE_MIN_COUNT': '3',
-    'YTDLP_FORMAT': 'bestvideo*+bestaudio/best',
-    'YTDLP_CONTAINER': 'mkv',
+    # Minimum image-to-image CLIP cosine for the fallback to accept a
+    # fandom; below it the image is too unlike the library and stays in
+    # Unknown rather than being forced into the nearest fandom. Tunable:
+    # raise it if unrelated photos get mislabelled, lower it if real
+    # fandom images pile up in Unknown.
+    'SORT_TAU': '0.75',
+    # mp4 by default: H.264+AAC muxes into mp4 with no re-encode and plays
+    # inline everywhere -- Telegram, iOS, browsers. (mkv accepts VP9/AV1+Opus
+    # at slightly higher quality but Telegram shows it as a file, no inline
+    # preview.) Override both for max quality: YTDLP_CONTAINER=mkv +
+    # YTDLP_FORMAT=bestvideo*+bestaudio/best.
+    'YTDLP_FORMAT': (
+        'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+    ),
+    'YTDLP_CONTAINER': 'mp4',
     'YTDLP_PLAYER_CLIENTS': 'default',
     'SOURCE_DIRS': '',
     'SORT_WATCH': '',
@@ -68,6 +81,7 @@ class Settings:
     max_embedding_scan: int
     seen_paths_max: int
     demote_min_count: int
+    sort_tau: float
     ytdlp_format: str
     ytdlp_container: str
     ytdlp_player_clients: tuple[str, ...]
@@ -153,6 +167,7 @@ def load(env: Mapping[str, str]) -> Settings:
         max_embedding_scan=int(get('MAX_EMBEDDING_SCAN')),
         seen_paths_max=int(get('SEEN_PATHS_MAX')),
         demote_min_count=int(get('DEMOTE_MIN_COUNT')),
+        sort_tau=float(get('SORT_TAU')),
         ytdlp_format=get('YTDLP_FORMAT'),
         ytdlp_container=get('YTDLP_CONTAINER'),
         ytdlp_player_clients=_csv(get('YTDLP_PLAYER_CLIENTS')),

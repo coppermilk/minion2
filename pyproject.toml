@@ -44,9 +44,9 @@ include = ['minion_core*', 'minions*']
 minion_core = ['py.typed', 'prompts/*.md']
 # The donations bot's Russian alert templates: UTF-8, deliberately not
 # an ASCII-checked source (BLUEPRINT 4), shipped with the wheel.
-'minions.donations' = ['messages.json']
+'minions.bots.donations' = ['messages.json']
 # The wishlist bot's Russian thank-you template: same rationale.
-'minions.wishlist' = ['messages.json']
+'minions.bots.wishlist' = ['messages.json']
 
 # ---------------------------------------------------------------- ruff
 [tool.ruff]
@@ -98,13 +98,24 @@ inline-quotes = 'single'
 convention = 'pep257'
 
 [tool.ruff.lint.per-file-ignores]
-# Sanctioned lazy vendor loads (BLUEPRINT 4, Power-of-10 rule 8).
+# Sanctioned lazy vendor loads (BLUEPRINT 4, Power-of-10 rule 8). The
+# processing minions (svc-* Steps) own their model and load torch lazily,
+# exactly like an adapter.
 'minion_core/adapters/*' = ['PLC0415']
+'minions/svc/*/step.py' = ['PLC0415']
 # Tests: assert is the medium; magic values are fixtures; doubles
 # carry unused hook arguments; docstring ceremony, import-placement
 # and packaging rules do not apply to CT-E tooling.
 'tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
              'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
+# Services tier: lighter conventions than the kernel. Lazy imports keep
+# the entrypoint's skin optional (the adapters' Power-of-10 rule 8 pattern).
+'services/*' = ['PLC0415']
+# A FastAPI app factory aggregates its route handlers, so its McCabe
+# score is route count, not branching complexity.
+'services/http.py' = ['PLC0415', 'C901']
+'services/tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
+                      'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]
@@ -127,6 +138,17 @@ module = [
     'facenet_pytorch.*',
     'google.*',
 ]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The services tier carries its own web stack (fastapi, uvicorn, mcp) and its
+# own lighter conventions -- it is not part of the kernel's strict gate
+# (packages above are minion_core + minions). Each minion's service.py imports
+# its serve helper, so tell mypy not to follow into the services package (its
+# deps are not installed for the kernel gate). It is linted by ruff and proven
+# by services/tests.
+module = ['services.*']
+follow_imports = 'skip'
 ignore_missing_imports = true
 
 # -------------------------------------------------------------- pytest

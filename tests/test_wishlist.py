@@ -15,13 +15,13 @@ from minion_core.adapters.wishlist import _next_lek
 from minion_core.adapters.wishlist import fetch_items
 from minion_core.adapters.wishlist import gifted
 from minion_core.adapters.wishlist import parse_items
-from minions.wishlist.main import Deps
-from minions.wishlist.main import Spec
-from minions.wishlist.main import digest
-from minions.wishlist.main import load_messages
-from minions.wishlist.main import main
-from minions.wishlist.main import render
-from minions.wishlist.main import run_once
+from minions.bots.wishlist.main import Deps
+from minions.bots.wishlist.main import Spec
+from minions.bots.wishlist.main import digest
+from minions.bots.wishlist.main import load_messages
+from minions.bots.wishlist.main import main
+from minions.bots.wishlist.main import render
+from minions.bots.wishlist.main import run_once
 from tests.conftest import make_cfg
 from tests.conftest import make_env
 

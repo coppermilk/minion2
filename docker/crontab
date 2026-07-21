@@ -2,8 +2,8 @@
 # the bots (BLUEPRINT 11). sort is NOT here: it runs as a watch
 # daemon (SORT_WATCH=1, the `sort` compose service) so new images
 # sort instantly.
-0 6 * * 1 root . /etc/minions.env && python -m minions.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1
+0 9 * * 1 root . /etc/minions.env && python -m minions.bots.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1
 # wishlist: daily. TG_TOKEN is mapped from TG_TOKEN_WISHLIST; WISHLIST_URL
 # and WISHLIST_CHAT ride in via /etc/minions.env (the batch service greps
 # WISHLIST). Unset URL/chat -> a clean no-op run.
-0 8 * * * root . /etc/minions.env && TG_TOKEN="$TG_TOKEN_WISHLIST" python -m minions.wishlist.main >> /data/bots/_data/logs/wishlist.cron.log 2>&1
+0 8 * * * root . /etc/minions.env && TG_TOKEN="$TG_TOKEN_WISHLIST" python -m minions.bots.wishlist.main >> /data/bots/_data/logs/wishlist.cron.log 2>&1
