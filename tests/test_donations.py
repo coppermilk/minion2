@@ -50,7 +50,8 @@ def test_streamlabs_parse_orders_filters_and_drops_bad() -> None:
     alerts = _parse(payload, 5, 'Streamlabs')
     assert [a.ident for a in alerts] == [7]  # 5 == cursor, 'nope' bad
     assert alerts[0].name == 'Bob'
-    assert alerts[0].amount == '5 USD'
+    assert alerts[0].amount == '5'  # bare number
+    assert alerts[0].currency == 'USD'  # kept apart for the symbol
     assert alerts[0].platform == 'Streamlabs'
     assert alerts[0].message == 'why is the sky blue?'
 
@@ -63,23 +64,44 @@ def test_streamlabs_parse_tolerates_junk_payloads() -> None:
 
 
 def test_render_carries_who_how_much_and_the_question() -> None:
-    """The Russian alert names the donor, amount and question."""
+    """The alert names the donor, the amount+symbol and the question."""
     templates = load_messages()
-    alert = Donation(1, 'Streamlabs', 'Bob', '5 USD', 'why sky blue?')
+    alert = Donation(1, 'Streamlabs', 'Bob', '500', 'RUB', 'why sky blue?')
     text = render(templates, alert)
-    assert 'Bob' in text
-    assert '5 USD' in text
+    assert 'Bob' in text  # the donor, also drawn in the bed
+    assert text.count('Bob') == 2  # the line AND the bed
+    assert '500' in text
+    assert templates['cur_RUB'] in text  # RUB -> the ruble sign
+    assert '500' + templates['cur_RUB'] in text  # amount+symbol, no gap
     assert 'why sky blue?' in text
+    assert '<i>why sky blue?</i>' in text  # the message is italicised
+    assert '<pre>' in text  # the bed rides a monospace block
     assert 'Streamlabs' in text
     assert not text.isascii()  # the Russian template is exercised
+
+
+def test_render_uses_dollar_for_usd() -> None:
+    """The symbol follows the currency code, not a hardcoded ruble."""
+    templates = load_messages()
+    text = render(templates, Donation(1, 'S', 'Ann', '5', 'USD', 'hi'))
+    assert '5' + templates['cur_USD'] in text  # 5$
 
 
 def test_render_falls_back_for_anon_and_empty_message() -> None:
     """No name -> anonymous; no message -> the no-question filler."""
     templates = load_messages()
-    text = render(templates, Donation(1, 'Streamlabs', '', '10 USD', ''))
+    text = render(templates, Donation(1, 'Streamlabs', '', '10', 'USD', ''))
     assert templates['anonymous'] in text
     assert templates['no_message'] in text
+
+
+def test_render_escapes_untrusted_name_and_message() -> None:
+    """A donor name or message with HTML is escaped, never injected."""
+    templates = load_messages()
+    text = render(templates, Donation(1, 'S', '<b>x', '1', 'USD', '<i>hi'))
+    assert '<b>x' not in text  # the raw tag never survives
+    assert '&lt;b&gt;x' in text  # escaped instead
+    assert '&lt;i&gt;hi' in text  # the message too
 
 
 def test_feed_for_selects_streamlabs_and_degrades() -> None:
@@ -131,8 +153,8 @@ def test_alerts_posts_new_advances_and_never_duplicates(
     cfg = make_cfg(tmp_path / 'drive')
     feed = _FeedDouble(
         [
-            Donation(1, 'Test', 'A', '1 USD', 'q1'),
-            Donation(2, 'Test', 'B', '2 USD', 'q2'),
+            Donation(1, 'Test', 'A', '1', 'USD', 'q1'),
+            Donation(2, 'Test', 'B', '2', 'USD', 'q2'),
         ]
     )
     sender = _SenderDouble()
@@ -144,7 +166,7 @@ def test_alerts_posts_new_advances_and_never_duplicates(
     src = DonationAlerts(feed, sender, spec)
 
     assert src.drain_once(0) == 2
-    assert sender.sent == [('@chan', 'A:1 USD'), ('@chan', 'B:2 USD')]
+    assert sender.sent == [('@chan', 'A:1'), ('@chan', 'B:2')]
     assert src.drain_once(2) == 2  # nothing newer
     assert len(sender.sent) == 2  # no duplicate posts
 

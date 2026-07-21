@@ -15,6 +15,7 @@ in Russian.
 from __future__ import annotations
 
 import functools
+import html
 import json
 import os
 from importlib import resources
@@ -50,12 +51,21 @@ def load_messages() -> dict[str, str]:
 
 
 def render(templates: Mapping[str, str], alert: Donation) -> str:
-    """One alert as Russian text: who sent, how much, the question."""
+    """One alert as Russian HTML: who sent, how much, the question.
+
+    The donor's name and message are HTML-escaped (they are untrusted
+    input) before landing in the italic line and the bed; the currency
+    symbol is looked up per code, so an amount reads ``500RUB`` -> the
+    ruble sign, ``5USD`` -> a dollar sign, and so on.
+    """
+    name = html.escape(alert.name) or templates['anonymous']
+    message = html.escape(alert.message) or templates['no_message']
+    symbol = templates.get('cur_' + alert.currency, templates['cur_default'])
     return templates['alert'].format(
-        platform=alert.platform,
-        name=alert.name or templates['anonymous'],
-        amount=alert.amount,
-        message=alert.message or templates['no_message'],
+        name=name,
+        amount=html.escape(alert.amount),
+        symbol=symbol,
+        message=message,
     )
 
 
@@ -63,7 +73,9 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the poll-and-post dock; secrets come from ``env``."""
     templates = load_messages()
     feed = feed_for(env.get('DONATION_PLATFORM', DEFAULT_PLATFORM), env)
-    sender = TgSender(TgApi(env.get('TG_TOKEN', '')))
+    sender = TgSender(
+        TgApi(env.get('TG_TOKEN', '')), parse_mode='HTML', preview=False
+    )
     spec = AlertSpec(
         chat=env.get('DONATION_CHAT', ''),
         offset=cfg.state / f'{BOT}.offset',

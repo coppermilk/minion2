@@ -53,6 +53,7 @@ class Donation:
     platform: str
     name: str
     amount: str
+    currency: str
     message: str
 
 
@@ -87,15 +88,24 @@ def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ''
 
 
-def _amount(row: Mapping[str, object]) -> str:
-    """The gift as ``amount currency`` (either may be a number)."""
-    raw = row.get('amount')
-    amount = _text(raw) or (str(raw) if isinstance(raw, int | float) else '')
-    return f'{amount} {_text(row.get("currency"))}'.strip()
+def _money(value: object) -> str:
+    """The donated amount as a bare number string (may be numeric)."""
+    if isinstance(value, bool):
+        return ''
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, int | float):
+        return str(value)
+    return ''
 
 
 def _one(row: Mapping[str, object], platform: str) -> Donation | None:
-    """One donation row, or None when its id is missing or bad."""
+    """One donation row, or None when its id is missing or bad.
+
+    Amount and currency are kept apart so the render picks the symbol
+    (RUB -> the ruble sign, USD -> a dollar sign, ...) from its own
+    table; the adapter stays currency-blind.
+    """
     ident = _int(row.get('donation_id'))
     if ident is None:
         return None
@@ -103,7 +113,8 @@ def _one(row: Mapping[str, object], platform: str) -> Donation | None:
         ident=ident,
         platform=platform,
         name=_text(row.get('name')),
-        amount=_amount(row),
+        amount=_money(row.get('amount')),
+        currency=_text(row.get('currency')),
         message=_text(row.get('message')),
     )
 
@@ -207,9 +218,16 @@ class Sender(Protocol):
 
 @dataclass(frozen=True)
 class TgSender:
-    """Post plain text to a Telegram chat via the Bot API."""
+    """Post text to a Telegram chat via the Bot API.
+
+    ``parse_mode`` (e.g. ``HTML``) turns on rich formatting -- italics,
+    links, a monospace block for the ASCII art. ``preview`` off keeps the
+    tip link from expanding into a card below every alert.
+    """
 
     api: TgApi
+    parse_mode: str = ''
+    preview: bool = True
 
     @property
     def live(self) -> bool:
@@ -220,7 +238,12 @@ class TgSender:
         """Send one message; a missing token or chat is a no-op."""
         if not self.api.live or not chat:
             return
-        self.api.call('sendMessage', {'chat_id': chat, 'text': text})
+        params: dict[str, object] = {'chat_id': chat, 'text': text}
+        if self.parse_mode:
+            params['parse_mode'] = self.parse_mode
+        if not self.preview:
+            params['disable_web_page_preview'] = True
+        self.api.call('sendMessage', params)
 
 
 @dataclass(frozen=True)

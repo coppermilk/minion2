@@ -1,5 +1,11 @@
 {
-  "alert": "💸 Новый донат — {platform}\n\n👤 От кого: {name}\n💰 Сколько: {amount}\n❓ Вопрос: {message}",
+  "alert": "{name} задонатил {amount}{symbol} через <a href=\"https://streamlabs.com/da_eto_tyoma/tip\">Streamlabs</a>\n\n<i>{message}</i>\n\nТак, освобождаю тебе место под моей кроватью, будешь жить тут.\n\n<pre>      .         .\n    /|________/|\n   // /      //|\n  |/_/______|//!  {name}\n  |_________|/\n  !         !</pre>",
   "anonymous": "Аноним",
-  "no_message": "(без вопроса)"
+  "no_message": "(без вопроса)",
+  "cur_default": "",
+  "cur_RUB": "₽",
+  "cur_USD": "$",
+  "cur_EUR": "€",
+  "cur_UAH": "₴",
+  "cur_KZT": "₸"
 }
