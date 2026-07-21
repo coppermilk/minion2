@@ -45,6 +45,8 @@ minion_core = ['py.typed', 'prompts/*.md']
 # The donations bot's Russian alert templates: UTF-8, deliberately not
 # an ASCII-checked source (BLUEPRINT 4), shipped with the wheel.
 'minions.donations' = ['messages.json']
+# The wishlist bot's Russian thank-you template: same rationale.
+'minions.wishlist' = ['messages.json']
 
 # ---------------------------------------------------------------- ruff
 [tool.ruff]

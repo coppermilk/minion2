@@ -1,6 +1,11 @@
 # Bare-metal Linux host without the compose stack. sort is NOT
 # scheduled here: run it as a watch daemon (SORT_WATCH=1) so new
-# images in _inbox/Downloads sort instantly; only week-clean keeps
-# a calendar cadence (the wall clock lives in cron, BLUEPRINT 11).
+# images in _inbox/Downloads sort instantly; week-clean and wishlist
+# keep a calendar cadence (the wall clock lives in cron, BLUEPRINT 11).
 
 0 6 * * 1 cd /opt/bananaland && python -m minions.week_clean.main >> "$DRIVE/bots/_data/logs/week-clean.cron.log" 2>&1
+
+# wishlist: daily snapshot of the public wishlist; an item gone since
+# yesterday is a gift. TG_TOKEN comes from TG_TOKEN_WISHLIST; WISHLIST_URL
+# and WISHLIST_CHAT must be exported (e.g. from the .env) in cron's env.
+0 8 * * * cd /opt/bananaland && TG_TOKEN="$TG_TOKEN_WISHLIST" python -m minions.wishlist.main >> "$DRIVE/bots/_data/logs/wishlist.cron.log" 2>&1

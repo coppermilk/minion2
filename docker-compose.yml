@@ -184,10 +184,12 @@ services:
     depends_on:
       - ollama
 
-  # week-clean rides cron; the foreground cron is the supervisor.
+  # week-clean and wishlist ride cron; the foreground cron is the
+  # supervisor. WISHLIST is grepped in too so the wishlist bot's URL and
+  # target chat reach the cron environment alongside DRIVE and the tokens.
   batch:
     <<: *minion
-    command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI" > /etc/minions.env; exec cron -f'
+    command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI|WISHLIST" > /etc/minions.env; exec cron -f'
     mem_limit: 512m
 
 # Ollama's model blobs: a disposable, re-pullable CACHE. A named volume
