@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Protocol
 
@@ -38,7 +39,13 @@ DEFAULT_POLL_SEC = 10.0
 """Gap between polls; a paid external API is not hammered."""
 
 STREAMLABS = 'streamlabs'
-"""The one platform name wired today (the agnostic default)."""
+"""The default platform name (the agnostic default)."""
+
+REVOLUT = 'revolut'
+"""The second wired platform: Revolut Business incoming transactions."""
+
+REVOLUT_LIMIT = 100
+"""How many recent transactions one Revolut page returns."""
 
 
 @dataclass(frozen=True)
@@ -169,6 +176,118 @@ class StreamlabsFeed:
         return _parse(resp.json(), cursor, self.name)
 
 
+def _epoch_ms(value: object) -> int | None:
+    """An ISO-8601 timestamp as a millisecond cursor, or None.
+
+    Revolut transactions carry no integer id, so the completion time --
+    to the millisecond -- is the monotonic high-water key the belt uses.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return int(moment.timestamp() * 1000)
+
+
+def _num(value: object) -> float:
+    """A numeric amount, or 0.0 when absent or non-numeric."""
+    if isinstance(value, bool):
+        return 0.0
+    return float(value) if isinstance(value, int | float) else 0.0
+
+
+def _money_str(amount: float) -> str:
+    """A tidy amount string: no trailing ``.0`` on whole numbers."""
+    return str(int(amount)) if amount == int(amount) else str(amount)
+
+
+def _incoming_leg(legs: object) -> dict[str, object] | None:
+    """The first credit leg (money in), or None -- an outgoing/zero tx."""
+    rows = legs if isinstance(legs, list) else []
+    for leg in rows:
+        if isinstance(leg, dict) and _num(leg.get('amount')) > 0:
+            return leg
+    return None
+
+
+def _counterparty(leg: dict[str, object]) -> str:
+    """The donor's name from a transaction leg, or ''."""
+    party = leg.get('counterparty')
+    name = party.get('name') if isinstance(party, dict) else None
+    return name.strip() if isinstance(name, str) else ''
+
+
+def _revolut_one(tx: dict[str, object], platform: str) -> Donation | None:
+    """One completed incoming transaction as a Donation, or None."""
+    if tx.get('state') != 'completed':
+        return None
+    ident = _epoch_ms(tx.get('completed_at') or tx.get('created_at'))
+    leg = _incoming_leg(tx.get('legs'))
+    if ident is None or leg is None:
+        return None
+    return Donation(
+        ident=ident,
+        platform=platform,
+        name=_counterparty(leg),
+        amount=_money_str(_num(leg.get('amount'))),
+        currency=_text(leg.get('currency')),
+        message=_text(tx.get('reference')) or _text(leg.get('description')),
+    )
+
+
+def _parse_revolut(
+    payload: object, cursor: int, platform: str
+) -> list[Donation]:
+    """Read the untrusted transactions payload into alerts (BLUEPRINT 4).
+
+    Only completed, incoming transactions past ``cursor`` survive, so a
+    top-up or a refund is never mistaken for a donation and each is
+    posted exactly once.
+    """
+    rows = payload if isinstance(payload, list) else []
+    parsed = (_revolut_one(r, platform) for r in rows if isinstance(r, dict))
+    fresh = [d for d in parsed if d is not None and d.ident > cursor]
+    return sorted(fresh, key=lambda d: d.ident)
+
+
+@dataclass(frozen=True)
+class RevolutFeed:
+    """Revolut Business incoming transactions, newest since a cursor.
+
+    The token is a Revolut Business API access token (Bearer). Those
+    tokens are short-lived, so a long-running deployment refreshes it out
+    of band; the OAuth refresh flow is deliberately out of scope here.
+    """
+
+    token: str
+    base: str = 'https://b2b.revolut.com'
+
+    @property
+    def name(self) -> str:
+        """The platform label shown in each alert."""
+        return 'Revolut'
+
+    @property
+    def live(self) -> bool:
+        """Whether an API access token is configured."""
+        return bool(self.token)
+
+    def fetch_after(self, cursor: int, /) -> list[Donation]:
+        """Incoming transactions past ``cursor`` (oldest first)."""
+        import requests
+
+        resp = requests.get(
+            f'{self.base}/api/1.0/transactions',
+            headers={'Authorization': f'Bearer {self.token}'},
+            params={'count': str(REVOLUT_LIMIT)},
+            timeout=API_TIMEOUT_SEC,
+        )
+        resp.raise_for_status()
+        return _parse_revolut(resp.json(), cursor, self.name)
+
+
 @dataclass(frozen=True)
 class DeadFeed:
     """A feed that never yields; the clean-degradation default.
@@ -202,7 +321,20 @@ def feed_for(platform: str, env: Mapping[str, str]) -> Feed:
     """
     if platform == STREAMLABS:
         return StreamlabsFeed(env.get('STREAMLABS_TOKEN', ''))
+    if platform == REVOLUT:
+        return RevolutFeed(env.get('REVOLUT_TOKEN', ''))
     return DeadFeed(platform)
+
+
+def feeds_for(platforms: str, env: Mapping[str, str]) -> list[Feed]:
+    """Every feed named in a comma-separated platform list.
+
+    ``streamlabs,revolut`` runs both at once, each with its own cursor;
+    order and whitespace do not matter. An empty list yields no feeds
+    (the bot idles).
+    """
+    names = [part.strip() for part in platforms.split(',') if part.strip()]
+    return [feed_for(name, env) for name in names]
 
 
 class Sender(Protocol):
@@ -248,49 +380,70 @@ class TgSender:
 
 @dataclass(frozen=True)
 class AlertSpec:
-    """Where alerts post, how often, and how each is rendered."""
+    """Where alerts post, how often, and how each is rendered.
+
+    ``state`` is the directory the per-feed high-water files live in, so
+    Streamlabs and Revolut keep independent cursors (their id scales --
+    a small donation id vs a millisecond timestamp -- must never share).
+    """
 
     chat: str
-    offset: Path
+    state: Path
     render: Callable[[Donation], str]
     poll_sec: float = DEFAULT_POLL_SEC
 
 
 class DonationAlerts(Source):
-    """Poll a donation feed; post each new alert to a chat.
+    """Poll one or more donation feeds; post each new alert to a chat.
 
-    Platform-agnostic: any ``Feed`` drives it, so Streamlabs today and
-    Revolut or another platform tomorrow reuse this loop unchanged. The
-    donation-id high-water mark is persisted per post (STATE,
-    REQ-DATA-003), so a restart never replays an alert. Unconfigured, it
-    ends at once and the bot degrades to a clean no-op (REQ-DEG-001).
+    Platform-agnostic: any ``Feed`` drives it, and several run at once
+    (Streamlabs and Revolut together). Each feed keeps its own high-water
+    mark, persisted per post (STATE, REQ-DATA-003), so a restart never
+    replays an alert and one platform's cursor never shadows another's.
+    Unconfigured, it ends at once and degrades to a clean no-op
+    (REQ-DEG-001).
     """
 
-    def __init__(self, feed: Feed, sender: Sender, spec: AlertSpec) -> None:
+    def __init__(
+        self, feeds: list[Feed], sender: Sender, spec: AlertSpec
+    ) -> None:
         super().__init__()
-        self._feed = feed
+        self._feeds = feeds
         self._sender = sender
         self._spec = spec
-        self._offsets = OffsetStore(spec.offset)
 
-    def drain_once(self, cursor: int) -> int:
-        """Post every alert past ``cursor``; return the new high-water."""
-        for alert in self._feed.fetch_after(cursor):
+    def drain_once(self) -> None:
+        """One poll of every live feed, each on its own cursor."""
+        for feed in self._feeds:
+            if feed.live:
+                self._drain_feed(feed)
+
+    def _drain_feed(self, feed: Feed) -> None:
+        """Post every alert a feed has past its persisted high-water."""
+        offsets = OffsetStore(self._offset(feed.name))
+        cursor = offsets.read()
+        for alert in feed.fetch_after(cursor):
             self._sender.send(self._spec.chat, self._spec.render(alert))
             cursor = max(cursor, alert.ident)
-            self._offsets.write(cursor)
-        return cursor
+            offsets.write(cursor)
+
+    def _offset(self, name: str) -> Path:
+        """The per-feed high-water file, keyed by platform name."""
+        return self._spec.state / f'donations-{name.lower()}.offset'
 
     def produce(self, _emit: Emit) -> None:
         """Poll forever; unconfigured, end at once (clean no-op)."""
         if not self._ready():
-            _LOG.info('idle: feed, sender or chat not configured')
+            _LOG.info('idle: sender, chat or feeds not configured')
             return
-        cursor = self._offsets.read()
         while not self.stopped:
-            cursor = self.drain_once(cursor)
+            self.drain_once()
             self.wait(self._spec.poll_sec)
 
     def _ready(self) -> bool:
-        """Whether the feed, sender and target chat are all set."""
-        return self._feed.live and self._sender.live and bool(self._spec.chat)
+        """Whether the sender, chat and at least one live feed are set."""
+        return (
+            self._sender.live
+            and bool(self._spec.chat)
+            and any(feed.live for feed in self._feeds)
+        )

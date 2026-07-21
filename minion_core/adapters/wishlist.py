@@ -198,6 +198,12 @@ def gifted(
     return [item for item in previous if item.ident not in have]
 
 
+def added(previous: list[WishItem], current: list[WishItem]) -> list[WishItem]:
+    """Items on the list today that were not there yesterday -- new wants."""
+    had = {item.ident for item in previous}
+    return [item for item in current if item.ident not in had]
+
+
 @dataclass(frozen=True)
 class SnapshotStore:
     """Yesterday's wishlist on disk (STATE, JSON; REQ-DATA-002)."""

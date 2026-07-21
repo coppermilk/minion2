@@ -6,6 +6,7 @@ loop uses fetch/post/say doubles and a monkeypatched page fetcher.
 
 from __future__ import annotations
 
+import random
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import wishlist as wl
@@ -21,6 +22,7 @@ from minions.bots.wishlist.main import digest
 from minions.bots.wishlist.main import load_messages
 from minions.bots.wishlist.main import main
 from minions.bots.wishlist.main import render
+from minions.bots.wishlist.main import render_added
 from minions.bots.wishlist.main import run_once
 from tests.conftest import make_cfg
 from tests.conftest import make_env
@@ -139,12 +141,58 @@ def test_render_trims_title_to_five_words_and_weaves_note() -> None:
     assert not caption.isascii()
 
 
-def test_render_omits_note_line_when_there_is_no_note() -> None:
-    """No note -> the note line is absent, just the plain thank-you."""
+def test_render_gift_uses_the_no_note_form_without_a_note() -> None:
+    """No note -> the note-free gift form, filled with item and link."""
     templates = load_messages()
     caption = render(templates, WishItem('I1', 'Gadget', 'x'), 'link')
-    assert templates['note_line'].strip() not in caption
+    gift = templates['gift']
+    assert caption == gift['no_note'].format(
+        item='Gadget', note='', link='link'
+    )
     assert 'Gadget' in caption
+
+
+def test_render_added_picks_a_template_and_fills_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One template is chosen; item (5-word), note and link are filled."""
+    monkeypatch.setattr(random, 'choice', lambda seq: seq[1])
+    templates = load_messages()
+    item = WishItem(
+        'I1',
+        'Optimum Nutrition Gold Standard Whey Extra Big',
+        'img',
+        note='mint please',
+    )
+    text = render_added(templates, item, 'https://amazon.de/wl/X')
+    assert 'Optimum Nutrition Gold Standard Whey' in text  # 5-word title
+    assert 'Extra' not in text  # 6th word trimmed
+    assert 'mint please' in text  # the note is woven in
+    assert 'https://amazon.de/wl/X' in text
+    assert not text.isascii()  # a Russian template
+
+
+def test_render_added_uses_no_note_form_without_a_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An added item with no note gets that template's note-free form."""
+    monkeypatch.setattr(random, 'choice', lambda seq: seq[1])
+    templates = load_messages()
+    text = render_added(templates, WishItem('I1', 'Gadget', 'img'), 'L')
+    entry = templates['added'][1]
+    assert text == entry['no_note'].format(item='Gadget', note='', link='L')
+
+
+def test_added_templates_are_count_agnostic_and_note_aware() -> None:
+    """Every added entry offers both forms and fills without error."""
+    added = load_messages()['added']
+    assert isinstance(added, list)
+    assert added  # at least one, but the code works for any count
+    for entry in added:
+        assert 'with_note' in entry
+        assert 'no_note' in entry
+        assert entry['with_note'].format(item='X', note='n', link='L')
+        assert entry['no_note'].format(item='X', note='', link='L')
 
 
 def test_digest_lists_the_current_wishlist(tmp_path: Path) -> None:
@@ -207,6 +255,26 @@ def test_run_reports_the_vanished_item(tmp_path: Path) -> None:
     assert 'Cool Mug' in caption
     assert 'in blue' in caption  # the note is woven in
     assert SnapshotStore(cfg.state / 'wishlist.json').load() == [kept]
+
+
+def test_run_reports_an_added_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An item added since yesterday posts its photo and a random blurb."""
+    monkeypatch.setattr(random, 'choice', lambda seq: seq[1])
+    cfg = make_cfg(tmp_path / 'drive')
+    kept = WishItem('I1', 'Gadget', 'https://img/1.jpg')
+    SnapshotStore(cfg.state / 'wishlist.json').save([kept])
+    fresh = WishItem('I2', 'Shiny New Thing', 'https://img/2.jpg', note='want')
+    sink = _Sink()
+    run_once(cfg, _spec(), _deps(sink, [kept, fresh]))  # I2 is new
+    assert sink.says == []  # not first run, not forced
+    assert len(sink.posts) == 1
+    image, caption = sink.posts[0]
+    assert image == 'https://img/2.jpg'
+    assert 'Shiny New Thing' in caption
+    assert 'want' in caption  # the note is woven in
+    assert SnapshotStore(cfg.state / 'wishlist.json').load() == [kept, fresh]
 
 
 def test_announce_flag_forces_a_digest(tmp_path: Path) -> None:

@@ -25,7 +25,7 @@ from typing import cast
 from minion_core.adapters.donations import AlertSpec
 from minion_core.adapters.donations import DonationAlerts
 from minion_core.adapters.donations import TgSender
-from minion_core.adapters.donations import feed_for
+from minion_core.adapters.donations import feeds_for
 from minion_core.adapters.tg import TgApi
 from minion_core.kernel import run
 from minion_core.settings import load
@@ -62,6 +62,7 @@ def render(templates: Mapping[str, str], alert: Donation) -> str:
     message = html.escape(alert.message) or templates['no_message']
     symbol = templates.get('cur_' + alert.currency, templates['cur_default'])
     return templates['alert'].format(
+        platform=html.escape(alert.platform),
         name=name,
         amount=html.escape(alert.amount),
         symbol=symbol,
@@ -72,17 +73,17 @@ def render(templates: Mapping[str, str], alert: Donation) -> str:
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
     """Assemble the poll-and-post dock; secrets come from ``env``."""
     templates = load_messages()
-    feed = feed_for(env.get('DONATION_PLATFORM', DEFAULT_PLATFORM), env)
+    feeds = feeds_for(env.get('DONATION_PLATFORM', DEFAULT_PLATFORM), env)
     sender = TgSender(
         TgApi(env.get('TG_TOKEN', '')), parse_mode='HTML', preview=False
     )
     spec = AlertSpec(
         chat=env.get('DONATION_CHAT', ''),
-        offset=cfg.state / f'{BOT}.offset',
+        state=cfg.state,
         render=functools.partial(render, templates),
         poll_sec=float(env.get('DONATION_POLL_SEC', DEFAULT_POLL_SEC)),
     )
-    return DonationAlerts(feed, sender, spec)
+    return DonationAlerts(feeds, sender, spec)
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

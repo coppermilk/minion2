@@ -12,9 +12,12 @@ from minion_core.adapters.donations import AlertSpec
 from minion_core.adapters.donations import DeadFeed
 from minion_core.adapters.donations import Donation
 from minion_core.adapters.donations import DonationAlerts
+from minion_core.adapters.donations import RevolutFeed
 from minion_core.adapters.donations import StreamlabsFeed
 from minion_core.adapters.donations import _parse
+from minion_core.adapters.donations import _parse_revolut
 from minion_core.adapters.donations import feed_for
+from minion_core.adapters.donations import feeds_for
 from minions.bots.donations.main import build
 from minions.bots.donations.main import load_messages
 from minions.bots.donations.main import main
@@ -104,16 +107,68 @@ def test_render_escapes_untrusted_name_and_message() -> None:
     assert '&lt;i&gt;hi' in text  # the message too
 
 
-def test_feed_for_selects_streamlabs_and_degrades() -> None:
-    """Known+token is live; unknown or tokenless idles cleanly."""
-    live = feed_for('streamlabs', {'STREAMLABS_TOKEN': 'x'})
-    assert isinstance(live, StreamlabsFeed)
-    assert live.live
-    assert live.name == 'Streamlabs'
-    other = feed_for('revolut', {})
-    assert isinstance(other, DeadFeed)
-    assert not other.live  # future platform, not wired yet -> idle
+def test_feed_for_selects_platforms_and_degrades() -> None:
+    """Streamlabs and Revolut are wired; an unknown name idles."""
+    labs = feed_for('streamlabs', {'STREAMLABS_TOKEN': 'x'})
+    assert isinstance(labs, StreamlabsFeed)
+    assert labs.live
+    assert labs.name == 'Streamlabs'
+    rev = feed_for('revolut', {'REVOLUT_TOKEN': 'y'})
+    assert isinstance(rev, RevolutFeed)
+    assert rev.live
+    assert rev.name == 'Revolut'
+    unknown = feed_for('paypal', {})
+    assert isinstance(unknown, DeadFeed)
+    assert not unknown.live  # not wired -> idle
     assert not feed_for('streamlabs', {}).live  # tokenless -> idle
+    assert not feed_for('revolut', {}).live  # tokenless -> idle
+
+
+def test_feeds_for_runs_several_platforms_at_once() -> None:
+    """A comma list builds one feed per name, order-independent."""
+    feeds = feeds_for(
+        ' revolut , streamlabs ',
+        {'STREAMLABS_TOKEN': 'a', 'REVOLUT_TOKEN': 'b'},
+    )
+    assert [f.name for f in feeds] == ['Revolut', 'Streamlabs']
+    assert all(f.live for f in feeds)
+    assert feeds_for('', {}) == []  # nothing configured -> no feeds
+
+
+def test_revolut_parse_keeps_completed_incoming_only() -> None:
+    """Only completed credit legs past the cursor become alerts."""
+    payload = [
+        {
+            'state': 'completed',
+            'completed_at': '2026-07-21T10:00:01.500Z',
+            'reference': 'thanks for the stream!',
+            'legs': [
+                {
+                    'amount': 10.0,
+                    'currency': 'EUR',
+                    'counterparty': {'name': 'John D'},
+                }
+            ],
+        },
+        {  # outgoing (negative leg) -> dropped
+            'state': 'completed',
+            'completed_at': '2026-07-21T11:00:00Z',
+            'legs': [{'amount': -5.0, 'currency': 'EUR'}],
+        },
+        {  # not completed -> dropped
+            'state': 'pending',
+            'completed_at': '2026-07-21T12:00:00Z',
+            'legs': [{'amount': 3.0, 'currency': 'EUR'}],
+        },
+    ]
+    alerts = _parse_revolut(payload, 0, 'Revolut')
+    assert len(alerts) == 1
+    assert alerts[0].name == 'John D'
+    assert alerts[0].amount == '10'  # whole number, no trailing .0
+    assert alerts[0].currency == 'EUR'
+    assert alerts[0].message == 'thanks for the stream!'
+    assert alerts[0].platform == 'Revolut'
+    assert alerts[0].ident > 0  # a millisecond timestamp cursor
 
 
 class _FeedDouble:
@@ -160,15 +215,41 @@ def test_alerts_posts_new_advances_and_never_duplicates(
     sender = _SenderDouble()
     spec = AlertSpec(
         chat='@chan',
-        offset=cfg.state / 'donations.offset',
+        state=cfg.state,
         render=lambda a: f'{a.name}:{a.amount}',
     )
-    src = DonationAlerts(feed, sender, spec)
+    src = DonationAlerts([feed], sender, spec)
 
-    assert src.drain_once(0) == 2
+    src.drain_once()
     assert sender.sent == [('@chan', 'A:1'), ('@chan', 'B:2')]
-    assert src.drain_once(2) == 2  # nothing newer
+    src.drain_once()  # the per-feed high-water persisted
     assert len(sender.sent) == 2  # no duplicate posts
+
+
+def test_alerts_drains_each_feed_on_its_own_cursor(tmp_path: Path) -> None:
+    """Two platforms post independently, each with its own offset file.
+
+    Streamlabs ids are small; Revolut idents are millisecond timestamps.
+    A shared cursor would let the huge Revolut cursor shadow Streamlabs,
+    so each feed must keep a separate high-water file.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    labs = _FeedDouble([Donation(5, 'Streamlabs', 'A', '1', 'USD', '')])
+    rev = _FeedDouble(
+        [Donation(1_700_000_000_000, 'Revolut', 'B', '2', 'EUR', '')]
+    )
+    labs.name = 'Streamlabs'
+    rev.name = 'Revolut'
+    sender = _SenderDouble()
+    spec = AlertSpec(chat='@c', state=cfg.state, render=lambda a: a.platform)
+    src = DonationAlerts([labs, rev], sender, spec)
+
+    src.drain_once()
+    assert sorted(text for _, text in sender.sent) == ['Revolut', 'Streamlabs']
+    assert (cfg.state / 'donations-streamlabs.offset').exists()
+    assert (cfg.state / 'donations-revolut.offset').exists()
+    src.drain_once()  # both cursors persisted independently
+    assert len(sender.sent) == 2  # no re-posts
 
 
 def test_build_and_main_idle_without_config(tmp_path: Path) -> None:
