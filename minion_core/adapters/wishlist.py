@@ -4,9 +4,9 @@ A daily snapshot of the wishlist is the database (STATE); an item that
 was there yesterday and is gone today is treated as gifted. Third
 sanctioned ``requests`` import site (REQ-ARC-002); the lazy import keeps
 the module hermetic for the offline suite. Parsing a public list is
-best-effort HTML scraping: a failed or blocked fetch returns ``None`` so
-the caller keeps the old snapshot and never mistakes a block for a
-hundred gifts.
+best-effort HTML scraping: a failed or blocked fetch (or any page of a
+paginated list) returns ``None`` so the caller keeps the old snapshot
+and never mistakes a block for a hundred gifts.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
 from minion_core.adapters.files import atomic_write
 from minion_core.adapters.tg import TgApi
@@ -28,10 +29,13 @@ if TYPE_CHECKING:
 _LOG = logging.getLogger('wishlist')
 
 FETCH_TIMEOUT_SEC = 20
-"""One short attempt per run; a failure keeps yesterday's snapshot."""
+"""One short attempt per page; a failure keeps yesterday's snapshot."""
 
 MAX_ITEMS = 500
 """Bound on items parsed from one page (bounded, BLUEPRINT 4)."""
+
+MAX_PAGES = 25
+"""Bound on lek-paginated pages walked in one run (bounded)."""
 
 _UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -52,31 +56,47 @@ _IMAGE = re.compile(
     r'\.com/images/[^"\'\s]+'
 )
 
+_LEK = (
+    re.compile(r'data-showmoreurl="[^"]*[?&]lek=([^"&]+)'),
+    re.compile(r'"lastEvaluatedKey"\s*:\s*"([^"]+)"'),
+    re.compile(r'id="[^"]*-lek"[^>]*value="([^"]+)"'),
+)
+
 
 @dataclass(frozen=True)
 class WishItem:
-    """One wishlist entry: a stable id, its title and a photo URL."""
+    """One wishlist entry: id, title, photo URL and the owner's note."""
 
     ident: str
     title: str
     image: str
+    note: str = ''
 
 
-def _title(window: str, ident: str) -> str:
-    """The item's full title from its ``itemName`` anchor, unescaped."""
+def _attr(window: str, tag: str, ident: str) -> str:
+    """A ``title="..."`` value hanging off ``<tag>_<ident>``, unescaped."""
     match = re.search(
-        r'id="itemName_' + re.escape(ident) + r'"[^>]*?title="([^"]*)"',
+        r'id="' + tag + '_' + re.escape(ident) + r'"[^>]*?title="([^"]*)"',
+        window,
+    )
+    return html.unescape(match.group(1)).strip() if match else ''
+
+
+def _note(window: str, ident: str) -> str:
+    """The owner's note for the item (``itemComment_<id>``), unescaped."""
+    match = re.search(
+        r'id="itemComment_' + re.escape(ident) + r'"[^>]*>([^<]*)<',
         window,
     )
     return html.unescape(match.group(1)).strip() if match else ''
 
 
 def parse_items(page: str) -> list[WishItem]:
-    """Every item found in the wishlist HTML (id, title, image).
+    """Every item found in the wishlist HTML (id, title, image, note).
 
     Each item's ``<li>`` carries ``data-itemid``; the window up to the
-    next item holds that item's title anchor and product image. A row
-    without a title is skipped rather than guessed.
+    next item holds that item's title anchor, product image and any
+    note. A row without a title is skipped rather than guessed.
     """
     marks = list(_ITEM_ID.finditer(page))[:MAX_ITEMS]
     items: list[WishItem] = []
@@ -87,26 +107,43 @@ def parse_items(page: str) -> list[WishItem]:
             continue
         end = marks[idx + 1].start() if idx + 1 < len(marks) else len(page)
         window = page[mark.start() : end]
-        title = _title(window, ident)
+        title = _attr(window, 'itemName', ident)
         if not title:
             continue
         image = _IMAGE.search(window)
-        items.append(WishItem(ident, title, image.group(0) if image else ''))
+        items.append(
+            WishItem(
+                ident=ident,
+                title=title,
+                image=image.group(0) if image else '',
+                note=_note(window, ident),
+            )
+        )
         seen.add(ident)
     return items
 
 
-def fetch_items(url: str) -> list[WishItem] | None:
-    """The current wishlist items, or ``None`` on any fetch failure.
+def _next_lek(page: str) -> str | None:
+    """The pagination token for the next page, or None when last."""
+    for pattern in _LEK:
+        found = pattern.search(page)
+        if found:
+            return unquote(found.group(1))
+    return None
 
-    An empty parse is treated as a failure too: a live shared list has
-    items, so parsing zero means we were blocked or the layout moved --
-    never that every item was gifted at once.
-    """
+
+def _get_page(url: str, lek: str | None) -> str | None:
+    """One page of the list HTML, or None on any fetch failure."""
     import requests
 
+    params = {'lek': lek} if lek else None
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=FETCH_TIMEOUT_SEC)
+        resp = requests.get(
+            url,
+            headers={**_HEADERS, 'Referer': url},
+            params=params,
+            timeout=FETCH_TIMEOUT_SEC,
+        )
         resp.raise_for_status()
     except (requests.RequestException, OSError) as exc:
         _LOG.warning('wishlist_fetch_failed reason=%s', exc)
@@ -114,7 +151,39 @@ def fetch_items(url: str) -> list[WishItem] | None:
     if 'text/html' not in resp.headers.get('Content-Type', ''):
         _LOG.warning('wishlist_fetch_failed reason=not_html')
         return None
-    items = parse_items(resp.text)
+    page: str = resp.text
+    return page
+
+
+def _merge(items: list[WishItem], seen: set[str], page: str) -> None:
+    """Append this page's not-yet-seen items to the running list."""
+    for item in parse_items(page):
+        if item.ident not in seen:
+            seen.add(item.ident)
+            items.append(item)
+
+
+def fetch_items(url: str) -> list[WishItem] | None:
+    """The whole wishlist across lek pages, or None on any failure.
+
+    Any page that fails to fetch fails the whole run (None): a partial
+    list would make the missing page's items look gifted next day. An
+    empty parse is a failure too -- a live shared list has items, so
+    zero means a block or a layout change, never a mass gifting.
+    """
+    items: list[WishItem] = []
+    seen: set[str] = set()
+    leks: set[str] = set()
+    lek: str | None = None
+    for _ in range(MAX_PAGES):
+        page = _get_page(url, lek)
+        if page is None:
+            return None
+        _merge(items, seen, page)
+        lek = _next_lek(page)
+        if not lek or lek in leks:
+            break
+        leks.add(lek)
     if not items:
         _LOG.warning('wishlist_parse_empty reason=blocked_or_layout')
         return None
@@ -148,10 +217,21 @@ class SnapshotStore:
     def save(self, items: list[WishItem]) -> None:
         """Persist today's snapshot atomically (REQ-DATA-002)."""
         payload = [
-            {'id': i.ident, 'title': i.title, 'image': i.image} for i in items
+            {
+                'id': i.ident,
+                'title': i.title,
+                'image': i.image,
+                'note': i.note,
+            }
+            for i in items
         ]
         raw = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         atomic_write(self.path, raw)
+
+
+def _str(value: object) -> str:
+    """A field coerced to str, '' when absent or not a string."""
+    return value if isinstance(value, str) else ''
 
 
 def _row(row: dict[str, object]) -> WishItem | None:
@@ -159,18 +239,17 @@ def _row(row: dict[str, object]) -> WishItem | None:
     ident = row.get('id')
     if not isinstance(ident, str) or not ident:
         return None
-    title = row.get('title')
-    image = row.get('image')
     return WishItem(
         ident=ident,
-        title=title if isinstance(title, str) else '',
-        image=image if isinstance(image, str) else '',
+        title=_str(row.get('title')),
+        image=_str(row.get('image')),
+        note=_str(row.get('note')),
     )
 
 
 @dataclass(frozen=True)
 class TgPhoto:
-    """Post a photo with a caption to a chat; text-only on fallback.
+    """Post photos and text to a chat; text-only on photo fallback.
 
     A missing image, or a sendPhoto the Bot API refuses (a dead image
     URL), falls back to a plain message so the gift is still announced.
@@ -185,7 +264,13 @@ class TgPhoto:
             return
         if image and self._photo(image, caption):
             return
-        self.api.call('sendMessage', {'chat_id': self.chat, 'text': caption})
+        self.text(caption)
+
+    def text(self, message: str) -> None:
+        """Send one plain-text message; no-op without token or chat."""
+        if not self.api.live or not self.chat:
+            return
+        self.api.call('sendMessage', {'chat_id': self.chat, 'text': message})
 
     def _photo(self, image: str, caption: str) -> bool:
         """Try sendPhoto; False (and logged) when the API refuses."""
