@@ -20,8 +20,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from dataclasses import field
+from typing import TYPE_CHECKING
 
 from telethon.tl.types import MessageEntityCustomEmoji
+from telethon.tl.types import MessageEntityTextUrl
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from telethon.tl.types import TypeMessageEntity
 
 # <tg-emoji emoji-id="5334681713316479679">X</tg-emoji>
 _TG_EMOJI_RE = re.compile(
@@ -32,10 +40,26 @@ _TG_EMOJI_RE = re.compile(
 
 @dataclass(frozen=True)
 class PremiumMessage:
-    """A plain-text message plus the custom-emoji entities that decorate it."""
+    """A plain-text message plus the entities that decorate it."""
 
     text: str
-    entities: list[MessageEntityCustomEmoji]
+    entities: list[TypeMessageEntity] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class Social:
+    """One social-bar entry: a colored glyph that links to a platform.
+
+    ``emoji_id`` is a premium custom-emoji document id -- the colored
+    platform logo. When it is ``None`` the plain ``fallback`` glyph shows
+    instead, so the bar still renders before you have all the ids. A
+    non-empty ``url`` makes the glyph tappable.
+    """
+
+    name: str
+    emoji_id: int | None
+    fallback: str
+    url: str = ''
 
 
 def _utf16_len(text: str) -> int:
@@ -73,4 +97,39 @@ def build_premium_message(markup: str) -> PremiumMessage:
         cursor = match.end()
 
     text_parts.append(markup[cursor:])
+    return PremiumMessage(text=''.join(text_parts), entities=entities)
+
+
+def build_social_bar(
+    entries: Sequence[Social],
+    *,
+    separator: str = '   ',
+) -> PremiumMessage:
+    """Render a row of colored, tappable premium-emoji "buttons".
+
+    A Telegram user account cannot send real inline buttons (bot-only), and
+    button labels never render premium emoji -- so the closest thing is a
+    line of premium emoji, each linked to its platform. Every glyph carries
+    a custom-emoji entity (its color) and, when a url is set, an overlapping
+    text-url entity on the same span (its tap target).
+    """
+    text_parts: list[str] = []
+    entities: list[TypeMessageEntity] = []
+    offset = 0
+
+    for index, entry in enumerate(entries):
+        if index:  # a separator sits between glyphs, not before the first
+            offset += _utf16_len(separator)
+            text_parts.append(separator)
+        glyph = entry.fallback
+        length = _utf16_len(glyph)
+        if entry.emoji_id is not None:
+            entities.append(
+                MessageEntityCustomEmoji(offset, length, entry.emoji_id)
+            )
+        if entry.url:
+            entities.append(MessageEntityTextUrl(offset, length, entry.url))
+        text_parts.append(glyph)
+        offset += length
+
     return PremiumMessage(text=''.join(text_parts), entities=entities)

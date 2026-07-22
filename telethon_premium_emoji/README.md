@@ -23,6 +23,30 @@ A premium emoji is a normal fallback glyph in the message text (e.g. a phone gly
 into `(text, entities)`, taking care to measure entity offsets/lengths in
 **UTF-16 code units** as Telegram requires.
 
+## Colored "buttons" (the social bar)
+
+On startup the app also posts a **social bar**: a row of colored premium
+platform emoji (black TikTok, red YouTube, pink Instagram, red Pinterest),
+each **tappable** and linked to its platform.
+
+Note what Telegram does and does not allow here:
+
+- A **user account cannot send real inline buttons** -- inline keyboards are
+  bot-only. And even a bot's button labels never render premium emoji.
+- Button background color cannot be set at all (buttons take the theme color).
+
+So the "colored buttons" are a row of **premium emoji that are also links**:
+each glyph carries a `MessageEntityCustomEmoji` (its color, the platform
+logo) and an overlapping `MessageEntityTextUrl` (its tap target) on the same
+span. That is the closest a userbot can get, and it actually shows the
+colored premium logos.
+
+Configure the bar in `SOCIAL_BAR` in `main.py` -- one `Social(name, emoji_id,
+fallback, url)` per platform. Set each `emoji_id` to that platform's premium
+custom-emoji document id (currently they all reuse the one id we have; swap in
+the real per-platform ids to get the exact logos), and point each `url` at
+your own profile. An entry with `emoji_id=None` falls back to its plain glyph.
+
 ## Setup
 
 ```bash

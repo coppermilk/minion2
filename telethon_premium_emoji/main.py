@@ -25,7 +25,9 @@ import logging
 import os
 from pathlib import Path
 
+from premium_emoji import Social
 from premium_emoji import build_premium_message
+from premium_emoji import build_social_bar
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
@@ -43,6 +45,39 @@ DEFAULT_TARGET_CHAT_ID = -1002431466060
 PROOF_OF_WORK_MARKUP = (
     '<tg-emoji emoji-id="5334681713316479679">\U0001f4f1</tg-emoji> '
     'Telethon userbot online -- premium emoji proof-of-work.'
+)
+
+# Colored "buttons": a row of premium platform logos, each linked to its
+# platform. The COLOR is the premium emoji itself (black TikTok, red
+# YouTube, pink Instagram, red Pinterest). A user account cannot send real
+# inline buttons and buttons never render premium emoji, so this row of
+# linked premium emoji is the userbot equivalent.
+#
+# emoji_id is the premium custom-emoji document id. For now every entry
+# reuses the one id we have (Instagram's), so the whole bar renders as a
+# premium emoji already -- swap TikTok/YouTube/Pinterest for their own ids
+# when you have them to get the exact colored logos. Point the urls at your
+# own profiles.
+INSTAGRAM_EMOJI_ID = 5319160079465857105
+SOCIAL_BAR = (
+    Social(
+        'TikTok', INSTAGRAM_EMOJI_ID, '\U0001f3b5', 'https://www.tiktok.com/'
+    ),
+    Social(
+        'YouTube', INSTAGRAM_EMOJI_ID, '\U000025b6', 'https://www.youtube.com/'
+    ),
+    Social(
+        'Instagram',
+        INSTAGRAM_EMOJI_ID,
+        '\U0001f4f7',
+        'https://www.instagram.com/',
+    ),
+    Social(
+        'Pinterest',
+        INSTAGRAM_EMOJI_ID,
+        '\U0001f4cc',
+        'https://www.pinterest.com/',
+    ),
 )
 
 
@@ -124,6 +159,17 @@ async def send_proof_of_work(client: TelegramClient, chat_id: int) -> None:
     )
 
 
+async def send_social_bar(client: TelegramClient, chat_id: int) -> None:
+    """Send the colored premium-emoji social bar to ``chat_id``."""
+    message = build_social_bar(SOCIAL_BAR)
+    await client.send_message(
+        chat_id, message.text, formatting_entities=message.entities
+    )
+    log.info(
+        'Sent social bar to %s with %d buttons.', chat_id, len(SOCIAL_BAR)
+    )
+
+
 async def main() -> None:
     """Log in, verify it is a user account, send the proof-of-work."""
     _load_dotenv(Path(__file__).with_name('.env'))
@@ -162,6 +208,7 @@ async def main() -> None:
 
     log.info('Logged in as @%s (id=%s).', me.username or '-', me.id)
     await send_proof_of_work(client, chat_id)
+    await send_social_bar(client, chat_id)
 
     log.info('Proof-of-work done. Staying connected -- Ctrl+C to stop.')
     await client.run_until_disconnected()
