@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import time
+
 from minion_core.adapters.backend import BackendToggle
+from minion_core.adapters.donations import bed_roster
+from minion_core.adapters.wishlist import SnapshotStore
+from minion_core.adapters.wishlist import WishItem
 from minion_core.kernel import bot_logger
+from minions.bots.model_switch.main import _MENU
 from minions.bots.model_switch.main import _Moderator
 from minions.bots.model_switch.main import reply_for
 from tests.conftest import make_cfg
@@ -46,7 +52,22 @@ def test_switch_unknown_gives_help(tmp_path):
     assert 'local' in reply
     assert 'gemini' in reply
     assert 'clean' in reply  # the on-demand clean is advertised too
+    assert 'menu' in reply  # the panel is discoverable
     assert BackendToggle(cfg).read() == 'gemini'  # unchanged (default)
+
+
+def test_panel_shows_menu_and_reads_bot_status(tmp_path):
+    """The admin panel prints the menu and reads donations/wishlist state."""
+    cfg = make_cfg(tmp_path / 'drive')
+    mod = _handler(cfg)
+    assert mod('menu') == _MENU
+    assert mod('help') == _MENU
+    assert 'empty' in mod('bed')  # no donors under the bed yet
+    bed_roster(cfg.state).add('Vasya', time.time())
+    assert 'Vasya' in mod('bed')  # now one is
+    assert '0 items' in mod('wishlist')  # nothing tracked yet
+    SnapshotStore(cfg.state / 'wishlist.json').save([WishItem('I1', 'X', '')])
+    assert '1 items' in mod('wishlist')
 
 
 def test_clean_command_shelves_the_week(tmp_path):

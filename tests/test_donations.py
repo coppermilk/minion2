@@ -6,9 +6,12 @@ fixed payload; the poll loop on feed/sender doubles.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
+from minion_core.adapters.donations import BED_TTL_SEC
 from minion_core.adapters.donations import AlertSpec
+from minion_core.adapters.donations import BedRoster
 from minion_core.adapters.donations import DeadFeed
 from minion_core.adapters.donations import Donation
 from minion_core.adapters.donations import DonationAlerts
@@ -16,12 +19,15 @@ from minion_core.adapters.donations import RevolutFeed
 from minion_core.adapters.donations import StreamlabsFeed
 from minion_core.adapters.donations import _parse
 from minion_core.adapters.donations import _parse_revolut
+from minion_core.adapters.donations import bed_roster
 from minion_core.adapters.donations import feed_for
 from minion_core.adapters.donations import feeds_for
+from minions.bots.donations.main import _BedCommand
 from minions.bots.donations.main import build
 from minions.bots.donations.main import load_messages
 from minions.bots.donations.main import main
 from minions.bots.donations.main import render
+from minions.bots.donations.main import render_bed
 from tests.conftest import make_cfg
 from tests.conftest import make_env
 
@@ -258,3 +264,49 @@ def test_build_and_main_idle_without_config(tmp_path: Path) -> None:
     graph = build(cfg, {})
     assert list(graph(iter(()))) == []  # tokenless: drains clean
     assert main(make_env(tmp_path / 'drive')) == 0
+
+
+def test_render_links_each_platform_to_its_own_tip_page() -> None:
+    """A Streamlabs gift links to Streamlabs; a Revolut one to Revolut."""
+    templates = load_messages()
+    labs = render(templates, Donation(1, 'Streamlabs', 'A', '5', 'USD', 'q'))
+    assert templates['link_streamlabs'] in labs
+    rev = render(templates, Donation(2, 'Revolut', 'B', '5', 'EUR', 'q'))
+    assert templates['link_revolut'] in rev
+    assert 'revolut.me' in rev  # no longer hardcoded to Streamlabs
+
+
+def test_bed_roster_keeps_recent_and_prunes_expired(tmp_path: Path) -> None:
+    """A donor stays under the bed for the TTL; then is pruned on write."""
+    roster = BedRoster(tmp_path / 'bed.json')
+    now = 1_000_000.0
+    roster.add('Vasya', now)
+    roster.add('Alex', now - 1)
+    assert roster.active(now) == ['Vasya', 'Alex']  # newest first
+    later = now + BED_TTL_SEC + 10
+    assert roster.active(later) == []  # both expired
+    roster.add('Vasya', later)  # re-donation refreshes and prunes Alex
+    assert roster.active(later) == ['Vasya']
+
+
+def test_render_bed_lists_names_or_says_empty() -> None:
+    """The roster render names each donor, or the empty-bed line."""
+    templates = load_messages()
+    assert render_bed(templates, []) == templates['bed_empty']
+    text = render_bed(templates, ['Vasya', ''])
+    assert 'Vasya' in text
+    assert templates['anonymous'] in text  # '' -> the anonymous label
+    assert templates['bed_head'].format(count=2) in text
+
+
+def test_bed_command_answers_a_trigger_and_stays_silent(
+    tmp_path: Path,
+) -> None:
+    """A bed trigger renders the roster; other chatter gets no reply."""
+    roster = bed_roster(tmp_path)
+    roster.add('Vasya', time.time())
+    cmd = _BedCommand(roster, load_messages())
+    assert 'Vasya' in cmd('/bed')  # ASCII trigger
+    ru_trigger = load_messages()['bed_triggers'].split('|')[0]
+    assert 'Vasya' in cmd('hi ' + ru_trigger)  # a Russian trigger, embedded
+    assert cmd('hello there') == ''  # non-trigger stays silent

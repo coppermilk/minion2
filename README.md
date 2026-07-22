@@ -73,9 +73,9 @@ login`).
 | sort | batch | classifies images IN PLACE in `_inbox/` the moment they land (the active backend -> prim name + EXIF fandom + week tag; CLIP decides instantly when it punts); the working week stays in `_inbox/` |
 | catch | streaming | new Downloads image -> prim-named copy straight into `pictures/<Fandom>/`; the original never leaves `CATCH_DIR` |
 | week-clean | batch | Monday, mechanical: strip the week tag, shelve each classified image into `pictures/<Fandom>/` per its EXIF; unclassified files stay for retry |
-| model-switch | streaming | Telegram command bot: `local` / `gemini` / `status` flips the classify+props backend at runtime (no restart) |
+| model-switch | streaming | moderator/admin panel (Telegram commands): `menu` shows the panel; `local`/`gemini`/`status` flip the classify+props backend at runtime, `clean` runs week-clean now, `bed`/`wishlist` read the donations+wishlist state |
 | props | streaming | scenario (pasted, or the weekly script) -> recommended props, split into what the `Pr*` library has vs. still needs |
-| donations | streaming | polls one or more donation platforms (Streamlabs + Revolut; `DONATION_PLATFORM` is a comma list, each on its own cursor) -> a Russian alert (who gave, how much, their question) posted to `DONATION_CHAT` |
+| donations | streaming | polls one or more donation platforms (Streamlabs + Revolut; `DONATION_PLATFORM` is a comma list, each on its own cursor) -> a Russian alert (who gave, how much, their question, linking that platform's tip page) posted to `DONATION_CHAT`; also a PUBLIC command (`/bed`, "кто под кроватью") anyone can send to see who is "under the bed" -- donors of the last 7 days |
 | wishlist | batch | daily snapshot of a public Amazon wishlist; an item gone since yesterday is treated as a gift -> its photo + a Russian thank-you to `WISHLIST_CHAT` (cron cadence, like week-clean) |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` (`PRINT_SPOOLER`: lp / SumatraPDF) |
 | kindle | outlier | Apps Script, `deploy/apps_script/` |

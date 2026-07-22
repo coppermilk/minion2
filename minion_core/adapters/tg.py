@@ -529,3 +529,18 @@ class TgCommands(_TgSource):
             self.api.call(
                 'sendMessage', {'chat_id': msg['chat']['id'], 'text': reply}
             )
+
+
+class TgPublicCommands(TgCommands):
+    """A command dock open to any chat -- no allow-list (public commands).
+
+    A public trigger anyone may send is answered in whatever chat it
+    arrived from; the injected ``handle`` returns '' for everything else,
+    so ordinary chatter stays silent and only the trigger gets a reply.
+    """
+
+    def _route(self, upd: dict[str, Any], emit: Emit) -> None:
+        """Answer every chat's message; the allow-list is bypassed."""
+        msg = upd.get('message')
+        if msg:
+            self.accept(msg, emit)

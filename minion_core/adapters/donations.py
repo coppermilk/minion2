@@ -10,12 +10,15 @@ lazy import keeps the module hermetic for the offline suite.
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Protocol
 
+from minion_core.adapters.files import atomic_write
 from minion_core.adapters.tg import OffsetStore
 from minion_core.adapters.tg import TgApi
 from minion_core.kernel import Source
@@ -378,6 +381,58 @@ class TgSender:
         self.api.call('sendMessage', params)
 
 
+BED_TTL_SEC = 7 * 24 * 3600
+"""How long a donor stays "under the bed": seven days."""
+
+BED_FILE = 'donations-bed.json'
+"""The roster of who is under the bed (STATE, name -> last-seen epoch)."""
+
+
+@dataclass(frozen=True)
+class BedRoster:
+    """Who is under the bed: a donor's name kept for ``BED_TTL_SEC``.
+
+    A name -> last-donation-epoch map on disk (STATE, REQ-DATA-002). A
+    fresh donation refreshes the seven-day timer; expired names are pruned
+    on every write, so the file never grows without bound.
+    """
+
+    path: Path
+
+    def _load(self) -> dict[str, float]:
+        try:
+            data = json.loads(self.path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        out: dict[str, float] = {}
+        for key, value in data.items():
+            if isinstance(key, str) and isinstance(value, int | float):
+                out[key] = float(value)
+        return out
+
+    def add(self, name: str, now: float) -> None:
+        """Record a donor under the bed, pruning anyone expired."""
+        roster = self._load()
+        roster[name] = now
+        fresh = {n: t for n, t in roster.items() if now - t < BED_TTL_SEC}
+        raw = json.dumps(fresh, ensure_ascii=False).encode('utf-8')
+        atomic_write(self.path, raw)
+
+    def active(self, now: float) -> list[str]:
+        """Names still under the bed, most recent first."""
+        roster = self._load()
+        fresh = [(t, n) for n, t in roster.items() if now - t < BED_TTL_SEC]
+        fresh.sort(reverse=True)
+        return [name for _, name in fresh]
+
+
+def bed_roster(state: Path) -> BedRoster:
+    """The bed roster stored under a STATE directory."""
+    return BedRoster(state / BED_FILE)
+
+
 @dataclass(frozen=True)
 class AlertSpec:
     """Where alerts post, how often, and how each is rendered.
@@ -411,6 +466,7 @@ class DonationAlerts(Source):
         self._feeds = feeds
         self._sender = sender
         self._spec = spec
+        self._roster = bed_roster(spec.state)
 
     def drain_once(self) -> None:
         """One poll of every live feed, each on its own cursor."""
@@ -424,6 +480,7 @@ class DonationAlerts(Source):
         cursor = offsets.read()
         for alert in feed.fetch_after(cursor):
             self._sender.send(self._spec.chat, self._spec.render(alert))
+            self._roster.add(alert.name, time.time())
             cursor = max(cursor, alert.ident)
             offsets.write(cursor)
 
