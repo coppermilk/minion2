@@ -50,6 +50,28 @@ silently. On startup it:
    (default `-1002431466060`, override with `TARGET_CHAT_ID`).
 3. Stays connected so you can extend it with your own handlers.
 
+## Log in once — reboots don't ask again
+
+You log in **once**, not every time the machine restarts. After the first login
+the auth key is saved and every later start is silent — a shutdown/reboot does
+not wipe it.
+
+The only reason you'd be asked to log in again is if the **session gets lost**
+(the machine wipes its disk/working folder on shutdown, or you run in a throwaway
+container). Bulletproof fix — keep the session in an env var instead of on disk:
+
+```bash
+python login.py        # one-time interactive login (phone, code, 2FA password)
+```
+
+It prints a `TELEGRAM_SESSION=…` line. Paste it into `.env`. From then on
+`main.py` logs in silently on every start — across reboots, twice-a-day
+shutdowns, even a different machine — because the auth key now lives in that
+string, not on the machine's disk. **No second login, ever.**
+
+> Keep that string secret — it is full access to the account, like the
+> `.session` file. `.env` is git-ignored.
+
 ## Session storage & your 2FA password
 
 **Where the session is saved.** After the first login Telethon stores an *auth
