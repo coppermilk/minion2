@@ -42,24 +42,27 @@ log = logging.getLogger('post-bot')
 
 DEFAULT_TARGET_CHAT_ID = -1002431466060
 
+# A real premium custom-emoji document id. Every premium emoji in the post and
+# the button icon reuse it for now; give each its own id for different glyphs.
+EMOJI_ID = 5330248916224983855
+
 # The post body. Premium emoji are <tg-emoji emoji-id="..."> tags; the glyph
-# between the tags is the fallback shown without Premium. The two ids we have
-# are reused for now -- swap in your own for the exact colored icons. Edit the
-# English placeholder text to your own (keep it ASCII, or drive it from a data
-# file if you need another script).
+# between the tags is the fallback shown without Premium. Edit the English
+# placeholder text to your own (keep it ASCII, or drive it from a data file if
+# you need another script).
 POST_MARKUP = (
-    '<tg-emoji emoji-id="5334681713316479679">\U0001f4f1</tg-emoji> '
+    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f4f1</tg-emoji> '
     'Premium emoji in the post (proof-of-work).\n\n'
-    '<tg-emoji emoji-id="5319160079465857105">\U00002b50</tg-emoji> '
+    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f4f1</tg-emoji> '
     'First bullet with a premium icon\n'
-    '<tg-emoji emoji-id="5319160079465857105">\U00002b50</tg-emoji> '
+    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f4f1</tg-emoji> '
     'Second bullet with a premium icon'
 )
 
 # The bottom "plate": one full-width inline URL button. BUTTON_ICON_ID is a
 # premium emoji shown on the button (needs the 9.4 TL layer + owner Premium);
 # without it the fallback glyph is prefixed to the label instead.
-BUTTON_ICON_ID = 5319160079465857105
+BUTTON_ICON_ID = EMOJI_ID
 BUTTON_FALLBACK = '\U0001f3ac'  # clapper board
 
 
