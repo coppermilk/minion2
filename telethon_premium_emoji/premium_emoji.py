@@ -133,3 +133,28 @@ def build_social_bar(
         offset += length
 
     return PremiumMessage(text=''.join(text_parts), entities=entities)
+
+
+def build_post_with_bar(
+    markup: str,
+    entries: Sequence[Social],
+    *,
+    separator: str = '\n\n',
+) -> PremiumMessage:
+    """A post plus a social bar as a signature line beneath it.
+
+    ``markup`` is the post body (it may itself contain ``<tg-emoji>`` tags);
+    ``entries`` become the footer row. The bar's entity offsets are shifted
+    past the post text and the separator, so the whole thing sends as ONE
+    message -- the post on top, the row of colored premium-emoji links as its
+    caption underneath.
+    """
+    post = build_premium_message(markup)
+    bar = build_social_bar(entries)
+    shift = _utf16_len(post.text) + _utf16_len(separator)
+    for entity in bar.entities:
+        entity.offset += shift
+    return PremiumMessage(
+        text=post.text + separator + bar.text,
+        entities=[*post.entities, *bar.entities],
+    )

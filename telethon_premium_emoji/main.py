@@ -26,8 +26,7 @@ import os
 from pathlib import Path
 
 from premium_emoji import Social
-from premium_emoji import build_premium_message
-from premium_emoji import build_social_bar
+from premium_emoji import build_post_with_bar
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
@@ -47,11 +46,11 @@ PROOF_OF_WORK_MARKUP = (
     'Telethon userbot online -- premium emoji proof-of-work.'
 )
 
-# Colored "buttons": a row of premium platform logos, each linked to its
-# platform. The COLOR is the premium emoji itself (black TikTok, red
-# YouTube, pink Instagram, red Pinterest). A user account cannot send real
-# inline buttons and buttons never render premium emoji, so this row of
-# linked premium emoji is the userbot equivalent.
+# The caption under the post: a row of premium platform logos, each linked
+# to its platform. The COLOR is the premium emoji itself (black TikTok, red
+# YouTube, pink Instagram, red Pinterest). This is a signature line in the
+# message text -- not bot buttons -- so a user account posts it and the
+# colors are whatever the premium emoji are.
 #
 # emoji_id is the premium custom-emoji document id. For now every entry
 # reuses the one id we have (Instagram's), so the whole bar renders as a
@@ -145,28 +144,16 @@ def _build_client() -> tuple[TelegramClient, str]:
     return TelegramClient(session, int(api_id), api_hash), where
 
 
-async def send_proof_of_work(client: TelegramClient, chat_id: int) -> None:
-    """Send the premium-emoji proof-of-work message to ``chat_id``."""
-    message = build_premium_message(PROOF_OF_WORK_MARKUP)
+async def send_post(client: TelegramClient, chat_id: int) -> None:
+    """Send one post: the proof-of-work text with the bar as its caption."""
+    message = build_post_with_bar(PROOF_OF_WORK_MARKUP, SOCIAL_BAR)
     await client.send_message(
         chat_id, message.text, formatting_entities=message.entities
     )
     log.info(
-        'Sent proof-of-work to %s with %d premium emoji entit%s.',
+        'Posted to %s with a %d-link premium-emoji caption.',
         chat_id,
-        len(message.entities),
-        'y' if len(message.entities) == 1 else 'ies',
-    )
-
-
-async def send_social_bar(client: TelegramClient, chat_id: int) -> None:
-    """Send the colored premium-emoji social bar to ``chat_id``."""
-    message = build_social_bar(SOCIAL_BAR)
-    await client.send_message(
-        chat_id, message.text, formatting_entities=message.entities
-    )
-    log.info(
-        'Sent social bar to %s with %d buttons.', chat_id, len(SOCIAL_BAR)
+        len(SOCIAL_BAR),
     )
 
 
@@ -207,8 +194,7 @@ async def main() -> None:
         )
 
     log.info('Logged in as @%s (id=%s).', me.username or '-', me.id)
-    await send_proof_of_work(client, chat_id)
-    await send_social_bar(client, chat_id)
+    await send_post(client, chat_id)
 
     log.info('Proof-of-work done. Staying connected -- Ctrl+C to stop.')
     await client.run_until_disconnected()
