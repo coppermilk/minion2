@@ -49,13 +49,20 @@ Settings (the registry in `minion_core/adapters/admin.py`):
 | `donation_platform` | `streamlabs` | donations: platforms, comma list (`streamlabs,revolut`) |
 | `donation_chat` | (blank) | donations: alert channel (blank = env `DONATION_CHAT`) |
 | `donation_poll_sec` | `10` | donations: seconds between feed polls (restart to apply) |
-| `bed_broadcast_sec` | `0` | donations: bed auto-post interval in seconds (0 = off) |
+| `bed_broadcast_cron` | (blank) | donations: cron for the bed auto-post (blank = off, e.g. `0 */6 * * *`) |
 | `bed_chat` | (blank) | donations: chat for the bed auto-post (blank = `donation_chat`) |
 | `wishlist_url` | (blank) | wishlist: the public wishlist URL (blank = env `WISHLIST_URL`) |
 | `wishlist_chat` | (blank) | wishlist: gifts/adds channel (blank = env `WISHLIST_CHAT`) |
 | `wishlist_enabled` | `1` | wishlist: run the daily scan (1/0) |
+| `wishlist_cron` | `0 8 * * *` | wishlist: cron for the daily scan |
 | `wishlist_announce` | `0` | wishlist: post the full list every run (1/0) |
-| `week_clean_enabled` | `1` | week-clean: run the Monday shelving (1/0) |
+| `week_clean_enabled` | `1` | week-clean: run the shelving (1/0) |
+| `week_clean_cron` | `0 9 * * 1` | week-clean: cron for the shelving (default Monday 09:00) |
+
+Schedules are 5-field cron expressions (`minute hour day-of-month month
+day-of-week`, Sunday = 0) the moderator edits. Cron polls the batch bots
+every minute and each fires when its expression is due (the streaming
+bed broadcast checks its cron every 30s).
 
 Edit them with the moderator commands `config`, `set <key> <value>`,
 `get <key>`, `reset <key>` (see [moderator](#moderator)).

@@ -14,11 +14,13 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Protocol
 
 from minion_core.adapters.files import atomic_write
+from minion_core.adapters.schedule import cron_due
 from minion_core.adapters.tg import OffsetStore
 from minion_core.adapters.tg import TgApi
 from minion_core.kernel import Source
@@ -506,30 +508,30 @@ class DonationAlerts(Source):
         )
 
 
-BROADCAST_RECHECK_SEC = 60.0
-"""How often an off/idle broadcast re-reads its live config."""
+BROADCAST_CHECK_SEC = 30.0
+"""How often the broadcast re-reads its cron and checks the clock."""
 
 
 @dataclass(frozen=True)
 class BroadcastSpec:
-    """When and where the bed roster is auto-posted, read live each loop.
+    """When and where the bed roster is auto-posted, read live each tick.
 
-    ``chat`` and ``interval_sec`` are callables so the moderator can turn
-    the broadcast on, off or re-target it at runtime with no restart: an
-    interval of 0 (or a blank chat) idles until the config changes.
+    ``chat`` and ``cron`` are callables so the moderator can switch the
+    broadcast on, off or re-target it at runtime with no restart: a blank
+    cron (or chat) idles until the config changes.
     """
 
     chat: Callable[[], str]
-    interval_sec: Callable[[], float]
+    cron: Callable[[], str]
     render: Callable[[list[str]], str]
 
 
 class BedBroadcast(Source):
-    """Post the bed roster to a chat on a timer, apart from the command.
+    """Post the bed roster to a chat on a cron, apart from the command.
 
-    Its own live schedule: each loop it re-reads the interval and chat, so
-    an operator edit takes effect within ``BROADCAST_RECHECK_SEC``. An
-    empty bed is skipped, so an idle stretch never spams the chat.
+    Its own live schedule: each tick it re-reads the cron and evaluates it
+    against the clock, firing at most once a minute. An empty bed (or a
+    blank cron/chat) is skipped, so it never spams.
     """
 
     def __init__(
@@ -539,24 +541,23 @@ class BedBroadcast(Source):
         self._roster = roster
         self._sender = sender
         self._spec = spec
+        self._fired = ''
 
     def produce(self, _emit: Emit) -> None:
-        """Poll the live config; post when on. Tokenless ends at once.
-
-        A live token loops forever (a daemon that re-reads the interval),
-        so the operator can switch the broadcast on or off at runtime; a
-        tokenless bot ends immediately and degrades clean (REQ-DEG-001).
-        """
+        """Check the cron each tick; tokenless ends at once (REQ-DEG-001)."""
         if not self._sender.live:
             return
         while not self.stopped:
-            interval = self._spec.interval_sec()
-            if interval > 0:
-                self.wait(interval)
-                if not self.stopped:
-                    self.post_once()
-            else:
-                self.wait(BROADCAST_RECHECK_SEC)
+            self.tick(datetime.now(tz=UTC))
+            self.wait(BROADCAST_CHECK_SEC)
+
+    def tick(self, now: datetime) -> None:
+        """Post once when the cron is due, at most once per matching minute."""
+        expr = self._spec.cron()
+        stamp = now.strftime('%Y%m%d%H%M')
+        if expr and self._fired != stamp and cron_due(expr, now):
+            self._fired = stamp
+            self.post_once()
 
     def post_once(self) -> None:
         """Post the current roster once; empty bed or no chat is skipped."""

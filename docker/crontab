@@ -1,9 +1,10 @@
-# Batch cadence (OPERATIONS 5). The wall clock lives here, not in
-# the bots (BLUEPRINT 11). sort is NOT here: it runs as a watch
-# daemon (SORT_WATCH=1, the `sort` compose service) so new images
-# sort instantly.
-0 9 * * 1 root . /etc/minions.env && python -m minions.bots.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1
-# wishlist: daily. TG_TOKEN is mapped from TG_TOKEN_WISHLIST; WISHLIST_URL
-# and WISHLIST_CHAT ride in via /etc/minions.env (the batch service greps
+# The scheduler polls the batch bots every minute; each bot decides
+# whether it is due from its own cron setting in admin.json (edited by
+# the moderator: week_clean_cron, wishlist_cron). An off-schedule minute
+# is a cheap no-op. sort is NOT here: it runs as a watch daemon
+# (SORT_WATCH=1, the `sort` compose service) so new images sort instantly.
+* * * * * root . /etc/minions.env && python -m minions.bots.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1
+# wishlist: TG_TOKEN is mapped from TG_TOKEN_WISHLIST; WISHLIST_URL and
+# WISHLIST_CHAT ride in via /etc/minions.env (the batch service greps
 # WISHLIST). Unset URL/chat -> a clean no-op run.
-0 8 * * * root . /etc/minions.env && TG_TOKEN="$TG_TOKEN_WISHLIST" python -m minions.bots.wishlist.main >> /data/bots/_data/logs/wishlist.cron.log 2>&1
+* * * * * root . /etc/minions.env && TG_TOKEN="$TG_TOKEN_WISHLIST" python -m minions.bots.wishlist.main >> /data/bots/_data/logs/wishlist.cron.log 2>&1

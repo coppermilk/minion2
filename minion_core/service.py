@@ -7,7 +7,7 @@ Steps lives at the top level (``minions/service.py``), so the kernel layer
 never imports a bot (import direction; test: adapters never import bots).
 
 This is the transport-neutral seam: any front-end -- the in-process belt, a
-thin Telegram relay, n8n, or an MCP agent over HTTP -- reaches the same Step
+thin Telegram relay or an MCP agent over HTTP -- reaches the same Step
 through ``invoke`` without the IP moving or changing.
 """
 

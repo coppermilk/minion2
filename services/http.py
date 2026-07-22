@@ -2,12 +2,12 @@
 
 One generic app, parameterized by the STEP env var, so N services are N
 containers of one image. FastAPI serves /openapi.json for free -- what
-n8n's HTTP Request node and any web consumer read. /healthz is the
+an HTTP client and any web consumer read. /healthz is the
 container probe.
 
 Ways in (bytes in, bytes out -- no shared object store):
 - ``/run-file`` takes an uploaded file and returns the result file. The
-  frictionless path for n8n's HTTP Request node, a thin relay, or any
+  frictionless path for an HTTP client, a thin relay, or any
   caller with the media as binary. Synchronous: fine up to ~a minute.
 - ``/jobs/file`` is the async path for slow Steps: submit returns 202 + a
   job id at once, the Step runs in the background, and the caller learns it

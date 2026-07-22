@@ -76,13 +76,13 @@ def test_panel_gets_sets_and_resets_settings(tmp_path):
     """set/get/reset persist to admin.json; unknown keys are refused."""
     cfg = make_cfg(tmp_path / 'drive')
     mod = _handler(cfg)
-    assert 'bed_broadcast_sec' in mod('config')  # the panel lists settings
-    assert '3600' in mod('set bed_broadcast_sec 3600')
-    assert admin_config(cfg.state).get('bed_broadcast_sec') == '3600'
-    assert '= 3600' in mod('get bed_broadcast_sec')
+    assert 'donation_poll_sec' in mod('config')  # the panel lists settings
+    assert '30' in mod('set donation_poll_sec 30')
+    assert admin_config(cfg.state).get('donation_poll_sec') == '30'
+    assert '= 30' in mod('get donation_poll_sec')
     assert 'unknown' in mod('set nope 1')  # not in the registry
-    mod('reset bed_broadcast_sec')
-    assert admin_config(cfg.state).get('bed_broadcast_sec') == '0'
+    mod('reset donation_poll_sec')
+    assert admin_config(cfg.state).get('donation_poll_sec') == '10'
 
 
 def test_clean_command_shelves_the_week(tmp_path):

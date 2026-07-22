@@ -1,7 +1,7 @@
 # services -- atomic web services over a Step (HTTP/OpenAPI + MCP)
 
 Each Step becomes **its own tiny container with an API**: bytes in, bytes out
-over the web. A Telegram transport, n8n, a React Flow canvas or an MCP agent
+over the web. A Telegram transport, a React Flow canvas or an MCP agent
 all call the same service the same way. One image, N services: `STEP` selects
 the Step, `SKIN` the facade (`http` | `mcp`).
 
@@ -13,7 +13,7 @@ the Step, `SKIN` the facade (`http` | `mcp`).
         /                                        \
    HTTP/OpenAPI                                 MCP
    services/http.py                        services/mcp_server.py
-   (curl, n8n HTTP node, tg-* relay)       (Claude / agents)
+   (curl, HTTP client, tg-* relay)       (Claude / agents)
 ```
 
 - **Nothing here touches the IP.** The Steps live in `minion_core` /
@@ -39,7 +39,7 @@ STEP=censor-blur SKIN=mcp python -m services.serve
 
 - **`POST /run-file`** -- upload a file, get the result file back
   (`X-Disposition` / `X-Run-Ms` headers; `422` when the Step skips). The
-  frictionless path for n8n's HTTP Request node and the `tg-*` relays:
+  frictionless path for an HTTP client and the `tg-*` relays:
 
   ```
   curl -F file=@photo.jpg http://localhost:8091/run-file --output blurred.jpg
@@ -63,7 +63,7 @@ A pixel-transform bot (`censor-blur`, `censor-black`) is two containers:
   `minion_core/adapters/service_call.py:CallService` and sends the bytes back.
   No torch in the transport; the heavy work is the service.
 
-n8n and React Flow are just more web consumers of the same `/run-file`.
+React Flow is just another web consumer of the same `/run-file`.
 
 ## Tests
 

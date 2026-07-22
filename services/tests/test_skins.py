@@ -47,7 +47,7 @@ def test_run_file_delivers_the_bytes() -> None:
 def test_openapi_exposes_run_file() -> None:
     client = TestClient(create_app('deliver', _deliver))
     spec = client.get('/openapi.json').json()
-    assert '/run-file' in spec['paths']  # n8n / relays consume this
+    assert '/run-file' in spec['paths']  # HTTP clients / relays consume this
 
 
 def test_mcp_registers_the_run_tool() -> None:

@@ -321,11 +321,11 @@ def _blurb(names: list[str]) -> str:
 def test_bed_broadcast_posts_roster_and_skips_an_empty_bed(
     tmp_path: Path,
 ) -> None:
-    """The timed broadcast posts the roster, but never an empty bed."""
+    """The broadcast posts the roster, but never an empty bed."""
     roster = bed_roster(tmp_path)
     sender = _SenderDouble()
     spec = BroadcastSpec(
-        chat=lambda: '@c', interval_sec=lambda: 60.0, render=_blurb
+        chat=lambda: '@c', cron=lambda: '* * * * *', render=_blurb
     )
     broadcast = BedBroadcast(roster, sender, spec)
 
@@ -342,7 +342,30 @@ def test_bed_broadcast_skips_when_no_chat(tmp_path: Path) -> None:
     roster.add('Vasya', time.time())
     sender = _SenderDouble()
     spec = BroadcastSpec(
-        chat=lambda: '', interval_sec=lambda: 60.0, render=_blurb
+        chat=lambda: '', cron=lambda: '* * * * *', render=_blurb
     )
     BedBroadcast(roster, sender, spec).post_once()
     assert sender.sent == []  # no chat -> nothing posted
+
+
+def test_bed_broadcast_tick_fires_on_cron_once_per_minute(
+    tmp_path: Path,
+) -> None:
+    """A due cron posts once, and never twice within the same minute."""
+    from datetime import UTC
+    from datetime import datetime
+
+    roster = bed_roster(tmp_path)
+    roster.add('Vasya', time.time())
+    sender = _SenderDouble()
+    spec = BroadcastSpec(
+        chat=lambda: '@c', cron=lambda: '0 8 * * *', render=_blurb
+    )
+    broadcast = BedBroadcast(roster, sender, spec)
+
+    due = datetime(2026, 7, 20, 8, 0, tzinfo=UTC)
+    broadcast.tick(datetime(2026, 7, 20, 9, 0, tzinfo=UTC))  # not due
+    assert sender.sent == []
+    broadcast.tick(due)  # due -> posts
+    broadcast.tick(due)  # same minute -> no repeat
+    assert sender.sent == [('@c', 'bed:Vasya')]

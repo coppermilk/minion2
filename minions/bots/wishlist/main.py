@@ -23,12 +23,15 @@ import logging
 import os
 import random
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
 from importlib import resources
 from typing import TYPE_CHECKING
 from typing import cast
 
 from minion_core.adapters.admin import admin_config
 from minion_core.adapters.files import BatchLock
+from minion_core.adapters.schedule import cron_due
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.wishlist import SnapshotStore
 from minion_core.adapters.wishlist import TgPhoto
@@ -213,8 +216,12 @@ def main(env: Mapping[str, str] | None = None) -> int:
     mapping = os.environ if env is None else env
     cfg = load(mapping)
     log = bot_logger(BOT, cfg.logs)
-    if admin_config(cfg.state).get('wishlist_enabled') == '0':
+    admin = admin_config(cfg.state)
+    if admin.get('wishlist_enabled') == '0':
         log.info('skipped reason=disabled_by_admin')
+        return 0
+    if not cron_due(admin.get('wishlist_cron'), datetime.now(tz=UTC)):
+        log.info('skipped reason=not_scheduled')
         return 0
     lock = BatchLock(cfg.state / f'{BOT}.lock')
     if not lock.acquire():

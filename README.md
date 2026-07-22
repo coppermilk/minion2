@@ -10,7 +10,6 @@ directory tree rooted at `DRIVE`.
 - Design, requirements, traceability: [BLUEPRINT.md](BLUEPRINT.md)
 - Operations, failure modes, recovery: [OPERATIONS.md](OPERATIONS.md)
 - Atomic web services (HTTP/OpenAPI + MCP over a Step): [services/README.md](services/README.md)
-- Driving the services from n8n: [deploy/n8n/README.md](deploy/n8n/README.md)
 
 ## Layout
 
@@ -20,7 +19,7 @@ minions/       one directory per bot; streaming or batch; relay/ = thin transpor
 services/      atomic web services: HTTP/OpenAPI + MCP over a Step (bytes in/out)
 tests/         requirement-based suite + structural analysis
 docker/        base image; deploy/reactflow/ = canvas placeholder
-deploy/        nas-update.sh, n8n workflow, kindle Apps Script (off-kernel)
+deploy/        nas-update.sh, reactflow canvas, kindle Apps Script (off-kernel)
 ```
 
 ## Quick start
@@ -102,7 +101,7 @@ The processing IP and the Telegram transport are **fully separated**, in one
 
 - **`svc-*`** -- one atomic web service per Step: bytes in, bytes out over
   HTTP (`/run-file`, async `/jobs/file`) and MCP. No Telegram. A folder
-  result (frames) comes back as one zip. n8n, a React Flow canvas or an MCP
+  result (frames) comes back as one zip. A React Flow canvas or an MCP
   agent call these the same way ([services/README.md](services/README.md)).
   Each is its own self-contained minion (`minions/<name>/step.py` owns the
   model, `minions/<name>/service.py` serves it); the container runs

@@ -51,9 +51,9 @@ SETTINGS: tuple[Setting, ...] = (
         'donations: seconds between feed polls (restart to apply)',
     ),
     Setting(
-        'bed_broadcast_sec',
-        '0',
-        'donations: bed auto-post interval in seconds (0 = off)',
+        'bed_broadcast_cron',
+        '',
+        'donations: cron for the bed auto-post (blank = off)',
     ),
     Setting(
         'bed_chat',
@@ -71,15 +71,17 @@ SETTINGS: tuple[Setting, ...] = (
         'wishlist: chat gifts/adds post into (blank = env WISHLIST_CHAT)',
     ),
     Setting('wishlist_enabled', '1', 'wishlist: run the daily scan (1/0)'),
+    Setting('wishlist_cron', '0 8 * * *', 'wishlist: cron for the daily scan'),
     Setting(
         'wishlist_announce',
         '0',
         'wishlist: post the full list every run (1/0)',
     ),
+    Setting('week_clean_enabled', '1', 'week-clean: run the shelving (1/0)'),
     Setting(
-        'week_clean_enabled',
-        '1',
-        'week-clean: run the Monday shelving (1/0)',
+        'week_clean_cron',
+        '0 9 * * 1',
+        'week-clean: cron for the shelving (default Monday 09:00)',
     ),
 )
 

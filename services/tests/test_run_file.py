@@ -1,6 +1,6 @@
 """The web-facing /run-file: bytes in, bytes out.
 
-Services tier. A caller (n8n's HTTP Request node, a thin relay, ...) has the
+Services tier. A caller (an HTTP client, a thin relay, ...) has the
 media as binary and wants binary back; /run-file is a single node, no object
 store. Each service is built with its own ``make`` -- no catalog. We check a
 file round-trips (deliver), a real blur comes back (censor-blur, segmentation

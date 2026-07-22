@@ -6,8 +6,8 @@
 #     back (minions/telegram/main.py -> minions.telegram.relay -> CallService).
 #   * svc-*      -- the processing IP, one atomic web service per Step, bytes
 #     in / bytes out (the same one image). No Telegram here. Callable by
-#     the telegram container, by n8n, by React Flow, by any HTTP/MCP client.
-#   * n8n, reactflow -- more web consumers of the same svc-*.
+#     the telegram container, by React Flow, by any HTTP/MCP client.
+#   * reactflow -- another web consumer of the same svc-*.
 #
 # The remaining bots are not file-processors coupled to Telegram, so they
 # stay as they are: inbox (ingest, no IP), moderator/props (chat commands),
@@ -217,17 +217,6 @@ services:
     mem_limit: 512m
 
   # --- Web consumers of the services (separate containers, one project)
-  n8n:
-    image: docker.n8n.io/n8nio/n8n
-    restart: unless-stopped
-    ports:
-      - "${N8N_PORT:-5678}:5678"
-    environment:
-      N8N_SECURE_COOKIE: 'false'
-      N8N_RUNNERS_ENABLED: 'true'
-    volumes:
-      - n8n-data:/home/node/.n8n
-
   # React Flow canvas placeholder: a static page that will call the svc-*
   # over the web. Swap the mounted dir for the built app when it exists.
   reactflow:
@@ -240,5 +229,4 @@ services:
 
 volumes:
   ollama-models:
-  n8n-data:
   svc-logs:

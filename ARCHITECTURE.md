@@ -2,7 +2,7 @@
 
 One picture of the whole system: the austere kernel (the IP), the atomic web
 services wrapped around each Step, and the consumers that call them over the
-web -- Telegram transports, n8n, a React Flow canvas, MCP agents. Everything
+web -- Telegram transports, a React Flow canvas, MCP agents. Everything
 is one docker-compose project.
 
 ```mermaid
@@ -13,7 +13,6 @@ flowchart TB
 
   subgraph EXT["Consumers (separate containers, over the web)"]
     TG["telegram<br/>ONE container, all media docks<br/>(no processing IP)"]:::ext
-    N8N["n8n<br/>HTTP node / MCP"]:::ext
     RF["React Flow canvas<br/>(placeholder)"]:::ext
     AG["MCP agents<br/>(Claude, ...)"]:::ext
   end
@@ -30,7 +29,6 @@ flowchart TB
   end
 
   TG -- "POST /run-file (bytes)" --> SKINS
-  N8N -- "HTTP / MCP" --> SKINS
   RF -- "HTTP" --> SKINS
   AG -- "MCP" --> SKINS
   SKINS --> CORE
@@ -56,7 +54,7 @@ flowchart TB
   file to its service and sends the bytes back (`minions/telegram/main.py` ->
   `minions.telegram.relay` -> `CallService`). A multi-step bot (restore, frames) is a
   chain in the catalog, so the service does the bot's whole work.
-- **Consumers are equal.** The `telegram` container, n8n, React Flow and MCP
+- **Consumers are equal.** The `telegram` container, React Flow and MCP
   agents all call the same services over the same HTTP/MCP. Rip any consumer
   out; the rest run. The IP never leaves the kernel.
 - **The remaining bots stay.** `inbox` (ingest), `moderator`/`props` (chat

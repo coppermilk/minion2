@@ -150,7 +150,7 @@ def _broadcast(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
     )
     spec = BroadcastSpec(
         chat=lambda: admin.get('bed_chat') or default_chat,
-        interval_sec=lambda: float(admin.get('bed_broadcast_sec')),
+        cron=lambda: admin.get('bed_broadcast_cron'),
         render=functools.partial(render_bed, templates),
     )
     return BedBroadcast(bed_roster(cfg.state), TgSender(api), spec)
