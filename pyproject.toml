@@ -116,6 +116,12 @@ convention = 'pep257'
 'services/http.py' = ['PLC0415', 'C901']
 'services/tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
                       'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
+# telethon_premium_emoji: a standalone user-account app (own Dockerfile and
+# deps), run as `python main.py`, not imported as a kernel package -- so the
+# implicit-namespace rule does not apply (INP001). login.py prints the session
+# string to the console for the operator to copy: that IS its output, so the
+# no-print rule is waived there (T201).
+'telethon_premium_emoji/*' = ['INP001', 'T201']
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]

@@ -259,10 +259,13 @@ def test_replace_pass_rescues_unknown(tmp_path: Path) -> None:
 def test_full_week_end_to_end(tmp_path: Path) -> None:
     """The week's cycle: decide everything now, Monday just executes."""
     import minions.bots.week_clean.main
+    from minion_core.adapters.admin import admin_config
     from minion_core.adapters.files import has_week
     from tests.conftest import make_env
 
     cfg = make_cfg(tmp_path / 'drive')
+    # Fire the Monday run now: default cron is Monday 09:00, make it due.
+    admin_config(cfg.state).set('week_clean_cron', '* * * * *')
     _seed_library(cfg)
     _jpeg(cfg.inbox / 'stray cat.jpg')
     run_passes(cfg, DEPS)

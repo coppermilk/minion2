@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import minions.bots.inbox.main
 import minions.bots.week_clean.main
+from minion_core.adapters.admin import admin_config
 from minion_core.adapters.files import HideSpec
 from minion_core.adapters.files import hide_boxes
 from minion_core.kernel import Disposition
@@ -154,6 +155,8 @@ def test_week_clean_untags_and_shelves(tmp_path: Path) -> None:
 
     drive = tmp_path / 'drive'
     cfg = make_cfg(drive)
+    # Fire now: the default cron is Monday 09:00, so make it always due.
+    admin_config(cfg.state).set('week_clean_cron', '* * * * *')
     week = _jpeg(cfg.inbox / 'FgSnapeOfficeAngry.jpg')
     tag_fandom(week, 'HarryPotter')
     tag_week(week, cfg.week_tag)
@@ -171,6 +174,7 @@ def test_week_clean_untagged_prim_goes_to_unknown(tmp_path: Path) -> None:
     """An image that lost its EXIF fandom is shelved into Unknown."""
     drive = tmp_path / 'drive'
     cfg = make_cfg(drive)
+    admin_config(cfg.state).set('week_clean_cron', '* * * * *')  # due now
     _jpeg(cfg.inbox / 'PrWand.jpg')  # prim-named, no fandom tag
     assert minions.bots.week_clean.main.main(make_env(drive)) == 0
     assert (cfg.pictures / 'Unknown' / 'PrWand.jpg').exists()
@@ -182,6 +186,7 @@ def test_week_clean_archives_scripts_not_deletes(tmp_path: Path) -> None:
 
     drive = tmp_path / 'drive'
     cfg = make_cfg(drive)
+    admin_config(cfg.state).set('week_clean_cron', '* * * * *')  # due now
     gdoc = cfg.inbox / 'week.gdoc'
     gdoc.write_text(json.dumps({'doc_id': 'abc'}), encoding='ascii')
     assert minions.bots.week_clean.main.main(make_env(drive)) == 0
@@ -195,6 +200,8 @@ def test_week_clean_respects_batch_lock(tmp_path: Path) -> None:
 
     drive = tmp_path / 'drive'
     cfg = make_cfg(drive)
+    # Due now, so it is the held lock -- not the schedule -- that skips.
+    admin_config(cfg.state).set('week_clean_cron', '* * * * *')
     (cfg.inbox / 'stay.jpg').write_bytes(b'x')
     lock = BatchLock(cfg.state / 'week-clean.lock')
     assert lock.acquire()

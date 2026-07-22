@@ -1,6 +1,6 @@
 # Telethon Premium-Emoji Userbot
 
-A minimal **Telethon** application (a *userbot* — a real user account over
+A minimal **Telethon** application (a *userbot* -- a real user account over
 MTProto, **not** a Bot API bot) that, on startup, posts a proof-of-work message
 containing a **premium / custom emoji** to a Telegram chat.
 
@@ -12,12 +12,12 @@ user session rather than a bot token.
 
 ## How premium emoji are sent
 
-A premium emoji is a normal fallback glyph in the message text (e.g. 📱) plus a
+A premium emoji is a normal fallback glyph in the message text (e.g. a phone glyph) plus a
 `MessageEntityCustomEmoji` entity that points that glyph's span at the emoji's
 `document_id`. `premium_emoji.py` parses the Bot-API-style markup
 
 ```
-<tg-emoji emoji-id="5334681713316479679">📱</tg-emoji>
+<tg-emoji emoji-id="5334681713316479679">X</tg-emoji>
 ```
 
 into `(text, entities)`, taking care to measure entity offsets/lengths in
@@ -55,7 +55,7 @@ silently. On startup it:
 This runs as a **separate container** in the project's root `docker-compose.yml`
 (service `premium-emoji`), built from this folder. It has its own tiny image
 (telethon, no torch) and does not ride the shared minion image, but it mounts
-the same `${DRIVE_NAS}:/data` volume — so its session file lives at
+the same `${DRIVE_NAS}:/data` volume -- so its session file lives at
 `/data/bots/premium-emoji/session.session` and survives restarts and shutdowns.
 
 From the **repository root**:
@@ -63,7 +63,7 @@ From the **repository root**:
 ```bash
 cp .env.example .env        # fill in TELEGRAM_API_ID / TELEGRAM_API_HASH (+ DRIVE_NAS)
 
-# 1) First login — interactive, once. Asks for phone, code, and 2FA password.
+# 1) First login -- interactive, once. Asks for phone, code, and 2FA password.
 docker compose run --rm premium-emoji
 
 # 2) Then run it in the background. Silent login from the saved session.
@@ -78,16 +78,16 @@ docker compose stop premium-emoji
 ```
 
 The session is a file on the shared `/data` mount, independent of the
-container's lifecycle — only deleting that file forces a new login. Set
+container's lifecycle -- only deleting that file forces a new login. Set
 `TELEGRAM_PASSWORD` in `.env` for a fully non-interactive first login.
 
-## Log in once — reboots don't ask again
+## Log in once -- reboots don't ask again
 
 You log in **once**, not every time the machine restarts. After the first login
-the auth key is saved and every later start is silent — a shutdown/reboot does
+the auth key is saved and every later start is silent -- a shutdown/reboot does
 not wipe it.
 
-The session is saved as a **file** — `telethon_premium_emoji.session`, right next
+The session is saved as a **file** -- `telethon_premium_emoji.session`, right next
 to `main.py`. Just run `python main.py`, log in once, and that file persists on
 disk across shutdowns. Nothing else to do.
 
@@ -95,20 +95,20 @@ disk across shutdowns. Nothing else to do.
 at a path that survives (a mounted/persistent volume) so it isn't lost:
 
 ```bash
-# in .env — ".session" is appended for you
+# in .env -- ".session" is appended for you
 TELEGRAM_SESSION_FILE=/data/telethon_premium_emoji
 ```
 
-The app logs the exact file on startup (`Session store: …`).
+The app logs the exact file on startup (`Session store: ...`).
 
 > The `.session` file is full access to the account. It is git-ignored; don't
-> share it, and revoke it from Telegram → Settings → Devices if it leaks.
+> share it, and revoke it from Telegram -> Settings -> Devices if it leaks.
 
 <details>
 <summary>Alternative: a portable session string instead of a file</summary>
 
 If you'd rather not keep a file at all (e.g. a throwaway container with no
-persistent disk), run `python login.py` once. It prints a `TELEGRAM_SESSION=…`
+persistent disk), run `python login.py` once. It prints a `TELEGRAM_SESSION=...`
 line to paste into `.env`; `main.py` then logs in from that string with no file.
 
 </details>
@@ -121,29 +121,29 @@ phone/code again. Two options:
 
 | Mode | How to enable | Where it lives |
 |------|---------------|----------------|
-| **File session** (default) | leave `TELEGRAM_SESSION` unset | `telethon_premium_emoji.session` (SQLite) **next to `main.py`** — the path is anchored to the script, not your current directory |
-| **String session** | set `TELEGRAM_SESSION=<string>` | only in that env var / memory — nothing written to disk |
+| **File session** (default) | leave `TELEGRAM_SESSION` unset | `telethon_premium_emoji.session` (SQLite) **next to `main.py`** -- the path is anchored to the script, not your current directory |
+| **String session** | set `TELEGRAM_SESSION=<string>` | only in that env var / memory -- nothing written to disk |
 
-The app logs the exact session location on startup (`Session store: …`).
+The app logs the exact session location on startup (`Session store: ...`).
 
-> ⚠️ **The session file is as sensitive as your password** — anyone who copies
+> Note: **The session file is as sensitive as your password** -- anyone who copies
 > it has full access to your account. It is covered by `.gitignore` so it is
-> never committed. Don't share it, and revoke it from **Telegram → Settings →
+> never committed. Don't share it, and revoke it from **Telegram -> Settings ->
 > Devices** if it leaks.
 
 **Your 2FA / cloud password.** If your account has two-step verification, the
 password is needed **once, at login**, to authorise the session. Telethon uses
-it only to authenticate — **it is never written into the session file.** After
+it only to authenticate -- **it is never written into the session file.** After
 login the saved auth key is what keeps you logged in, not the password.
 
-- Leave `TELEGRAM_PASSWORD` unset → Telethon prompts for it securely (`getpass`,
+- Leave `TELEGRAM_PASSWORD` unset -> Telethon prompts for it securely (`getpass`,
   no echo) at first login, only if 2FA is actually enabled.
-- Set `TELEGRAM_PASSWORD` in `.env` → used automatically for a non-interactive
+- Set `TELEGRAM_PASSWORD` in `.env` -> used automatically for a non-interactive
   run (server/cron). `.env` is git-ignored.
 
 To move to another machine without re-entering anything, generate a
 `StringSession` once (command in `.env.example`) and pass it via
-`TELEGRAM_SESSION` — then no `.session` file and no password prompt are needed.
+`TELEGRAM_SESSION` -- then no `.session` file and no password prompt are needed.
 
 ## Extending
 
