@@ -50,31 +50,36 @@ silently. On startup it:
    (default `-1002431466060`, override with `TARGET_CHAT_ID`).
 3. Stays connected so you can extend it with your own handlers.
 
-## Run in Docker
+## Run in Docker (as part of this project)
 
-The session file is kept on a **named volume**, so it survives container
-restarts and machine shutdowns — log in once, never again.
+This runs as a **separate container** in the project's root `docker-compose.yml`
+(service `premium-emoji`), built from this folder. It has its own tiny image
+(telethon, no torch) and does not ride the shared minion image, but it mounts
+the same `${DRIVE_NAS}:/data` volume — so its session file lives at
+`/data/bots/premium-emoji/session.session` and survives restarts and shutdowns.
+
+From the **repository root**:
 
 ```bash
-cp .env.example .env        # fill in TELEGRAM_API_ID / TELEGRAM_API_HASH
+cp .env.example .env        # fill in TELEGRAM_API_ID / TELEGRAM_API_HASH (+ DRIVE_NAS)
 
 # 1) First login — interactive, once. Asks for phone, code, and 2FA password.
 docker compose run --rm premium-emoji
 
 # 2) Then run it in the background. Silent login from the saved session.
-docker compose up -d --build
+docker compose up -d --build premium-emoji
 ```
 
 Logs / stop:
 
 ```bash
-docker compose logs -f
-docker compose down          # keeps the session volume
+docker compose logs -f premium-emoji
+docker compose stop premium-emoji
 ```
 
-The session lives in the `session` volume (`TELEGRAM_SESSION_FILE=/data/…`
-inside the container), independent of the container's lifecycle. Only wiping
-that volume (`docker compose down -v`) forces a new login.
+The session is a file on the shared `/data` mount, independent of the
+container's lifecycle — only deleting that file forces a new login. Set
+`TELEGRAM_PASSWORD` in `.env` for a fully non-interactive first login.
 
 ## Log in once — reboots don't ask again
 
