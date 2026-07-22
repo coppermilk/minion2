@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING
 
 from minion_core.adapters.donations import BED_TTL_SEC
 from minion_core.adapters.donations import AlertSpec
+from minion_core.adapters.donations import BedBroadcast
 from minion_core.adapters.donations import BedRoster
+from minion_core.adapters.donations import BroadcastSpec
 from minion_core.adapters.donations import DeadFeed
 from minion_core.adapters.donations import Donation
 from minion_core.adapters.donations import DonationAlerts
@@ -310,3 +312,39 @@ def test_bed_command_answers_a_trigger_and_stays_silent(
     ru_trigger = load_messages()['bed_triggers'].split('|')[0]
     assert 'Vasya' in cmd('hi ' + ru_trigger)  # a Russian trigger, embedded
     assert cmd('hello there') == ''  # non-trigger stays silent
+
+
+def test_bed_broadcast_posts_roster_and_skips_an_empty_bed(
+    tmp_path: Path,
+) -> None:
+    """The timed broadcast posts the roster, but never an empty bed."""
+    roster = bed_roster(tmp_path)
+    sender = _SenderDouble()
+    spec = BroadcastSpec(
+        chat='@c',
+        interval_sec=60,
+        render=lambda names: 'bed:' + ','.join(names),
+    )
+    broadcast = BedBroadcast(roster, sender, spec)
+
+    broadcast.post_once()  # nobody under the bed -> nothing sent
+    assert sender.sent == []
+    roster.add('Vasya', time.time())
+    broadcast.post_once()
+    assert sender.sent == [('@c', 'bed:Vasya')]
+
+
+def test_bed_broadcast_off_without_interval_or_chat(tmp_path: Path) -> None:
+    """The broadcast is opt-in: no interval or no chat means it idles."""
+    roster = bed_roster(tmp_path)
+    sender = _SenderDouble()
+
+    def blurb(names: list[str]) -> str:
+        return ','.join(names)
+
+    off = BedBroadcast(roster, sender, BroadcastSpec('@c', 0, blurb))
+    assert not off._ready()  # interval 0 -> off
+    nochat = BedBroadcast(roster, sender, BroadcastSpec('', 60, blurb))
+    assert not nochat._ready()  # no chat -> off
+    live = BedBroadcast(roster, sender, BroadcastSpec('@c', 60, blurb))
+    assert live._ready()

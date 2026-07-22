@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 from typing import cast
 
 from minion_core.adapters.donations import AlertSpec
+from minion_core.adapters.donations import BedBroadcast
+from minion_core.adapters.donations import BroadcastSpec
 from minion_core.adapters.donations import DonationAlerts
 from minion_core.adapters.donations import TgSender
 from minion_core.adapters.donations import bed_roster
@@ -50,6 +52,7 @@ BOT = 'donations'
 
 DEFAULT_PLATFORM = 'streamlabs'
 DEFAULT_POLL_SEC = '10'
+DEFAULT_BED_BROADCAST_SEC = '0'
 
 
 def load_messages() -> dict[str, str]:
@@ -136,10 +139,27 @@ def _commands(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
     return TgPublicCommands(api, spec, handle)
 
 
+def _broadcast(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
+    """The timed bed-roster broadcast; its own interval and chat (opt-in)."""
+    templates = load_messages()
+    spec = BroadcastSpec(
+        chat=env.get('BED_CHAT', '') or env.get('DONATION_CHAT', ''),
+        interval_sec=float(
+            env.get('BED_BROADCAST_SEC', DEFAULT_BED_BROADCAST_SEC)
+        ),
+        render=functools.partial(render_bed, templates),
+    )
+    return BedBroadcast(bed_roster(cfg.state), TgSender(api), spec)
+
+
 def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
-    """Two docks on one belt: the alert poller and the public commands."""
+    """Three docks on one belt: alerts, public commands, timed broadcast."""
     api = TgApi(env.get('TG_TOKEN', ''))
-    return _alerts(cfg, env, api) | _commands(cfg, env, api)
+    return (
+        _alerts(cfg, env, api)
+        | _commands(cfg, env, api)
+        | _broadcast(cfg, env, api)
+    )
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

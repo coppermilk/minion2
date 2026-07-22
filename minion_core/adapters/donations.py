@@ -504,3 +504,53 @@ class DonationAlerts(Source):
             and bool(self._spec.chat)
             and any(feed.live for feed in self._feeds)
         )
+
+
+@dataclass(frozen=True)
+class BroadcastSpec:
+    """When and where the bed roster is auto-posted, and how it renders."""
+
+    chat: str
+    interval_sec: float
+    render: Callable[[list[str]], str]
+
+
+class BedBroadcast(Source):
+    """Post the bed roster to a chat on a timer, apart from the command.
+
+    A separate schedule (its own interval and chat, REQ-DEG-001 when
+    unset): every ``interval_sec`` it posts who is under the bed. An empty
+    bed is skipped, so an idle stretch never spams the chat.
+    """
+
+    def __init__(
+        self, roster: BedRoster, sender: Sender, spec: BroadcastSpec
+    ) -> None:
+        super().__init__()
+        self._roster = roster
+        self._sender = sender
+        self._spec = spec
+
+    def produce(self, _emit: Emit) -> None:
+        """Wait, then post the roster, forever; unconfigured, end at once."""
+        if not self._ready():
+            _LOG.info('bed broadcast idle: sender, chat or interval not set')
+            return
+        while not self.stopped:
+            self.wait(self._spec.interval_sec)
+            if not self.stopped:
+                self.post_once()
+
+    def post_once(self) -> None:
+        """Post the current roster once; a bed with nobody in it is skipped."""
+        names = self._roster.active(time.time())
+        if names:
+            self._sender.send(self._spec.chat, self._spec.render(names))
+
+    def _ready(self) -> bool:
+        """Whether the sender, chat and a positive interval are all set."""
+        return (
+            self._sender.live
+            and bool(self._spec.chat)
+            and self._spec.interval_sec > 0
+        )
