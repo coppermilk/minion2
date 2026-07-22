@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import time
 
+from minion_core.adapters.admin import admin_config
 from minion_core.adapters.backend import BackendToggle
 from minion_core.adapters.donations import bed_roster
+from minion_core.adapters.tg import TgApi
 from minion_core.adapters.wishlist import SnapshotStore
 from minion_core.adapters.wishlist import WishItem
 from minion_core.kernel import bot_logger
@@ -17,7 +19,7 @@ from tests.conftest import make_cfg
 
 def _handler(cfg):
     log = bot_logger('model-switch', cfg.logs)
-    return _Moderator(cfg, BackendToggle(cfg), log)
+    return _Moderator(cfg, BackendToggle(cfg), TgApi(''), log)
 
 
 def _classified_jpeg(cfg, name):
@@ -68,6 +70,19 @@ def test_panel_shows_menu_and_reads_bot_status(tmp_path):
     assert '0 items' in mod('wishlist')  # nothing tracked yet
     SnapshotStore(cfg.state / 'wishlist.json').save([WishItem('I1', 'X', '')])
     assert '1 items' in mod('wishlist')
+
+
+def test_panel_gets_sets_and_resets_settings(tmp_path):
+    """set/get/reset persist to admin.json; unknown keys are refused."""
+    cfg = make_cfg(tmp_path / 'drive')
+    mod = _handler(cfg)
+    assert 'bed_broadcast_sec' in mod('config')  # the panel lists settings
+    assert '3600' in mod('set bed_broadcast_sec 3600')
+    assert admin_config(cfg.state).get('bed_broadcast_sec') == '3600'
+    assert '= 3600' in mod('get bed_broadcast_sec')
+    assert 'unknown' in mod('set nope 1')  # not in the registry
+    mod('reset bed_broadcast_sec')
+    assert admin_config(cfg.state).get('bed_broadcast_sec') == '0'
 
 
 def test_clean_command_shelves_the_week(tmp_path):

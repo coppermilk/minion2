@@ -266,6 +266,33 @@ def chats_from(env: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(',') if part.strip())
 
 
+def chat_title(api: TgApi, chat: str) -> str:
+    """A human name for a chat id via getChat, or '' when unavailable.
+
+    A group/channel resolves to its title, a user to a username or first
+    name. A refusal (unknown chat, no access, tokenless) is '', never a
+    crash -- the caller shows the raw id instead.
+    """
+    if not api.live or not chat:
+        return ''
+    try:
+        info = api.call('getChat', {'chat_id': chat})
+    except TgError:
+        return ''
+    return _chat_name(info)
+
+
+def _chat_name(info: object) -> str:
+    """The first present name field of a getChat result, or ''."""
+    if not isinstance(info, dict):
+        return ''
+    for key in ('title', 'username', 'first_name'):
+        value = info.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ''
+
+
 DOCS_ONLY = 'Send files as a document (not a compressed photo/video).'
 """The documents-only reminder appended to every bot's help line."""
 

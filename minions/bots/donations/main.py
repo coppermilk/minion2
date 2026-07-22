@@ -24,6 +24,7 @@ from importlib import resources
 from typing import TYPE_CHECKING
 from typing import cast
 
+from minion_core.adapters.admin import admin_config
 from minion_core.adapters.donations import AlertSpec
 from minion_core.adapters.donations import BedBroadcast
 from minion_core.adapters.donations import BroadcastSpec
@@ -51,8 +52,6 @@ if TYPE_CHECKING:
 BOT = 'donations'
 
 DEFAULT_PLATFORM = 'streamlabs'
-DEFAULT_POLL_SEC = '10'
-DEFAULT_BED_BROADCAST_SEC = '0'
 
 
 def load_messages() -> dict[str, str]:
@@ -112,17 +111,20 @@ class _BedCommand:
 
 
 def _alerts(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
-    """The poll-and-post alert dock over every configured feed."""
+    """The poll-and-post alert dock; chat and platforms are admin knobs."""
     templates = load_messages()
-    feeds = feeds_for(env.get('DONATION_PLATFORM', DEFAULT_PLATFORM), env)
+    admin = admin_config(cfg.state)
+    platform = admin.effective(
+        'donation_platform', env.get('DONATION_PLATFORM', DEFAULT_PLATFORM)
+    )
     sender = TgSender(api, parse_mode='HTML', preview=False)
     spec = AlertSpec(
-        chat=env.get('DONATION_CHAT', ''),
+        chat=admin.effective('donation_chat', env.get('DONATION_CHAT', '')),
         state=cfg.state,
         render=functools.partial(render, templates),
-        poll_sec=float(env.get('DONATION_POLL_SEC', DEFAULT_POLL_SEC)),
+        poll_sec=float(admin.get('donation_poll_sec')),
     )
-    return DonationAlerts(feeds, sender, spec)
+    return DonationAlerts(feeds_for(platform, env), sender, spec)
 
 
 def _commands(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
@@ -140,13 +142,15 @@ def _commands(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
 
 
 def _broadcast(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
-    """The timed bed-roster broadcast; its own interval and chat (opt-in)."""
+    """The timed bed-roster broadcast; interval and chat read live (admin)."""
     templates = load_messages()
+    admin = admin_config(cfg.state)
+    default_chat = admin.effective(
+        'donation_chat', env.get('DONATION_CHAT', '')
+    )
     spec = BroadcastSpec(
-        chat=env.get('BED_CHAT', '') or env.get('DONATION_CHAT', ''),
-        interval_sec=float(
-            env.get('BED_BROADCAST_SEC', DEFAULT_BED_BROADCAST_SEC)
-        ),
+        chat=lambda: admin.get('bed_chat') or default_chat,
+        interval_sec=lambda: float(admin.get('bed_broadcast_sec')),
         render=functools.partial(render_bed, templates),
     )
     return BedBroadcast(bed_roster(cfg.state), TgSender(api), spec)

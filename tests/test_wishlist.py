@@ -311,3 +311,12 @@ def test_idle_without_url_or_chat(tmp_path: Path) -> None:
     assert sink.posts == []
     assert sink.says == []
     assert main(make_env(tmp_path / 'drive')) == 0
+
+
+def test_admin_can_disable_the_daily_scan(tmp_path: Path) -> None:
+    """wishlist_enabled=0 in admin.json makes main a clean no-op run."""
+    from minion_core.adapters.admin import admin_config
+
+    cfg = make_cfg(tmp_path / 'drive')
+    admin_config(cfg.state).set('wishlist_enabled', '0')
+    assert main(make_env(tmp_path / 'drive')) == 0  # skipped by admin

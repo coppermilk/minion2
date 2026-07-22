@@ -314,6 +314,10 @@ def test_bed_command_answers_a_trigger_and_stays_silent(
     assert cmd('hello there') == ''  # non-trigger stays silent
 
 
+def _blurb(names: list[str]) -> str:
+    return 'bed:' + ','.join(names)
+
+
 def test_bed_broadcast_posts_roster_and_skips_an_empty_bed(
     tmp_path: Path,
 ) -> None:
@@ -321,9 +325,7 @@ def test_bed_broadcast_posts_roster_and_skips_an_empty_bed(
     roster = bed_roster(tmp_path)
     sender = _SenderDouble()
     spec = BroadcastSpec(
-        chat='@c',
-        interval_sec=60,
-        render=lambda names: 'bed:' + ','.join(names),
+        chat=lambda: '@c', interval_sec=lambda: 60.0, render=_blurb
     )
     broadcast = BedBroadcast(roster, sender, spec)
 
@@ -334,17 +336,13 @@ def test_bed_broadcast_posts_roster_and_skips_an_empty_bed(
     assert sender.sent == [('@c', 'bed:Vasya')]
 
 
-def test_bed_broadcast_off_without_interval_or_chat(tmp_path: Path) -> None:
-    """The broadcast is opt-in: no interval or no chat means it idles."""
+def test_bed_broadcast_skips_when_no_chat(tmp_path: Path) -> None:
+    """A blank chat (broadcast off/unconfigured) posts nothing."""
     roster = bed_roster(tmp_path)
+    roster.add('Vasya', time.time())
     sender = _SenderDouble()
-
-    def blurb(names: list[str]) -> str:
-        return ','.join(names)
-
-    off = BedBroadcast(roster, sender, BroadcastSpec('@c', 0, blurb))
-    assert not off._ready()  # interval 0 -> off
-    nochat = BedBroadcast(roster, sender, BroadcastSpec('', 60, blurb))
-    assert not nochat._ready()  # no chat -> off
-    live = BedBroadcast(roster, sender, BroadcastSpec('@c', 60, blurb))
-    assert live._ready()
+    spec = BroadcastSpec(
+        chat=lambda: '', interval_sec=lambda: 60.0, render=_blurb
+    )
+    BedBroadcast(roster, sender, spec).post_once()
+    assert sender.sent == []  # no chat -> nothing posted

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from minion_core.adapters.admin import admin_config
 from minion_core.adapters.library import clean_week
 from minion_core.kernel import bot_logger
 from minion_core.settings import load
@@ -30,10 +31,14 @@ BOT = 'week-clean'
 
 
 def main(env: Mapping[str, str] | None = None) -> int:
-    """One scan-act-exit run; overlap-safe (REQ-RES-003)."""
+    """One scan-act-exit run; overlap-safe, admin-disablable (REQ-RES-003)."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
-    clean_week(cfg, bot_logger(BOT, cfg.logs))
+    log = bot_logger(BOT, cfg.logs)
+    if admin_config(cfg.state).get('week_clean_enabled') == '0':
+        log.info('skipped reason=disabled_by_admin')
+        return 0
+    clean_week(cfg, log)
     return 0
 
 

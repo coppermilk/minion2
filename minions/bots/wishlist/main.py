@@ -27,6 +27,7 @@ from importlib import resources
 from typing import TYPE_CHECKING
 from typing import cast
 
+from minion_core.adapters.admin import admin_config
 from minion_core.adapters.files import BatchLock
 from minion_core.adapters.tg import TgApi
 from minion_core.adapters.wishlist import SnapshotStore
@@ -195,28 +196,32 @@ def run_once(cfg: Settings, spec: Spec, deps: Deps) -> None:
     _LOG.info('scanned prev=%d cur=%d', len(previous), len(current))
 
 
-def build(env: Mapping[str, str]) -> tuple[Spec, Deps]:
-    """Wire the real fetch and Telegram sender from the environment."""
+def build(cfg: Settings, env: Mapping[str, str]) -> tuple[Spec, Deps]:
+    """Wire fetch and sender; url, chat and toggles are runtime admin knobs."""
+    admin = admin_config(cfg.state)
     spec = Spec(
-        url=env.get('WISHLIST_URL', ''),
-        chat=env.get('WISHLIST_CHAT', ''),
-        announce=env.get('WISHLIST_ANNOUNCE', '') == '1',
+        url=admin.effective('wishlist_url', env.get('WISHLIST_URL', '')),
+        chat=admin.effective('wishlist_chat', env.get('WISHLIST_CHAT', '')),
+        announce=admin.get('wishlist_announce') == '1',
     )
     photo = TgPhoto(TgApi(env.get('TG_TOKEN', '')), spec.chat)
     return spec, Deps(fetch=fetch_items, post=photo.post, say=photo.text)
 
 
 def main(env: Mapping[str, str] | None = None) -> int:
-    """One overlap-safe run; unconfigured, a clean no-op (exit 0)."""
+    """One overlap-safe run; unconfigured or admin-disabled, a clean no-op."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
     log = bot_logger(BOT, cfg.logs)
+    if admin_config(cfg.state).get('wishlist_enabled') == '0':
+        log.info('skipped reason=disabled_by_admin')
+        return 0
     lock = BatchLock(cfg.state / f'{BOT}.lock')
     if not lock.acquire():
         log.warning('skipped reason=batch_locked')
         return 0
     try:
-        spec, deps = build(mapping)
+        spec, deps = build(cfg, mapping)
         run_once(cfg, spec, deps)
     finally:
         lock.release()
