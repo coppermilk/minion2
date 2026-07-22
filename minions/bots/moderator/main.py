@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from minion_core.kernel import Stage
     from minion_core.settings import Settings
 
-BOT = 'model-switch'
+BOT = 'moderator'
 
 _STATUS = ('status', 'which', '')
 _CLEAN = ('clean', 'clean now', 'cleanup')

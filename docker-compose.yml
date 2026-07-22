@@ -10,7 +10,7 @@
 #   * n8n, reactflow -- more web consumers of the same svc-*.
 #
 # The remaining bots are not file-processors coupled to Telegram, so they
-# stay as they are: inbox (ingest, no IP), model-switch/props (chat commands),
+# stay as they are: inbox (ingest, no IP), moderator/props (chat commands),
 # sort/batch (folder watch + cron), ollama (the local model).
 #
 # DRIVE_NAS points at the media tree on the host; .env holds secrets. print
@@ -177,12 +177,12 @@ services:
     depends_on:
       - ollama
 
-  model-switch:
+  moderator:
     <<: *minion
     environment:
       <<: *minion-env
-      TG_TOKEN: ${TG_TOKEN_MODEL_SWITCH:-}
-    command: python -m minions.bots.model_switch.main
+      TG_TOKEN: ${TG_TOKEN_MODERATOR:-}
+    command: python -m minions.bots.moderator.main
     mem_limit: 256m
 
   props:

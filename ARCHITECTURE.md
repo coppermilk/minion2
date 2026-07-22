@@ -59,6 +59,6 @@ flowchart TB
 - **Consumers are equal.** The `telegram` container, n8n, React Flow and MCP
   agents all call the same services over the same HTTP/MCP. Rip any consumer
   out; the rest run. The IP never leaves the kernel.
-- **The remaining bots stay.** `inbox` (ingest), `model-switch`/`props` (chat
+- **The remaining bots stay.** `inbox` (ingest), `moderator`/`props` (chat
   commands) and `sort`/`batch` (folder watch + cron) are not file-processors
   coupled to Telegram, so they keep running as single in-process belts.

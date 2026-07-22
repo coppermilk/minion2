@@ -11,14 +11,14 @@ from minion_core.adapters.tg import TgApi
 from minion_core.adapters.wishlist import SnapshotStore
 from minion_core.adapters.wishlist import WishItem
 from minion_core.kernel import bot_logger
-from minions.bots.model_switch.main import _MENU
-from minions.bots.model_switch.main import _Moderator
-from minions.bots.model_switch.main import reply_for
+from minions.bots.moderator.main import _MENU
+from minions.bots.moderator.main import _Moderator
+from minions.bots.moderator.main import reply_for
 from tests.conftest import make_cfg
 
 
 def _handler(cfg):
-    log = bot_logger('model-switch', cfg.logs)
+    log = bot_logger('moderator', cfg.logs)
     return _Moderator(cfg, BackendToggle(cfg), TgApi(''), log)
 
 

@@ -40,7 +40,7 @@ and reinstalls `minion_core` (editable) whenever `pyproject.toml`
 changed, so a `git pull` never leaves the bots on a stale env; an
 unchanged env is a fast no-op. Each bot runs in exactly one place. The same
 `.env` file works on both machines verbatim (paths are validated
-against both OS flavors). `model-switch` and `props` need their own
+against both OS flavors). `moderator` and `props` need their own
 `TG_TOKEN_*` set, or those two containers idle-restart harmlessly.
 
 The image is built on GitHub and published to GHCR on every push to
@@ -74,7 +74,7 @@ login`).
 | sort | batch | classifies images IN PLACE in `_inbox/` the moment they land (the active backend -> prim name + EXIF fandom + week tag; CLIP decides instantly when it punts); the working week stays in `_inbox/` |
 | catch | streaming | new Downloads image -> prim-named copy straight into `pictures/<Fandom>/`; the original never leaves `CATCH_DIR` |
 | week-clean | batch | Monday, mechanical: strip the week tag, shelve each classified image into `pictures/<Fandom>/` per its EXIF; unclassified files stay for retry |
-| model-switch | streaming | moderator/admin panel (Telegram commands): `menu` shows the panel; `local`/`gemini`/`status` flip the classify+props backend at runtime, `clean` runs week-clean now, `bed`/`wishlist` read the donations+wishlist state |
+| moderator | streaming | admin panel (Telegram commands): `menu` shows the panel; `config`/`set`/`get`/`reset` edit runtime settings (`admin.json`); `local`/`gemini`/`status` flip the classify+props backend, `clean` runs week-clean now, `bed`/`wishlist` read state, `whois <id>` names a chat |
 | props | streaming | scenario (pasted, or the weekly script) -> recommended props, split into what the `Pr*` library has vs. still needs |
 | donations | streaming | polls one or more donation platforms (Streamlabs + Revolut; `DONATION_PLATFORM` is a comma list, each on its own cursor) -> a Russian alert (who gave, how much, their question, linking that platform's tip page) posted to `DONATION_CHAT`; also a PUBLIC `/bed` command anyone can send to see who is "under the bed" (donors of the last 7 days), optionally auto-posted on a timer (`BED_BROADCAST_SEC`, `BED_CHAT`) |
 | wishlist | batch | daily snapshot of a public Amazon wishlist; an item gone since yesterday is treated as a gift -> its photo + a Russian thank-you to `WISHLIST_CHAT` (cron cadence, like week-clean) |
@@ -84,7 +84,7 @@ login`).
 Model backend: classification and the props bot run behind one adapter
 (`minion_core/adapters/backend.py`) over interchangeable models. The
 default is **Gemini** (fast; a low-power NAS CPU can't run a 7B vision
-model at usable speed). The `model-switch` bot flips to a **local
+model at usable speed). The `moderator` bot flips to a **local
 Qwen2.5-VL** (Ollama container "gem") and back at runtime; the exact
 prompts sent to the model are logged. Background restore stays
 Gemini-only (image generation). To use the local model, pull it once:
@@ -116,7 +116,7 @@ The processing IP and the Telegram transport are **fully separated**, in one
 So `censor-blur`, `censor-black`, `restore`, `frames`, `fetch` and `fan-save`
 run as services (`svc-*`), and the `telegram` container is a thin router in
 front of them -- no torch, no IP. The rest are not file-processors coupled to
-Telegram, so they stay as they are: `inbox` (ingest), `model-switch`/`props`
+Telegram, so they stay as they are: `inbox` (ingest), `moderator`/`props`
 (chat commands), `sort`/`batch` (folder watch + cron), `ollama` (local model).
 
 ## CI gates

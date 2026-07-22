@@ -238,7 +238,7 @@ minion_core/
     files.py      stem/usd_prim/next_free_path, EXIF, validate/sanitize, dedup, atomic, lock (Pillow, piexif)
 minions/
   sort/ censor_blur/ censor_black/ restore/ fetch/ frames/ inbox/
-  catch/ week-clean/ model_switch/ props/ print/ _template/
+  catch/ week-clean/ moderator/ props/ print/ _template/
 ```
 
 Import direction is strictly downward: bots -> adapters/kernel/settings;
@@ -356,7 +356,7 @@ that folder's `_done/` (files.Shelve).
 | sort | batch | images classified in place (prim name + EXIF fandom); the week waits in `_inbox/` | `source_dirs`: `_inbox/` or `Downloads/`; `SORT_WATCH`: streaming trigger, instant classification |
 | catch | streaming | new Downloads image -> prim-named copy in `pictures/<Fandom>/` (same backend verdict as sort); the original is renamed in place, never moved | `catch_dir` |
 | week-clean | batch | Monday, purely mechanical: strip the weekly tag and shelve each classified image from `_inbox/` into `pictures/<Fandom>/` per its EXIF fandom; unclassified files stay for retry | - |
-| model-switch | streaming | Telegram command bot: `local`/`gemini`/`status` flips the classify+props backend at runtime (writes `state/model.backend`) | `TG_TOKEN_MODEL_SWITCH` |
+| moderator | streaming | admin panel: backend toggle (`local`/`gemini`/`status`), `clean`, `config`/`set`/`get`/`reset` (runtime `admin.json`), `bed`/`wishlist` status, `whois` | `TG_TOKEN_MODERATOR` |
 | props | streaming | scenario (pasted or the weekly script) -> the active model lists props -> matched against the `Pr*` library (name + CLIP text->image) -> have/need reply | `TG_TOKEN_PROPS` |
 | print | streaming | PDF in `print/` -> spooler -> `print/_done/` | `print_spooler`: lp / SumatraPDF argv |
 | kindle | outlier | Google Doc -> PDF -> `print/`; weekly archive | Apps Script (off-kernel, declared, not disguised) |

@@ -535,7 +535,7 @@ class TgAny(_TgSource):
 class TgCommands(_TgSource):
     """A text-command dock: answer each message, emit no belt jobs.
 
-    For control bots (model-switch) and query bots (props) that reply
+    For control bots (moderator) and query bots (props) that reply
     in chat rather than feeding the belt. The injected ``handle`` maps
     the message text to a reply string; an empty reply stays silent.
     Reuses the long-poll, offset and chat-allowlist machinery of the

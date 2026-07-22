@@ -21,7 +21,7 @@ as a no-op instead of crashing (REQ-DEG-001).
 | [sort](#sort) | batch/watch | classify images in place in `_inbox/` |
 | [catch](#catch) | streaming | new Downloads image -> `pictures/<Fandom>/` |
 | [week-clean](#week-clean) | batch | Monday: shelve the classified week |
-| [model-switch](#model-switch-the-moderator) | streaming | the moderator / admin panel |
+| [moderator](#moderator) | streaming | the admin panel |
 | [props](#props) | streaming | scenario -> recommended props |
 | [donations](#donations) | streaming | donor alerts + the "under the bed" game |
 | [wishlist](#wishlist) | batch | daily wishlist diff -> gifts and new wants |
@@ -58,7 +58,7 @@ Settings (the registry in `minion_core/adapters/admin.py`):
 | `week_clean_enabled` | `1` | week-clean: run the Monday shelving (1/0) |
 
 Edit them with the moderator commands `config`, `set <key> <value>`,
-`get <key>`, `reset <key>` (see [model-switch](#model-switch-the-moderator)).
+`get <key>`, `reset <key>` (see [moderator](#moderator)).
 
 Precedence: an explicit moderator override wins; otherwise a non-secret
 env var (e.g. `DONATION_CHAT`, `WISHLIST_URL`) seeds the value, else the
@@ -131,9 +131,9 @@ default. Only secrets -- the `TG_TOKEN_*`, `STREAMLABS_TOKEN` and
   when `week_clean_enabled=0`. On demand, the moderator's `clean` command
   runs the exact same routine.
 
-## model-switch (the moderator)
+## moderator
 
-- **Kind:** streaming. **Token:** `TG_TOKEN_MODEL_SWITCH`.
+- **Kind:** streaming. **Token:** `TG_TOKEN_MODERATOR`.
 - The admin panel: text commands that control the system and read each
   bot's state (it shares `/data`, so it reads other bots' STATE files).
 

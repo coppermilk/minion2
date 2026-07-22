@@ -202,10 +202,10 @@ Classification and the props bot run behind one adapter
   touches volumes). `OLLAMA_KEEP_ALIVE=5m` unloads the model 5 min after last
   use, so its ~6 GB is freed while the backend is Gemini or the queue is idle.
   Prefer `OLLAMA_MODEL=qwen2.5vl:3b` on a slow CPU.
-- **Switch at runtime.** Message the `model-switch` bot `local`, `gemini`,
+- **Switch at runtime.** Message the `moderator` bot `local`, `gemini`,
   or `status`. It writes `state/model.backend`; sort/catch/props re-read it
   per item, so the swap takes effect on the next image with no restart. The
-  toggle is per-machine (each host's own `DRIVE/state`). `model-switch` and
+  toggle is per-machine (each host's own `DRIVE/state`). `moderator` and
   `props` each need their own `TG_TOKEN_*`; without it the tokenless dock
   ends and the container idle-restarts (harmless, but that is the repeating
   `drained` line in its log).
