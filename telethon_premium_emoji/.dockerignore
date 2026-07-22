@@ -1,0 +1,6 @@
+# Never bake secrets or a local session into the image.
+.env
+*.session
+*.session-journal
+__pycache__/
+*.pyc

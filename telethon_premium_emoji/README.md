@@ -50,27 +50,63 @@ silently. On startup it:
    (default `-1002431466060`, override with `TARGET_CHAT_ID`).
 3. Stays connected so you can extend it with your own handlers.
 
+## Run in Docker
+
+The session file is kept on a **named volume**, so it survives container
+restarts and machine shutdowns — log in once, never again.
+
+```bash
+cp .env.example .env        # fill in TELEGRAM_API_ID / TELEGRAM_API_HASH
+
+# 1) First login — interactive, once. Asks for phone, code, and 2FA password.
+docker compose run --rm premium-emoji
+
+# 2) Then run it in the background. Silent login from the saved session.
+docker compose up -d --build
+```
+
+Logs / stop:
+
+```bash
+docker compose logs -f
+docker compose down          # keeps the session volume
+```
+
+The session lives in the `session` volume (`TELEGRAM_SESSION_FILE=/data/…`
+inside the container), independent of the container's lifecycle. Only wiping
+that volume (`docker compose down -v`) forces a new login.
+
 ## Log in once — reboots don't ask again
 
 You log in **once**, not every time the machine restarts. After the first login
 the auth key is saved and every later start is silent — a shutdown/reboot does
 not wipe it.
 
-The only reason you'd be asked to log in again is if the **session gets lost**
-(the machine wipes its disk/working folder on shutdown, or you run in a throwaway
-container). Bulletproof fix — keep the session in an env var instead of on disk:
+The session is saved as a **file** — `telethon_premium_emoji.session`, right next
+to `main.py`. Just run `python main.py`, log in once, and that file persists on
+disk across shutdowns. Nothing else to do.
+
+**If your machine's shutdown wipes the working folder**, point the session file
+at a path that survives (a mounted/persistent volume) so it isn't lost:
 
 ```bash
-python login.py        # one-time interactive login (phone, code, 2FA password)
+# in .env — ".session" is appended for you
+TELEGRAM_SESSION_FILE=/data/telethon_premium_emoji
 ```
 
-It prints a `TELEGRAM_SESSION=…` line. Paste it into `.env`. From then on
-`main.py` logs in silently on every start — across reboots, twice-a-day
-shutdowns, even a different machine — because the auth key now lives in that
-string, not on the machine's disk. **No second login, ever.**
+The app logs the exact file on startup (`Session store: …`).
 
-> Keep that string secret — it is full access to the account, like the
-> `.session` file. `.env` is git-ignored.
+> The `.session` file is full access to the account. It is git-ignored; don't
+> share it, and revoke it from Telegram → Settings → Devices if it leaks.
+
+<details>
+<summary>Alternative: a portable session string instead of a file</summary>
+
+If you'd rather not keep a file at all (e.g. a throwaway container with no
+persistent disk), run `python login.py` once. It prints a `TELEGRAM_SESSION=…`
+line to paste into `.env`; `main.py` then logs in from that string with no file.
+
+</details>
 
 ## Session storage & your 2FA password
 

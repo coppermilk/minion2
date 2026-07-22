@@ -63,11 +63,27 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-# Where the file session lives when TELEGRAM_SESSION is not set. Anchored next
-# to this script (not the current working directory) so the same `.session`
-# file is reused no matter where you launch from. Telethon appends `.session`,
-# so the file on disk is `telethon_premium_emoji.session`.
-SESSION_PATH = Path(__file__).with_name("telethon_premium_emoji")
+# Default file-session location: anchored next to this script (not the current
+# working directory) so the same file is reused no matter where you launch from.
+# Telethon appends ".session", so the file on disk is
+# "telethon_premium_emoji.session". Override with TELEGRAM_SESSION_FILE to point
+# at a path that survives your machine's shutdowns (e.g. a mounted volume).
+DEFAULT_SESSION_PATH = Path(__file__).with_name("telethon_premium_emoji")
+
+
+def _resolve_session_path() -> Path:
+    """The file-session base path, from TELEGRAM_SESSION_FILE or the default.
+
+    A trailing ".session" is stripped so the value works whether you point at
+    the file itself or its base name.
+    """
+    override = os.environ.get("TELEGRAM_SESSION_FILE")
+    if not override:
+        return DEFAULT_SESSION_PATH
+    path = Path(override).expanduser()
+    if path.suffix == ".session":
+        path = path.with_suffix("")
+    return path
 
 
 def _build_client() -> tuple[TelegramClient, str]:
@@ -80,15 +96,18 @@ def _build_client() -> tuple[TelegramClient, str]:
             "(get them from https://my.telegram.org)."
         )
 
+    # StringSession stays supported as an opt-in, but the default (and what we
+    # recommend here) is a plain session FILE that persists on disk across
+    # restarts — log in once, then every later start is silent.
     session_str = os.environ.get("TELEGRAM_SESSION")
     if session_str:
-        # StringSession keeps the auth key only in memory / in the env var;
-        # nothing is written to disk.
         session: StringSession | str = StringSession(session_str)
         where = "in-memory StringSession (from TELEGRAM_SESSION)"
     else:
-        session = str(SESSION_PATH)
-        where = f"{SESSION_PATH}.session"
+        session_path = _resolve_session_path()
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        session = str(session_path)
+        where = f"{session_path}.session"
     return TelegramClient(session, int(api_id), api_hash), where
 
 
