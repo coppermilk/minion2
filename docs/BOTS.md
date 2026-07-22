@@ -66,8 +66,9 @@ bed broadcast checks its cron every 30s).
 
 Edit them with the moderator commands `config`, `set <key> <value>`,
 `get <key>`, `reset <key>` (see [moderator](#moderator)). `config`
-renders every setting as an HTML table (key, value, help), so tuning
-the constants reads like editing a spreadsheet.
+prints every setting as an aligned monospace table (a `<pre>` block --
+the Bot API has no real `<table>`), key and value first so the
+constants read like a spreadsheet, help in the trailing column.
 
 Precedence: an explicit moderator override wins; otherwise a non-secret
 env var (e.g. `DONATION_CHAT`, `WISHLIST_URL`) seeds the value, else the
@@ -154,7 +155,7 @@ Commands:
 | `local` / `gemini` | switch the classify/props model backend |
 | `status` | which backend is live |
 | `clean` | run week-clean now (the Monday routine) |
-| `config` | every setting as an HTML table (key, value, help) -- reads like a spreadsheet to edit |
+| `config` | every setting as an aligned monospace table (key, value, help) -- reads like a spreadsheet to edit |
 | `set <key> <value>` | change a setting (persisted to `admin.json`) |
 | `get <key>` | read one setting |
 | `reset <key>` | restore a setting to its default |

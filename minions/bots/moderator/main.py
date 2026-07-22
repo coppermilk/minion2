@@ -99,15 +99,6 @@ def _set_reply(admin: AdminConfig, key: str, value: str) -> str:
     return _unknown(key)
 
 
-def _row(key: str, value: str, note: str) -> str:
-    """One HTML table row: key, current value, one-line help (escaped)."""
-    return (
-        f'<tr><td><code>{key}</code></td>'
-        f'<td>{html.escape(value) or "-"}</td>'
-        f'<td>{html.escape(note)}</td></tr>'
-    )
-
-
 @dataclass(frozen=True)
 class _Moderator:
     """The admin panel: backend, on-demand clean, settings and status."""
@@ -159,15 +150,21 @@ class _Moderator:
         }
 
     def _config(self) -> str:
-        """Every setting as an HTML table -- edit it like a table."""
+        """Every setting as an aligned table -- edit constants at a glance."""
         admin = admin_config(self.cfg.state)
-        rows = ''.join(_row(s.key, admin.get(s.key), s.help) for s in SETTINGS)
+        vals = {s.key: admin.get(s.key) or '-' for s in SETTINGS}
+        kw = max(len(key) for key in vals)
+        vw = max(len('value'), *(len(v) for v in vals.values()))
+        head = f'{"key".ljust(kw)}  {"value".ljust(vw)}  what'
+        rows = '\n'.join(
+            f'{s.key.ljust(kw)}  {vals[s.key].ljust(vw)}  {s.help}'
+            for s in SETTINGS
+        )
+        table = html.escape(f'{head}\n{rows}')
         return (
-            'edit with <code>set [key] [value]</code> or '
-            '<code>reset [key]</code>\n'
-            '<table><tr><th>key</th><th>value</th><th>what</th></tr>'
-            + rows
-            + '</table>'
+            'edit with set [key] [value] or reset [key]\n<pre>'
+            + table
+            + '</pre>'
         )
 
     def _whois(self, chat: str) -> str:
