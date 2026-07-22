@@ -42,31 +42,28 @@ log = logging.getLogger('post-bot')
 
 DEFAULT_TARGET_CHAT_ID = -1002431466060
 
-# A real premium custom-emoji document id. Every premium emoji in the post and
-# the button icon reuse it for now; give each its own id for different glyphs.
-EMOJI_ID = 5330248916224983855
+# A premium custom-emoji document id. Override it per run with EMOJI_ID in
+# .env, so you can try ids from dump_emoji_ids.py without editing code. It is
+# reused for every premium emoji in the post and the button icon.
+DEFAULT_EMOJI_ID = 5330248916224983855
 
-# The post body. Premium emoji are <tg-emoji emoji-id="..."> tags; the glyph
-# between the tags is the fallback shown without Premium. Edit the English
-# placeholder text to your own (keep it ASCII, or drive it from a data file if
-# you need another script).
-# The fallback glyph is a bright red circle on purpose: if you still see red
-# circles, the premium emoji did NOT render (the bot owner lacks Premium); if
-# you see the real custom emoji, it worked.
-POST_MARKUP = (
-    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f534</tg-emoji> '
-    'Premium emoji in the post (proof-of-work).\n\n'
-    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f534</tg-emoji> '
-    'First bullet with a premium icon\n'
-    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f534</tg-emoji> '
-    'Second bullet with a premium icon'
-)
-
-# The bottom "plate": one full-width inline URL button. BUTTON_ICON_ID is a
-# premium emoji shown on the button (needs the 9.4 TL layer + owner Premium);
-# without it the fallback glyph is prefixed to the label instead.
-BUTTON_ICON_ID = EMOJI_ID
+# The plain glyph prefixed to the button label when the icon cannot render.
 BUTTON_FALLBACK = '\U0001f3ac'  # clapper board
+
+
+def _emoji_id() -> int:
+    """The premium emoji id to use (EMOJI_ID in .env overrides the default)."""
+    return int(os.environ.get('EMOJI_ID', DEFAULT_EMOJI_ID))
+
+
+def _post_markup(emoji_id: int) -> str:
+    """The post body; a red-circle fallback shows if premium does not render."""
+    tag = f'<tg-emoji emoji-id="{emoji_id}">\U0001f534</tg-emoji>'
+    return (
+        f'{tag} Premium emoji in the post (proof-of-work).\n\n'
+        f'{tag} First bullet with a premium icon\n'
+        f'{tag} Second bullet with a premium icon'
+    )
 
 
 def _load_dotenv(path: Path) -> None:
@@ -81,32 +78,35 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('\'"'))
 
 
-def _button() -> KeyboardButtonUrl:
+def _button(emoji_id: int) -> KeyboardButtonUrl:
     """The single bottom button, with a premium emoji icon when supported."""
     text = os.environ.get('BUTTON_TEXT', 'VIDEO')
     url = os.environ.get('BUTTON_URL', 'https://www.youtube.com/')
     if _HAVE_STYLE:
-        style = KeyboardButtonStyle(icon=BUTTON_ICON_ID)
+        style = KeyboardButtonStyle(icon=emoji_id)
         return KeyboardButtonUrl(text=text, url=url, style=style)
     return KeyboardButtonUrl(text=f'{BUTTON_FALLBACK} {text}', url=url)
 
 
-def _markup() -> ReplyInlineMarkup:
+def _markup(emoji_id: int) -> ReplyInlineMarkup:
     """A one-button inline keyboard, so the button spans the full width."""
-    return ReplyInlineMarkup(rows=[KeyboardButtonRow(buttons=[_button()])])
+    return ReplyInlineMarkup(
+        rows=[KeyboardButtonRow(buttons=[_button(emoji_id)])]
+    )
 
 
 async def send_post(client: TelegramClient, chat_id: int) -> None:
     """Post the premium-emoji text with the bottom plate; no link preview."""
-    message = build_premium_message(POST_MARKUP)
+    emoji_id = _emoji_id()
+    message = build_premium_message(_post_markup(emoji_id))
     await client.send_message(
         chat_id,
         message.text,
         formatting_entities=message.entities,
-        buttons=_markup(),
+        buttons=_markup(emoji_id),
         link_preview=False,
     )
-    log.info('Posted to %s with an inline bottom button.', chat_id)
+    log.info('Posted to %s (premium emoji id %s).', chat_id, emoji_id)
 
 
 async def main() -> None:
