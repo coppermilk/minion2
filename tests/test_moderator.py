@@ -85,6 +85,28 @@ def test_panel_gets_sets_and_resets_settings(tmp_path):
     assert admin_config(cfg.state).get('donation_poll_sec') == '10'
 
 
+def test_config_renders_as_an_html_table(tmp_path):
+    """`config` is an HTML table: a header row and a cell per setting."""
+    cfg = make_cfg(tmp_path / 'drive')
+    mod = _handler(cfg)
+    out = mod('config')
+    assert '<table>' in out
+    assert '</table>' in out
+    assert '<th>key</th>' in out
+    assert '<td><code>donation_poll_sec</code></td>' in out  # a known key
+    assert '<td>10</td>' in out  # its current value in its own cell
+
+
+def test_config_cell_escapes_a_set_value(tmp_path):
+    """A value with HTML metacharacters is escaped, never a live tag."""
+    cfg = make_cfg(tmp_path / 'drive')
+    mod = _handler(cfg)
+    mod('set donation_chat <b>x</b>')
+    out = mod('config')
+    assert '&lt;b&gt;x&lt;/b&gt;' in out  # escaped, not an injected tag
+    assert '<td><b>x</b></td>' not in out
+
+
 def test_clean_command_shelves_the_week(tmp_path):
     """`clean` runs the week-clean shelving on demand, right now."""
     cfg = make_cfg(tmp_path / 'drive')

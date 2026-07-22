@@ -312,6 +312,10 @@ class TgSpec:
     ack: str = ''
     """Sent the moment a work message is seen (before the download). Empty
     disables it; the caller sets the text (the relay keys it per bot)."""
+    parse_mode: str = ''
+    """Telegram parse mode for command replies (e.g. ``HTML``). Empty is
+    plain text; a command dock that returns markup (the moderator's
+    tables) sets it so the reply renders."""
 
 
 class _TgSource(Source):
@@ -552,10 +556,12 @@ class TgCommands(_TgSource):
         """Answer the message text; no envelope is produced."""
         text = msg.get('text', '') or msg.get('caption', '')
         reply = self._handle(text)
-        if reply:
-            self.api.call(
-                'sendMessage', {'chat_id': msg['chat']['id'], 'text': reply}
-            )
+        if not reply:
+            return
+        params: dict[str, Any] = {'chat_id': msg['chat']['id'], 'text': reply}
+        if self.spec.parse_mode:
+            params['parse_mode'] = self.spec.parse_mode
+        self.api.call('sendMessage', params)
 
 
 class TgPublicCommands(TgCommands):
