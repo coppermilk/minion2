@@ -57,7 +57,7 @@ def _emoji_id() -> int:
 
 
 def _post_markup(emoji_id: int) -> str:
-    """The post body; a red-circle fallback shows if premium does not render."""
+    """The post body; red-circle fallback = premium did not render."""
     tag = f'<tg-emoji emoji-id="{emoji_id}">\U0001f534</tg-emoji>'
     return (
         f'{tag} Premium emoji in the post (proof-of-work).\n\n'
