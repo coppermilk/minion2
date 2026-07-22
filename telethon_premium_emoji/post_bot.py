@@ -50,12 +50,15 @@ EMOJI_ID = 5330248916224983855
 # between the tags is the fallback shown without Premium. Edit the English
 # placeholder text to your own (keep it ASCII, or drive it from a data file if
 # you need another script).
+# The fallback glyph is a bright red circle on purpose: if you still see red
+# circles, the premium emoji did NOT render (the bot owner lacks Premium); if
+# you see the real custom emoji, it worked.
 POST_MARKUP = (
-    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f4f1</tg-emoji> '
+    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f534</tg-emoji> '
     'Premium emoji in the post (proof-of-work).\n\n'
-    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f4f1</tg-emoji> '
+    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f534</tg-emoji> '
     'First bullet with a premium icon\n'
-    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f4f1</tg-emoji> '
+    f'<tg-emoji emoji-id="{EMOJI_ID}">\U0001f534</tg-emoji> '
     'Second bullet with a premium icon'
 )
 
