@@ -177,6 +177,40 @@ services:
     command: sh -c 'env | grep -E "DRIVE|TORCH|HF|TG_|GEMINI" > /etc/minions.env; exec cron -f'
     mem_limit: 512m
 
+  # premium-emoji: a Telethon USER account (not a bot-token minion), so it does
+  # NOT ride the shared minion image -- it needs `telethon`, not torch, and logs
+  # in with a user session (the only kind allowed to send premium emoji). Hence
+  # its own tiny image built from telethon_premium_emoji/. The `build:` here is
+  # the deliberate exception to the "NAS only pulls" rule above: this image is
+  # telethon-only and safe to build anywhere (no torch to compile on the NAS).
+  #
+  # The session is a FILE on the shared /data mount, so a one-time interactive
+  # login survives restarts and shutdowns. First login (once):
+  #   docker compose run --rm premium-emoji
+  # then `docker compose up -d` runs it silently. Needs TELEGRAM_API_ID /
+  # TELEGRAM_API_HASH in .env (from https://my.telegram.org).
+  premium-emoji:
+    build:
+      context: ./telethon_premium_emoji
+    image: minion2-premium-emoji
+    env_file: .env
+    environment:
+      TELEGRAM_SESSION_FILE: /data/bots/premium-emoji/session
+    volumes:
+      - ${DRIVE_NAS}:/data
+    restart: unless-stopped
+    init: true
+    stdin_open: true            # for the one-time interactive login
+    tty: true
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
 # Ollama's model blobs: a disposable, re-pullable CACHE. A named volume
 # (Docker auto-creates it) rather than a bind, so a missing host subpath
 # can never fail the start; `image prune` never touches volumes.
