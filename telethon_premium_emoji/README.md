@@ -47,6 +47,32 @@ swap in the real per-platform ids to get the exact logos), and point each
 `url` at your own profile. An entry with `emoji_id=None` falls back to its
 plain glyph.
 
+## The bottom button ("plate"): `post_bot.py`
+
+A bottom full-width button under the post (a VIDEO-style call-to-action) is an
+**inline keyboard button**, which only a **bot** can attach -- a user account
+cannot. So `post_bot.py` logs in with a **bot token** (from @BotFather) and
+posts one message that combines both things you wanted:
+
+- **premium emoji inline in the text** (colored bullets), and
+- **one full-width bottom button** whose icon is a premium emoji
+  (`KeyboardButtonStyle.icon`, from the Bot API 9.4 MTProto layer).
+
+Requirements and notes:
+
+- The bot's **owner must have Telegram Premium** to send premium emoji (in the
+  text or on the button), and the bot must be in the target chat.
+- If the installed Telethon predates the 9.4 button layer, the button icon
+  falls back to a plain glyph in the label (the app warns and still posts).
+- The web-page preview is disabled, so no link card covers the post.
+- Set `BUTTON_TEXT` in `.env` for a non-ASCII label (e.g. a Russian caption) --
+  the `.py` source stays ASCII.
+
+```bash
+# in .env: TELEGRAM_BOT_TOKEN=... (plus API_ID / API_HASH)
+python post_bot.py
+```
+
 ## Setup
 
 ```bash
