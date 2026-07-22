@@ -63,7 +63,15 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-def _build_client() -> TelegramClient:
+# Where the file session lives when TELEGRAM_SESSION is not set. Anchored next
+# to this script (not the current working directory) so the same `.session`
+# file is reused no matter where you launch from. Telethon appends `.session`,
+# so the file on disk is `telethon_premium_emoji.session`.
+SESSION_PATH = Path(__file__).with_name("telethon_premium_emoji")
+
+
+def _build_client() -> tuple[TelegramClient, str]:
+    """Build the client and return it with a human description of the session."""
     api_id = os.environ.get("TELEGRAM_API_ID")
     api_hash = os.environ.get("TELEGRAM_API_HASH")
     if not api_id or not api_hash:
@@ -73,10 +81,15 @@ def _build_client() -> TelegramClient:
         )
 
     session_str = os.environ.get("TELEGRAM_SESSION")
-    session = (
-        StringSession(session_str) if session_str else "telethon_premium_emoji.session"
-    )
-    return TelegramClient(session, int(api_id), api_hash)
+    if session_str:
+        # StringSession keeps the auth key only in memory / in the env var;
+        # nothing is written to disk.
+        session: StringSession | str = StringSession(session_str)
+        where = "in-memory StringSession (from TELEGRAM_SESSION)"
+    else:
+        session = str(SESSION_PATH)
+        where = f"{SESSION_PATH}.session"
+    return TelegramClient(session, int(api_id), api_hash), where
 
 
 async def send_proof_of_work(client: TelegramClient, chat_id: int) -> None:
@@ -95,10 +108,22 @@ async def main() -> None:
     _load_dotenv(Path(__file__).with_name(".env"))
     chat_id = int(os.environ.get("TARGET_CHAT_ID", DEFAULT_TARGET_CHAT_ID))
 
-    client = _build_client()
-    # `start()` triggers the interactive login (phone + code, and 2FA password
-    # if set) the first time; afterwards the saved session logs in silently.
-    await client.start()
+    client, session_where = _build_client()
+    log.info("Session store: %s", session_where)
+
+    # First run performs the login: phone number, the code Telegram sends, and —
+    # if your account has 2FA (a cloud password) — that password too. Telethon
+    # uses the password ONLY to authenticate; it is never written to the session.
+    # After a successful login the auth key is saved and later runs are silent.
+    #
+    # TELEGRAM_PASSWORD lets you supply the 2FA password non-interactively (e.g.
+    # for a server/cron run). If it is unset, Telethon prompts for it securely
+    # (getpass, no echo) only when the account actually has 2FA enabled.
+    start_kwargs: dict[str, object] = {}
+    password = os.environ.get("TELEGRAM_PASSWORD")
+    if password:
+        start_kwargs["password"] = password
+    await client.start(**start_kwargs)
 
     me = await client.get_me()
     if me.bot:
