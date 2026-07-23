@@ -67,10 +67,12 @@ to the NAS -- no container rebuild.
 
    It writes `telethon.session` (next to `minions\aggregator\`) and
    prints its path.
-4. Copy that file to the NAS at
-   `\\<nas>\docker\<DRIVE_NAS>\bots\aggregator\session.session`
-   (compose points `TELEGRAM_SESSION_FILE` there). Then
-   `docker compose up -d aggregator` on the NAS logs in silently from it.
+4. Copy that file **as-is** (no rename) to the NAS at
+   `<DRIVE_NAS>/bots/aggregator/telethon.session` -- where `<DRIVE_NAS>`
+   is the host folder compose mounts as `/data` (the parent of your
+   existing `bots/` folder; check `DRIVE_NAS` in `.env`). Compose points
+   `TELEGRAM_SESSION_FILE` at `.../telethon`, so the file name matches.
+   Then `docker compose up -d aggregator` on the NAS logs in silently.
 
 > The `.session` file is full account access -- it is git-ignored; don't
 > commit or share it, and revoke it from Telegram -> Settings -> Devices

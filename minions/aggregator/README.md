@@ -79,7 +79,7 @@ re-sync (`deploy/nas-update.sh`) -- exactly like `.env`.
 The aggregator rides the **one shared image** (`telethon` is baked in via the
 `tg` extra) -- there is no separate image to build. Compose (`aggregator`
 service) mounts `${DRIVE_NAS}:/data`, sets
-`TELEGRAM_SESSION_FILE=/data/bots/aggregator/session`, and reads `.env`.
+`TELEGRAM_SESSION_FILE=/data/bots/aggregator/telethon`, and reads `.env`.
 
 From the **repository root**:
 
@@ -98,8 +98,9 @@ starts are silent across reboots and shutdowns because the file persists (on
 
 **Generate the session on another machine (e.g. Windows) and point at it.**
 Run `python -m minions.aggregator.login` there once; it writes and locates the
-`.session` file. Copy that file to where the aggregator runs (for Docker,
-`/data/bots/aggregator/session.session`) -- **no rebuild**. See
+`telethon.session` file. Copy that file to where the aggregator runs -- for
+Docker, `<DRIVE_NAS>/bots/aggregator/telethon.session` (the host path behind
+`/data`); same base name, so no rename -- **no rebuild**. See
 `deploy/windows/README.md`.
 
 > The `.session` file is full account access. It is git-ignored; don't share it,
