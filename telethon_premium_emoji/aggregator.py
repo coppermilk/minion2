@@ -14,8 +14,9 @@ Only Shorts are aggregated: a message whose known ``duration`` reaches 3
 minutes marks that video as full-length and drops it. Platforms are ranked by
 priority (tiktok, youtube, pinterest, instagram): the order sets the link order
 in the post and picks which platform's caption and thumbnail lead. After a
-video is posted, its source messages are reacted to (a like); a message that
-already carries this account's reaction is skipped as already processed.
+video is posted, its source message ids are saved to disk (and the messages
+are also liked, best-effort); on restart, backfill skips any message whose id
+was already posted -- so re-posting never happens even if reactions are off.
 
 Notes:
     * The link is read from ``link`` (or ``url``); the thumbnail from
@@ -80,6 +81,8 @@ CONSTANTS_FILE = 'aggregator_constants.json'
 STATE_FILE = 'aggregator_state.json'
 # How often to log the pending videos and what each still awaits.
 STATUS_INTERVAL = 60
+# How many processed source-message ids to remember (restart dedup).
+PROCESSED_CAP = 5000
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -361,6 +364,7 @@ class Aggregator:
         self._keys = tuple(dict.fromkeys(self.consts.fields.values()))
         self.groups: list[Group] = []
         self.rejected: set[str] = set()
+        self.processed_ids: set[int] = set()
         self.me_id = 0
 
     async def on_message(self, message: object) -> None:
@@ -368,8 +372,7 @@ class Aggregator:
         msg_id = int(getattr(message, 'id', 0) or 0)
         preview = (getattr(message, 'message', '') or '').replace('\n', ' ')
         log.info('received msg %s: %.120s', msg_id, preview)
-        if _already_liked(message, self.me_id):
-            log.info('msg %s: already processed (reacted), skipping', msg_id)
+        if self._seen(msg_id, message):
             return
         item = self._accept(message)
         if item is None:
@@ -390,6 +393,16 @@ class Aggregator:
         self._save()
         if not missing:
             await self._flush(group)
+
+    def _seen(self, msg_id: int, message: object) -> bool:
+        """Whether this message was already posted (or carries our like)."""
+        if msg_id in self.processed_ids:
+            log.info('msg %s: already posted, skipping', msg_id)
+            return True
+        if _already_liked(message, self.me_id):
+            log.info('msg %s: already reacted, skipping', msg_id)
+            return True
+        return False
 
     def _accept(self, message: object) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
@@ -480,6 +493,7 @@ class Aggregator:
         )
         message = _compose(group, self.config.platforms, self.consts)
         await self._post(message, _youtube_thumb(group))
+        self._mark_posted(group.msg_ids)
         await self._like(group.msg_ids)
         log.info(
             'posted %r and liked %d source msg(s)',
@@ -487,6 +501,13 @@ class Aggregator:
             len(group.msg_ids),
         )
         self._save()
+
+    def _mark_posted(self, msg_ids: set[int]) -> None:
+        """Record posted source ids so a restart never re-posts them."""
+        self.processed_ids |= msg_ids
+        if len(self.processed_ids) > PROCESSED_CAP:
+            keep = sorted(self.processed_ids)[-PROCESSED_CAP:]
+            self.processed_ids = set(keep)
 
     async def status_loop(self) -> None:
         """Periodically log which videos are pending and what they await."""
@@ -558,9 +579,10 @@ class Aggregator:
         )
 
     def _save(self) -> None:
-        """Persist in-flight groups and the rejected set to disk (atomic)."""
+        """Persist state (groups, rejected, posted ids) to disk (atomic)."""
         data = {
             'rejected': sorted(self.rejected),
+            'processed_ids': sorted(self.processed_ids),
             'groups': [_group_dict(g) for g in self.groups],
         }
         tmp = self.state_path.with_suffix('.tmp')
@@ -573,11 +595,16 @@ class Aggregator:
             return
         data = json.loads(self.state_path.read_text(encoding='utf-8'))
         self.rejected = set(data.get('rejected') or [])
+        self.processed_ids = set(data.get('processed_ids') or [])
         for raw in data.get('groups') or []:
             group = _group_from_dict(raw)
             self.groups.append(group)
             self._arm(group)
-        log.info('restored %d pending videos from disk', len(self.groups))
+        log.info(
+            'restored %d pending videos, %d processed ids from disk',
+            len(self.groups),
+            len(self.processed_ids),
+        )
 
 
 def _load_config() -> Config:
