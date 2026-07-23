@@ -16,31 +16,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from pathlib import Path
 
 from telethon import TelegramClient
 from telethon import events
 from telethon.tl.types import MessageEntityCustomEmoji
 
 from minions.aggregator.main import _resolve_session_path
+from minions.aggregator.main import load_env
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
 )
 log = logging.getLogger('dump-emoji-ids')
-
-
-def _load_dotenv(path: Path) -> None:
-    """Load simple KEY=VALUE lines from a local .env (environment wins)."""
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding='utf-8').splitlines():
-        line = raw.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, _, value = line.partition('=')
-        os.environ.setdefault(key.strip(), value.strip().strip('\'"'))
 
 
 def _glyph(text: str, offset: int, length: int) -> str:
@@ -67,7 +55,7 @@ async def _report(event: events.NewMessage.Event) -> None:
 
 async def main() -> None:
     """Listen for your messages and print each premium emoji's id."""
-    _load_dotenv(Path(__file__).with_name('.env'))
+    load_env()
 
     api_id = os.environ.get('TELEGRAM_API_ID')
     api_hash = os.environ.get('TELEGRAM_API_HASH')

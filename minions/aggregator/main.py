@@ -181,7 +181,7 @@ def _load_constants(path: Path) -> Consts:
 
 
 def _load_dotenv(path: Path) -> None:
-    """Load simple KEY=VALUE lines from a local .env (environment wins)."""
+    """Load simple KEY=VALUE lines from a .env file (environment wins)."""
     if not path.exists():
         return
     for raw in path.read_text(encoding='utf-8').splitlines():
@@ -190,6 +190,18 @@ def _load_dotenv(path: Path) -> None:
             continue
         key, _, value = line.partition('=')
         os.environ.setdefault(key.strip(), value.strip().strip('\'"'))
+
+
+# The project keeps ONE .env at the repo root (compose's env_file and the
+# Windows launcher both point there). This package is minions/aggregator/, so
+# parents[2] is that repo root. In Docker the vars are already in os.environ
+# (compose env_file), so a missing file here is harmless; env always wins.
+PROJECT_ENV = Path(__file__).resolve().parents[2] / '.env'
+
+
+def load_env() -> None:
+    """Load the project's root .env so a bare run finds the credentials."""
+    _load_dotenv(PROJECT_ENV)
 
 
 # Default file-session base path: 'telethon.session' next to this package.
@@ -715,7 +727,7 @@ def _load_config() -> Config:
 
 async def main() -> None:
     """Listen to the source chat and aggregate videos across platforms."""
-    _load_dotenv(Path(__file__).with_name('.env'))
+    load_env()
 
     api_id = os.environ.get('TELEGRAM_API_ID')
     api_hash = os.environ.get('TELEGRAM_API_HASH')
