@@ -36,21 +36,30 @@ code units, as Telegram requires).
 
 ## Configuration
 
-Only credentials must live in the env: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`
-(from <https://my.telegram.org>), and optionally `TELEGRAM_PASSWORD` (2FA).
+Two sources, no overlap: the **env** carries only the deploy knobs (credentials
+and the chats); **`aggregator_constants.json`** carries all behaviour.
 
-Everything else is editable in `aggregator_constants.json` (source/target chats,
-platforms, texts, emoji), and any setting can be overridden by an env var:
+**env** (credentials + chats + paths):
 
 | Env | Meaning |
 |-----|---------|
-| `SOURCE_CHAT_ID` | the chat the per-platform JSON arrives in |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | credentials (from <https://my.telegram.org>) |
+| `TELEGRAM_PASSWORD` | optional 2FA/cloud password |
+| `SOURCE_CHAT_ID` | the chat the per-platform JSON arrives in (monitoring) |
 | `TARGET_CHAT_ID` | target chat(s) -- **comma-separated** to post to several |
-| `PLATFORMS` | expected platforms, in priority order |
-| `TITLE_MATCH` | caption similarity to treat two messages as the same video |
-| `AGGREGATE_TIMEOUT_SEC` | how long to wait for the rest before posting a partial |
 | `TELEGRAM_SESSION_FILE` | session-file base path (`.session` appended) |
 | `AGGREGATOR_STATE_DIR` | where in-flight state is persisted |
+
+**`aggregator_constants.json`** (behaviour + content):
+
+| Key | Meaning |
+|-----|---------|
+| `platforms` | expected platforms, in priority order (comma-separated) |
+| `title_match` | caption similarity to treat two messages as the same video |
+| `timeout_sec` | how long to wait for the rest before posting a partial |
+| `backfill` | recent source messages scanned at startup |
+| `max_duration_sec` | a video at/above this many seconds is dropped (not a Short) |
+| `fields`, `action_value`, `author`, `announce`, `love`, `ps`, `arrow_down`, `view_label`, `rows`, `platform_emoji` | incoming field names + the post's texts and premium emoji |
 
 ## Run (without Docker)
 
