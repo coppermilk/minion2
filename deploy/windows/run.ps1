@@ -60,11 +60,14 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 # since the last successful install, or when minion_core cannot be
 # imported at all (a fresh or broken env). A no-op on an unchanged env,
 # so logon stays fast. This is an editable install, not a compile --
-# every dependency ships a Windows wheel. The .[llm] extra adds
-# google-genai (catch classifies via Gemini on Windows, since the NAS
-# ollama is not exposed); the heavy ml/links extras are not needed
-# here. A failed install is logged, never fatal: the bots still start
-# on whatever is already installed.
+# every dependency ships a Windows wheel. We install the FULL runtime
+# stack `.[ml,llm,links,tg]`: ml (torch/transformers/facenet, several
+# GB) for local vision, llm (google-genai) for Gemini, links (yt-dlp),
+# and tg (telethon) for the aggregator's session/login tool
+# (python -m minions.aggregator.login). Only `dev` is left out. The
+# first install is heavy but it re-runs only when pyproject.toml
+# changes. A failed install is logged, never fatal: the bots still
+# start on whatever is already installed.
 $stateDir = Join-Path $env:DRIVE 'bots\_data\state'
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 $stamp = Join-Path $stateDir 'windows-deps.stamp'
@@ -83,9 +86,9 @@ try {
 }
 
 if ($hash -ne $prev -or -not $importOk) {
-    Write-Output 'requirements changed: installing minion_core (.[llm])'
+    Write-Output 'requirements changed: installing minion_core (.[ml,llm,links,tg])'
     try {
-        & python -m pip install -e '.[llm]' 2>&1 |
+        & python -m pip install -e '.[ml,llm,links,tg]' 2>&1 |
             Out-File -FilePath $depsLog -Encoding utf8
         if ($LASTEXITCODE -eq 0) {
             Set-Content -Path $stamp -Value $hash

@@ -9,8 +9,10 @@ they will run in two places.
 Three steps:
 
 1. Install Python 3.12+ and the package from the repo root:
-   `pip install -e .[ml,llm]` (catch needs the vision and naming
-   adapters; print alone needs only the base install).
+   `pip install -e .[ml,llm,links,tg]` -- the full runtime stack
+   (torch/transformers for vision, google-genai, yt-dlp, telethon). The
+   launcher `run.ps1` installs the same set for you and re-runs it
+   whenever `pyproject.toml` changes.
 2. Copy `.env.example` to `.env` at the repo root -- the **same**
    single `.env` the NAS uses works verbatim (paths are validated
    for either OS). The Windows-relevant lines:
@@ -51,7 +53,10 @@ and 2FA is convenient. You generate the session **file** once and hand it
 to the NAS -- no container rebuild.
 
 1. Install the package with the telethon extra:
-   `pip install -e .[tg]` (from the repo root).
+   `pip install -e .[tg]` (from the repo root). If you already run the
+   print/catch launcher (`run.ps1`), this is done for you -- it installs
+   the full `.[ml,llm,links,tg]` stack and re-runs whenever
+   `pyproject.toml` changes.
 2. Put `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` (from
    <https://my.telegram.org>) in the repo-root `.env`.
 3. Log in once -- it asks for phone, code, and 2FA if enabled:

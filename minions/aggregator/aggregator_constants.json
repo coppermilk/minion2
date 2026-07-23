@@ -1,6 +1,8 @@
 {
-  "source_chat": -1004402620527,
-  "target_chat": -1002431466060,
+  "platforms": "tiktok,youtube,pinterest,instagram",
+  "title_match": 0.9,
+  "timeout_sec": 7200,
+  "backfill": 100,
   "max_duration_sec": 180,
   "fields": {
     "action": "action",

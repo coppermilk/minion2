@@ -25,19 +25,20 @@ Notes:
       the links as its caption, otherwise a plain text message.
     * Messages must be valid JSON; anything that does not parse is ignored.
 
-Almost everything is editable in ``aggregator_constants.json`` (a JSON file,
-so it may hold non-ASCII text): source_chat, target_chat, max_duration_sec,
-the incoming field names, and the post's texts and emoji. In-flight groups are
-persisted to ``aggregator_state.json`` and restored on start, so a restart
-within the timeout window does not lose pending videos and never re-posts.
+Every behaviour knob is editable in ``aggregator_constants.json`` (a JSON file,
+so it may hold non-ASCII text): platforms, title_match, timeout_sec, backfill,
+max_duration_sec, the incoming field names, and the post's texts and emoji.
+In-flight groups are persisted to ``aggregator_state.json`` and restored on
+start, so a restart within the timeout window does not lose pending videos and
+never re-posts.
 
-Only credentials live in the env: TELEGRAM_API_ID, TELEGRAM_API_HASH (and an
-optional TELEGRAM_PASSWORD for 2FA). Any setting (SOURCE_CHAT_ID,
-TARGET_CHAT_ID, PLATFORMS, TITLE_MATCH, AGGREGATE_TIMEOUT_SEC, BACKFILL_LIMIT,
-MAX_DURATION_SEC) may still be set as an env var to override the JSON.
-TARGET_CHAT_ID is comma-separated -- list several chats to post to all of them.
-The session file is TELEGRAM_SESSION_FILE (default 'telethon.session' next to
-this package); state goes to AGGREGATOR_STATE_DIR when set.
+The env holds only the deploy knobs: credentials (TELEGRAM_API_ID,
+TELEGRAM_API_HASH, optional TELEGRAM_PASSWORD), the monitoring chat
+SOURCE_CHAT_ID, and the target chat(s) TARGET_CHAT_ID (comma-separated -- list
+several chats to post to all of them). The chats live ONLY in the env, the
+behaviour ONLY in the JSON -- there is no overlap. The session file is
+TELEGRAM_SESSION_FILE (default 'telethon.session' next to this package); state
+goes to AGGREGATOR_STATE_DIR when set.
 """
 
 from __future__ import annotations
@@ -670,59 +671,45 @@ class Aggregator:
         )
 
 
-def _setting(data: dict[str, object], env: str, key: str) -> str:
-    """The raw value for a setting: env var wins, then the JSON, else ''."""
-    return os.environ.get(env) or str(data.get(key) or '')
+def _source() -> int:
+    """The monitoring (source) chat id from the env, else the default."""
+    return int(os.environ.get('SOURCE_CHAT_ID') or DEFAULT_SOURCE_CHAT_ID)
 
 
-def _targets(data: dict[str, object]) -> tuple[int, ...]:
-    """The target chat ids: env CSV wins, then JSON list/scalar, then default.
+def _targets() -> tuple[int, ...]:
+    """The target chat ids from the env (comma-separated), else the default.
 
     Set TARGET_CHAT_ID (or TARGET_CHAT_IDS) to a comma-separated list to post
-    the same message to several chats; in JSON use 'target_chats' (a list) or
-    'target_chat' (a single id).
+    the same message to several chats. Chats live in the env only, never in the
+    JSON.
     """
-    raw: object = (
+    raw = (
         os.environ.get('TARGET_CHAT_IDS')
         or os.environ.get('TARGET_CHAT_ID')
-        or data.get('target_chats')
-        or data.get('target_chat')
-        or DEFAULT_TARGET_CHAT_ID
+        or str(DEFAULT_TARGET_CHAT_ID)
     )
-    if isinstance(raw, list | tuple):
-        parts = [str(x) for x in raw]
-    else:
-        parts = str(raw).split(',')
-    return tuple(int(p.strip()) for p in parts if str(p).strip())
+    return tuple(int(p.strip()) for p in raw.split(',') if p.strip())
 
 
 def _load_config() -> Config:
-    """Read the aggregator settings from the constants JSON (env overrides)."""
+    """Chats come from the env; all behaviour from the constants JSON."""
     data = json.loads(
         Path(__file__).with_name(CONSTANTS_FILE).read_text(encoding='utf-8')
     )
-    csv = _setting(data, 'PLATFORMS', 'platforms') or DEFAULT_PLATFORMS
+    csv = str(data.get('platforms') or DEFAULT_PLATFORMS)
     platforms = tuple(p.strip().lower() for p in csv.split(',') if p.strip())
     return Config(
-        source=int(
-            _setting(data, 'SOURCE_CHAT_ID', 'source_chat')
-            or DEFAULT_SOURCE_CHAT_ID
-        ),
-        targets=_targets(data),
+        source=_source(),
+        targets=_targets(),
         platforms=platforms,
-        threshold=float(_setting(data, 'TITLE_MATCH', 'title_match') or '0.9'),
+        threshold=float(data.get('title_match') or 0.9),
         # Two hours by default: platforms can arrive far apart. The wait is a
         # local timer (asyncio.sleep), so it costs Telegram nothing.
-        timeout=float(
-            _setting(data, 'AGGREGATE_TIMEOUT_SEC', 'timeout_sec') or '7200'
-        ),
+        timeout=float(data.get('timeout_sec') or 7200),
         # Recent source messages to scan at startup for unprocessed ones.
-        backfill=int(_setting(data, 'BACKFILL_LIMIT', 'backfill') or '100'),
+        backfill=int(data.get('backfill') or 100),
         # A video whose known duration reaches this many seconds is dropped.
-        max_duration=int(
-            _setting(data, 'MAX_DURATION_SEC', 'max_duration_sec')
-            or MAX_SHORT_SEC
-        ),
+        max_duration=int(data.get('max_duration_sec') or MAX_SHORT_SEC),
     )
 
 
