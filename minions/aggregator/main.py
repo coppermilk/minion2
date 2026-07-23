@@ -87,7 +87,8 @@ STATE_FILE = 'aggregator_state.json'
 STATUS_INTERVAL = 60
 # How many processed source-message ids to remember (restart dedup).
 PROCESSED_CAP = 5000
-# Chat command (sent in the watcher chat) that previews the premium emoji.
+# Chat command (from ANY chat, ANYONE) that previews the premium emoji; the
+# preview is always rendered into the source chat.
 COMMAND_EMOJIS = '/emojis'
 
 _HASHTAG_RE = re.compile(r'#\S+')
@@ -156,10 +157,17 @@ class Consts:
     love: list[object]
     ps: list[object]
     arrow_down: list[object]
-    view_label: str
+    view_label: list[str]
     column_separator: str
     rows: list[list[str]]
     platform_emoji: dict[str, object]
+
+
+def _str_list(value: object, default: str) -> list[str]:
+    """A list of label strings from a JSON list (or a single string)."""
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value] if value else [default]
 
 
 def _load_constants(path: Path) -> Consts:
@@ -173,7 +181,7 @@ def _load_constants(path: Path) -> Consts:
         love=list(data.get('love') or ['']),
         ps=list(data.get('ps') or ['']),
         arrow_down=list(data.get('arrow_down') or ['']),
-        view_label=str(data.get('view_label', 'View')),
+        view_label=_str_list(data.get('view_label'), 'View'),
         column_separator=str(data.get('column_separator', '  |  ')),
         rows=list(data.get('rows') or []),
         platform_emoji=dict(data.get('platform_emoji') or {}),
@@ -389,7 +397,8 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
             if index:
                 rich.text(consts.column_separator)
             rich.emoji(consts.platform_emoji.get(key, '')).text(' ')
-            rich.link(consts.view_label, group.items[key].url)
+            label = random.choice(consts.view_label)  # noqa: S311
+            rich.link(label, group.items[key].url)
         if cells:
             rich.text('\n')
 
@@ -584,6 +593,18 @@ class Aggregator:
             keep = sorted(self.processed_ids)[-PROCESSED_CAP:]
             self.processed_ids = set(keep)
 
+    async def handle(self, event: events.NewMessage.Event) -> None:
+        """Dispatch one event: the /emojis command, or source aggregation.
+
+        The command works from ANY chat and for ANYONE (its preview renders
+        into the source chat); aggregation stays scoped to the source chat.
+        """
+        if (event.raw_text or '').strip().lower() == COMMAND_EMOJIS:
+            await self.show_constants()
+            return
+        if event.chat_id == self.config.source:
+            await self.on_message(event.message)
+
     async def show_constants(self) -> None:
         """Post a preview of every premium emoji constant to the watcher."""
         message = _render_constants(self.consts)
@@ -740,13 +761,10 @@ async def main() -> None:
     client = TelegramClient(str(session_path), int(api_id), api_hash)
     agg = Aggregator(client, config)
 
-    async def _handler(event: events.NewMessage.Event) -> None:
-        if (event.raw_text or '').strip().lower() == COMMAND_EMOJIS:
-            await agg.show_constants()
-            return
-        await agg.on_message(event.message)
-
-    client.add_event_handler(_handler, events.NewMessage(chats=config.source))
+    # Listen everywhere the account can see: the /emojis preview command works
+    # from ANY chat and for ANYONE (it renders back into the source chat);
+    # aggregation itself stays scoped to the source chat inside agg.handle.
+    client.add_event_handler(agg.handle, events.NewMessage())
 
     # TELEGRAM_PASSWORD supplies the 2FA/cloud password non-interactively;
     # unset, Telethon prompts for it (getpass) only if the account has 2FA.

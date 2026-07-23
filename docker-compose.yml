@@ -237,14 +237,16 @@ services:
   # several chats), plus TELEGRAM_API_ID / TELEGRAM_API_HASH (my.telegram.org).
   # The session is a FILE on the shared /data mount, so a one-time login (or a
   # session file generated on Windows and dropped at
-  # /data/bots/aggregator/session.session) survives restarts and shutdowns --
-  # no rebuild. First login (once): docker compose run --rm aggregator
-  # then `docker compose up -d aggregator` runs it silently.
+  # /data/bots/aggregator/telethon.session) survives restarts and shutdowns --
+  # no rebuild. Same base name as the bare-run default (telethon.session), so a
+  # file generated on Windows drops straight in -- no rename. First login
+  # (once): docker compose run --rm aggregator, then
+  # `docker compose up -d aggregator` runs it silently.
   aggregator:
     <<: *minion
     environment:
       <<: *minion-env
-      TELEGRAM_SESSION_FILE: /data/bots/aggregator/session
+      TELEGRAM_SESSION_FILE: /data/bots/aggregator/telethon
       AGGREGATOR_STATE_DIR: /data/bots/aggregator
     command: python -m minions.aggregator.main
     stdin_open: true            # for the one-time interactive login
