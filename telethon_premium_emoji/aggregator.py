@@ -78,6 +78,8 @@ LIKE_REACTION = '\U0001f44d'  # thumbs up
 # Files next to this script: the editable constants and the saved state.
 CONSTANTS_FILE = 'aggregator_constants.json'
 STATE_FILE = 'aggregator_state.json'
+# How often to log the pending videos and what each still awaits.
+STATUS_INTERVAL = 60
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -486,6 +488,23 @@ class Aggregator:
         )
         self._save()
 
+    async def status_loop(self) -> None:
+        """Periodically log which videos are pending and what they await."""
+        while True:
+            await asyncio.sleep(STATUS_INTERVAL)
+            if not self.groups:
+                continue
+            for group in self.groups:
+                missing = [
+                    p for p in self.config.platforms if p not in group.items
+                ]
+                log.info(
+                    'pending %r: have [%s], still waiting for [%s]',
+                    group.title,
+                    ', '.join(sorted(group.items)),
+                    ', '.join(missing),
+                )
+
     async def backfill(self) -> None:
         """Scan recent source history for messages not yet processed."""
         limit = self.config.backfill
@@ -611,7 +630,9 @@ async def main() -> None:
         ','.join(config.platforms),
     )
     await agg.backfill()
+    status_task = asyncio.create_task(agg.status_loop())
     await client.run_until_disconnected()
+    status_task.cancel()
 
 
 if __name__ == '__main__':
