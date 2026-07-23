@@ -157,10 +157,17 @@ class Consts:
     love: list[object]
     ps: list[object]
     arrow_down: list[object]
-    view_label: str
+    view_label: list[str]
     column_separator: str
     rows: list[list[str]]
     platform_emoji: dict[str, object]
+
+
+def _str_list(value: object, default: str) -> list[str]:
+    """A list of label strings from a JSON list (or a single string)."""
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value] if value else [default]
 
 
 def _load_constants(path: Path) -> Consts:
@@ -174,7 +181,7 @@ def _load_constants(path: Path) -> Consts:
         love=list(data.get('love') or ['']),
         ps=list(data.get('ps') or ['']),
         arrow_down=list(data.get('arrow_down') or ['']),
-        view_label=str(data.get('view_label', 'View')),
+        view_label=_str_list(data.get('view_label'), 'View'),
         column_separator=str(data.get('column_separator', '  |  ')),
         rows=list(data.get('rows') or []),
         platform_emoji=dict(data.get('platform_emoji') or {}),
@@ -390,7 +397,8 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
             if index:
                 rich.text(consts.column_separator)
             rich.emoji(consts.platform_emoji.get(key, '')).text(' ')
-            rich.link(consts.view_label, group.items[key].url)
+            label = random.choice(consts.view_label)  # noqa: S311
+            rich.link(label, group.items[key].url)
         if cells:
             rich.text('\n')
 
