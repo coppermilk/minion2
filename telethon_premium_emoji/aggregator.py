@@ -24,9 +24,15 @@ Notes:
       the links as its caption, otherwise a plain text message.
     * Messages must be valid JSON; anything that does not parse is ignored.
 
+The post's texts and emoji (author, announce phrases, love/ps/arrow emoji,
+platform glyphs, the "view" label) are all editable in
+``aggregator_constants.json`` -- a JSON file, so it may hold non-ASCII text.
+In-flight groups are persisted to ``aggregator_state.json`` and restored on
+start, so a restart within the (2 hour) window does not lose pending videos.
+
 Env: TELEGRAM_API_ID, TELEGRAM_API_HASH, SOURCE_CHAT_ID (where the JSON
-arrives), TARGET_CHAT_ID (where to post), and optional PLATFORMS,
-TITLE_MATCH (0-1, default 0.9), AGGREGATE_TIMEOUT_SEC (default 300).
+arrives), TARGET_CHAT_ID (where to post), and optional PLATFORMS, TITLE_MATCH
+(0-1, default 0.9), AGGREGATE_TIMEOUT_SEC (default 7200).
 """
 
 from __future__ import annotations
@@ -35,18 +41,24 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
+import time
+from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from premium_emoji import RichText
 from telethon import TelegramClient
 from telethon import events
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from premium_emoji import PremiumMessage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,14 +75,9 @@ DEFAULT_PLATFORMS = 'tiktok,youtube,pinterest,instagram'
 MAX_SHORT_SEC = 180
 # Reaction used to mark a source message as processed.
 LIKE_REACTION = '\U0001f44d'  # thumbs up
-
-# Plain (non-premium) platform glyphs, written as ASCII escapes.
-_EMOJI = {
-    'youtube': '\U000025b6',
-    'tiktok': '\U0001f3b5',
-    'instagram': '\U0001f4f7',
-    'pinterest': '\U0001f4cc',
-}
+# Files next to this script: the editable constants and the saved state.
+CONSTANTS_FILE = 'aggregator_constants.json'
+STATE_FILE = 'aggregator_state.json'
 
 _JSON_RE = re.compile(r'\{.*\}', re.DOTALL)
 _HASHTAG_RE = re.compile(r'#\S+')
@@ -108,7 +115,39 @@ class Group:
     title: str
     items: dict[str, Item] = field(default_factory=dict)
     msg_ids: set[int] = field(default_factory=set)
+    created_at: float = field(default_factory=time.time)
     task: asyncio.Task[None] | None = None
+
+
+@dataclass(frozen=True)
+class Consts:
+    """Randomizable texts and emoji for the post, loaded from JSON."""
+
+    author: str
+    announce: list[str]
+    love: list[object]
+    ps: list[object]
+    arrow_down: list[object]
+    view_label: str
+    column_separator: str
+    rows: list[list[str]]
+    platform_emoji: dict[str, object]
+
+
+def _load_constants(path: Path) -> Consts:
+    """Load the post constants from JSON, ignoring unknown keys."""
+    data = json.loads(path.read_text(encoding='utf-8'))
+    return Consts(
+        author=str(data.get('author', '')),
+        announce=list(data.get('announce') or ['']),
+        love=list(data.get('love') or ['']),
+        ps=list(data.get('ps') or ['']),
+        arrow_down=list(data.get('arrow_down') or ['']),
+        view_label=str(data.get('view_label', 'View')),
+        column_separator=str(data.get('column_separator', '  |  ')),
+        rows=list(data.get('rows') or []),
+        platform_emoji=dict(data.get('platform_emoji') or {}),
+    )
 
 
 def _load_dotenv(path: Path) -> None:
@@ -211,37 +250,83 @@ def _primary(group: Group, order: Iterable[str]) -> Item:
     return next(iter(group.items.values()))
 
 
-def _first_thumb(group: Group, order: Iterable[str]) -> str:
-    """The highest-priority thumbnail URL among the items, or ''."""
-    for key in order:
-        item = group.items.get(key)
-        if item and item.thumbnail:
-            return item.thumbnail
-    return ''
+def _group_dict(group: Group) -> dict[str, object]:
+    """Serialize a Group to a JSON-friendly dict."""
+    return {
+        'title': group.title,
+        'created_at': group.created_at,
+        'msg_ids': sorted(group.msg_ids),
+        'items': {key: asdict(item) for key, item in group.items.items()},
+    }
 
 
-def _render(group: Group, order: tuple[str, ...]) -> str:
-    """The collected-links message: caption, then one line per platform."""
-    lines = [_primary(group, order).title, '']
-    for key in order:
-        item = group.items.get(key)
-        if item and item.url:
-            glyph = _EMOJI.get(key, '')
-            lines.append(f'{glyph} {item.platform}: {item.url}'.strip())
-    duration = next(
-        (i.duration for i in group.items.values() if i.duration), ''
+def _group_from_dict(raw: dict[str, object]) -> Group:
+    """Rebuild a Group from its serialized dict."""
+    items = {
+        key: Item(**value) for key, value in (raw.get('items') or {}).items()
+    }
+    return Group(
+        title=str(raw.get('title', '')),
+        items=items,
+        msg_ids=set(raw.get('msg_ids') or []),
+        created_at=float(raw.get('created_at') or time.time()),
     )
-    if duration:
-        lines.extend(['', f'Duration: {duration}'])
-    return '\n'.join(lines)
+
+
+def _youtube_thumb(group: Group) -> str:
+    """The thumbnail URL from the YouTube item only (per the spec), or ''."""
+    item = group.items.get('youtube')
+    return item.thumbnail if item else ''
+
+
+def _strip_tags(caption: str) -> str:
+    """Caption without its trailing hashtags, for display."""
+    return ' '.join(_HASHTAG_RE.sub(' ', caption).split())
+
+
+def _cells(group: Group, row: list[str]) -> list[str]:
+    """Platform keys in a row that have a link, in the row's order."""
+    return [p for p in row if group.items.get(p) and group.items[p].url]
+
+
+def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
+    """Append the platform link grid: '<emoji> View | <emoji> View' rows."""
+    for row in consts.rows:
+        cells = _cells(group, row)
+        for index, key in enumerate(cells):
+            if index:
+                rich.text(consts.column_separator)
+            rich.emoji(consts.platform_emoji.get(key, '')).text(' ')
+            rich.link(consts.view_label, group.items[key].url)
+        if cells:
+            rich.text('\n')
+
+
+def _compose(
+    group: Group, order: tuple[str, ...], consts: Consts
+) -> PremiumMessage:
+    """Build the full post: author line, description line, and link grid."""
+    caption = _strip_tags(_primary(group, order).title)
+    rich = RichText()
+    rich.text(consts.author).text(' ')
+    rich.text(random.choice(consts.announce)).text(' ')  # noqa: S311
+    rich.emoji(random.choice(consts.love)).text('\n\n')  # noqa: S311
+    rich.emoji(random.choice(consts.ps)).text(' ')  # noqa: S311
+    rich.text(caption).text(' ')
+    rich.emoji(random.choice(consts.arrow_down)).text('\n\n')  # noqa: S311
+    _compose_links(rich, group, consts)
+    return rich.build()
 
 
 class Aggregator:
     """Groups platform messages by title and posts the collected links."""
 
     def __init__(self, client: TelegramClient, config: Config) -> None:
+        here = Path(__file__)
         self.client = client
         self.config = config
+        self.consts = _load_constants(here.with_name(CONSTANTS_FILE))
+        self.state_path = here.with_name(STATE_FILE)
         self.groups: list[Group] = []
         self.rejected: set[str] = set()
         self.me_id = 0
@@ -262,6 +347,7 @@ class Aggregator:
             len(group.items),
             len(self.config.platforms),
         )
+        self._save()
         if all(p in group.items for p in self.config.platforms):
             await self._flush(group)
 
@@ -285,6 +371,7 @@ class Aggregator:
             self.groups.remove(group)
             if group.task is not None:
                 group.task.cancel()
+        self._save()
 
     def _match(self, title: str) -> Group | None:
         """An existing group whose title is >= threshold similar, or None."""
@@ -298,13 +385,19 @@ class Aggregator:
         """Create a group for a new video and arm its flush timeout."""
         group = Group(title=item.title)
         self.groups.append(group)
-        group.task = asyncio.create_task(self._expire(group))
+        self._arm(group)
         return group
 
+    def _arm(self, group: Group) -> None:
+        """Schedule the group's timeout flush."""
+        group.task = asyncio.create_task(self._expire(group))
+
     async def _expire(self, group: Group) -> None:
-        """Flush a group with whatever arrived once the timeout elapses."""
-        await asyncio.sleep(self.config.timeout)
-        log.info('timeout for %r -- posting partial', group.title)
+        """Flush a group once its timeout (from creation) elapses."""
+        remaining = self.config.timeout - (time.time() - group.created_at)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+        log.info('timeout for %r -- posting what arrived', group.title)
         await self._flush(group)
 
     async def _flush(self, group: Group) -> None:
@@ -314,9 +407,10 @@ class Aggregator:
         self.groups.remove(group)
         if group.task is not None:
             group.task.cancel()
-        order = self.config.platforms
-        await self._post(_render(group, order), _first_thumb(group, order))
+        message = _compose(group, self.config.platforms, self.consts)
+        await self._post(message, _youtube_thumb(group))
         await self._like(group.msg_ids)
+        self._save()
 
     async def _like(self, msg_ids: set[int]) -> None:
         """React to each processed source message, best-effort."""
@@ -328,20 +422,48 @@ class Aggregator:
             except Exception:  # noqa: BLE001 -- reactions may be off in chat
                 log.warning('could not react to message %s', msg_id)
 
-    async def _post(self, text: str, thumb: str) -> None:
+    async def _post(self, message: PremiumMessage, thumb: str) -> None:
         """Send the message as a photo (if a thumbnail) or plain text."""
         if thumb:
             try:
                 await self.client.send_file(
-                    self.config.target, thumb, caption=text
+                    self.config.target,
+                    thumb,
+                    caption=message.text,
+                    formatting_entities=message.entities,
                 )
             except Exception:  # noqa: BLE001 -- bad thumb falls back to text
                 log.warning('thumbnail send failed; posting as text')
             else:
                 return
         await self.client.send_message(
-            self.config.target, text, link_preview=False
+            self.config.target,
+            message.text,
+            formatting_entities=message.entities,
+            link_preview=False,
         )
+
+    def _save(self) -> None:
+        """Persist in-flight groups and the rejected set to disk (atomic)."""
+        data = {
+            'rejected': sorted(self.rejected),
+            'groups': [_group_dict(g) for g in self.groups],
+        }
+        tmp = self.state_path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        tmp.replace(self.state_path)
+
+    def restore(self) -> None:
+        """Reload saved state and re-arm timers (call once at startup)."""
+        if not self.state_path.exists():
+            return
+        data = json.loads(self.state_path.read_text(encoding='utf-8'))
+        self.rejected = set(data.get('rejected') or [])
+        for raw in data.get('groups') or []:
+            group = _group_from_dict(raw)
+            self.groups.append(group)
+            self._arm(group)
+        log.info('restored %d pending videos from disk', len(self.groups))
 
 
 def _load_config() -> Config:
@@ -383,6 +505,7 @@ async def main() -> None:
 
     await client.start()
     agg.me_id = (await client.get_me()).id
+    agg.restore()
     log.info(
         'Listening on %s; posting to %s; platforms=%s',
         config.source,

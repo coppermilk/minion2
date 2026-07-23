@@ -5,3 +5,7 @@
 
 # Local secrets.
 .env
+
+# Aggregator runtime state (in-flight video groups); regenerated at runtime.
+aggregator_state.json
+aggregator_state.tmp

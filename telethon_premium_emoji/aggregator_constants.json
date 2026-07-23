@@ -1,0 +1,22 @@
+{
+  "author": "@da_eto_tyoma",
+  "announce": [
+    "загрузил новое видео",
+    "выпустил новый ролик",
+    "запостил свежее видео",
+    "залил новое видео"
+  ],
+  "love": ["🙈", "❤️", "😍", "🥰", "😻", "🔥"],
+  "ps": ["P.S."],
+  "arrow_down": ["↓", "↘", "⬇️"],
+  "view_label": "Посмотреть",
+  "column_separator": "  |  ",
+  "rows": [["tiktok", "youtube"], ["instagram", "pinterest"]],
+  "platform_emoji": {
+    "tiktok": "🎵",
+    "youtube": "▶️",
+    "instagram": "📷",
+    "pinterest": "📌"
+  },
+  "_note": "Emoji may be a plain glyph like \"🔥\" or a premium one written as {\"id\": \"5330248916224983855\", \"fallback\": \"🔥\"}. Premium emoji render only from a user account with Telegram Premium. Fill platform_emoji / ps / love with premium {id, fallback} entries to get the exact custom logos."
+}

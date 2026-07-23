@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from telethon.tl.types import MessageEntityCustomEmoji
 from telethon.tl.types import MessageEntityTextUrl
+from telethon.tl.types import MessageEntityUnderline
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -158,3 +159,51 @@ def build_post_with_bar(
         text=post.text + separator + bar.text,
         entities=[*post.entities, *bar.entities],
     )
+
+
+class RichText:
+    """Assemble a message from text, premium emoji, and underlined links.
+
+    Offsets are tracked in UTF-16 code units (Telegram's unit). Each method
+    returns ``self`` for chaining; call ``build()`` for the final message.
+    """
+
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+        self._entities: list[TypeMessageEntity] = []
+        self._offset = 0
+
+    def text(self, value: str) -> RichText:
+        """Append plain text."""
+        self._parts.append(value)
+        self._offset += _utf16_len(value)
+        return self
+
+    def emoji(self, spec: str | dict[str, object]) -> RichText:
+        """Append an emoji: a plain glyph, or a premium ``{id, fallback}``."""
+        if isinstance(spec, dict):
+            fallback = str(spec.get('fallback') or ' ')
+            emoji_id = int(str(spec.get('id')))
+            self._entities.append(
+                MessageEntityCustomEmoji(
+                    self._offset, _utf16_len(fallback), emoji_id
+                )
+            )
+            return self.text(fallback)
+        return self.text(str(spec))
+
+    def link(self, label: str, url: str) -> RichText:
+        """Append an underlined text link."""
+        length = _utf16_len(label)
+        if url:
+            self._entities.append(
+                MessageEntityTextUrl(self._offset, length, url)
+            )
+        self._entities.append(MessageEntityUnderline(self._offset, length))
+        return self.text(label)
+
+    def build(self) -> PremiumMessage:
+        """The assembled text and its entities."""
+        return PremiumMessage(
+            text=''.join(self._parts), entities=self._entities
+        )
