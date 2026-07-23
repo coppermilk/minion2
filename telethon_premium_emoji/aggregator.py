@@ -79,7 +79,6 @@ LIKE_REACTION = '\U0001f44d'  # thumbs up
 CONSTANTS_FILE = 'aggregator_constants.json'
 STATE_FILE = 'aggregator_state.json'
 
-_JSON_RE = re.compile(r'\{.*\}', re.DOTALL)
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
 
@@ -230,16 +229,22 @@ def _already_liked(message: object, me_id: int) -> bool:
     return False
 
 
-def _extract_json(text: str) -> dict[str, object] | None:
-    """The first JSON object embedded in a message, or None."""
-    match = _JSON_RE.search(text or '')
-    if not match:
-        return None
-    try:
-        data = json.loads(match.group())
-    except ValueError:
-        return None
-    return data if isinstance(data, dict) else None
+def _extract_fields(text: str, keys: Iterable[str]) -> dict[str, str]:
+    """Pull "key": value pairs from possibly-invalid JSON-ish text.
+
+    The source API is not strict JSON (trailing commas, unquoted or unclosed
+    values), so instead of json.loads we find each wanted key and read its
+    value: a quoted string, or a bareword up to the next comma or brace.
+    """
+    value_re = r'"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}\n]*)'
+    found: dict[str, str] = {}
+    for key in keys:
+        match = re.search('"' + re.escape(key) + value_re, text)
+        if match is None:
+            continue
+        value = match.group(1).strip().removeprefix('"').removesuffix('"')
+        found[key] = value.replace('\\/', '/').replace('\\"', '"').strip()
+    return found
 
 
 def _parse_item(
@@ -351,6 +356,7 @@ class Aggregator:
         self.config = config
         self.consts = _load_constants(here.with_name(CONSTANTS_FILE))
         self.state_path = here.with_name(STATE_FILE)
+        self._keys = tuple(dict.fromkeys(self.consts.fields.values()))
         self.groups: list[Group] = []
         self.rejected: set[str] = set()
         self.me_id = 0
@@ -386,9 +392,10 @@ class Aggregator:
     def _accept(self, message: object) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
         msg_id = int(getattr(message, 'id', 0) or 0)
-        data = _extract_json(getattr(message, 'message', '') or '')
-        if data is None:
-            log.info('msg %s: no JSON object found, ignoring', msg_id)
+        text = getattr(message, 'message', '') or ''
+        data = _extract_fields(text, self._keys)
+        if not data:
+            log.info('msg %s: no recognizable fields, ignoring', msg_id)
             return None
         if not _action_ok(data, self.consts):
             log.info(
