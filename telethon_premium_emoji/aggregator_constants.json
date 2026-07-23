@@ -1,4 +1,11 @@
 {
+  "fields": {
+    "caption": "caption",
+    "platform": "platform",
+    "link": "link",
+    "thumbnail": "thumnailUrl",
+    "duration": "duration"
+  },
   "author": "@da_eto_tyoma",
   "announce": [
     "загрузил новое видео",

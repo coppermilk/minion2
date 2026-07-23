@@ -93,6 +93,7 @@ class Config:
     platforms: tuple[str, ...]
     threshold: float
     timeout: float
+    backfill: int
 
 
 @dataclass(frozen=True)
@@ -119,10 +120,22 @@ class Group:
     task: asyncio.Task[None] | None = None
 
 
+# The incoming-message JSON keys, so a typo in the API can be fixed in the
+# constants file (the "fields" object) without touching code.
+DEFAULT_FIELDS = {
+    'caption': 'caption',
+    'platform': 'platform',
+    'link': 'link',
+    'thumbnail': 'thumnailUrl',
+    'duration': 'duration',
+}
+
+
 @dataclass(frozen=True)
 class Consts:
     """Randomizable texts and emoji for the post, loaded from JSON."""
 
+    fields: dict[str, str]
     author: str
     announce: list[str]
     love: list[object]
@@ -138,6 +151,7 @@ def _load_constants(path: Path) -> Consts:
     """Load the post constants from JSON, ignoring unknown keys."""
     data = json.loads(path.read_text(encoding='utf-8'))
     return Consts(
+        fields={**DEFAULT_FIELDS, **(data.get('fields') or {})},
         author=str(data.get('author', '')),
         announce=list(data.get('announce') or ['']),
         love=list(data.get('love') or ['']),
@@ -217,26 +231,25 @@ def _extract_json(text: str) -> dict[str, object] | None:
     return data if isinstance(data, dict) else None
 
 
-def _parse_item(data: dict[str, object], msg_id: int) -> Item | None:
-    """Build an Item from a parsed JSON object, or None if incomplete."""
-    title = str(data.get('caption') or data.get('title') or '').strip()
-    platform = str(data.get('platform') or '').strip()
+def _parse_item(
+    data: dict[str, object], msg_id: int, fields: dict[str, str]
+) -> Item | None:
+    """Build an Item from a parsed JSON object, or None if incomplete.
+
+    ``fields`` maps our names to the incoming JSON keys, so a renamed or
+    misspelled API key is fixed in the constants file, not here.
+    """
+    title = str(data.get(fields['caption']) or '').strip()
+    platform = str(data.get(fields['platform']) or '').strip()
     if not title or not platform:
         return None
-    url = str(data.get('link') or data.get('url') or '').strip()
-    thumb = str(
-        data.get('thumnailUrl')  # the API's field, spelled as-is (typo)
-        or data.get('thumbnailUrl')
-        or data.get('thumbnail')
-        or ''
-    ).strip()
     return Item(
         key=platform.lower(),
         platform=platform,
         title=title,
-        url=url,
-        thumbnail=thumb,
-        duration=str(data.get('duration') or '').strip(),
+        url=str(data.get(fields['link']) or '').strip(),
+        thumbnail=str(data.get(fields['thumbnail']) or '').strip(),
+        duration=str(data.get(fields['duration']) or '').strip(),
         msg_id=msg_id,
     )
 
@@ -333,7 +346,9 @@ class Aggregator:
 
     async def on_message(self, message: object) -> None:
         """Route one incoming message into its video group."""
+        msg_id = int(getattr(message, 'id', 0) or 0)
         if _already_liked(message, self.me_id):
+            log.info('msg %s: already processed (reacted), skipping', msg_id)
             return
         item = self._accept(message)
         if item is None:
@@ -341,25 +356,41 @@ class Aggregator:
         group = self._match(item.title) or self._start(item)
         group.items[item.key] = item
         group.msg_ids.add(item.msg_id)
+        missing = [p for p in self.config.platforms if p not in group.items]
         log.info(
-            'video %r: have %d/%d platforms',
+            'caught msg %s (%s) for %r -- have %d/%d, waiting for: %s',
+            item.msg_id,
+            item.platform,
             group.title,
             len(group.items),
             len(self.config.platforms),
+            ', '.join(missing) or 'nothing, complete',
         )
         self._save()
-        if all(p in group.items for p in self.config.platforms):
+        if not missing:
             await self._flush(group)
 
     def _accept(self, message: object) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
         data = _extract_json(getattr(message, 'message', '') or '')
         msg_id = int(getattr(message, 'id', 0) or 0)
-        item = _parse_item(data, msg_id) if data else None
-        if item is None or _norm(item.title) in self.rejected:
+        item = _parse_item(data, msg_id, self.consts.fields) if data else None
+        if item is None:
             return None
-        if _duration_seconds(item.duration) >= MAX_SHORT_SEC:
-            self._reject(item.title)  # a full-length video, not a Short
+        if _norm(item.title) in self.rejected:
+            log.info('msg %s: video already rejected as non-Short', msg_id)
+            return None
+        seconds = _duration_seconds(item.duration)
+        if seconds >= MAX_SHORT_SEC:
+            log.info(
+                'msg %s: %s is %ss (>= %ss) -- not a Short, dropping %r',
+                msg_id,
+                item.platform,
+                seconds,
+                MAX_SHORT_SEC,
+                item.title,
+            )
+            self._reject(item.title)
             return None
         return item
 
@@ -407,10 +438,42 @@ class Aggregator:
         self.groups.remove(group)
         if group.task is not None:
             group.task.cancel()
+        log.info(
+            'posting %r with %d platform(s): %s',
+            group.title,
+            len(group.items),
+            ', '.join(sorted(group.items)),
+        )
         message = _compose(group, self.config.platforms, self.consts)
         await self._post(message, _youtube_thumb(group))
         await self._like(group.msg_ids)
+        log.info(
+            'posted %r and liked %d source msg(s)',
+            group.title,
+            len(group.msg_ids),
+        )
         self._save()
+
+    async def backfill(self) -> None:
+        """Scan recent source history for messages not yet processed."""
+        limit = self.config.backfill
+        if limit <= 0:
+            return
+        log.info(
+            'backfill: scanning last %d messages of %s ...',
+            limit,
+            self.config.source,
+        )
+        try:
+            history = await self.client.get_messages(
+                self.config.source, limit=limit
+            )
+        except Exception:  # noqa: BLE001 -- source may be unreachable at start
+            log.warning('backfill: could not read source history')
+            return
+        for message in reversed(history):  # oldest first
+            await self.on_message(message)
+        log.info('backfill: done (%d messages scanned)', len(history))
 
     async def _like(self, msg_ids: set[int]) -> None:
         """React to each processed source message, best-effort."""
@@ -482,6 +545,9 @@ def _load_config() -> Config:
         # Two hours by default: platforms can arrive far apart. The wait is a
         # local timer (asyncio.sleep), so it costs Telegram nothing.
         timeout=float(os.environ.get('AGGREGATE_TIMEOUT_SEC', '7200')),
+        # How many recent source messages to scan at startup for unprocessed
+        # ones (those without our reaction).
+        backfill=int(os.environ.get('BACKFILL_LIMIT', '100')),
     )
 
 
@@ -512,6 +578,7 @@ async def main() -> None:
         config.target,
         ','.join(config.platforms),
     )
+    await agg.backfill()
     await client.run_until_disconnected()
 
 
