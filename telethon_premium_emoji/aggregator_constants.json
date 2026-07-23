@@ -6,17 +6,25 @@
     "запостил свежее видео",
     "залил новое видео"
   ],
-  "love": ["🙈", "❤️", "😍", "🥰", "😻", "🔥"],
-  "ps": ["P.S."],
-  "arrow_down": ["↓", "↘", "⬇️"],
+  "love": [
+    {"id": "5359648353913167803", "fallback": "🤩"},
+    {"id": "5255723571417719479", "fallback": "🤭"},
+    {"id": "5253764727028326961", "fallback": "🐰"}
+  ],
+  "ps": [
+    {"id": "5215303874713245624", "fallback": "👁‍🗨"}
+  ],
+  "arrow_down": [
+    {"id": "5352621830366571940", "fallback": "⬇️"}
+  ],
   "view_label": "Посмотреть",
   "column_separator": "  |  ",
   "rows": [["tiktok", "youtube"], ["instagram", "pinterest"]],
   "platform_emoji": {
-    "tiktok": "🎵",
-    "youtube": "▶️",
-    "instagram": "📷",
-    "pinterest": "📌"
+    "tiktok": {"id": "5199675785803234283", "fallback": "🤩"},
+    "youtube": {"id": "5262839855485825204", "fallback": "📕"},
+    "instagram": {"id": "5265150543596107416", "fallback": "📓"},
+    "pinterest": {"id": "5411109823125158956", "fallback": "🤩"}
   },
-  "_note": "Emoji may be a plain glyph like \"🔥\" or a premium one written as {\"id\": \"5330248916224983855\", \"fallback\": \"🔥\"}. Premium emoji render only from a user account with Telegram Premium. Fill platform_emoji / ps / love with premium {id, fallback} entries to get the exact custom logos."
+  "_note": "Emoji are premium {id, fallback} entries (render from a user account with Telegram Premium). Replace an entry with a plain glyph string like \"🔥\" to use a non-premium emoji. Add more love/announce variants freely."
 }
