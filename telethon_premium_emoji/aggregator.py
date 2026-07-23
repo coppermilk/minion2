@@ -358,6 +358,8 @@ class Aggregator:
     async def on_message(self, message: object) -> None:
         """Route one incoming message into its video group."""
         msg_id = int(getattr(message, 'id', 0) or 0)
+        preview = (getattr(message, 'message', '') or '').replace('\n', ' ')
+        log.info('received msg %s: %.120s', msg_id, preview)
         if _already_liked(message, self.me_id):
             log.info('msg %s: already processed (reacted), skipping', msg_id)
             return
@@ -383,10 +385,11 @@ class Aggregator:
 
     def _accept(self, message: object) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
+        msg_id = int(getattr(message, 'id', 0) or 0)
         data = _extract_json(getattr(message, 'message', '') or '')
         if data is None:
+            log.info('msg %s: no JSON object found, ignoring', msg_id)
             return None
-        msg_id = int(getattr(message, 'id', 0) or 0)
         if not _action_ok(data, self.consts):
             log.info(
                 'msg %s: action is not %r, skipping',
@@ -396,6 +399,7 @@ class Aggregator:
             return None
         item = _parse_item(data, msg_id, self.consts.fields)
         if item is None or _norm(item.title) in self.rejected:
+            log.info('msg %s: no platform/caption or already rejected', msg_id)
             return None
         return self._short_or_reject(item, msg_id)
 
