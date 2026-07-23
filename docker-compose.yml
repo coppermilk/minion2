@@ -227,39 +227,29 @@ services:
     volumes:
       - ./deploy/reactflow:/usr/share/nginx/html:ro
 
-  # premium-emoji: a Telethon USER account (not a bot-token minion), so it does
-  # NOT ride the shared minion image -- it needs `telethon`, not torch, and logs
-  # in with a user session (the only kind allowed to send premium emoji). Hence
-  # its own tiny image built from telethon_premium_emoji/. The `build:` here is
-  # the deliberate exception to the "NAS only pulls" rule above: this image is
-  # telethon-only and safe to build anywhere (no torch to compile on the NAS).
+  # aggregator: a Telethon USER account (not a bot-token minion) -- the only
+  # kind that may send premium emoji. It listens to a source chat, groups a
+  # Short's per-platform links, and posts the collected message to one or more
+  # target chats. It rides the ONE shared image now: telethon is baked in
+  # (pyproject `tg` extra), so there is no separate image to build.
   #
-  # The session is a FILE on the shared /data mount, so a one-time interactive
-  # login survives restarts and shutdowns. First login (once):
-  #   docker compose run --rm premium-emoji
-  # then `docker compose up -d` runs it silently. Needs TELEGRAM_API_ID /
-  # TELEGRAM_API_HASH in .env (from https://my.telegram.org).
-  premium-emoji:
-    build:
-      context: ./telethon_premium_emoji
-    image: minion2-premium-emoji
-    env_file: .env
+  # Config lives in .env: SOURCE_CHAT_ID, TARGET_CHAT_ID (comma-separated for
+  # several chats), plus TELEGRAM_API_ID / TELEGRAM_API_HASH (my.telegram.org).
+  # The session is a FILE on the shared /data mount, so a one-time login (or a
+  # session file generated on Windows and dropped at
+  # /data/bots/aggregator/session.session) survives restarts and shutdowns --
+  # no rebuild. First login (once): docker compose run --rm aggregator
+  # then `docker compose up -d aggregator` runs it silently.
+  aggregator:
+    <<: *minion
     environment:
-      TELEGRAM_SESSION_FILE: /data/bots/premium-emoji/session
-    volumes:
-      - ${DRIVE_NAS}:/data
-    restart: unless-stopped
-    init: true
+      <<: *minion-env
+      TELEGRAM_SESSION_FILE: /data/bots/aggregator/session
+      AGGREGATOR_STATE_DIR: /data/bots/aggregator
+    command: python -m minions.aggregator.main
     stdin_open: true            # for the one-time interactive login
     tty: true
     mem_limit: 256m
-    security_opt:
-      - no-new-privileges:true
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: '3'
 
 # Ollama's model blobs: a disposable, re-pullable CACHE. A named volume
 # (Docker auto-creates it) rather than a bind, so a missing host subpath

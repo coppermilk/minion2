@@ -42,3 +42,31 @@ Verify in `DRIVE\bots\_data\logs\`:
 
 Idle cost is near zero by design: both bots sleep in folder waits and
 the write-stability guard keeps half-downloaded files untouched.
+
+## Generating the aggregator session on Windows
+
+The **aggregator** userbot runs on the NAS (Docker), but its Telethon
+login is easiest to do here, on a machine where entering the phone code
+and 2FA is convenient. You generate the session **file** once and hand it
+to the NAS -- no container rebuild.
+
+1. Install the package with the telethon extra:
+   `pip install -e .[tg]` (from the repo root).
+2. Put `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` (from
+   <https://my.telegram.org>) in the repo-root `.env`.
+3. Log in once -- it asks for phone, code, and 2FA if enabled:
+
+   ```
+   python -m minions.aggregator.login
+   ```
+
+   It writes `telethon.session` (next to `minions\aggregator\`) and
+   prints its path.
+4. Copy that file to the NAS at
+   `\\<nas>\docker\<DRIVE_NAS>\bots\aggregator\session.session`
+   (compose points `TELEGRAM_SESSION_FILE` there). Then
+   `docker compose up -d aggregator` on the NAS logs in silently from it.
+
+> The `.session` file is full account access -- it is git-ignored; don't
+> commit or share it, and revoke it from Telegram -> Settings -> Devices
+> if it leaks.

@@ -11,6 +11,10 @@
 # NAS never compiles torch -- it just downloads the ready image. The
 # GHCR package and the repo are public, so no credentials are needed.
 #
+# Everything rides that one image now, including the Telethon aggregator
+# userbot (telethon is baked in via the `tg` extra) -- there is no separate
+# premium-emoji image to build any more.
+#
 # Setup (once): Control Panel -> Task Scheduler -> Create -> Scheduled
 # Task -> User-defined script; User: root; Schedule: e.g. weekly Sunday
 # 23:00 (before Monday's week-clean); Run command:
@@ -69,7 +73,9 @@ trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
 # Works whether or not the folder is already a git repo, and never
 # needs an empty directory: `git init` + hard reset overwrites tracked
 # files in place where `git clone` would refuse. `.env` is git-ignored,
-# so it is preserved untouched across every run.
+# so it is preserved untouched across every run -- and so is a
+# `telethon.session` file kept in the checkout: `git reset --hard` never
+# touches ignored, untracked files, and this script runs no `git clean`.
 if [ ! -d "$REPO/.git" ]; then
     echo 'no .git: initialising the checkout in place'
     "$GIT" init
@@ -94,6 +100,12 @@ compose pull
 # The ollama-models named volume and the /data weights survive `down`,
 # so nothing re-downloads and the gap is seconds.
 compose down --remove-orphans
+
+# The aggregator now rides the shared image; drop the obsolete standalone
+# premium-emoji image if an earlier version of this deploy built it
+# (`image prune` only removes DANGLING images, not this tagged one).
+"$DOCKER" image rm -f minion2-premium-emoji 2>/dev/null || true
+
 compose up -d
 
 # Remove now-dangling old layers so the NAS stays bounded.

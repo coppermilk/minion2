@@ -28,7 +28,7 @@ COPY pyproject.toml ./
 RUN python -c "\
 import tomllib; \
 p = tomllib.load(open('pyproject.toml', 'rb'))['project']; \
-extras = [x for k in ('ml', 'llm', 'links') \
+extras = [x for k in ('ml', 'llm', 'links', 'tg') \
           for x in p['optional-dependencies'][k]]; \
 print('\n'.join(p['dependencies'] + extras))" > /tmp/requirements.txt \
     && pip install --no-cache-dir \

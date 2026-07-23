@@ -29,6 +29,9 @@ dependencies = [
 ml = ['torch', 'torchvision', 'transformers', 'facenet-pytorch']
 llm = ['google-genai']
 links = ['yt-dlp']
+# The aggregator userbot (minions/aggregator): a Telethon USER account is the
+# only kind that may send premium emoji. Baked into the one shared image.
+tg = ['telethon>=1.36,<2']
 dev = [
     'pytest>=8',
     'ruff>=0.8',
@@ -47,6 +50,8 @@ minion_core = ['py.typed', 'prompts/*.md']
 'minions.bots.donations' = ['messages.json']
 # The wishlist bot's Russian thank-you template: same rationale.
 'minions.bots.wishlist' = ['messages.json']
+# The aggregator's editable post constants (UTF-8 texts + premium emoji ids).
+'minions.aggregator' = ['aggregator_constants.json']
 
 # ---------------------------------------------------------------- ruff
 [tool.ruff]
@@ -116,12 +121,12 @@ convention = 'pep257'
 'services/http.py' = ['PLC0415', 'C901']
 'services/tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
                       'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
-# telethon_premium_emoji: a standalone user-account app (own Dockerfile and
-# deps), run as `python main.py`, not imported as a kernel package -- so the
-# implicit-namespace rule does not apply (INP001). login.py prints the session
-# string to the console for the operator to copy: that IS its output, so the
+# minions/aggregator: the userbot's operator tools print to the console for the
+# person running them -- login.py reports where it wrote the session file, and
+# dump_emoji_ids.py prints each premium emoji's id: that IS their output, so the
 # no-print rule is waived there (T201).
-'telethon_premium_emoji/*' = ['INP001', 'T201']
+'minions/aggregator/login.py' = ['T201']
+'minions/aggregator/dump_emoji_ids.py' = ['T201']
 
 # ---------------------------------------------------------------- mypy
 [tool.mypy]
@@ -143,6 +148,7 @@ module = [
     'transformers.*',
     'facenet_pytorch.*',
     'google.*',
+    'telethon.*',
 ]
 ignore_missing_imports = true
 
@@ -156,6 +162,14 @@ ignore_missing_imports = true
 module = ['services.*']
 follow_imports = 'skip'
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The aggregator userbot rides the kernel package tree (minions/aggregator) but
+# is a standalone Telethon app, not part of the strict kernel gate -- exactly
+# like services.* above. Telethon is untyped and its event/message objects are
+# duck-typed here, so keep it out of strict checking; ruff (ALL) still lints it.
+module = ['minions.aggregator.*']
+ignore_errors = true
 
 # -------------------------------------------------------------- pytest
 [tool.pytest.ini_options]
