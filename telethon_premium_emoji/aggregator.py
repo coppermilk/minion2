@@ -13,10 +13,10 @@ every platform's link is posted to the target chat.
 Only Shorts are aggregated: a message whose known ``duration`` reaches 3
 minutes marks that video as full-length and drops it. Platforms are ranked by
 priority (tiktok, youtube, pinterest, instagram): the order sets the link order
-in the post and picks which platform's caption and thumbnail lead. After a
-video is posted, its source message ids are saved to disk (and the messages
-are also liked, best-effort); on restart, backfill skips any message whose id
-was already posted -- so re-posting never happens even if reactions are off.
+in the post and picks which platform's caption leads (the thumbnail is taken
+from YouTube only). After a video is posted, its source message ids are saved
+to disk; on restart, backfill skips any message whose id was already posted, so
+re-posting never happens.
 
 Notes:
     * The link is read from ``link`` (or ``url``); the thumbnail from
@@ -25,15 +25,16 @@ Notes:
       the links as its caption, otherwise a plain text message.
     * Messages must be valid JSON; anything that does not parse is ignored.
 
-The post's texts and emoji (author, announce phrases, love/ps/arrow emoji,
-platform glyphs, the "view" label) are all editable in
-``aggregator_constants.json`` -- a JSON file, so it may hold non-ASCII text.
-In-flight groups are persisted to ``aggregator_state.json`` and restored on
-start, so a restart within the (2 hour) window does not lose pending videos.
+Almost everything is editable in ``aggregator_constants.json`` (a JSON file,
+so it may hold non-ASCII text): source_chat, target_chat, max_duration_sec,
+the incoming field names, and the post's texts and emoji. In-flight groups are
+persisted to ``aggregator_state.json`` and restored on start, so a restart
+within the timeout window does not lose pending videos and never re-posts.
 
-Env: TELEGRAM_API_ID, TELEGRAM_API_HASH, SOURCE_CHAT_ID (where the JSON
-arrives), TARGET_CHAT_ID (where to post), and optional PLATFORMS, TITLE_MATCH
-(0-1, default 0.9), AGGREGATE_TIMEOUT_SEC (default 7200).
+Only credentials live in the env: TELEGRAM_API_ID, TELEGRAM_API_HASH. Any
+setting (SOURCE_CHAT_ID, TARGET_CHAT_ID, PLATFORMS, TITLE_MATCH,
+AGGREGATE_TIMEOUT_SEC, BACKFILL_LIMIT, MAX_DURATION_SEC) may still be set as an
+env var to override the JSON.
 """
 
 from __future__ import annotations
@@ -74,8 +75,6 @@ DEFAULT_TARGET_CHAT_ID = -1002431466060
 DEFAULT_PLATFORMS = 'tiktok,youtube,pinterest,instagram'
 # Only Shorts: a video whose known duration reaches this is dropped.
 MAX_SHORT_SEC = 180
-# Reaction used to mark a source message as processed.
-LIKE_REACTION = '\U0001f44d'  # thumbs up
 # Files next to this script: the editable constants and the saved state.
 CONSTANTS_FILE = 'aggregator_constants.json'
 STATE_FILE = 'aggregator_state.json'
@@ -100,6 +99,7 @@ class Config:
     threshold: float
     timeout: float
     backfill: int
+    max_duration: int
 
 
 @dataclass(frozen=True)
@@ -136,6 +136,8 @@ DEFAULT_FIELDS = {
     'thumbnail': 'thumnailUrl',
     'duration': 'duration',
 }
+# Thumbnail key spellings seen in the wild; any is accepted (optional field).
+_THUMB_ALIASES = ('thumbnail', 'thumbnailUrl', 'thumnailUrl')
 
 
 @dataclass(frozen=True)
@@ -225,17 +227,6 @@ def _action_ok(data: dict[str, object], consts: Consts) -> bool:
     return value == consts.action_value
 
 
-def _already_liked(message: object, me_id: int) -> bool:
-    """Whether this account already reacted to the message (processed)."""
-    reactions = getattr(message, 'reactions', None)
-    recent = getattr(reactions, 'recent_reactions', None) or []
-    for reaction in recent:
-        peer = getattr(reaction, 'peer_id', None)
-        if getattr(peer, 'user_id', None) == me_id:
-            return True
-    return False
-
-
 def _extract_fields(text: str, keys: Iterable[str]) -> dict[str, str]:
     """Pull "key": value pairs from possibly-invalid JSON-ish text.
 
@@ -271,10 +262,19 @@ def _parse_item(
         platform=platform,
         title=title,
         url=str(data.get(fields['link']) or '').strip(),
-        thumbnail=str(data.get(fields['thumbnail']) or '').strip(),
+        thumbnail=_pick(data, fields['thumbnail'], *_THUMB_ALIASES),
         duration=str(data.get(fields['duration']) or '').strip(),
         msg_id=msg_id,
     )
+
+
+def _pick(data: dict[str, object], *keys: str) -> str:
+    """First non-empty value among ``keys`` (handles optional/renamed keys)."""
+    for key in keys:
+        value = str(data.get(key) or '').strip()
+        if value:
+            return value
+    return ''
 
 
 def _primary(group: Group, order: Iterable[str]) -> Item:
@@ -391,18 +391,19 @@ class Aggregator:
         self.config = config
         self.consts = _load_constants(here.with_name(CONSTANTS_FILE))
         self.state_path = here.with_name(STATE_FILE)
-        self._keys = tuple(dict.fromkeys(self.consts.fields.values()))
+        keys = [*self.consts.fields.values(), *_THUMB_ALIASES]
+        self._keys = tuple(dict.fromkeys(keys))
         self.groups: list[Group] = []
         self.rejected: set[str] = set()
         self.processed_ids: set[int] = set()
-        self.me_id = 0
 
     async def on_message(self, message: object) -> None:
         """Route one incoming message into its video group."""
         msg_id = int(getattr(message, 'id', 0) or 0)
         preview = (getattr(message, 'message', '') or '').replace('\n', ' ')
         log.info('received msg %s: %.120s', msg_id, preview)
-        if self._seen(msg_id, message):
+        if msg_id in self.processed_ids:
+            log.info('msg %s: already posted, skipping', msg_id)
             return
         item = self._accept(message)
         if item is None:
@@ -423,16 +424,6 @@ class Aggregator:
         self._save()
         if not missing:
             await self._flush(group)
-
-    def _seen(self, msg_id: int, message: object) -> bool:
-        """Whether this message was already posted (or carries our like)."""
-        if msg_id in self.processed_ids:
-            log.info('msg %s: already posted, skipping', msg_id)
-            return True
-        if _already_liked(message, self.me_id):
-            log.info('msg %s: already reacted, skipping', msg_id)
-            return True
-        return False
 
     def _accept(self, message: object) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
@@ -456,15 +447,18 @@ class Aggregator:
         return self._short_or_reject(item, msg_id)
 
     def _short_or_reject(self, item: Item, msg_id: int) -> Item | None:
-        """Return the item if it is a Short, else reject the video and log."""
+        """Return the item if it is a Short, else reject the video and log.
+
+        An empty/absent duration means unknown -- treated as a Short (kept).
+        """
         seconds = _duration_seconds(item.duration)
-        if seconds >= MAX_SHORT_SEC:
+        if seconds >= self.config.max_duration:
             log.info(
                 'msg %s: %s is %ss (>= %ss) -- not a Short, dropping %r',
                 msg_id,
                 item.platform,
                 seconds,
-                MAX_SHORT_SEC,
+                self.config.max_duration,
                 item.title,
             )
             self._reject(item.title)
@@ -524,12 +518,7 @@ class Aggregator:
         message = _compose(group, self.config.platforms, self.consts)
         await self._post(message, _youtube_thumb(group))
         self._mark_posted(group.msg_ids)
-        await self._like(group.msg_ids)
-        log.info(
-            'posted %r and liked %d source msg(s)',
-            group.title,
-            len(group.msg_ids),
-        )
+        log.info('posted %r', group.title)
         self._save()
 
     def _mark_posted(self, msg_ids: set[int]) -> None:
@@ -587,16 +576,6 @@ class Aggregator:
             await self.on_message(message)
         log.info('backfill: done (%d messages scanned)', len(history))
 
-    async def _like(self, msg_ids: set[int]) -> None:
-        """React to each processed source message, best-effort."""
-        for msg_id in msg_ids:
-            try:
-                await self.client.send_reaction(
-                    self.config.source, msg_id, LIKE_REACTION
-                )
-            except Exception:  # noqa: BLE001 -- reactions may be off in chat
-                log.warning('could not react to message %s', msg_id)
-
     async def _post(self, message: PremiumMessage, thumb: str) -> None:
         """Send the message as a photo (if a thumbnail) or plain text."""
         if thumb:
@@ -647,25 +626,41 @@ class Aggregator:
         )
 
 
+def _setting(data: dict[str, object], env: str, key: str) -> str:
+    """The raw value for a setting: env var wins, then the JSON, else ''."""
+    return os.environ.get(env) or str(data.get(key) or '')
+
+
 def _load_config() -> Config:
-    """Read the aggregator settings from the environment."""
-    source = os.environ.get('SOURCE_CHAT_ID', str(DEFAULT_SOURCE_CHAT_ID))
-    platforms = tuple(
-        p.strip().lower()
-        for p in os.environ.get('PLATFORMS', DEFAULT_PLATFORMS).split(',')
-        if p.strip()
+    """Read the aggregator settings from the constants JSON (env overrides)."""
+    data = json.loads(
+        Path(__file__).with_name(CONSTANTS_FILE).read_text(encoding='utf-8')
     )
+    csv = _setting(data, 'PLATFORMS', 'platforms') or DEFAULT_PLATFORMS
+    platforms = tuple(p.strip().lower() for p in csv.split(',') if p.strip())
     return Config(
-        source=int(source),
-        target=int(os.environ.get('TARGET_CHAT_ID', DEFAULT_TARGET_CHAT_ID)),
+        source=int(
+            _setting(data, 'SOURCE_CHAT_ID', 'source_chat')
+            or DEFAULT_SOURCE_CHAT_ID
+        ),
+        target=int(
+            _setting(data, 'TARGET_CHAT_ID', 'target_chat')
+            or DEFAULT_TARGET_CHAT_ID
+        ),
         platforms=platforms,
-        threshold=float(os.environ.get('TITLE_MATCH', '0.9')),
+        threshold=float(_setting(data, 'TITLE_MATCH', 'title_match') or '0.9'),
         # Two hours by default: platforms can arrive far apart. The wait is a
         # local timer (asyncio.sleep), so it costs Telegram nothing.
-        timeout=float(os.environ.get('AGGREGATE_TIMEOUT_SEC', '7200')),
-        # How many recent source messages to scan at startup for unprocessed
-        # ones (those without our reaction).
-        backfill=int(os.environ.get('BACKFILL_LIMIT', '100')),
+        timeout=float(
+            _setting(data, 'AGGREGATE_TIMEOUT_SEC', 'timeout_sec') or '7200'
+        ),
+        # Recent source messages to scan at startup for unprocessed ones.
+        backfill=int(_setting(data, 'BACKFILL_LIMIT', 'backfill') or '100'),
+        # A video whose known duration reaches this many seconds is dropped.
+        max_duration=int(
+            _setting(data, 'MAX_DURATION_SEC', 'max_duration_sec')
+            or MAX_SHORT_SEC
+        ),
     )
 
 
@@ -691,7 +686,6 @@ async def main() -> None:
     client.add_event_handler(_handler, events.NewMessage(chats=config.source))
 
     await client.start()
-    agg.me_id = (await client.get_me()).id
     agg.restore()
     log.info(
         'Listening on %s; posting to %s; platforms=%s',

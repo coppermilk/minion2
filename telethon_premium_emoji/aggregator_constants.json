@@ -1,4 +1,7 @@
 {
+  "source_chat": -1004402620527,
+  "target_chat": -1002431466060,
+  "max_duration_sec": 180,
   "fields": {
     "action": "action",
     "platform": "platform",
