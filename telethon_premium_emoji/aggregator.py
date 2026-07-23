@@ -83,6 +83,8 @@ STATE_FILE = 'aggregator_state.json'
 STATUS_INTERVAL = 60
 # How many processed source-message ids to remember (restart dedup).
 PROCESSED_CAP = 5000
+# Chat command (sent in the watcher chat) that previews the premium emoji.
+COMMAND_EMOJIS = '/emojis'
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -336,6 +338,34 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
             rich.text('\n')
 
 
+def _emoji_id_str(spec: object) -> str:
+    """The document id of a premium emoji spec, or '(plain)' for a glyph."""
+    if isinstance(spec, dict):
+        return str(spec.get('id', '?'))
+    return '(plain)'
+
+
+def _emoji_section(rich: RichText, label: str, specs: list[object]) -> None:
+    """Append one labelled block of emoji, each with its id, to ``rich``."""
+    rich.text(label + ':\n')
+    for spec in specs:
+        rich.emoji(spec).text(' ' + _emoji_id_str(spec) + '\n')
+    rich.text('\n')
+
+
+def _render_constants(consts: Consts) -> PremiumMessage:
+    """A preview of every premium emoji constant, rendered with its id."""
+    rich = RichText()
+    rich.text('Premium emoji constants\n\n')
+    _emoji_section(rich, 'love', consts.love)
+    _emoji_section(rich, 'ps', consts.ps)
+    _emoji_section(rich, 'arrow_down', consts.arrow_down)
+    rich.text('platforms:\n')
+    for name, spec in consts.platform_emoji.items():
+        rich.emoji(spec).text(f' {name} {_emoji_id_str(spec)}\n')
+    return rich.build()
+
+
 def _compose(
     group: Group, order: tuple[str, ...], consts: Consts
 ) -> PremiumMessage:
@@ -509,6 +539,16 @@ class Aggregator:
             keep = sorted(self.processed_ids)[-PROCESSED_CAP:]
             self.processed_ids = set(keep)
 
+    async def show_constants(self) -> None:
+        """Post a preview of every premium emoji constant to the watcher."""
+        message = _render_constants(self.consts)
+        await self.client.send_message(
+            self.config.source,
+            message.text,
+            formatting_entities=message.entities,
+        )
+        log.info('sent premium constants preview to %s', self.config.source)
+
     async def status_loop(self) -> None:
         """Periodically log which videos are pending and what they await."""
         while True:
@@ -643,6 +683,9 @@ async def main() -> None:
     agg = Aggregator(client, config)
 
     async def _handler(event: events.NewMessage.Event) -> None:
+        if (event.raw_text or '').strip().lower() == COMMAND_EMOJIS:
+            await agg.show_constants()
+            return
         await agg.on_message(event.message)
 
     client.add_event_handler(_handler, events.NewMessage(chats=config.source))
