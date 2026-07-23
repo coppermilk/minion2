@@ -47,8 +47,9 @@ and the chats); **`aggregator_constants.json`** carries all behaviour.
 | `TELEGRAM_PASSWORD` | optional 2FA/cloud password |
 | `SOURCE_CHAT_ID` | the chat the per-platform JSON arrives in (monitoring) |
 | `TARGET_CHAT_ID` | target chat(s) -- **comma-separated** to post to several |
-| `TELEGRAM_SESSION_FILE` | session-file base path (`.session` appended) |
-| `AGGREGATOR_STATE_DIR` | where in-flight state is persisted |
+| `TELEGRAM_SESSION_FILE` | session-file base path override (`.session` appended) |
+| `AGGREGATOR_STATE_DIR` | state-dir override |
+| `DRIVE` | library root; session + state default to `<DRIVE>/bots/aggregator/` |
 
 **`aggregator_constants.json`** (behaviour + content):
 
@@ -70,9 +71,11 @@ python -m minions.aggregator.main
 ```
 
 The first run logs you in interactively (phone, code, 2FA if enabled) and writes
-`telethon.session` next to this package. Every run after that is silent. That
-file is **git-ignored**, so a session kept in the checkout survives a repo
-re-sync (`deploy/nas-update.sh`) -- exactly like `.env`.
+the session to `<DRIVE>/bots/aggregator/telethon.session` when `DRIVE` is set
+(on Windows that is your Google Drive), else `telethon.session` next to this
+package. Every run after that is silent, reading from the same place. A session
+kept in the checkout is **git-ignored**, so it survives a repo re-sync
+(`deploy/nas-update.sh`) -- exactly like `.env`.
 
 ## Run in Docker (this project's shared image)
 

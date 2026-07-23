@@ -38,9 +38,12 @@ The env holds only the deploy knobs: credentials (TELEGRAM_API_ID,
 TELEGRAM_API_HASH, optional TELEGRAM_PASSWORD), the monitoring chat
 SOURCE_CHAT_ID, and the target chat(s) TARGET_CHAT_ID (comma-separated -- list
 several chats to post to all of them). The chats live ONLY in the env, the
-behaviour ONLY in the JSON -- there is no overlap. The session file is
-TELEGRAM_SESSION_FILE (default 'telethon.session' next to this package); state
-goes to AGGREGATOR_STATE_DIR when set.
+behaviour ONLY in the JSON -- there is no overlap. The session file and the
+state default to <DRIVE>/bots/aggregator/ (DRIVE is the library root: your
+Google Drive on Windows, /data in the NAS container) -- so the session is
+created and read from the same place on every host. Override with
+TELEGRAM_SESSION_FILE / AGGREGATOR_STATE_DIR; with no DRIVE either, they fall
+back next to this package.
 """
 
 from __future__ import annotations
@@ -239,43 +242,57 @@ def load_env() -> None:
     _load_dotenv(PROJECT_ENV)
 
 
-# Default file-session base path: 'telethon.session' next to this package.
+# Last-resort file-session base path: 'telethon.session' next to this package.
 # It is git-ignored, so a session file kept in the repo checkout survives a
 # repo re-sync (deploy/nas-update.sh's `git reset --hard`), exactly like .env.
 # Telethon appends '.session', so the file on disk is 'telethon.session'.
 DEFAULT_SESSION_PATH = Path(__file__).with_name('telethon')
 
 
-def _resolve_session_path() -> Path:
-    """The file-session base path, from TELEGRAM_SESSION_FILE or the default.
+def _drive_dir() -> Path | None:
+    """The aggregator data dir <DRIVE>/bots/aggregator, or None if no DRIVE.
 
-    A trailing '.session' is stripped so the value works whether you point at
-    the file itself or its base name (e.g. /data/bots/aggregator/session in the
-    container, on the persistent mount).
+    DRIVE is the project's library root -- the Google Drive folder on Windows,
+    /data in the NAS container (compose forces it). Every bot keeps its files
+    under <DRIVE>/bots/<name>/, so the session and state default there too: on
+    Windows that is your Google Drive, on the NAS the /data mount.
+    """
+    drive = os.environ.get('DRIVE')
+    if not drive:
+        return None
+    return Path(drive).expanduser() / 'bots' / 'aggregator'
+
+
+def _resolve_session_path() -> Path:
+    """The file-session base path (override, else <DRIVE>, else the package).
+
+    A trailing '.session' is stripped so an override works whether you point at
+    the file or its base name. With no TELEGRAM_SESSION_FILE, the session lives
+    at <DRIVE>/bots/aggregator/telethon.session (DRIVE set), else next to the
+    package.
     """
     override = os.environ.get('TELEGRAM_SESSION_FILE')
-    if not override:
-        return DEFAULT_SESSION_PATH
-    path = Path(override).expanduser()
-    if path.suffix == '.session':
-        path = path.with_suffix('')
-    return path
+    if override:
+        path = Path(override).expanduser()
+        return path.with_suffix('') if path.suffix == '.session' else path
+    drive = _drive_dir()
+    return drive / 'telethon' if drive is not None else DEFAULT_SESSION_PATH
 
 
 def _resolve_state_path(default: Path) -> Path:
-    """Where the in-flight state file lives: AGGREGATOR_STATE_DIR or default.
+    """Where the state file lives (override, else <DRIVE>, else the package).
 
-    In the container the package dir is ephemeral (/app), so compose points
-    AGGREGATOR_STATE_DIR at the /data mount -- then dedup (posted ids) and any
-    pending groups survive a `compose down/up` (nas-update). Unset for local
-    runs keeps the state next to the package.
+    Same rule as the session: an explicit AGGREGATOR_STATE_DIR wins, else it
+    sits under <DRIVE>/bots/aggregator (Windows Google Drive or the NAS /data
+    mount, so it survives a `compose down/up`), else next to the package.
     """
-    state_dir = os.environ.get('AGGREGATOR_STATE_DIR')
-    if not state_dir:
+    override = os.environ.get('AGGREGATOR_STATE_DIR')
+    directory = Path(override) if override else _drive_dir()
+    if directory is None:
         return default
-    path = Path(state_dir).expanduser()
-    path.mkdir(parents=True, exist_ok=True)
-    return path / STATE_FILE
+    directory = directory.expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / STATE_FILE
 
 
 def _norm(title: str) -> str:

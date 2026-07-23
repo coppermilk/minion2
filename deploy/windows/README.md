@@ -58,21 +58,24 @@ to the NAS -- no container rebuild.
    the full `.[ml,llm,links,tg]` stack and re-runs whenever
    `pyproject.toml` changes.
 2. Put `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` (from
-   <https://my.telegram.org>) in the repo-root `.env`.
+   <https://my.telegram.org>) in the repo-root `.env`, and make sure
+   `DRIVE` points at your Google Drive folder (e.g.
+   `DRIVE=C:\Users\a\My Drive`).
 3. Log in once -- it asks for phone, code, and 2FA if enabled:
 
    ```
    python -m minions.aggregator.login
    ```
 
-   It writes `telethon.session` (next to `minions\aggregator\`) and
-   prints its path.
-4. Copy that file **as-is** (no rename) to the NAS at
-   `<DRIVE_NAS>/bots/aggregator/telethon.session` -- where `<DRIVE_NAS>`
-   is the host folder compose mounts as `/data` (the parent of your
-   existing `bots/` folder; check `DRIVE_NAS` in `.env`). Compose points
-   `TELEGRAM_SESSION_FILE` at `.../telethon`, so the file name matches.
-   Then `docker compose up -d aggregator` on the NAS logs in silently.
+   It creates the session at **`%DRIVE%\bots\aggregator\telethon.session`**
+   (right in your Google Drive) and prints the exact path. The aggregator
+   reads it from that same place, so on Windows there is nothing else to do.
+4. To run the aggregator on the **NAS** instead, copy that file **as-is**
+   (no rename) to `<DRIVE_NAS>/bots/aggregator/telethon.session` -- the
+   host folder compose mounts as `/data` (check `DRIVE_NAS` in `.env`).
+   The container defaults the session to `<DRIVE>/bots/aggregator/`
+   (DRIVE=/data there), so the name and layout match. Then
+   `docker compose up -d aggregator` logs in silently.
 
 > The `.session` file is full account access -- it is git-ignored; don't
 > commit or share it, and revoke it from Telegram -> Settings -> Devices
