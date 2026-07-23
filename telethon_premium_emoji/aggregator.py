@@ -123,6 +123,7 @@ class Group:
 # The incoming-message JSON keys, so a typo in the API can be fixed in the
 # constants file (the "fields" object) without touching code.
 DEFAULT_FIELDS = {
+    'action': 'action',
     'caption': 'caption',
     'platform': 'platform',
     'link': 'link',
@@ -136,6 +137,7 @@ class Consts:
     """Randomizable texts and emoji for the post, loaded from JSON."""
 
     fields: dict[str, str]
+    action_value: str
     author: str
     announce: list[str]
     love: list[object]
@@ -152,6 +154,7 @@ def _load_constants(path: Path) -> Consts:
     data = json.loads(path.read_text(encoding='utf-8'))
     return Consts(
         fields={**DEFAULT_FIELDS, **(data.get('fields') or {})},
+        action_value=str(data.get('action_value', '')),
         author=str(data.get('author', '')),
         announce=list(data.get('announce') or ['']),
         love=list(data.get('love') or ['']),
@@ -206,6 +209,14 @@ def _duration_seconds(text: str) -> int:
     for part in parts:
         seconds = seconds * 60 + part
     return seconds
+
+
+def _action_ok(data: dict[str, object], consts: Consts) -> bool:
+    """Whether the message's action is the one we act on (or no filter set)."""
+    if not consts.action_value:
+        return True
+    value = str(data.get(consts.fields['action']) or '')
+    return value == consts.action_value
 
 
 def _already_liked(message: object, me_id: int) -> bool:
@@ -373,13 +384,23 @@ class Aggregator:
     def _accept(self, message: object) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
         data = _extract_json(getattr(message, 'message', '') or '')
+        if data is None:
+            return None
         msg_id = int(getattr(message, 'id', 0) or 0)
-        item = _parse_item(data, msg_id, self.consts.fields) if data else None
-        if item is None:
+        if not _action_ok(data, self.consts):
+            log.info(
+                'msg %s: action is not %r, skipping',
+                msg_id,
+                self.consts.action_value,
+            )
             return None
-        if _norm(item.title) in self.rejected:
-            log.info('msg %s: video already rejected as non-Short', msg_id)
+        item = _parse_item(data, msg_id, self.consts.fields)
+        if item is None or _norm(item.title) in self.rejected:
             return None
+        return self._short_or_reject(item, msg_id)
+
+    def _short_or_reject(self, item: Item, msg_id: int) -> Item | None:
+        """Return the item if it is a Short, else reject the video and log."""
         seconds = _duration_seconds(item.duration)
         if seconds >= MAX_SHORT_SEC:
             log.info(

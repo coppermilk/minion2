@@ -1,11 +1,13 @@
 {
   "fields": {
-    "caption": "caption",
+    "action": "action",
     "platform": "platform",
+    "caption": "caption",
     "link": "link",
     "thumbnail": "thumnailUrl",
     "duration": "duration"
   },
+  "action_value": "newVideo",
   "author": "@da_eto_tyoma",
   "announce": [
     "загрузил новое видео",
