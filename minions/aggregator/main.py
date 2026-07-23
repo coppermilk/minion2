@@ -28,9 +28,11 @@ Notes:
 Every behaviour knob is editable in ``aggregator_constants.json`` (a JSON file,
 so it may hold non-ASCII text): platforms, title_match, timeout_sec, backfill,
 max_duration_sec, the incoming field names, and the post's texts and emoji.
-In-flight groups are persisted to ``aggregator_state.json`` and restored on
-start, so a restart within the timeout window does not lose pending videos and
-never re-posts.
+Runtime state is persisted to ``aggregator_state.json`` (human-readable,
+indented) and restored on start: ``posted`` (what went out -- title, links,
+time -- doubling as the re-post guard), ``pending`` (videos still collecting
+platforms) and ``rejected``. A restart within the timeout window loses nothing
+and never re-posts.
 
 The env holds only the deploy knobs: credentials (TELEGRAM_API_ID,
 TELEGRAM_API_HASH, optional TELEGRAM_PASSWORD), the monitoring chat
@@ -50,9 +52,10 @@ import os
 import random
 import re
 import time
-from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import UTC
+from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -85,8 +88,9 @@ CONSTANTS_FILE = 'aggregator_constants.json'
 STATE_FILE = 'aggregator_state.json'
 # How often to log the pending videos and what each still awaits.
 STATUS_INTERVAL = 60
-# How many processed source-message ids to remember (restart dedup).
-PROCESSED_CAP = 5000
+# How many posted videos to keep in the readable log; this doubles as the
+# restart-dedup window (300 videos >> the backfill scan, so no re-posts).
+POSTED_CAP = 300
 # Chat command (from ANY chat, ANYONE) that previews the premium emoji; the
 # preview is always rendered into the source chat.
 COMMAND_EMOJIS = '/emojis'
@@ -130,6 +134,29 @@ class Group:
     msg_ids: set[int] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
     task: asyncio.Task[None] | None = None
+
+
+@dataclass(frozen=True)
+class Posted:
+    """A readable record of one video that was posted (state log + dedup)."""
+
+    title: str
+    at: str  # ISO 8601 UTC, e.g. '2026-07-23T14:20:00Z'
+    links: dict[str, str]  # platform -> url
+    msg_ids: list[int]  # the source messages consumed by this post
+
+
+def _iso(ts: float) -> str:
+    """A unix timestamp as an ISO-8601 UTC string (second precision)."""
+    return datetime.fromtimestamp(ts, tz=UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _parse_iso(text: str) -> float:
+    """An ISO-8601 UTC string back to a unix timestamp (now on bad input)."""
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except (ValueError, TypeError):
+        return time.time()
 
 
 # The incoming-message JSON keys, so a typo in the API can be fixed in the
@@ -350,26 +377,74 @@ def _primary(group: Group, order: Iterable[str]) -> Item:
     return next(iter(group.items.values()))
 
 
-def _group_dict(group: Group) -> dict[str, object]:
-    """Serialize a Group to a JSON-friendly dict."""
+def _posted_dict(post: Posted) -> dict[str, object]:
+    """A Posted record as a readable JSON dict."""
+    return {
+        'title': post.title,
+        'at': post.at,
+        'links': post.links,
+        'msg_ids': sorted(post.msg_ids),
+    }
+
+
+def _posted_from_dict(raw: dict[str, object]) -> Posted:
+    """Rebuild a Posted record from its dict."""
+    return Posted(
+        title=str(raw.get('title', '')),
+        at=str(raw.get('at', '')),
+        links=dict(raw.get('links') or {}),
+        msg_ids=[int(i) for i in (raw.get('msg_ids') or [])],
+    )
+
+
+def _pending_dict(
+    group: Group, platforms: tuple[str, ...]
+) -> dict[str, object]:
+    """A pending Group as a readable, resumable JSON dict."""
+    items = {
+        key: {
+            'url': item.url,
+            'thumbnail': item.thumbnail,
+            'duration': item.duration,
+            'msg_id': item.msg_id,
+        }
+        for key, item in group.items.items()
+    }
     return {
         'title': group.title,
-        'created_at': group.created_at,
+        'since': _iso(group.created_at),
+        'waiting': [p for p in platforms if p not in group.items],
+        'items': items,
         'msg_ids': sorted(group.msg_ids),
-        'items': {key: asdict(item) for key, item in group.items.items()},
     }
 
 
-def _group_from_dict(raw: dict[str, object]) -> Group:
-    """Rebuild a Group from its serialized dict."""
+def _pending_from_dict(raw: dict[str, object]) -> Group:
+    """Rebuild a Group from a pending dict (or an old-schema group dict)."""
+    title = str(raw.get('title', ''))
     items = {
-        key: Item(**value) for key, value in (raw.get('items') or {}).items()
+        key: Item(
+            key=key,
+            platform=key,
+            title=title,
+            url=str(value.get('url', '')),
+            thumbnail=str(value.get('thumbnail', '')),
+            duration=str(value.get('duration', '')),
+            msg_id=int(value.get('msg_id', 0)),
+        )
+        for key, value in (raw.get('items') or {}).items()
     }
+    since = raw.get('since')
+    created_at = (
+        _parse_iso(str(since))
+        if since is not None
+        else float(raw.get('created_at') or time.time())
+    )
     return Group(
-        title=str(raw.get('title', '')),
+        title=title,
         items=items,
         msg_ids=set(raw.get('msg_ids') or []),
-        created_at=float(raw.get('created_at') or time.time()),
+        created_at=created_at,
     )
 
 
@@ -460,6 +535,9 @@ class Aggregator:
         self._keys = tuple(dict.fromkeys(keys))
         self.groups: list[Group] = []
         self.rejected: set[str] = set()
+        # posted is the readable log; processed_ids is its flattened msg-id set
+        # (kept for O(1) dedup) and is always rebuilt from posted.
+        self.posted: list[Posted] = []
         self.processed_ids: set[int] = set()
 
     async def on_message(self, message: object) -> None:
@@ -582,16 +660,25 @@ class Aggregator:
         )
         message = _compose(group, self.config.platforms, self.consts)
         await self._post(message, _youtube_thumb(group))
-        self._mark_posted(group.msg_ids)
+        self._record_posted(group)
         log.info('posted %r', group.title)
         self._save()
 
-    def _mark_posted(self, msg_ids: set[int]) -> None:
-        """Record posted source ids so a restart never re-posts them."""
-        self.processed_ids |= msg_ids
-        if len(self.processed_ids) > PROCESSED_CAP:
-            keep = sorted(self.processed_ids)[-PROCESSED_CAP:]
-            self.processed_ids = set(keep)
+    def _record_posted(self, group: Group) -> None:
+        """Append a readable posted record; rebuild the dedup id set."""
+        links = {
+            key: item.url for key, item in group.items.items() if item.url
+        }
+        self.posted.append(
+            Posted(
+                title=group.title,
+                at=_iso(time.time()),
+                links=links,
+                msg_ids=sorted(group.msg_ids),
+            )
+        )
+        del self.posted[:-POSTED_CAP]  # keep only the most recent POSTED_CAP
+        self.processed_ids = {i for p in self.posted for i in p.msg_ids}
 
     async def handle(self, event: events.NewMessage.Event) -> None:
         """Dispatch one event: the /emojis command, or source aggregation.
@@ -676,14 +763,18 @@ class Aggregator:
             )
 
     def _save(self) -> None:
-        """Persist state (groups, rejected, posted ids) to disk (atomic)."""
+        """Persist state to disk as readable, indented JSON (atomic)."""
         data = {
+            'posted': [_posted_dict(p) for p in self.posted],
+            'pending': [
+                _pending_dict(g, self.config.platforms) for g in self.groups
+            ],
             'rejected': sorted(self.rejected),
-            'processed_ids': sorted(self.processed_ids),
-            'groups': [_group_dict(g) for g in self.groups],
         }
         tmp = self.state_path.with_suffix('.tmp')
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        tmp.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
+        )
         tmp.replace(self.state_path)
 
     def restore(self) -> None:
@@ -692,16 +783,30 @@ class Aggregator:
             return
         data = json.loads(self.state_path.read_text(encoding='utf-8'))
         self.rejected = set(data.get('rejected') or [])
-        self.processed_ids = set(data.get('processed_ids') or [])
-        for raw in data.get('groups') or []:
-            group = _group_from_dict(raw)
-            self.groups.append(group)
-            self._arm(group)
+        self._restore_posted(data)
+        self._restore_pending(data)
         log.info(
-            'restored %d pending videos, %d processed ids from disk',
+            'restored %d pending videos, %d posted (%d dedup ids) from disk',
             len(self.groups),
+            len(self.posted),
             len(self.processed_ids),
         )
+
+    def _restore_posted(self, data: dict[str, object]) -> None:
+        """Load the posted log; migrate an old processed_ids-only file."""
+        self.posted = [_posted_from_dict(p) for p in data.get('posted') or []]
+        self.processed_ids = {i for p in self.posted for i in p.msg_ids}
+        # Back-compat: an old file has no posted log, only raw processed_ids --
+        # seed the dedup set from it so a restart still never re-posts.
+        self.processed_ids |= set(data.get('processed_ids') or [])
+
+    def _restore_pending(self, data: dict[str, object]) -> None:
+        """Load pending groups (new 'pending' key or old 'groups') + re-arm."""
+        raw_groups = data.get('pending') or data.get('groups') or []
+        for raw in raw_groups:
+            group = _pending_from_dict(raw)
+            self.groups.append(group)
+            self._arm(group)
 
 
 def _source() -> int:
