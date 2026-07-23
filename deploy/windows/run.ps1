@@ -62,9 +62,11 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 # so logon stays fast. This is an editable install, not a compile --
 # every dependency ships a Windows wheel. The .[llm] extra adds
 # google-genai (catch classifies via Gemini on Windows, since the NAS
-# ollama is not exposed); the heavy ml/links extras are not needed
-# here. A failed install is logged, never fatal: the bots still start
-# on whatever is already installed.
+# ollama is not exposed); .[tg] adds telethon so the aggregator's
+# session/login tool (python -m minions.aggregator.login) runs here --
+# generating the session file on Windows is the supported flow. The
+# heavy ml/links extras are not needed here. A failed install is
+# logged, never fatal: the bots still start on whatever is installed.
 $stateDir = Join-Path $env:DRIVE 'bots\_data\state'
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 $stamp = Join-Path $stateDir 'windows-deps.stamp'
@@ -83,9 +85,9 @@ try {
 }
 
 if ($hash -ne $prev -or -not $importOk) {
-    Write-Output 'requirements changed: installing minion_core (.[llm])'
+    Write-Output 'requirements changed: installing minion_core (.[llm,tg])'
     try {
-        & python -m pip install -e '.[llm]' 2>&1 |
+        & python -m pip install -e '.[llm,tg]' 2>&1 |
             Out-File -FilePath $depsLog -Encoding utf8
         if ($LASTEXITCODE -eq 0) {
             Set-Content -Path $stamp -Value $hash

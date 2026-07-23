@@ -51,7 +51,9 @@ and 2FA is convenient. You generate the session **file** once and hand it
 to the NAS -- no container rebuild.
 
 1. Install the package with the telethon extra:
-   `pip install -e .[tg]` (from the repo root).
+   `pip install -e .[tg]` (from the repo root). If you already run the
+   print/catch launcher (`run.ps1`), this is done for you -- it installs
+   `.[llm,tg]` and re-runs whenever `pyproject.toml` changes.
 2. Put `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` (from
    <https://my.telegram.org>) in the repo-root `.env`.
 3. Log in once -- it asks for phone, code, and 2FA if enabled:
