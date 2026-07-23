@@ -31,10 +31,13 @@ the incoming field names, and the post's texts and emoji. In-flight groups are
 persisted to ``aggregator_state.json`` and restored on start, so a restart
 within the timeout window does not lose pending videos and never re-posts.
 
-Only credentials live in the env: TELEGRAM_API_ID, TELEGRAM_API_HASH. Any
-setting (SOURCE_CHAT_ID, TARGET_CHAT_ID, PLATFORMS, TITLE_MATCH,
-AGGREGATE_TIMEOUT_SEC, BACKFILL_LIMIT, MAX_DURATION_SEC) may still be set as an
-env var to override the JSON.
+Only credentials live in the env: TELEGRAM_API_ID, TELEGRAM_API_HASH (and an
+optional TELEGRAM_PASSWORD for 2FA). Any setting (SOURCE_CHAT_ID,
+TARGET_CHAT_ID, PLATFORMS, TITLE_MATCH, AGGREGATE_TIMEOUT_SEC, BACKFILL_LIMIT,
+MAX_DURATION_SEC) may still be set as an env var to override the JSON.
+TARGET_CHAT_ID is comma-separated -- list several chats to post to all of them.
+The session file is TELEGRAM_SESSION_FILE (default 'telethon.session' next to
+this package); state goes to AGGREGATOR_STATE_DIR when set.
 """
 
 from __future__ import annotations
@@ -53,14 +56,15 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from premium_emoji import RichText
 from telethon import TelegramClient
 from telethon import events
+
+from minions.aggregator.premium_emoji import RichText
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from premium_emoji import PremiumMessage
+    from minions.aggregator.premium_emoji import PremiumMessage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,7 +98,7 @@ class Config:
     """Runtime settings for the aggregator, all resolved from the env."""
 
     source: int
-    target: int
+    targets: tuple[int, ...]
     platforms: tuple[str, ...]
     threshold: float
     timeout: float
@@ -185,6 +189,45 @@ def _load_dotenv(path: Path) -> None:
             continue
         key, _, value = line.partition('=')
         os.environ.setdefault(key.strip(), value.strip().strip('\'"'))
+
+
+# Default file-session base path: 'telethon.session' next to this package.
+# It is git-ignored, so a session file kept in the repo checkout survives a
+# repo re-sync (deploy/nas-update.sh's `git reset --hard`), exactly like .env.
+# Telethon appends '.session', so the file on disk is 'telethon.session'.
+DEFAULT_SESSION_PATH = Path(__file__).with_name('telethon')
+
+
+def _resolve_session_path() -> Path:
+    """The file-session base path, from TELEGRAM_SESSION_FILE or the default.
+
+    A trailing '.session' is stripped so the value works whether you point at
+    the file itself or its base name (e.g. /data/bots/aggregator/session in the
+    container, on the persistent mount).
+    """
+    override = os.environ.get('TELEGRAM_SESSION_FILE')
+    if not override:
+        return DEFAULT_SESSION_PATH
+    path = Path(override).expanduser()
+    if path.suffix == '.session':
+        path = path.with_suffix('')
+    return path
+
+
+def _resolve_state_path(default: Path) -> Path:
+    """Where the in-flight state file lives: AGGREGATOR_STATE_DIR or default.
+
+    In the container the package dir is ephemeral (/app), so compose points
+    AGGREGATOR_STATE_DIR at the /data mount -- then dedup (posted ids) and any
+    pending groups survive a `compose down/up` (nas-update). Unset for local
+    runs keeps the state next to the package.
+    """
+    state_dir = os.environ.get('AGGREGATOR_STATE_DIR')
+    if not state_dir:
+        return default
+    path = Path(state_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return path / STATE_FILE
 
 
 def _norm(title: str) -> str:
@@ -390,7 +433,7 @@ class Aggregator:
         self.client = client
         self.config = config
         self.consts = _load_constants(here.with_name(CONSTANTS_FILE))
-        self.state_path = here.with_name(STATE_FILE)
+        self.state_path = _resolve_state_path(here.with_name(STATE_FILE))
         keys = [*self.consts.fields.values(), *_THUMB_ALIASES]
         self._keys = tuple(dict.fromkeys(keys))
         self.groups: list[Group] = []
@@ -577,25 +620,26 @@ class Aggregator:
         log.info('backfill: done (%d messages scanned)', len(history))
 
     async def _post(self, message: PremiumMessage, thumb: str) -> None:
-        """Send the message as a photo (if a thumbnail) or plain text."""
-        if thumb:
-            try:
-                await self.client.send_file(
-                    self.config.target,
-                    thumb,
-                    caption=message.text,
-                    formatting_entities=message.entities,
-                )
-            except Exception:  # noqa: BLE001 -- bad thumb falls back to text
-                log.warning('thumbnail send failed; posting as text')
-            else:
-                return
-        await self.client.send_message(
-            self.config.target,
-            message.text,
-            formatting_entities=message.entities,
-            link_preview=False,
-        )
+        """Send the message to every target as a photo or plain text."""
+        for target in self.config.targets:
+            if thumb:
+                try:
+                    await self.client.send_file(
+                        target,
+                        thumb,
+                        caption=message.text,
+                        formatting_entities=message.entities,
+                    )
+                except Exception:  # noqa: BLE001 -- bad thumb falls back to text
+                    log.warning('thumbnail send failed; posting as text')
+                else:
+                    continue
+            await self.client.send_message(
+                target,
+                message.text,
+                formatting_entities=message.entities,
+                link_preview=False,
+            )
 
     def _save(self) -> None:
         """Persist state (groups, rejected, posted ids) to disk (atomic)."""
@@ -631,6 +675,27 @@ def _setting(data: dict[str, object], env: str, key: str) -> str:
     return os.environ.get(env) or str(data.get(key) or '')
 
 
+def _targets(data: dict[str, object]) -> tuple[int, ...]:
+    """The target chat ids: env CSV wins, then JSON list/scalar, then default.
+
+    Set TARGET_CHAT_ID (or TARGET_CHAT_IDS) to a comma-separated list to post
+    the same message to several chats; in JSON use 'target_chats' (a list) or
+    'target_chat' (a single id).
+    """
+    raw: object = (
+        os.environ.get('TARGET_CHAT_IDS')
+        or os.environ.get('TARGET_CHAT_ID')
+        or data.get('target_chats')
+        or data.get('target_chat')
+        or DEFAULT_TARGET_CHAT_ID
+    )
+    if isinstance(raw, list | tuple):
+        parts = [str(x) for x in raw]
+    else:
+        parts = str(raw).split(',')
+    return tuple(int(p.strip()) for p in parts if str(p).strip())
+
+
 def _load_config() -> Config:
     """Read the aggregator settings from the constants JSON (env overrides)."""
     data = json.loads(
@@ -643,10 +708,7 @@ def _load_config() -> Config:
             _setting(data, 'SOURCE_CHAT_ID', 'source_chat')
             or DEFAULT_SOURCE_CHAT_ID
         ),
-        target=int(
-            _setting(data, 'TARGET_CHAT_ID', 'target_chat')
-            or DEFAULT_TARGET_CHAT_ID
-        ),
+        targets=_targets(data),
         platforms=platforms,
         threshold=float(_setting(data, 'TITLE_MATCH', 'title_match') or '0.9'),
         # Two hours by default: platforms can arrive far apart. The wait is a
@@ -674,7 +736,9 @@ async def main() -> None:
         raise SystemExit('Set TELEGRAM_API_ID and TELEGRAM_API_HASH.')
     config = _load_config()
 
-    client = TelegramClient('telethon_premium_emoji', int(api_id), api_hash)
+    session_path = _resolve_session_path()
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    client = TelegramClient(str(session_path), int(api_id), api_hash)
     agg = Aggregator(client, config)
 
     async def _handler(event: events.NewMessage.Event) -> None:
@@ -685,12 +749,19 @@ async def main() -> None:
 
     client.add_event_handler(_handler, events.NewMessage(chats=config.source))
 
-    await client.start()
+    # TELEGRAM_PASSWORD supplies the 2FA/cloud password non-interactively;
+    # unset, Telethon prompts for it (getpass) only if the account has 2FA.
+    start_kwargs: dict[str, object] = {}
+    password = os.environ.get('TELEGRAM_PASSWORD')
+    if password:
+        start_kwargs['password'] = password
+    log.info('Session store: %s.session', session_path)
+    await client.start(**start_kwargs)
     agg.restore()
     log.info(
         'Listening on %s; posting to %s; platforms=%s',
         config.source,
-        config.target,
+        ','.join(str(t) for t in config.targets),
         ','.join(config.platforms),
     )
     await agg.backfill()

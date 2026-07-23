@@ -13,3 +13,13 @@ venv/
 .coverage
 htmlcov/
 deploy/windows/launcher-bootstrap.log
+
+# Telethon session files (the aggregator userbot) hold the account auth key --
+# as powerful as your password. NEVER commit them. A session file kept in the
+# checkout is intentionally preserved across nas-update (git reset never touches
+# ignored files).
+*.session
+*.session-journal
+# Aggregator runtime state (in-flight video groups); regenerated at runtime.
+minions/aggregator/aggregator_state.json
+minions/aggregator/aggregator_state.tmp
