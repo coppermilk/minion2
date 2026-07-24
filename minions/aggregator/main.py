@@ -187,9 +187,8 @@ class Consts:
     author: str
     announce: list[str]
     love: list[object]
-    ps: list[object]
+    lead: list[object]  # random premium emoji that leads the caption line
     arrow_down: list[object]
-    postscriptum: list[object]  # premium-emoji footer row (the post's P.S.)
     view_label: list[str]
     column_separator: str
     rows: list[list[str]]
@@ -212,9 +211,8 @@ def _load_constants(path: Path) -> Consts:
         author=str(data.get('author', '')),
         announce=list(data.get('announce') or ['']),
         love=list(data.get('love') or ['']),
-        ps=list(data.get('ps') or ['']),
+        lead=list(data.get('lead_emoji') or ['']),
         arrow_down=list(data.get('arrow_down') or ['']),
-        postscriptum=list(data.get('postscriptum') or []),
         view_label=_str_list(data.get('view_label'), 'View'),
         column_separator=str(data.get('column_separator', '  |  ')),
         rows=list(data.get('rows') or []),
@@ -546,9 +544,8 @@ def _render_constants(consts: Consts) -> PremiumMessage:
     rich = RichText()
     rich.text('Premium emoji constants\n\n')
     _emoji_section(rich, 'love', consts.love)
-    _emoji_section(rich, 'ps', consts.ps)
+    _emoji_section(rich, 'lead_emoji', consts.lead)
     _emoji_section(rich, 'arrow_down', consts.arrow_down)
-    _emoji_section(rich, 'postscriptum', consts.postscriptum)
     rich.text('platforms:\n')
     for name, spec in consts.platform_emoji.items():
         rich.emoji(spec).text(f' {name} {_emoji_id_str(spec)}\n')
@@ -564,23 +561,11 @@ def _compose(
     rich.text(consts.author).text(' ')
     rich.text(random.choice(consts.announce)).text(' ')  # noqa: S311
     rich.emoji(random.choice(consts.love)).text('\n\n')  # noqa: S311
-    rich.emoji(random.choice(consts.ps)).text(' ')  # noqa: S311
+    rich.emoji(random.choice(consts.lead)).text(' ')  # noqa: S311
     rich.text(caption).text(' ')
     rich.emoji(random.choice(consts.arrow_down)).text('\n\n')  # noqa: S311
     _compose_links(rich, group, consts)
-    _compose_postscriptum(rich, consts)
     return rich.build()
-
-
-def _compose_postscriptum(rich: RichText, consts: Consts) -> None:
-    """Append the premium-emoji P.S. footer (a blank line, then the row)."""
-    if not consts.postscriptum:
-        return
-    rich.text('\n')
-    for index, spec in enumerate(consts.postscriptum):
-        if index:
-            rich.text(' ')
-        rich.emoji(spec)
 
 
 # QC preview (/preview): fake titles + dummy links, one video per scenario.
