@@ -483,23 +483,44 @@ def _cells(group: Group, row: list[str]) -> list[str]:
     return [p for p in row if group.items.get(p) and group.items[p].url]
 
 
+def _grid_cells(group: Group, consts: Consts) -> list[list[tuple[str, str]]]:
+    """Pre-pick each cell's (platform key, random label), row by row."""
+    return [
+        [
+            (key, random.choice(consts.view_label))  # noqa: S311
+            for key in _cells(group, row)
+        ]
+        for row in consts.rows
+    ]
+
+
+def _col_widths(rows: list[list[tuple[str, str]]]) -> dict[int, int]:
+    """The longest label actually used in each column (to align the '|')."""
+    widths: dict[int, int] = {}
+    for row in rows:
+        for col, (_key, label) in enumerate(row):
+            widths[col] = max(widths.get(col, 0), len(label))
+    return widths
+
+
 def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
     """Append the platform link grid: '<emoji> View | <emoji> View' rows.
 
-    Each (random) label is padded to the longest view_label, so the '|'
-    columns line up down the post instead of shifting with the label length.
+    Each label is padded only to the longest label actually used in its
+    column, so the '|' separators line up with no wasted space -- and the last
+    cell of a row is never padded (no trailing spaces).
     """
-    width = max((len(w) for w in consts.view_label), default=0)
-    for row in consts.rows:
-        cells = _cells(group, row)
-        for index, key in enumerate(cells):
-            if index:
-                rich.text(consts.column_separator)
+    rows = _grid_cells(group, consts)
+    widths = _col_widths(rows)
+    for row in rows:
+        last = len(row) - 1
+        for index, (key, label) in enumerate(row):
             rich.emoji(consts.platform_emoji.get(key, '')).text(' ')
-            label = random.choice(consts.view_label)  # noqa: S311
             rich.link(label, group.items[key].url)
-            rich.text(' ' * (width - len(label)))
-        if cells:
+            if index != last:
+                pad = ' ' * (widths[index] - len(label))
+                rich.text(pad + consts.column_separator)
+        if row:
             rich.text('\n')
 
 
