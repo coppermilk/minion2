@@ -858,9 +858,9 @@ def _load_config() -> Config:
         targets=_targets(),
         platforms=platforms,
         threshold=float(data.get('title_match') or 0.9),
-        # Two hours by default: platforms can arrive far apart. The wait is a
-        # local timer (asyncio.sleep), so it costs Telegram nothing.
-        timeout=float(data.get('timeout_sec') or 7200),
+        # Three hours by default: platforms can arrive far apart. The wait is
+        # a local timer (asyncio.sleep), so it costs Telegram nothing.
+        timeout=float(data.get('timeout_sec') or 10800),
         # Recent source messages to scan at startup for unprocessed ones.
         backfill=int(data.get('backfill') or 100),
         # A video whose known duration reaches this many seconds is dropped.
