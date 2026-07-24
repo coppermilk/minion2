@@ -94,9 +94,11 @@ STATUS_INTERVAL = 60
 # How many posted videos to keep in the readable log; this doubles as the
 # restart-dedup window (300 videos >> the backfill scan, so no re-posts).
 POSTED_CAP = 300
-# Chat command (from ANY chat, ANYONE) that previews the premium emoji; the
-# preview is always rendered into the source chat.
+# Chat commands (from ANY chat, ANYONE), always rendered into the source chat:
+# /emojis previews the premium emoji constants; /preview renders sample posts
+# (partial + full platform coverage) for quality control of the post format.
 COMMAND_EMOJIS = '/emojis'
+COMMAND_PREVIEW = '/preview'
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -185,7 +187,7 @@ class Consts:
     author: str
     announce: list[str]
     love: list[object]
-    ps: list[object]
+    lead: list[object]  # random premium emoji that leads the caption line
     arrow_down: list[object]
     view_label: list[str]
     column_separator: str
@@ -209,7 +211,7 @@ def _load_constants(path: Path) -> Consts:
         author=str(data.get('author', '')),
         announce=list(data.get('announce') or ['']),
         love=list(data.get('love') or ['']),
-        ps=list(data.get('ps') or ['']),
+        lead=list(data.get('lead_emoji') or ['']),
         arrow_down=list(data.get('arrow_down') or ['']),
         view_label=_str_list(data.get('view_label'), 'View'),
         column_separator=str(data.get('column_separator', '  |  ')),
@@ -481,17 +483,44 @@ def _cells(group: Group, row: list[str]) -> list[str]:
     return [p for p in row if group.items.get(p) and group.items[p].url]
 
 
+def _grid_cells(group: Group, consts: Consts) -> list[list[tuple[str, str]]]:
+    """Pre-pick each cell's (platform key, random label), row by row."""
+    return [
+        [
+            (key, random.choice(consts.view_label))  # noqa: S311
+            for key in _cells(group, row)
+        ]
+        for row in consts.rows
+    ]
+
+
+def _col_widths(rows: list[list[tuple[str, str]]]) -> dict[int, int]:
+    """The longest label actually used in each column (to align the '|')."""
+    widths: dict[int, int] = {}
+    for row in rows:
+        for col, (_key, label) in enumerate(row):
+            widths[col] = max(widths.get(col, 0), len(label))
+    return widths
+
+
 def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
-    """Append the platform link grid: '<emoji> View | <emoji> View' rows."""
-    for row in consts.rows:
-        cells = _cells(group, row)
-        for index, key in enumerate(cells):
-            if index:
-                rich.text(consts.column_separator)
+    """Append the platform link grid: '<emoji> View | <emoji> View' rows.
+
+    Each label is padded only to the longest label actually used in its
+    column, so the '|' separators line up with no wasted space -- and the last
+    cell of a row is never padded (no trailing spaces).
+    """
+    rows = _grid_cells(group, consts)
+    widths = _col_widths(rows)
+    for row in rows:
+        last = len(row) - 1
+        for index, (key, label) in enumerate(row):
             rich.emoji(consts.platform_emoji.get(key, '')).text(' ')
-            label = random.choice(consts.view_label)  # noqa: S311
             rich.link(label, group.items[key].url)
-        if cells:
+            if index != last:
+                pad = ' ' * (widths[index] - len(label))
+                rich.text(pad + consts.column_separator)
+        if row:
             rich.text('\n')
 
 
@@ -515,7 +544,7 @@ def _render_constants(consts: Consts) -> PremiumMessage:
     rich = RichText()
     rich.text('Premium emoji constants\n\n')
     _emoji_section(rich, 'love', consts.love)
-    _emoji_section(rich, 'ps', consts.ps)
+    _emoji_section(rich, 'lead_emoji', consts.lead)
     _emoji_section(rich, 'arrow_down', consts.arrow_down)
     rich.text('platforms:\n')
     for name, spec in consts.platform_emoji.items():
@@ -532,11 +561,51 @@ def _compose(
     rich.text(consts.author).text(' ')
     rich.text(random.choice(consts.announce)).text(' ')  # noqa: S311
     rich.emoji(random.choice(consts.love)).text('\n\n')  # noqa: S311
-    rich.emoji(random.choice(consts.ps)).text(' ')  # noqa: S311
+    rich.emoji(random.choice(consts.lead)).text(' ')  # noqa: S311
     rich.text(caption).text(' ')
     rich.emoji(random.choice(consts.arrow_down)).text('\n\n')  # noqa: S311
     _compose_links(rich, group, consts)
     return rich.build()
+
+
+# QC preview (/preview): fake titles + dummy links, one video per scenario.
+_SAMPLE_TITLE = 'Когда просят сальсу 💃 #скетч #комедия'
+_SAMPLE_LONG = 'Три дня монтировал этот номер и наконец готово #бэнгер #юмор'
+
+
+def _sample_item(key: str, msg_id: int, title: str) -> Item:
+    """One fake platform item for a QC preview post."""
+    thumb = 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'
+    return Item(
+        key=key,
+        platform=key,
+        title=title,
+        url=f'https://example.com/{key}',
+        thumbnail=thumb if key == 'youtube' else '',
+        duration='0:0:20',
+        msg_id=msg_id,
+    )
+
+
+def _sample_group(platforms: Iterable[str], title: str) -> Group:
+    """A fake Group covering the given platforms, for a QC preview."""
+    group = Group(title=title)
+    for msg_id, key in enumerate(platforms):
+        group.items[key] = _sample_item(key, msg_id, title)
+    return group
+
+
+def _sample_groups() -> list[Group]:
+    """Five sample videos for QC: from one platform arrived up to all four."""
+    return [
+        _sample_group(['youtube'], _SAMPLE_TITLE),
+        _sample_group(['tiktok', 'youtube'], _SAMPLE_TITLE),
+        _sample_group(['instagram', 'pinterest'], _SAMPLE_TITLE),
+        _sample_group(['tiktok', 'youtube', 'instagram'], _SAMPLE_LONG),
+        _sample_group(
+            ['tiktok', 'youtube', 'pinterest', 'instagram'], _SAMPLE_TITLE
+        ),
+    ]
 
 
 class Aggregator:
@@ -698,13 +767,17 @@ class Aggregator:
         self.processed_ids = {i for p in self.posted for i in p.msg_ids}
 
     async def handle(self, event: events.NewMessage.Event) -> None:
-        """Dispatch one event: the /emojis command, or source aggregation.
+        """Dispatch one event: a /command, or source aggregation.
 
-        The command works from ANY chat and for ANYONE (its preview renders
-        into the source chat); aggregation stays scoped to the source chat.
+        Commands (/emojis, /preview) work from ANY chat and for ANYONE and
+        always render into the source chat; aggregation stays source-scoped.
         """
-        if (event.raw_text or '').strip().lower() == COMMAND_EMOJIS:
+        text = (event.raw_text or '').strip().lower()
+        if text == COMMAND_EMOJIS:
             await self.show_constants()
+            return
+        if text == COMMAND_PREVIEW:
+            await self.preview_posts()
             return
         if event.chat_id == self.config.source:
             await self.on_message(event.message)
@@ -718,6 +791,21 @@ class Aggregator:
             formatting_entities=message.entities,
         )
         log.info('sent premium constants preview to %s', self.config.source)
+
+    async def preview_posts(self) -> None:
+        """Render QC sample posts (partial + full coverage) to the source."""
+        groups = _sample_groups()
+        for group in groups:
+            message = _compose(group, self.config.platforms, self.consts)
+            await self.client.send_message(
+                self.config.source,
+                message.text,
+                formatting_entities=message.entities,
+                link_preview=False,
+            )
+        log.info(
+            'sent %d QC preview posts to %s', len(groups), self.config.source
+        )
 
     async def status_loop(self) -> None:
         """Periodically log which videos are pending and what they await."""

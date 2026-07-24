@@ -60,7 +60,7 @@ and the chats); **`aggregator_constants.json`** carries all behaviour.
 | `timeout_sec` | how long to wait for the rest before posting a partial |
 | `backfill` | recent source messages scanned at startup |
 | `max_duration_sec` | a video at/above this many seconds is dropped (not a Short) |
-| `fields`, `action_value`, `author`, `announce`, `love`, `ps`, `arrow_down`, `view_label`, `rows`, `platform_emoji` | incoming field names + the post's texts and premium emoji |
+| `fields`, `action_value`, `author`, `announce`, `love`, `lead_emoji`, `arrow_down`, `view_label`, `rows`, `platform_emoji` | incoming field names + the post's texts and premium emoji (`lead_emoji` leads the caption line) |
 
 ## Run (without Docker)
 
