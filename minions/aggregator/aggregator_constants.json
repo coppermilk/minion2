@@ -88,5 +88,9 @@
       "fallback": "🤩"
     }
   },
+  "sample_titles": {
+    "short": "Когда просят сальсу 💃 #скетч #комедия",
+    "long": "Три дня монтировал этот номер и наконец готово #бэнгер #юмор"
+  },
   "_note": "Emoji are premium {id, fallback} entries (render from a user account with Telegram Premium). Replace an entry with a plain glyph string like \"🔥\" to use a non-premium emoji. Add more love/announce variants freely."
 }
