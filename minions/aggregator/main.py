@@ -66,11 +66,13 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 
+from minions.aggregator import cats
 from minions.aggregator.premium_emoji import RichText
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from minions.aggregator.cats import CatEmoji
     from minions.aggregator.premium_emoji import PremiumMessage
 
 logging.basicConfig(
@@ -655,6 +657,16 @@ class Aggregator:
         # (kept for O(1) dedup) and is always rebuilt from posted.
         self.posted: list[Posted] = []
         self.processed_ids: set[int] = set()
+        # The human-like cat-reply engine: it tracks the last posts, decides
+        # whether/when to reply to a commenter, and picks the cat emoji. Its
+        # params/pool come from the constants JSON 'cats' section; idle unless
+        # 'enabled'. Fire-later tasks are held so they are not GC'd mid-sleep.
+        raw = _read_json(here.with_name(CONSTANTS_FILE))
+        self.cats = cats.CatBrain(
+            cats.load_cat_params(raw),
+            self.state_path.with_name('cats_state.json'),
+        )
+        self._cat_tasks: set[asyncio.Task[None]] = set()
 
     async def on_message(self, message: object) -> None:
         """Route one incoming message into its video group."""
@@ -797,10 +809,11 @@ class Aggregator:
         self.processed_ids = {i for p in self.posted for i in p.msg_ids}
 
     async def handle(self, event: events.NewMessage.Event) -> None:
-        """Dispatch one event: a /command, or source aggregation.
+        """Dispatch one event: a /command, a comment cat, or aggregation.
 
         Commands (/emojis, /preview) work from ANY chat and for ANYONE and
-        always render into the source chat; aggregation stays source-scoped.
+        always render into the source chat; the cat engine watches replies to
+        our own posts (any chat); aggregation stays source-scoped.
         """
         text = (event.raw_text or '').strip().lower()
         if text == COMMAND_EMOJIS:
@@ -809,8 +822,66 @@ class Aggregator:
         if text == COMMAND_PREVIEW:
             await self.preview_posts()
             return
+        if self.cats.params.enabled:
+            self._maybe_cat(event)
         if event.chat_id == self.config.source:
             await self.on_message(event.message)
+
+    def _maybe_cat(self, event: events.NewMessage.Event) -> None:
+        """If this message comments on one of our posts, schedule a cat reply.
+
+        A "comment" is a reply whose target is one of the last posts. The
+        commenter is catted at most once; the engine decides whether and when
+        (it may return nothing -- skipped, silent day, already catted).
+        """
+        reply = getattr(event.message, 'reply_to', None)
+        reply_to = getattr(reply, 'reply_to_msg_id', None)
+        chat = int(event.chat_id or 0)
+        if not self.cats.is_comment(chat, reply_to):
+            return
+        person = str(getattr(event, 'sender_id', None) or '')
+        if not person:
+            return
+        # Feedback (principle 8): a reply to our freshest post reads as active
+        # engagement, so the reaction comes faster.
+        engaged = bool(self.cats.posts) and self.cats.posts[-1] == (
+            chat,
+            reply_to,
+        )
+        when = self.cats.schedule(person, engaged=engaged)
+        if when is None:
+            return
+        task = asyncio.create_task(
+            self._cat_later(chat, event.message.id, when)
+        )
+        self._cat_tasks.add(task)
+        task.add_done_callback(self._cat_tasks.discard)
+
+    async def _cat_later(self, chat: int, reply_to: int, when: float) -> None:
+        """Sleep until ``when``, then reply to the comment with the cat(s)."""
+        delay = when - time.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        specs = self.cats.emit()
+        for index, spec in enumerate(specs):
+            if index:  # the rare second cat trails the first (principle 7)
+                await asyncio.sleep(self.cats.params.double_gap_sec)
+            await self._send_cat(chat, reply_to, spec)
+        if specs:
+            log.info('cat: replied with %d emoji in %s', len(specs), chat)
+
+    async def _send_cat(
+        self, chat: int, reply_to: int, spec: CatEmoji
+    ) -> None:
+        """Send one premium cat emoji as a reply to the commenter."""
+        emoji = {'id': spec.emoji_id, 'fallback': spec.fallback}
+        message = RichText().emoji(emoji).build()
+        await self.client.send_message(
+            chat,
+            message.text,
+            formatting_entities=message.entities,
+            reply_to=reply_to,
+        )
 
     async def show_constants(self) -> None:
         """Post a preview of every premium emoji constant to the watcher."""
@@ -876,26 +947,31 @@ class Aggregator:
         log.info('backfill: done (%d messages scanned)', len(history))
 
     async def _post(self, message: PremiumMessage, thumb: str) -> None:
-        """Send the message to every target as a photo or plain text."""
+        """Send to every target; remember each post as a cat-comment target."""
         for target in self.config.targets:
-            if thumb:
-                try:
-                    await self.client.send_file(
-                        target,
-                        thumb,
-                        caption=message.text,
-                        formatting_entities=message.entities,
-                    )
-                except Exception:  # noqa: BLE001 -- bad thumb falls back to text
-                    log.warning('thumbnail send failed; posting as text')
-                else:
-                    continue
-            await self.client.send_message(
-                target,
-                message.text,
-                formatting_entities=message.entities,
-                link_preview=False,
-            )
+            sent = await self._send_post(target, message, thumb)
+            self.cats.note_post(target, int(getattr(sent, 'id', 0) or 0))
+
+    async def _send_post(
+        self, target: int, message: PremiumMessage, thumb: str
+    ) -> object:
+        """Send one post as a photo (thumb) or text; return the message."""
+        if thumb:
+            try:
+                return await self.client.send_file(
+                    target,
+                    thumb,
+                    caption=message.text,
+                    formatting_entities=message.entities,
+                )
+            except Exception:  # noqa: BLE001 -- bad thumb falls back to text
+                log.warning('thumbnail send failed; posting as text')
+        return await self.client.send_message(
+            target,
+            message.text,
+            formatting_entities=message.entities,
+            link_preview=False,
+        )
 
     def _save(self) -> None:
         """Persist state to disk as readable, indented JSON (atomic)."""

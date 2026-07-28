@@ -92,5 +92,33 @@
     "short": "Когда просят сальсу 💃 #скетч #комедия",
     "long": "Три дня монтировал этот номер и наконец готово #бэнгер #юмор"
   },
+  "cats": {
+    "enabled": false,
+    "watch_posts": 4,
+    "tz_offset_hours": 3,
+    "quiet_hours": [2, 3, 4, 5, 6],
+    "hours_weekday": [[9, 2.0, 1.0], [21, 2.5, 1.3]],
+    "hours_weekend": [[11, 3.0, 1.0], [22, 3.0, 1.2]],
+    "latency_log_mu": 7.0,
+    "latency_log_sigma": 1.2,
+    "spacing_log_mu": 9.5,
+    "spacing_log_sigma": 1.3,
+    "jitter_sec": 90,
+    "skip_prob": 0.12,
+    "double_prob": 0.06,
+    "double_gap_sec": 40,
+    "silent_day_prob": 0.08,
+    "recency_half_life_sec": 172800,
+    "mood_phi": 0.8,
+    "mood_sigma": 0.35,
+    "feedback_speedup": 0.4,
+    "emoji": [
+      { "id": "REPLACE_WITH_CAT_EMOJI_ID_1", "fallback": "🐱", "base": 1.4, "tags": ["bodry"] },
+      { "id": "REPLACE_WITH_CAT_EMOJI_ID_2", "fallback": "😽", "base": 1.0, "tags": ["sleepy"] },
+      { "id": "REPLACE_WITH_CAT_EMOJI_ID_3", "fallback": "😺", "base": 1.0, "tags": ["bodry", "summer"] },
+      { "id": "REPLACE_WITH_CAT_EMOJI_ID_4", "fallback": "😻", "base": 0.8, "tags": ["newyear", "winter"] }
+    ],
+    "_note": "Human-like cat-emoji replies to people who comment on the last watch_posts posts, ONCE per person (see minions/aggregator/cats.py). DISABLED until you set enabled=true AND replace every emoji id with a real premium cat-emoji id (get ids with the /emojis dump helper). tz_offset_hours is the persona's UTC offset (3 = Moscow) so hours match the legend. hours_* are [mean_hour, sigma, weight] Gaussian peaks; quiet_hours are near-silent. latency_* is the log-normal reaction delay after a comment; spacing_* is the heavy-tailed gap between cats (bursts then silence). skip_prob ignores a comment; silent_day_prob mutes a whole day; double_prob sends a rare second cat. recency_half_life_sec fades a just-used cat; mood_phi/mood_sigma is the day-to-day AR(1) mood; a cat's tags (sleepy/bodry/winter/spring/summer/autumn/newyear) re-weight it by daypart/season. NOTE: comments are matched as replies to the post message id -- this fits a group target; for a channel with a linked discussion, point the account at the discussion group."
+  },
   "_note": "Emoji are premium {id, fallback} entries (render from a user account with Telegram Premium). Replace an entry with a plain glyph string like \"🔥\" to use a non-premium emoji. Add more love/announce variants freely."
 }

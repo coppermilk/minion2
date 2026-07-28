@@ -108,3 +108,37 @@ Docker, `<DRIVE_NAS>/bots/aggregator/telethon.session` (the host path behind
 
 > The `.session` file is full account access. It is git-ignored; don't share it,
 > and revoke it from **Telegram -> Settings -> Devices** if it leaks.
+
+## Human-like cat replies (`cats` engine)
+
+Optionally, the same account replies to people who **comment on the last
+posts** with a **premium cat emoji** -- once per person, timed and chosen so it
+reads as a distracted human rather than a scheduler. The logic lives in
+`cats.py` (Telethon-free and unit-tested in `tests/test_cats.py`); it is
+**off by default** and driven entirely from the `cats` section of
+`aggregator_constants.json`.
+
+To turn it on: fill every `emoji[].id` with a real premium **cat**-emoji id
+(use the `/emojis` dump helper to read ids), set `tz_offset_hours` to the
+persona's timezone, and set `"enabled": true`.
+
+How it stays human (the nine principles, all tunable in the JSON):
+
+1. **Timing** is a mixture-of-Gaussians density over the day, separate
+   weekday/weekend curves, near-zero in `quiet_hours` -- not `uniform(0,24)`.
+2. **Intervals** are heavy-tailed (log-normal), so cats come in bursts then
+   long silences -- not a flat cadence.
+3. **Selection has memory**: weight = base preference x recency penalty, so
+   favourites lead and a just-used cat fades.
+4. **Mood** does an AR(1) random walk day to day and tilts sleepy vs. lively.
+5. **Context tags** (daypart, season, December) re-weight the pool.
+6. **Jitter** takes the fire time off the `:00` second.
+7. **Imperfection**: a comment is sometimes ignored (`skip_prob`), a whole day
+   is sometimes silent (`silent_day_prob`), and a rare second cat follows.
+8. **Feedback**: a reply to the freshest post gets a faster reaction.
+9. **State** persists (`cats_state.json` next to the aggregator state): mood,
+   the spacing cursor, per-cat recency, and who was already catted.
+
+> Comments are matched as **replies to the post message id**, which fits a
+> **group** target. For a **channel with a linked discussion**, the comments
+> live in the discussion group -- point the account there so it sees them.
