@@ -72,6 +72,11 @@ class CatParams:
     """Every tunable, loaded from the constants JSON 'cats' section."""
 
     enabled: bool
+    # When the target is a CHANNEL, its comments live in the linked discussion
+    # group. True: resolve each post's discussion thread and react only there
+    # (so cats land in the channel post's comments). False: match replies to
+    # the post id directly (the target is a plain group).
+    comments_in_discussion: bool
     watch_posts: int
     hours_weekday: tuple[tuple[float, float, float], ...]
     hours_weekend: tuple[tuple[float, float, float], ...]
@@ -416,6 +421,7 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
     pool = tuple(_emoji(dict(e)) for e in (cats.get('emoji') or []))
     return CatParams(
         enabled=bool(cats.get('enabled', False)),
+        comments_in_discussion=bool(cats.get('comments_in_discussion', False)),
         watch_posts=int(cats.get('watch_posts') or 4),
         hours_weekday=_peaks(cats.get('hours_weekday'))
         or ((9.0, 2.0, 1.0), (21.0, 2.5, 1.3)),

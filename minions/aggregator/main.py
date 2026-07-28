@@ -65,6 +65,7 @@ from typing import TYPE_CHECKING
 
 from telethon import TelegramClient
 from telethon import events
+from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
 from minions.aggregator import cats
 from minions.aggregator.premium_emoji import RichText
@@ -520,6 +521,21 @@ def _trim(title: str, width: int = 40) -> str:
     return flat if len(flat) <= width else flat[: width - 1] + '~'
 
 
+def _thread_top(reply: object) -> int | None:
+    """The thread-root id a reply belongs to (comment target), or None.
+
+    A comment on a channel post is a reply in the discussion group: its
+    ``reply_to_top_id`` is the post's thread root; a first-level comment has
+    only ``reply_to_msg_id`` (the same root). Either way this yields the id the
+    engine watches, so nested and top-level comments both map to their post.
+    """
+    top = getattr(reply, 'reply_to_top_id', None)
+    if top is not None:
+        return int(top)
+    msg = getattr(reply, 'reply_to_msg_id', None)
+    return int(msg) if msg is not None else None
+
+
 def _cells(group: Group, row: list[str]) -> list[str]:
     """Platform keys in a row that have a link, in the row's order."""
     return [p for p in row if group.items.get(p) and group.items[p].url]
@@ -856,22 +872,20 @@ class Aggregator:
         nothing -- skipped, silent day, already catted here).
         """
         reply = getattr(event.message, 'reply_to', None)
-        reply_to = getattr(reply, 'reply_to_msg_id', None)
+        top = _thread_top(reply)
         chat = int(event.chat_id or 0)
-        if not self.cats.is_comment(chat, reply_to):
+        if not self.cats.is_comment(chat, top):
             return
         person = str(getattr(event, 'sender_id', None) or '')
         if not person:
             return
         # Once per (post, commenter): the dedup key ties the person to THIS
-        # post, so re-commenting under the same post gets no second cat.
-        key = f'{chat}:{reply_to}:{person}'
+        # post's thread, so re-commenting under the same post gets no second
+        # cat, but the same person on another post is eligible again.
+        key = f'{chat}:{top}:{person}'
         # Feedback (principle 8): a reply to our freshest post reads as active
         # engagement, so the reaction comes faster.
-        engaged = bool(self.cats.posts) and self.cats.posts[-1] == (
-            chat,
-            reply_to,
-        )
+        engaged = bool(self.cats.posts) and self.cats.posts[-1] == (chat, top)
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
@@ -1038,7 +1052,41 @@ class Aggregator:
         """Send to every target; remember each post as a cat-comment target."""
         for target in self.config.targets:
             sent = await self._send_post(target, message, thumb)
-            self.cats.note_post(target, int(getattr(sent, 'id', 0) or 0))
+            await self._watch_post(target, int(getattr(sent, 'id', 0) or 0))
+
+    async def _watch_post(self, target: int, post_id: int) -> None:
+        """Register where comments on this post will appear (the cat target).
+
+        For a channel with a linked discussion (comments_in_discussion), the
+        comments live in the discussion group: resolve the post's thread root
+        and watch THAT, so cats land only in the channel post's comments. For a
+        plain group target, the post message id itself is the comment target.
+        """
+        if self.cats.params.comments_in_discussion:
+            thread = await self._discussion_thread(target, post_id)
+            if thread is not None:
+                self.cats.note_post(*thread)
+                return
+        self.cats.note_post(target, post_id)
+
+    async def _discussion_thread(
+        self, channel: int, post_id: int
+    ) -> tuple[int, int] | None:
+        """(discussion_chat_id, thread_root_id) for a channel post, or None."""
+        try:
+            disc = await self.client(
+                GetDiscussionMessageRequest(peer=channel, msg_id=post_id)
+            )
+        except Exception:  # noqa: BLE001 -- not a channel / no linked group
+            log.warning('cats: no discussion thread for post %s', post_id)
+            return None
+        messages = getattr(disc, 'messages', None) or []
+        if not messages:
+            return None
+        root = messages[0]
+        chat_id = int(getattr(root, 'chat_id', 0) or 0)
+        root_id = int(getattr(root, 'id', 0) or 0)
+        return (chat_id, root_id) if chat_id and root_id else None
 
     async def _send_post(
         self, target: int, message: PremiumMessage, thumb: str

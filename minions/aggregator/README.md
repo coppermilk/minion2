@@ -143,9 +143,14 @@ How it stays human (the nine principles, all tunable in the JSON):
 9. **State** persists (`cats_state.json` next to the aggregator state): mood,
    the spacing cursor, per-cat recency, and who was already catted.
 
-> Comments are matched as **replies to the post message id**, which fits a
-> **group** target. For a **channel with a linked discussion**, the comments
-> live in the discussion group -- point the account there so it sees them.
+**Channel vs. group target** (`comments_in_discussion`, default `true`):
+- **Channel with a linked discussion** (`true`): each post's comments live in
+  the discussion group. The bot resolves the post's **discussion thread** and
+  replies **only inside that channel post's comments** -- off-topic discussion
+  messages and channel messages are ignored. The account **must be a member of
+  the discussion group** to receive those comments.
+- **Plain group** (`false`): comments are matched as direct replies to the post
+  message id, in the group itself.
 
 **Inspect it live** with the `/status` command (from any chat, renders into the
 source chat): it lists the videos still **pending** (and which platforms each
