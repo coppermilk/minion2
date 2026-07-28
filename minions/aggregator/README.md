@@ -141,7 +141,17 @@ How it stays human (the nine principles, all tunable in the JSON):
    is sometimes silent (`silent_day_prob`), and a rare second cat follows.
 8. **Feedback**: a reply to the freshest post gets a faster reaction.
 9. **State** persists (`cats_state.json` next to the aggregator state): mood,
-   the spacing cursor, per-cat recency, and who was already catted.
+   the spacing cursor, per-cat recency, who was already catted, **the watched
+   posts, and the cats scheduled but not yet sent** -- so a nightly NAS
+   shutdown loses nothing.
+
+**Host uptime window** (`active_start_hour` / `active_end_hour`, local hours):
+if the NAS runs only, say, 7-17, set the window and no cat is ever scheduled
+for a dead hour. A cat that would land after shutdown is kept in the persisted
+pending queue and **re-armed on the next boot** (missed ones are renewed to a
+fresh in-window slot so a night's worth doesn't fire at once). The watched
+posts survive the restart too, so comments on pre-restart posts are still
+recognised. Keep the `hours_*` peaks inside the window.
 
 **Channel vs. group target** (`comments_in_discussion`, default `true`):
 - **Channel with a linked discussion** (`true`): each post's comments live in

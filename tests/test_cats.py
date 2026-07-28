@@ -31,6 +31,8 @@ def _params(**over):
         'hours_weekday': ((12.0, 3.0, 1.0), (20.0, 3.0, 1.0)),
         'hours_weekend': ((12.0, 3.0, 1.0), (20.0, 3.0, 1.0)),
         'quiet_hours': frozenset({0, 1, 2, 3, 4, 5, 6}),
+        'active_start': 0.0,
+        'active_end': 24.0,
         'tz_offset_hours': 0.0,
         'latency_log_mu': 3.0,
         'latency_log_sigma': 0.5,
@@ -242,6 +244,57 @@ def test_catted_keys_are_pruned_when_a_post_rolls_off(tmp_path: Path) -> None:
     brain.note_post(1, 11)
     brain.note_post(1, 12)  # window is [11, 12] now -> post 10 rolled off
     assert '1:10:alice' not in brain.state.catted
+
+
+# --- host uptime window (NAS 7-17): no cat scheduled off-hours
+
+
+def test_hour_weight_is_zero_outside_the_uptime_window() -> None:
+    params = _params(
+        active_start=7.0,
+        active_end=17.0,
+        quiet_hours=frozenset(),
+        hours_weekday=((12.0, 3.0, 1.0),),
+        hours_weekend=((12.0, 3.0, 1.0),),
+    )
+    assert cats._hour_weight(_ts(hour=3), params) == 0.0  # host down
+    assert cats._hour_weight(_ts(hour=20), params) == 0.0  # host down
+    assert cats._hour_weight(_ts(hour=12), params) > 0.0  # host up
+
+
+# --- principle 9: watched posts and pending cats survive a restart
+
+
+def test_watched_posts_survive_a_restart(tmp_path: Path) -> None:
+    path = tmp_path / 'cats_state.json'
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    brain.note_post(100, 42)
+    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    assert fresh.is_comment(100, 42)  # still watched after reload
+
+
+def test_pending_cats_are_re_armed_and_missed_ones_renewed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'cats_state.json'
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    brain.clock = _ts
+    now = _ts()
+    brain.add_pending(5, 900, now + 3600)  # still in the future
+    brain.add_pending(5, 901, now - 3600)  # missed while host was down
+    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    fresh.clock = _ts
+    armed = {reply_to: when for _c, reply_to, when in fresh.rearm()}
+    assert armed[900] == now + 3600  # future one kept as-is
+    assert armed[901] > now  # missed one renewed to the future
+
+
+def test_done_pending_forgets_a_sent_cat(tmp_path: Path) -> None:
+    brain = _brain(tmp_path)
+    brain.add_pending(5, 900, 111.0)
+    brain.add_pending(5, 901, 222.0)
+    brain.done_pending(5, 900)
+    assert [p['reply_to'] for p in brain.state.pending] == [901]
 
 
 # --- emit records the send

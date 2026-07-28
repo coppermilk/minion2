@@ -889,11 +889,23 @@ class Aggregator:
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        task = asyncio.create_task(
-            self._cat_later(chat, event.message.id, when)
-        )
+        self.cats.add_pending(chat, event.message.id, when)
+        self._arm_cat(chat, event.message.id, when)
+
+    def _arm_cat(self, chat: int, reply_to: int, when: float) -> None:
+        """Create the fire-later task for a scheduled (persisted) cat."""
+        task = asyncio.create_task(self._cat_later(chat, reply_to, when))
         self._cat_tasks.add(task)
         task.add_done_callback(self._cat_tasks.discard)
+
+    def rearm_cats(self) -> None:
+        """Re-arm cats that were scheduled before a restart (survive downtime).
+
+        Any whose time passed while the host was down is renewed to a fresh
+        in-window slot by the engine, so a night's worth does not fire at once.
+        """
+        for chat, reply_to, when in self.cats.rearm():
+            self._arm_cat(chat, reply_to, when)
 
     async def _cat_later(self, chat: int, reply_to: int, when: float) -> None:
         """Sleep until ``when``, then reply to the comment with the cat(s)."""
@@ -905,6 +917,7 @@ class Aggregator:
             if index:  # the rare second cat trails the first (principle 7)
                 await asyncio.sleep(self.cats.params.double_gap_sec)
             await self._send_cat(chat, reply_to, spec)
+        self.cats.done_pending(chat, reply_to)
         if specs:
             log.info('cat: replied with %d emoji in %s', len(specs), chat)
 
@@ -961,10 +974,11 @@ class Aggregator:
 
     def _posted_lines(self) -> list[str]:
         """A tail of what went out, plus the rejected (non-Short) count."""
-        lines = [
+        head = (
             f'Recently posted: {len(self.posted)}'
             f' | rejected (non-Shorts): {len(self.rejected)}'
-        ]
+        )
+        lines = [head]
         for post in self.posted[-5:]:
             links = len(post.links)
             lines.append(
@@ -976,13 +990,18 @@ class Aggregator:
         """The cat engine's live state (empty-ish when it is disabled)."""
         brain = self.cats
         posts = ', '.join(f'{ch}:{mid}' for ch, mid in brain.posts) or '-'
+        window = f'{brain.params.active_start:g}-{brain.params.active_end:g}h'
+        counters = (
+            f'  catted={len(brain.state.catted)}'
+            f' pending={len(brain.state.pending)}'
+            f' mood={brain.state.mood:.2f}'
+        )
         return [
             'Cat engine:',
             f'  enabled={brain.params.enabled} pool={len(brain.params.pool)}',
+            f'  uptime window={window}',
             f'  watching posts=[{posts}]',
-            f'  catted={len(brain.state.catted)}'
-            f' pending_replies={len(self._cat_tasks)}'
-            f' mood={brain.state.mood:.2f}',
+            counters,
         ]
 
     async def show_constants(self) -> None:
@@ -1225,6 +1244,7 @@ async def main() -> None:
     log.info('Session store: %s.session', session_path)
     await client.start(**start_kwargs)
     agg.restore()
+    agg.rearm_cats()  # re-arm cats scheduled before a restart (NAS downtime)
     log.info(
         'Listening on %s; posting to %s; platforms=%s',
         config.source,

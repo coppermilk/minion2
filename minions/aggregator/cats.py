@@ -39,7 +39,6 @@ import json
 import math
 import random
 import time
-from collections import deque
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
@@ -81,6 +80,12 @@ class CatParams:
     hours_weekday: tuple[tuple[float, float, float], ...]
     hours_weekend: tuple[tuple[float, float, float], ...]
     quiet_hours: frozenset[int]
+    # The host's uptime window in local hours [start, end): outside it the
+    # weight is 0, so cats are only ever scheduled while the NAS is up (a cat
+    # planned for a dead hour survives the shutdown via the pending queue and
+    # fires when it is back). start >= end (or 0/24) means always up.
+    active_start: float
+    active_end: float
     # The persona's UTC offset: hours/dates are read in THIS timezone, so the
     # cadence matches the legend, not the server's clock (principle 9).
     tz_offset_hours: float
@@ -102,7 +107,12 @@ class CatParams:
 
 @dataclass
 class CatState:
-    """The persisted memory that principles 2-4 and once-per-person need."""
+    """The persisted memory that principles 2-4 and once-per-person need.
+
+    ``posts`` (the watched comment targets) and ``pending`` (cats scheduled but
+    not yet sent) are persisted too, so a nightly NAS shutdown does not lose
+    which posts to watch or the cats due after it comes back.
+    """
 
     mood: float = 0.0
     mood_day: str = ''  # ISO date of the last mood step (drift once a day)
@@ -110,6 +120,8 @@ class CatState:
     next_earliest: float = 0.0  # heavy-tailed spacing cursor
     cat_last: dict[str, float] = field(default_factory=dict)  # id -> last ts
     catted: set[str] = field(default_factory=set)  # (post, person) keys done
+    posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
+    pending: list[dict[str, float]] = field(default_factory=list)  # due cats
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -128,14 +140,21 @@ def _mixture(
     return total
 
 
+def _in_window(hour: float, params: CatParams) -> bool:
+    """Whether ``hour`` is inside the host's uptime window [start, end)."""
+    if params.active_start >= params.active_end:
+        return True  # no window configured -> always up
+    return params.active_start <= hour < params.active_end
+
+
 def _hour_weight(ts: float, params: CatParams) -> float:
-    """Activity weight in [0, ~) at ``ts``: 0 in quiet hours (principle 1)."""
+    """Activity weight in [0, ~) at ``ts``: 0 off-hours (principles 1, 9)."""
     when = _local(ts, params)
-    if when.hour in params.quiet_hours:
+    hour = when.hour + when.minute / 60.0
+    if when.hour in params.quiet_hours or not _in_window(hour, params):
         return 0.0
     weekend = when.weekday() >= 5  # noqa: PLR2004 -- Sat/Sun
     peaks = params.hours_weekday if not weekend else params.hours_weekend
-    hour = when.hour + when.minute / 60.0
     return _mixture(hour, peaks)
 
 
@@ -253,26 +272,64 @@ class CatBrain:
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto
         self.clock = time.time
         self.state = self._load()
-        # (chat_id, msg_id) of the last watch_posts posts -> comment targets.
-        self.posts: deque[tuple[int, int]] = deque(maxlen=params.watch_posts)
+
+    @property
+    def posts(self) -> list[tuple[int, int]]:
+        """The watched comment targets (last ``watch_posts`` posts)."""
+        return self.state.posts
 
     def note_post(self, chat: int, msg_id: int) -> None:
-        """Remember a post, and drop dedup keys for posts that rolled off.
+        """Remember a post (persisted), drop keys for posts that rolled off.
 
         Only the last ``watch_posts`` posts are ever matched, so once a post
         falls out of the window its (post, person) keys can never fire again --
         pruning them keeps the persisted ``catted`` set bounded (principle 9).
         """
-        self.posts.append((chat, msg_id))
-        live = tuple(f'{c}:{m}:' for c, m in self.posts)
-        kept = {k for k in self.state.catted if k.startswith(live)}
-        if kept != self.state.catted:
-            self.state.catted = kept
-            self._save()
+        self.state.posts.append((chat, msg_id))
+        del self.state.posts[: -self.params.watch_posts]  # keep the last N
+        live = tuple(f'{c}:{m}:' for c, m in self.state.posts)
+        self.state.catted = {
+            k for k in self.state.catted if k.startswith(live)
+        }
+        self._save()
 
     def is_comment(self, chat: int, reply_to: int | None) -> bool:
         """Whether a reply in ``chat`` targets one of the tracked posts."""
-        return reply_to is not None and (chat, reply_to) in self.posts
+        return reply_to is not None and (chat, reply_to) in self.state.posts
+
+    def add_pending(self, chat: int, reply_to: int, when: float) -> None:
+        """Record a cat scheduled but not yet sent (survives a restart)."""
+        self.state.pending.append(
+            {'chat': chat, 'reply_to': reply_to, 'when': when}
+        )
+        self._save()
+
+    def done_pending(self, chat: int, reply_to: int) -> None:
+        """Forget a cat once it has been sent (or abandoned)."""
+        self.state.pending = [
+            p
+            for p in self.state.pending
+            if not (p['chat'] == chat and p['reply_to'] == reply_to)
+        ]
+        self._save()
+
+    def rearm(self) -> list[tuple[int, int, float]]:
+        """The pending cats to re-arm at startup, renewing any missed ones.
+
+        A cat whose time passed while the host was down is given a fresh
+        near-future slot (snapped back into the uptime window and spread by the
+        spacing cursor), so a night's worth does not fire at once on boot.
+        """
+        now = self.clock()
+        out: list[tuple[int, int, float]] = []
+        for entry in self.state.pending:
+            when = float(entry['when'])
+            if when <= now:
+                when = self._fire_time(now, engaged=False)
+                entry['when'] = when
+            out.append((int(entry['chat']), int(entry['reply_to']), when))
+        self._save()
+        return out
 
     def schedule(self, key: str, *, engaged: bool) -> float | None:
         """Decide if/when to cat ``key``; None means no cat this time.
@@ -372,6 +429,8 @@ class CatBrain:
                 for k, v in (raw.get('cat_last') or {}).items()
             },
             catted={str(p) for p in (raw.get('catted') or [])},
+            posts=[(int(c), int(m)) for c, m in (raw.get('posts') or [])],
+            pending=[dict(p) for p in (raw.get('pending') or [])],
         )
 
     def _save(self) -> None:
@@ -383,6 +442,8 @@ class CatBrain:
             'next_earliest': self.state.next_earliest,
             'cat_last': self.state.cat_last,
             'catted': sorted(self.state.catted),
+            'posts': [[c, m] for c, m in self.state.posts],
+            'pending': self.state.pending,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(
@@ -430,6 +491,8 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         quiet_hours=frozenset(
             int(h) for h in (cats.get('quiet_hours') or [2, 3, 4, 5, 6])
         ),
+        active_start=float(cats.get('active_start_hour', 0.0)),
+        active_end=float(cats.get('active_end_hour', 24.0)),
         tz_offset_hours=float(cats.get('tz_offset_hours', 3.0)),
         latency_log_mu=float(cats.get('latency_log_mu', 7.0)),
         latency_log_sigma=float(cats.get('latency_log_sigma', 1.2)),
