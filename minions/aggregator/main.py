@@ -98,9 +98,11 @@ STATUS_INTERVAL = 60
 POSTED_CAP = 300
 # Chat commands (from ANY chat, ANYONE), always rendered into the source chat:
 # /emojis previews the premium emoji constants; /preview renders sample posts
-# (partial + full platform coverage) for quality control of the post format.
+# (partial + full platform coverage) for QC; /status reports what is pending,
+# what was posted/rejected, and the cat engine's live state.
 COMMAND_EMOJIS = '/emojis'
 COMMAND_PREVIEW = '/preview'
+COMMAND_STATUS = '/status'
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -197,6 +199,7 @@ class Consts:
     platform_emoji: dict[str, object]
     sample_short: str
     sample_long: str
+    status_help: str  # the /status legend (expected behaviour), from JSON
 
 
 def _str_list(value: object, default: str) -> list[str]:
@@ -249,6 +252,7 @@ def _load_constants(path: Path) -> Consts:
         platform_emoji=dict(data.get('platform_emoji') or {}),
         sample_short=str(samples.get('short') or 'Sample short video'),
         sample_long=str(samples.get('long') or 'Sample long video'),
+        status_help=str(data.get('status_help') or ''),
     )
 
 
@@ -508,6 +512,12 @@ def _youtube_thumb(group: Group) -> str:
 def _strip_tags(caption: str) -> str:
     """Caption without its trailing hashtags, for display."""
     return ' '.join(_HASHTAG_RE.sub(' ', caption).split())
+
+
+def _trim(title: str, width: int = 40) -> str:
+    """A one-line, length-capped title for the /status report."""
+    flat = ' '.join(title.split())
+    return flat if len(flat) <= width else flat[: width - 1] + '~'
 
 
 def _cells(group: Group, row: list[str]) -> list[str]:
@@ -811,28 +821,39 @@ class Aggregator:
     async def handle(self, event: events.NewMessage.Event) -> None:
         """Dispatch one event: a /command, a comment cat, or aggregation.
 
-        Commands (/emojis, /preview) work from ANY chat and for ANYONE and
-        always render into the source chat; the cat engine watches replies to
-        our own posts (any chat); aggregation stays source-scoped.
+        Commands (/emojis, /preview, /status) work from ANY chat and for
+        ANYONE and always render into the source chat; the cat engine watches
+        replies to our own posts (any chat); aggregation stays source-scoped.
         """
         text = (event.raw_text or '').strip().lower()
-        if text == COMMAND_EMOJIS:
-            await self.show_constants()
-            return
-        if text == COMMAND_PREVIEW:
-            await self.preview_posts()
+        if await self._command(text):
             return
         if self.cats.params.enabled:
             self._maybe_cat(event)
         if event.chat_id == self.config.source:
             await self.on_message(event.message)
 
+    async def _command(self, text: str) -> bool:
+        """Run a matching /command, returning True if one handled the text."""
+        handlers = {
+            COMMAND_EMOJIS: self.show_constants,
+            COMMAND_PREVIEW: self.preview_posts,
+            COMMAND_STATUS: self.status_report,
+        }
+        handler = handlers.get(text)
+        if handler is None:
+            return False
+        await handler()
+        return True
+
     def _maybe_cat(self, event: events.NewMessage.Event) -> None:
         """If this message comments on one of our posts, schedule a cat reply.
 
-        A "comment" is a reply whose target is one of the last posts. The
-        commenter is catted at most once; the engine decides whether and when
-        (it may return nothing -- skipped, silent day, already catted).
+        A "comment" is a reply whose target is one of the last posts. Each
+        commenter is catted at most once PER POST -- a second comment under the
+        same post is ignored, but the same person on a different post is
+        eligible again. The engine decides whether and when (it may return
+        nothing -- skipped, silent day, already catted here).
         """
         reply = getattr(event.message, 'reply_to', None)
         reply_to = getattr(reply, 'reply_to_msg_id', None)
@@ -842,13 +863,16 @@ class Aggregator:
         person = str(getattr(event, 'sender_id', None) or '')
         if not person:
             return
+        # Once per (post, commenter): the dedup key ties the person to THIS
+        # post, so re-commenting under the same post gets no second cat.
+        key = f'{chat}:{reply_to}:{person}'
         # Feedback (principle 8): a reply to our freshest post reads as active
         # engagement, so the reaction comes faster.
         engaged = bool(self.cats.posts) and self.cats.posts[-1] == (
             chat,
             reply_to,
         )
-        when = self.cats.schedule(person, engaged=engaged)
+        when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
         task = asyncio.create_task(
@@ -882,6 +906,70 @@ class Aggregator:
             formatting_entities=message.entities,
             reply_to=reply_to,
         )
+
+    async def status_report(self) -> None:
+        """Post the pending/posted/cat diagnostics to the source chat."""
+        await self.client.send_message(self.config.source, self._status_text())
+        log.info('sent status report to %s', self.config.source)
+
+    def _status_text(self) -> str:
+        """The full status message: pending, posted, cats, and the legend."""
+        parts = [
+            'Aggregator status',
+            '',
+            *self._pending_lines(),
+            '',
+            *self._posted_lines(),
+            '',
+            *self._cat_status_lines(),
+        ]
+        if self.consts.status_help:
+            parts += ['', self.consts.status_help]
+        return '\n'.join(parts)
+
+    def _pending_lines(self) -> list[str]:
+        """One line per pending video, and which platforms it awaits."""
+        lines = [f'Pending videos: {len(self.groups)}']
+        for group in self.groups:
+            have = ', '.join(sorted(group.items)) or '-'
+            missing = (
+                ', '.join(
+                    p for p in self.config.platforms if p not in group.items
+                )
+                or 'complete'
+            )
+            left = int(self.config.timeout - (time.time() - group.created_at))
+            lines.append(
+                f'  - "{_trim(group.title)}" have [{have}]'
+                f' wait [{missing}] ~{left}s'
+            )
+        return lines
+
+    def _posted_lines(self) -> list[str]:
+        """A tail of what went out, plus the rejected (non-Short) count."""
+        lines = [
+            f'Recently posted: {len(self.posted)}'
+            f' | rejected (non-Shorts): {len(self.rejected)}'
+        ]
+        for post in self.posted[-5:]:
+            links = len(post.links)
+            lines.append(
+                f'  - "{_trim(post.title)}" {post.at} ({links} links)'
+            )
+        return lines
+
+    def _cat_status_lines(self) -> list[str]:
+        """The cat engine's live state (empty-ish when it is disabled)."""
+        brain = self.cats
+        posts = ', '.join(f'{ch}:{mid}' for ch, mid in brain.posts) or '-'
+        return [
+            'Cat engine:',
+            f'  enabled={brain.params.enabled} pool={len(brain.params.pool)}',
+            f'  watching posts=[{posts}]',
+            f'  catted={len(brain.state.catted)}'
+            f' pending_replies={len(self._cat_tasks)}'
+            f' mood={brain.state.mood:.2f}',
+        ]
 
     async def show_constants(self) -> None:
         """Post a preview of every premium emoji constant to the watcher."""

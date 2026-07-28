@@ -233,6 +233,16 @@ def test_is_comment_tracks_only_the_last_posts(tmp_path: Path) -> None:
     assert brain.is_comment(100, 13)
 
 
+def test_catted_keys_are_pruned_when_a_post_rolls_off(tmp_path: Path) -> None:
+    brain = _brain(tmp_path, watch_posts=2)
+    brain.note_post(1, 10)
+    assert brain.schedule('1:10:alice', engaged=False) is not None
+    assert '1:10:alice' in brain.state.catted
+    brain.note_post(1, 11)
+    brain.note_post(1, 12)  # window is [11, 12] now -> post 10 rolled off
+    assert '1:10:alice' not in brain.state.catted
+
+
 # --- emit records the send
 
 

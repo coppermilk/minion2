@@ -104,7 +104,7 @@ class CatState:
     last_send: float = 0.0  # unix ts of the most recent cat sent
     next_earliest: float = 0.0  # heavy-tailed spacing cursor
     cat_last: dict[str, float] = field(default_factory=dict)  # id -> last ts
-    catted: set[str] = field(default_factory=set)  # people already catted
+    catted: set[str] = field(default_factory=set)  # (post, person) keys done
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -252,28 +252,39 @@ class CatBrain:
         self.posts: deque[tuple[int, int]] = deque(maxlen=params.watch_posts)
 
     def note_post(self, chat: int, msg_id: int) -> None:
-        """Remember a message the aggregator just posted (comment target)."""
+        """Remember a post, and drop dedup keys for posts that rolled off.
+
+        Only the last ``watch_posts`` posts are ever matched, so once a post
+        falls out of the window its (post, person) keys can never fire again --
+        pruning them keeps the persisted ``catted`` set bounded (principle 9).
+        """
         self.posts.append((chat, msg_id))
+        live = tuple(f'{c}:{m}:' for c, m in self.posts)
+        kept = {k for k in self.state.catted if k.startswith(live)}
+        if kept != self.state.catted:
+            self.state.catted = kept
+            self._save()
 
     def is_comment(self, chat: int, reply_to: int | None) -> bool:
         """Whether a reply in ``chat`` targets one of the tracked posts."""
         return reply_to is not None and (chat, reply_to) in self.posts
 
-    def schedule(self, person: str, *, engaged: bool) -> float | None:
-        """Decide if/when to cat ``person``; None means no cat this time.
+    def schedule(self, key: str, *, engaged: bool) -> float | None:
+        """Decide if/when to cat ``key``; None means no cat this time.
 
-        Marks the person as catted on success (once-per-person). Returns the
-        unix ts at which ``emit`` should run.
+        ``key`` is an opaque dedup handle (the caller ties it to a specific
+        post + commenter, so it is once per (post, person)). Marks ``key`` as
+        catted on success. Returns the unix ts at which ``emit`` should run.
         """
         now = self.clock()
-        if not self.params.enabled or person in self.state.catted:
+        if not self.params.enabled or key in self.state.catted:
             return None
         if self.rng.random() < self.params.skip_prob:  # principle 7
             return None
         when = self._fire_time(now, engaged=engaged)
         if _is_silent_day(when, self.params):  # principle 7
             return None
-        self.state.catted.add(person)
+        self.state.catted.add(key)
         self.state.next_earliest = when
         self._save()
         return when

@@ -111,16 +111,20 @@ Docker, `<DRIVE_NAS>/bots/aggregator/telethon.session` (the host path behind
 
 ## Human-like cat replies (`cats` engine)
 
-Optionally, the same account replies to people who **comment on the last
-posts** with a **premium cat emoji** -- once per person, timed and chosen so it
+The same account replies to people who **comment on the last posts** with a
+**premium cat emoji** -- **once per (post, commenter)**, timed and chosen so it
 reads as a distracted human rather than a scheduler. The logic lives in
-`cats.py` (Telethon-free and unit-tested in `tests/test_cats.py`); it is
-**off by default** and driven entirely from the `cats` section of
-`aggregator_constants.json`.
+`cats.py` (Telethon-free and unit-tested in `tests/test_cats.py`) and is driven
+entirely from the `cats` section of `aggregator_constants.json`.
 
-To turn it on: fill every `emoji[].id` with a real premium **cat**-emoji id
-(use the `/emojis` dump helper to read ids), set `tz_offset_hours` to the
-persona's timezone, and set `"enabled": true`.
+**Once per (post, commenter):** a person's *second* comment under the *same*
+post gets **no** reply; the *same* person commenting under a *different* post
+is eligible for a new cat. (Dedup keys for posts that roll out of the
+`watch_posts` window are pruned, so the persisted state stays bounded.)
+
+To tune it: `emoji[].id` are real premium **cat**-emoji ids (add more with the
+`/emojis` dump helper), `tz_offset_hours` is the persona's timezone, and
+`"enabled": false` turns it off.
 
 How it stays human (the nine principles, all tunable in the JSON):
 
@@ -142,3 +146,10 @@ How it stays human (the nine principles, all tunable in the JSON):
 > Comments are matched as **replies to the post message id**, which fits a
 > **group** target. For a **channel with a linked discussion**, the comments
 > live in the discussion group -- point the account there so it sees them.
+
+**Inspect it live** with the `/status` command (from any chat, renders into the
+source chat): it lists the videos still **pending** (and which platforms each
+awaits), a tail of what was **posted**, the **rejected** (non-Short) count, and
+the cat engine's state (enabled, pool size, watched posts, people catted,
+pending replies, mood) -- followed by a plain-language legend of the expected
+behaviour (`status_help` in the JSON).
