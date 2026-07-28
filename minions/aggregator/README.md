@@ -108,3 +108,53 @@ Docker, `<DRIVE_NAS>/bots/aggregator/telethon.session` (the host path behind
 
 > The `.session` file is full account access. It is git-ignored; don't share it,
 > and revoke it from **Telegram -> Settings -> Devices** if it leaks.
+
+## Human-like cat replies (`cats` engine)
+
+The same account replies to people who **comment on the last posts** with a
+**premium cat emoji** -- **once per (post, commenter)**, timed and chosen so it
+reads as a distracted human rather than a scheduler. The logic lives in
+`cats.py` (Telethon-free and unit-tested in `tests/test_cats.py`) and is driven
+entirely from the `cats` section of `aggregator_constants.json`.
+
+**Once per (post, commenter):** a person's *second* comment under the *same*
+post gets **no** reply; the *same* person commenting under a *different* post
+is eligible for a new cat. (Dedup keys for posts that roll out of the
+`watch_posts` window are pruned, so the persisted state stays bounded.)
+
+To tune it: `emoji[].id` are real premium **cat**-emoji ids (add more with the
+`/emojis` dump helper), `tz_offset_hours` is the persona's timezone, and
+`"enabled": false` turns it off.
+
+How it stays human (the nine principles, all tunable in the JSON):
+
+1. **Timing** is a mixture-of-Gaussians density over the day, separate
+   weekday/weekend curves, near-zero in `quiet_hours` -- not `uniform(0,24)`.
+2. **Intervals** are heavy-tailed (log-normal), so cats come in bursts then
+   long silences -- not a flat cadence.
+3. **Selection has memory**: weight = base preference x recency penalty, so
+   favourites lead and a just-used cat fades.
+4. **Mood** does an AR(1) random walk day to day and tilts sleepy vs. lively.
+5. **Context tags** (daypart, season, December) re-weight the pool.
+6. **Jitter** takes the fire time off the `:00` second.
+7. **Imperfection**: a comment is sometimes ignored (`skip_prob`), a whole day
+   is sometimes silent (`silent_day_prob`), and a rare second cat follows.
+8. **Feedback**: a reply to the freshest post gets a faster reaction.
+9. **State** persists (`cats_state.json` next to the aggregator state): mood,
+   the spacing cursor, per-cat recency, and who was already catted.
+
+**Channel vs. group target** (`comments_in_discussion`, default `true`):
+- **Channel with a linked discussion** (`true`): each post's comments live in
+  the discussion group. The bot resolves the post's **discussion thread** and
+  replies **only inside that channel post's comments** -- off-topic discussion
+  messages and channel messages are ignored. The account **must be a member of
+  the discussion group** to receive those comments.
+- **Plain group** (`false`): comments are matched as direct replies to the post
+  message id, in the group itself.
+
+**Inspect it live** with the `/status` command (from any chat, renders into the
+source chat): it lists the videos still **pending** (and which platforms each
+awaits), a tail of what was **posted**, the **rejected** (non-Short) count, and
+the cat engine's state (enabled, pool size, watched posts, people catted,
+pending replies, mood) -- followed by a plain-language legend of the expected
+behaviour (`status_help` in the JSON).
