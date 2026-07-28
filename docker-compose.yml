@@ -253,6 +253,24 @@ services:
     tty: true
     mem_limit: 256m
 
+  # donate: a SECOND Telethon USER account (a Telethon session is one account,
+  # so it cannot share the aggregator's). It listens for the /donate command
+  # and renders a formatted donation shout-out with premium emoji. Same shared
+  # image; its own session file on /data survives restarts. Config lives in
+  # .env: DONATE_API_ID / DONATE_API_HASH (my.telegram.org), optional
+  # DONATE_CHAT_ID (where to render; unset = reply in the command's chat). First
+  # login (once): docker compose run --rm donate python -m minions.donate.login,
+  # then `docker compose up -d donate` runs it silently.
+  donate:
+    <<: *minion
+    environment:
+      <<: *minion-env
+      DONATE_SESSION_FILE: /data/bots/donate/telethon
+    command: python -m minions.donate.main
+    stdin_open: true            # for the one-time interactive login
+    tty: true
+    mem_limit: 256m
+
 # Ollama's model blobs: a disposable, re-pullable CACHE. A named volume
 # (Docker auto-creates it) rather than a bind, so a missing host subpath
 # can never fail the start; `image prune` never touches volumes.

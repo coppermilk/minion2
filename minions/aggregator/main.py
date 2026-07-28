@@ -193,6 +193,8 @@ class Consts:
     column_separator: str
     rows: list[list[str]]
     platform_emoji: dict[str, object]
+    sample_short: str
+    sample_long: str
 
 
 def _str_list(value: object, default: str) -> list[str]:
@@ -230,6 +232,7 @@ def _read_json(path: Path) -> dict[str, object]:
 def _load_constants(path: Path) -> Consts:
     """Load the post constants from JSON, ignoring unknown keys."""
     data = _read_json(path)
+    samples = dict(data.get('sample_titles') or {})
     return Consts(
         fields={**DEFAULT_FIELDS, **(data.get('fields') or {})},
         action_value=str(data.get('action_value', '')),
@@ -242,6 +245,8 @@ def _load_constants(path: Path) -> Consts:
         column_separator=str(data.get('column_separator', '  |  ')),
         rows=list(data.get('rows') or []),
         platform_emoji=dict(data.get('platform_emoji') or {}),
+        sample_short=str(samples.get('short') or 'Sample short video'),
+        sample_long=str(samples.get('long') or 'Sample long video'),
     )
 
 
@@ -594,8 +599,8 @@ def _compose(
 
 
 # QC preview (/preview): fake titles + dummy links, one video per scenario.
-_SAMPLE_TITLE = 'Когда просят сальсу 💃 #скетч #комедия'
-_SAMPLE_LONG = 'Три дня монтировал этот номер и наконец готово #бэнгер #юмор'
+# The two sample captions live in the constants JSON (so this source stays
+# ASCII, BLUEPRINT 4); _sample_groups reads them off the loaded Consts.
 
 
 def _sample_item(key: str, msg_id: int, title: str) -> Item:
@@ -620,16 +625,16 @@ def _sample_group(platforms: Iterable[str], title: str) -> Group:
     return group
 
 
-def _sample_groups() -> list[Group]:
+def _sample_groups(consts: Consts) -> list[Group]:
     """Five sample videos for QC: from one platform arrived up to all four."""
+    short = consts.sample_short
+    long = consts.sample_long
     return [
-        _sample_group(['youtube'], _SAMPLE_TITLE),
-        _sample_group(['tiktok', 'youtube'], _SAMPLE_TITLE),
-        _sample_group(['instagram', 'pinterest'], _SAMPLE_TITLE),
-        _sample_group(['tiktok', 'youtube', 'instagram'], _SAMPLE_LONG),
-        _sample_group(
-            ['tiktok', 'youtube', 'pinterest', 'instagram'], _SAMPLE_TITLE
-        ),
+        _sample_group(['youtube'], short),
+        _sample_group(['tiktok', 'youtube'], short),
+        _sample_group(['instagram', 'pinterest'], short),
+        _sample_group(['tiktok', 'youtube', 'instagram'], long),
+        _sample_group(['tiktok', 'youtube', 'pinterest', 'instagram'], short),
     ]
 
 
@@ -819,7 +824,7 @@ class Aggregator:
 
     async def preview_posts(self) -> None:
         """Render QC sample posts (partial + full coverage) to the source."""
-        groups = _sample_groups()
+        groups = _sample_groups(self.consts)
         for group in groups:
             message = _compose(group, self.config.platforms, self.consts)
             await self.client.send_message(

@@ -1,0 +1,23 @@
+{
+  "donate_emoji": { "id": "5413704369918978673", "fallback": "🥛" },
+  "donate_header": "ДОНАТ · {name} · {amount}",
+  "donate_currency": "₽",
+  "donate_quote": "«{message}»",
+  "donate_reactions": [
+    "— Так-так. Одобряю, {name}. А одобряю я нечасто. Заношу вас в блокнотик. В хороший блокнотик",
+    "— О, {name}. Щедро. Даже Ганс на секунду перестал хмуриться. На секунду",
+    "— {name}, вы всё поняли правильно. Заношу в список приличных людей. Их там немного",
+    "— {name}, вот это по-нашему. Ганс молча кивнул, а он молча ничего не делает",
+    "— Принято, {name}. Пойду доем спагетти в вашу честь"
+  ],
+  "donate_separator": "────────────",
+  "donate_arrow": " → ",
+  "donate_link_text": "ссылка",
+  "donate_links": [
+    { "label": "впечатлить Ганса", "url": "" },
+    { "label": "задонатить", "url": "" },
+    { "label": "тоже хочешь так", "url": "" }
+  ],
+  "donate_usage": "Формат: /donate <имя> <сумма> <сообщение>",
+  "_note": "Editable texts + the leading premium emoji for the /donate command. donate_emoji is a premium {id, fallback} entry (rendered from a Telegram Premium user account); replace it with a plain glyph string like \"🥛\" for a non-premium emoji. donate_header/donate_quote/donate_reactions accept {name}, {amount}, {message} placeholders. donate_reactions and donate_links may be extended freely; an empty link url renders the link text as plain (non-tappable) text until you fill it in."
+}
