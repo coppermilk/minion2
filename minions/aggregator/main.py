@@ -202,9 +202,34 @@ def _str_list(value: object, default: str) -> list[str]:
     return [str(v) for v in value] if value else [default]
 
 
+def _read_json(path: Path) -> dict[str, object]:
+    """Parse the constants JSON; on a bad/missing file, log and use defaults.
+
+    A typo in aggregator_constants.json (e.g. a trailing comma) must not take
+    the bot down: log a clear error naming the file and the parse problem, then
+    fall back to built-in defaults so the aggregator still starts (posts are
+    bland until it is fixed).
+    """
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        # A clean one-liner (exc text is in the message) beats a traceback for
+        # a config typo, so log.error, not log.exception.
+        log.error(  # noqa: TRY400
+            '%s is invalid (%s); using defaults -- fix it and restart.',
+            path.name,
+            exc,
+        )
+        return {}
+    if not isinstance(data, dict):
+        log.error('%s must be a JSON object; using defaults.', path.name)
+        return {}
+    return data
+
+
 def _load_constants(path: Path) -> Consts:
     """Load the post constants from JSON, ignoring unknown keys."""
-    data = json.loads(path.read_text(encoding='utf-8'))
+    data = _read_json(path)
     return Consts(
         fields={**DEFAULT_FIELDS, **(data.get('fields') or {})},
         action_value=str(data.get('action_value', '')),
@@ -936,9 +961,7 @@ def _targets() -> tuple[int, ...]:
 
 def _load_config() -> Config:
     """Chats come from the env; all behaviour from the constants JSON."""
-    data = json.loads(
-        Path(__file__).with_name(CONSTANTS_FILE).read_text(encoding='utf-8')
-    )
+    data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
     csv = str(data.get('platforms') or DEFAULT_PLATFORMS)
     platforms = tuple(p.strip().lower() for p in csv.split(',') if p.strip())
     return Config(
