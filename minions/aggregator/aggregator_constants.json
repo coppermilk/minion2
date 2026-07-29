@@ -30,31 +30,212 @@
     "доел мясо, запил вискарём и залил новое видео. Нормально?",
     "вместо того чтобы кого-то чпокнуть, я чпокал финальный рендер"
   ],
-  "love": [
+  "emoji": [
     {
+      "type": "love",
       "id": "5359648353913167803",
       "fallback": "🤩"
     },
     {
+      "type": "love",
       "id": "5255723571417719479",
       "fallback": "🤭"
     },
     {
+      "type": "love",
       "id": "5253764727028326961",
       "fallback": "🐰"
+    },
+    {
+      "type": "lead",
+      "id": "5285221303727462652",
+      "fallback": "🤩"
+    },
+    {
+      "type": "lead",
+      "id": "5215303874713245624",
+      "fallback": "👁‍🗨"
+    },
+    {
+      "type": "lead",
+      "id": "5215215643200093999",
+      "fallback": "🤩"
+    },
+    {
+      "type": "arrow",
+      "id": "5352621830366571940",
+      "fallback": "⬇️"
+    },
+    {
+      "type": "arrow",
+      "id": "5265108929657976016",
+      "fallback": "🔃"
+    },
+    {
+      "type": "arrow",
+      "id": "5264753207581619060",
+      "fallback": "⤴️"
+    },
+    {
+      "type": "arrow",
+      "id": "5262827460210209636",
+      "fallback": "⤵️"
+    },
+    {
+      "type": "arrow",
+      "id": "5318867940085345673",
+      "fallback": "⏬"
+    },
+    {
+      "type": "platform",
+      "name": "tiktok",
+      "id": "5199675785803234283",
+      "fallback": "🤩"
+    },
+    {
+      "type": "platform",
+      "name": "youtube",
+      "id": "5262839855485825204",
+      "fallback": "📕"
+    },
+    {
+      "type": "platform",
+      "name": "instagram",
+      "id": "5265150543596107416",
+      "fallback": "📓"
+    },
+    {
+      "type": "platform",
+      "name": "pinterest",
+      "id": "5411109823125158956",
+      "fallback": "🤩"
+    },
+    {
+      "type": "cat",
+      "id": "5413747010354323321",
+      "fallback": "🐈",
+      "base": 1.6,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413511100685658345",
+      "fallback": "🐱",
+      "base": 1.6,
+      "tags": [
+        "sleepy"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413883646148912907",
+      "fallback": "🐰",
+      "base": 1.3,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5411477429376035850",
+      "fallback": "☺️",
+      "base": 1.1,
+      "tags": [
+        "sleepy"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413476955695656097",
+      "fallback": "🎀",
+      "base": 1.0,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413410581271061413",
+      "fallback": "😎",
+      "base": 1.0,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5411601227513372931",
+      "fallback": "🎮",
+      "base": 0.8,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413607647255504180",
+      "fallback": "🤩",
+      "base": 0.9,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5411280187297931169",
+      "fallback": "🤩",
+      "base": 0.9,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413789513350685479",
+      "fallback": "🤩",
+      "base": 0.9,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413369766196848984",
+      "fallback": "🤩",
+      "base": 0.9,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413808716149467908",
+      "fallback": "🤩",
+      "base": 0.9,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413742303070168248",
+      "fallback": "🤩",
+      "base": 0.9,
+      "tags": [
+        "bodry"
+      ]
+    },
+    {
+      "type": "cat",
+      "id": "5413333370643981198",
+      "fallback": "🤩",
+      "base": 0.9,
+      "tags": [
+        "bodry"
+      ]
     }
-  ],
-  "lead_emoji": [
-    { "id": "5285221303727462652", "fallback": "🤩" },
-    { "id": "5215303874713245624", "fallback": "👁‍🗨" },
-    { "id": "5215215643200093999", "fallback": "🤩" }
-  ],
-  "arrow_down": [
-    { "id": "5352621830366571940", "fallback": "⬇️" },
-    { "id": "5265108929657976016", "fallback": "🔃" },
-    { "id": "5264753207581619060", "fallback": "⤴️" },
-    { "id": "5262827460210209636", "fallback": "⤵️" },
-    { "id": "5318867940085345673", "fallback": "⏬" }
   ],
   "view_label": [
     "Посмотреть"
@@ -70,24 +251,6 @@
       "pinterest"
     ]
   ],
-  "platform_emoji": {
-    "tiktok": {
-      "id": "5199675785803234283",
-      "fallback": "🤩"
-    },
-    "youtube": {
-      "id": "5262839855485825204",
-      "fallback": "📕"
-    },
-    "instagram": {
-      "id": "5265150543596107416",
-      "fallback": "📓"
-    },
-    "pinterest": {
-      "id": "5411109823125158956",
-      "fallback": "🤩"
-    }
-  },
   "sample_titles": {
     "short": "Когда просят сальсу 💃 #скетч #комедия",
     "long": "Три дня монтировал этот номер и наконец готово #бэнгер #юмор"
@@ -97,45 +260,51 @@
     "comments_in_discussion": true,
     "watch_posts": 4,
     "tz_offset_hours": 3,
-    "active_start_hour": 7,
-    "active_end_hour": 17,
+    "active_start_hour": 0,
+    "active_end_hour": 24,
     "uptime_half_life_sec": 864000,
     "uptime_learn_obs": 2000,
     "skip_if_manually_replied": true,
     "quiet_hours": [],
-    "hours_weekday": [[10, 2.0, 1.0], [15, 2.5, 1.3]],
-    "hours_weekend": [[11, 2.5, 1.0], [15, 2.5, 1.1]],
-    "latency_log_mu": 7.0,
-    "latency_log_sigma": 1.2,
-    "spacing_log_mu": 9.5,
-    "spacing_log_sigma": 1.3,
-    "jitter_sec": 90,
-    "skip_prob": 0.12,
+    "hours_weekday": [
+      [
+        10,
+        2.0,
+        1.0
+      ],
+      [
+        15,
+        2.5,
+        1.3
+      ]
+    ],
+    "hours_weekend": [
+      [
+        11,
+        2.5,
+        1.0
+      ],
+      [
+        15,
+        2.5,
+        1.1
+      ]
+    ],
+    "latency_log_mu": 1.1,
+    "latency_log_sigma": 0.15,
+    "spacing_log_mu": 1.1,
+    "spacing_log_sigma": 0.15,
+    "jitter_sec": 0,
+    "skip_prob": 0,
     "double_prob": 0.06,
     "double_gap_sec": 40,
-    "silent_day_prob": 0.08,
+    "silent_day_prob": 0,
     "recency_half_life_sec": 172800,
     "mood_phi": 0.8,
     "mood_sigma": 0.35,
     "feedback_speedup": 0.4,
-    "emoji": [
-      { "id": "5413747010354323321", "fallback": "🐈", "base": 1.6, "tags": ["bodry"] },
-      { "id": "5413511100685658345", "fallback": "🐱", "base": 1.6, "tags": ["sleepy"] },
-      { "id": "5413883646148912907", "fallback": "🐰", "base": 1.3, "tags": ["bodry"] },
-      { "id": "5411477429376035850", "fallback": "☺️", "base": 1.1, "tags": ["sleepy"] },
-      { "id": "5413476955695656097", "fallback": "🎀", "base": 1.0, "tags": ["bodry"] },
-      { "id": "5413410581271061413", "fallback": "😎", "base": 1.0, "tags": ["bodry"] },
-      { "id": "5411601227513372931", "fallback": "🎮", "base": 0.8, "tags": ["bodry"] },
-      { "id": "5413607647255504180", "fallback": "🤩", "base": 0.9, "tags": ["bodry"] },
-      { "id": "5411280187297931169", "fallback": "🤩", "base": 0.9, "tags": ["bodry"] },
-      { "id": "5413789513350685479", "fallback": "🤩", "base": 0.9, "tags": ["bodry"] },
-      { "id": "5413369766196848984", "fallback": "🤩", "base": 0.9, "tags": ["bodry"] },
-      { "id": "5413808716149467908", "fallback": "🤩", "base": 0.9, "tags": ["bodry"] },
-      { "id": "5413742303070168248", "fallback": "🤩", "base": 0.9, "tags": ["bodry"] },
-      { "id": "5413333370643981198", "fallback": "🤩", "base": 0.9, "tags": ["bodry"] }
-    ],
-    "_note": "Human-like cat-emoji replies to people who comment on the last watch_posts posts, ONCE per (post, commenter) -- a second comment under the SAME post is ignored, but the same person on another post is eligible again (see minions/aggregator/cats.py). Turn off with enabled=false. Get more premium cat-emoji ids with the /emojis dump helper. tz_offset_hours is the persona's UTC offset (3 = Moscow) so hours match the legend. active_start_hour/active_end_hour are the DECLARED uptime window in local hours [start, end) -- a starting guess only. The bot also LEARNS the NAS's real on-hours (a heartbeat records the current hour while running) and blends the learned curve with this window by confidence, so it adapts to whatever hours the NAS is actually up, even outside 7-17 (set start>=end or 0/24 to lean entirely on learning). uptime_half_life_sec fades old uptime observations (10 days) so a changed schedule is followed; uptime_learn_obs is how many heartbeats of history earn full trust in the learned curve (2000 ~ 1.4 days of continuous uptime). A cat planned for an hour the NAS turns out to be down survives in the persisted pending queue and fires (renewed to a fresh in-window slot) when it is back. skip_if_manually_replied=true drops the cat if the operator has already replied to that comment by hand. hours_* are [mean_hour, sigma, weight] Gaussian peaks (the waking-day shape); quiet_hours are hard-silent hours. State (mood, watched posts, pending cats, and the learned uptime) persists to cats_state.json, so a nightly shutdown loses nothing. latency_* is the log-normal reaction delay after a comment; spacing_* is the heavy-tailed gap between cats (bursts then silence). skip_prob ignores a comment; silent_day_prob mutes a whole day; double_prob sends a rare second cat. recency_half_life_sec fades a just-used cat; mood_phi/mood_sigma is the day-to-day AR(1) mood; a cat's tags (sleepy/bodry/winter/spring/summer/autumn/newyear) re-weight it by daypart/season. comments_in_discussion=true (default here) is for a CHANNEL target: each post's comments live in the linked discussion group, so the bot resolves the post's discussion thread and replies ONLY inside that channel post's comments. The account MUST be a member of the discussion group to receive those comments. Set comments_in_discussion=false only when the target is a plain group (then comments are matched as direct replies to the post message id)."
+    "_note": "Human-like cat-emoji replies to people who comment on the last watch_posts posts, ONCE per (post, commenter) -- a second comment under the SAME post is ignored, but the same person on another post is eligible again (see minions/aggregator/cats.py). Turn off with enabled=false. The cat pool is the type=cat entries of the top-level \"emoji\" array (not here); add more there. /emojis renders the whole emoji array. tz_offset_hours is the persona's UTC offset (3 = Moscow) so hours match the legend. active_start_hour/active_end_hour are the DECLARED uptime window in local hours [start, end) -- a starting guess only. The bot also LEARNS the NAS's real on-hours (a heartbeat records the current hour while running) and blends the learned curve with this window by confidence, so it adapts to whatever hours the NAS is actually up, even outside 7-17 (set start>=end or 0/24 to lean entirely on learning). uptime_half_life_sec fades old uptime observations (10 days) so a changed schedule is followed; uptime_learn_obs is how many heartbeats of history earn full trust in the learned curve (2000 ~ 1.4 days of continuous uptime). A cat planned for an hour the NAS turns out to be down survives in the persisted pending queue and fires (renewed to a fresh in-window slot) when it is back. skip_if_manually_replied=true drops the cat if the operator has already replied to that comment by hand. hours_* are [mean_hour, sigma, weight] Gaussian peaks (the waking-day shape); quiet_hours are hard-silent hours. State (mood, watched posts, pending cats, and the learned uptime) persists to cats_state.json, so a nightly shutdown loses nothing. latency_* is the log-normal reaction delay after a comment; spacing_* is the heavy-tailed gap between cats (bursts then silence). skip_prob ignores a comment; silent_day_prob mutes a whole day; double_prob sends a rare second cat. recency_half_life_sec fades a just-used cat; mood_phi/mood_sigma is the day-to-day AR(1) mood; a cat's tags (sleepy/bodry/winter/spring/summer/autumn/newyear) re-weight it by daypart/season. comments_in_discussion=true (default here) is for a CHANNEL target: each post's comments live in the linked discussion group, so the bot resolves the post's discussion thread and replies ONLY inside that channel post's comments. The account MUST be a member of the discussion group to receive those comments. Set comments_in_discussion=false only when the target is a plain group (then comments are matched as direct replies to the post message id)."
   },
   "status_help": "Как это работает. Агрегатор собирает ссылки одного видео со всех площадок в ОДИН пост. Пока пришли не все площадки и не истёк таймаут -- видео 'в пендинге' (ждёт). Как только собраны все или вышло время -- постим. Слишком длинные (не Shorts) отклоняются (rejected). Коты: на коммент под одним из последних постов бот один раз отвечает премиум кот-эмодзи по человечному расписанию -- иногда пачкой, иногда тишина по несколько дней, ночью молчит, иногда вообще пропускает. Один раз на человека ПОД КОНКРЕТНЫМ постом: второй коммент того же человека под тем же постом остаётся без ответа, но под другим постом ему снова может прилететь кот. Команды: /status -- это сообщение (4 последних поста и сколько пендинг-комментов); /requeue -- обновить очередь котов; /preview -- примеры постов; /emojis -- id премиум-эмодзи и котов.",
-  "_note": "Emoji are premium {id, fallback} entries (render from a user account with Telegram Premium). Replace an entry with a plain glyph string like \"🔥\" to use a non-premium emoji. Add more love/announce variants freely."
+  "_note": "ALL premium emoji live in the single top-level \"emoji\" array. Each entry is {type, id, fallback} plus per-type extras: type=platform adds \"name\" (tiktok/youtube/instagram/pinterest); type=cat adds \"base\" (preference) and \"tags\" (sleepy/bodry/winter/spring/summer/autumn/newyear). Types: love + lead + arrow drive the post (random pick), platform is the link grid, cat is the reply pool. Add/remove entries freely; the whole array is rendered by /emojis. Render from a user account with Telegram Premium; replace an entry's id with a plain glyph in fallback to use a non-premium emoji."
 }

@@ -538,11 +538,19 @@ def _peaks(
     return tuple(out)
 
 
+def _cat_entries(data: dict[str, object]) -> list[dict]:
+    """The cat-emoji dicts from the unified top-level ``emoji`` array."""
+    top = data.get('emoji')
+    if not isinstance(top, list):
+        return []
+    return [e for e in top if isinstance(e, dict) and e.get('type') == 'cat']
+
+
 def load_cat_params(data: dict[str, object]) -> CatParams:
     """Load the cat engine's parameters from the constants JSON 'cats' key."""
     cats = data.get('cats') if isinstance(data.get('cats'), dict) else {}
     cats = cats or {}
-    pool = tuple(_emoji(dict(e)) for e in (cats.get('emoji') or []))
+    pool = tuple(_emoji(dict(e)) for e in _cat_entries(data))
     return CatParams(
         enabled=bool(cats.get('enabled', False)),
         comments_in_discussion=bool(cats.get('comments_in_discussion', False)),
