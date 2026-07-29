@@ -74,6 +74,32 @@ class CatEmoji:
 
 
 @dataclass(frozen=True)
+class Cat:
+    """A scheduled reply: cat ``reply_to`` in ``chat``, under ``root``.
+
+    ``root`` is the discussion thread root (the post), needed so the reply is
+    placed INSIDE the comment thread and shows as a real reply, not a flat
+    group message. For a plain group it equals ``reply_to`` (no threading).
+    """
+
+    chat: int
+    reply_to: int  # the commenter's message id
+    root: int  # the thread root (post) for discussion threading
+    when: float
+
+
+def _cat_from_entry(entry: dict[str, float], when: float) -> Cat:
+    """Rebuild a Cat from a persisted dict (root defaults to reply_to)."""
+    reply_to = int(entry['reply_to'])
+    return Cat(
+        chat=int(entry['chat']),
+        reply_to=reply_to,
+        root=int(entry.get('root', reply_to)),
+        when=when,
+    )
+
+
+@dataclass(frozen=True)
 class CatParams:
     """Every tunable, loaded from the constants JSON 'cats' section."""
 
@@ -304,10 +330,15 @@ class CatBrain:
         """Whether a reply in ``chat`` targets one of the tracked posts."""
         return reply_to is not None and (chat, reply_to) in self.state.posts
 
-    def add_pending(self, chat: int, reply_to: int, when: float) -> None:
+    def add_pending(self, cat: Cat) -> None:
         """Record a cat scheduled but not yet sent (survives a restart)."""
         self.state.pending.append(
-            {'chat': chat, 'reply_to': reply_to, 'when': when}
+            {
+                'chat': cat.chat,
+                'reply_to': cat.reply_to,
+                'root': cat.root,
+                'when': cat.when,
+            }
         )
         self._save()
 
@@ -320,9 +351,7 @@ class CatBrain:
         ]
         self._save()
 
-    def rearm(
-        self, *, renew_all: bool = False
-    ) -> list[tuple[int, int, float]]:
+    def rearm(self, *, renew_all: bool = False) -> list[Cat]:
         """The pending cats to re-arm, renewing missed ones (or all).
 
         A cat whose time passed while the host was down is given a fresh
@@ -338,13 +367,22 @@ class CatBrain:
             # production spacing), which would otherwise keep every cat days
             # out. /requeue is the operator's reset.
             self.state.next_earliest = now
-        out: list[tuple[int, int, float]] = []
+        out: list[Cat] = []
         for entry in self.state.pending:
             when = float(entry['when'])
             if renew_all or when <= now:
                 when = self._fire_time(now, engaged=False)
                 entry['when'] = when
-            out.append((int(entry['chat']), int(entry['reply_to']), when))
+            out.append(_cat_from_entry(entry, when))
+        self._save()
+        return out
+
+    def due_now(self) -> list[Cat]:
+        """Set EVERY pending cat's time to now and return them (answer all)."""
+        now = self.clock()
+        out = [_cat_from_entry(entry, now) for entry in self.state.pending]
+        for entry in self.state.pending:
+            entry['when'] = now
         self._save()
         return out
 

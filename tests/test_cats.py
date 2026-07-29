@@ -312,21 +312,31 @@ def test_pending_cats_are_re_armed_and_missed_ones_renewed(
     brain = cats.CatBrain(_params(), path, random.Random(0))
     brain.clock = _ts
     now = _ts()
-    brain.add_pending(5, 900, now + 3600)  # still in the future
-    brain.add_pending(5, 901, now - 3600)  # missed while host was down
+    brain.add_pending(cats.Cat(5, 900, 900, now + 3600))  # future
+    brain.add_pending(cats.Cat(5, 901, 901, now - 3600))  # missed
     fresh = cats.CatBrain(_params(), path, random.Random(0))
     fresh.clock = _ts
-    armed = {reply_to: when for _c, reply_to, when in fresh.rearm()}
+    armed = {c.reply_to: c.when for c in fresh.rearm()}
     assert armed[900] == now + 3600  # future one kept as-is
     assert armed[901] > now  # missed one renewed to the future
 
 
 def test_done_pending_forgets_a_sent_cat(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
-    brain.add_pending(5, 900, 111.0)
-    brain.add_pending(5, 901, 222.0)
+    brain.add_pending(cats.Cat(5, 900, 900, 111.0))
+    brain.add_pending(cats.Cat(5, 901, 901, 222.0))
     brain.done_pending(5, 900)
     assert [p['reply_to'] for p in brain.state.pending] == [901]
+
+
+def test_due_now_sets_all_pending_to_now(tmp_path: Path) -> None:
+    brain = _brain(tmp_path)
+    brain.clock = _ts
+    brain.add_pending(cats.Cat(5, 900, 800, _ts() + 99999))  # far future
+    due = brain.due_now()
+    assert len(due) == 1
+    assert due[0].when == _ts()  # pulled back to now
+    assert due[0].root == 800  # thread root preserved
 
 
 # --- emit records the send
