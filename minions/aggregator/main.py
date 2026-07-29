@@ -66,6 +66,8 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
+from telethon.tl.functions.messages import SendMessageRequest
+from telethon.tl.types import InputReplyToMessage
 
 from minions.aggregator import cats
 from minions.aggregator.premium_emoji import RichText
@@ -108,6 +110,9 @@ COMMAND_STATUS = '/status'
 # /requeue safely refreshes the pending-cat queue: cancel the in-flight timers
 # and re-arm from the persisted queue (renewing any that are due).
 COMMAND_REQUEUE = '/requeue'
+# /catnow answers EVERY pending commenter immediately (bypass the human-like
+# wait) -- an operator override for "reply to everyone now".
+COMMAND_CATNOW = '/catnow'
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
 CAT_REPLY_SCAN = 200
@@ -164,6 +169,15 @@ class Posted:
     at: str  # ISO 8601 UTC, e.g. '2026-07-23T14:20:00Z'
     links: dict[str, str]  # platform -> url
     msg_ids: list[int]  # the source messages consumed by this post
+
+
+@dataclass(frozen=True)
+class _Comment:
+    """A comment to maybe cat: its chat, thread root (post) and message id."""
+
+    chat: int
+    root: int
+    msg_id: int
 
 
 def _iso(ts: float) -> str:
@@ -894,6 +908,7 @@ class Aggregator:
             COMMAND_PREVIEW: self.preview_posts,
             COMMAND_STATUS: self.status_report,
             COMMAND_REQUEUE: self.requeue_cats,
+            COMMAND_CATNOW: self.answer_all_now,
         }
         handler = handlers.get(text)
         if handler is None:
@@ -910,6 +925,8 @@ class Aggregator:
         eligible again. The engine decides whether and when (it may return
         nothing -- skipped, silent day, already catted here).
         """
+        if getattr(event.message, 'out', False):
+            return  # our own message (a post or a cat reply) -- never cat it
         reply = getattr(event.message, 'reply_to', None)
         top = _thread_top(reply)
         chat = int(event.chat_id or 0)
@@ -921,18 +938,11 @@ class Aggregator:
         # Feedback (principle 8): a reply to our freshest post reads as active
         # engagement, so the reaction comes faster.
         engaged = bool(self.cats.posts) and self.cats.posts[-1] == (chat, top)
-        self._schedule_comment(
-            chat, top, int(event.message.id), person, engaged=engaged
-        )
+        ref = _Comment(chat=chat, root=top, msg_id=int(event.message.id))
+        self._schedule_comment(ref, person, engaged=engaged)
 
     def _schedule_comment(
-        self,
-        chat: int,
-        root: int,
-        comment_id: int,
-        person: str,
-        *,
-        engaged: bool,
+        self, comment: _Comment, person: str, *, engaged: bool
     ) -> None:
         """Schedule (and arm) a cat for one commenter under a watched post.
 
@@ -941,16 +951,22 @@ class Aggregator:
         but the same person on another post is eligible again. The engine may
         return nothing (skipped, silent day, already catted here).
         """
-        key = f'{chat}:{root}:{person}'
+        key = f'{comment.chat}:{comment.root}:{person}'
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        self.cats.add_pending(chat, comment_id, when)
-        self._arm_cat(chat, comment_id, when)
+        cat = cats.Cat(
+            chat=comment.chat,
+            reply_to=comment.msg_id,
+            root=comment.root,
+            when=when,
+        )
+        self.cats.add_pending(cat)
+        self._arm_cat(cat)
 
-    def _arm_cat(self, chat: int, reply_to: int, when: float) -> None:
+    def _arm_cat(self, cat: cats.Cat) -> None:
         """Create the fire-later task for a scheduled (persisted) cat."""
-        task = asyncio.create_task(self._cat_later(chat, reply_to, when))
+        task = asyncio.create_task(self._cat_later(cat))
         self._cat_tasks.add(task)
         task.add_done_callback(self._cat_tasks.discard)
 
@@ -960,8 +976,8 @@ class Aggregator:
         Any whose time passed while the host was down is renewed to a fresh
         in-window slot by the engine, so a night's worth does not fire at once.
         """
-        for chat, reply_to, when in self.cats.rearm():
-            self._arm_cat(chat, reply_to, when)
+        for cat in self.cats.rearm():
+            self._arm_cat(cat)
 
     async def backfill_cat_posts(self) -> None:
         """Seed the cat watch-list from the posts already in each target.
@@ -1035,9 +1051,8 @@ class Aggregator:
         person = str(getattr(message, 'sender_id', None) or '')
         comment_id = int(getattr(message, 'id', 0) or 0)
         if person and comment_id:
-            self._schedule_comment(
-                chat, root, comment_id, person, engaged=False
-            )
+            ref = _Comment(chat=chat, root=root, msg_id=comment_id)
+            self._schedule_comment(ref, person, engaged=False)
 
     async def requeue_cats(self) -> None:
         """Refresh the pending-cat queue on demand (the /requeue command).
@@ -1047,37 +1062,56 @@ class Aggregator:
         timing is flushed). Nothing is duplicated -- a cat is only forgotten
         once actually sent.
         """
-        for task in list(self._cat_tasks):
-            task.cancel()
-        self._cat_tasks.clear()
-        for chat, reply_to, when in self.cats.rearm(renew_all=True):
-            self._arm_cat(chat, reply_to, when)
+        self._cancel_cat_tasks()
+        for cat in self.cats.rearm(renew_all=True):
+            self._arm_cat(cat)
         count = len(self.cats.state.pending)
         await self.client.send_message(
             self.config.source, f'Requeued {count} pending cat(s).'
         )
         log.info('requeued %d pending cats', count)
 
-    async def _cat_later(self, chat: int, reply_to: int, when: float) -> None:
-        """Sleep until ``when``, then reply unless already answered by hand.
+    async def answer_all_now(self) -> None:
+        """Answer EVERY pending commenter immediately (the /catnow command).
+
+        The human-like wait is bypassed: all pending cats are set to fire now
+        (the manual-reply check still applies). An operator override.
+        """
+        self._cancel_cat_tasks()
+        due = self.cats.due_now()
+        for cat in due:
+            self._arm_cat(cat)
+        await self.client.send_message(
+            self.config.source, f'Answering {len(due)} pending cat(s) now.'
+        )
+        log.info('answering %d pending cats now', len(due))
+
+    def _cancel_cat_tasks(self) -> None:
+        """Cancel every in-flight fire-later cat task."""
+        for task in list(self._cat_tasks):
+            task.cancel()
+        self._cat_tasks.clear()
+
+    async def _cat_later(self, cat: cats.Cat) -> None:
+        """Sleep until the cat is due, then reply unless answered by hand.
 
         A send failure is logged loudly (not swallowed) and the entry is
         dropped so one poison comment cannot wedge the queue; the person stays
         catted, so it is not rescheduled.
         """
-        delay = when - time.time()
+        delay = cat.when - time.time()
         if delay > 0:
             await asyncio.sleep(delay)
         try:
-            if not await self._should_skip_cat(chat, reply_to):
-                await self._send_cats(chat, reply_to)
+            if not await self._should_skip_cat(cat.chat, cat.reply_to):
+                await self._send_cats(cat)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception(
-                'cat: send failed in %s (reply_to %s)', chat, reply_to
+                'cat: send failed in %s (reply %s)', cat.chat, cat.reply_to
             )
-        self.cats.done_pending(chat, reply_to)
+        self.cats.done_pending(cat.chat, cat.reply_to)
 
     async def _should_skip_cat(self, chat: int, reply_to: int) -> bool:
         """Skip the cat when the operator already replied to the comment."""
@@ -1112,27 +1146,61 @@ class Aggregator:
                 return True
         return False
 
-    async def _send_cats(self, chat: int, reply_to: int) -> None:
+    async def _send_cats(self, cat: cats.Cat) -> None:
         """Send the chosen cat(s) as a reply to the commenter."""
         specs = self.cats.emit()
         for index, spec in enumerate(specs):
             if index:  # the rare second cat trails the first (principle 7)
                 await asyncio.sleep(self.cats.params.double_gap_sec)
-            await self._send_cat(chat, reply_to, spec)
+            await self._send_cat(cat, spec)
         if specs:
-            log.info('cat: replied with %d emoji in %s', len(specs), chat)
+            log.info('cat: replied with %d emoji in %s', len(specs), cat.chat)
 
-    async def _send_cat(
-        self, chat: int, reply_to: int, spec: CatEmoji
-    ) -> None:
-        """Send one premium cat emoji as a reply to the commenter."""
+    async def _send_cat(self, cat: cats.Cat, spec: CatEmoji) -> None:
+        """Send one premium cat emoji as a threaded reply to the commenter.
+
+        In a discussion group a bare reply lands as a FLAT group message; the
+        reply must carry the thread root (top_msg_id) to show as a real reply
+        inside the comment thread. If that fails (or it is a plain group), fall
+        back to the simple reply so a cat is never lost to this.
+        """
         emoji = {'id': spec.emoji_id, 'fallback': spec.fallback}
         message = RichText().emoji(emoji).build()
+        threaded = (
+            self.cats.params.comments_in_discussion
+            and bool(cat.root)
+            and cat.root != cat.reply_to
+        )
+        if threaded:
+            try:
+                await self._reply_in_thread(cat, message)
+            except Exception:  # noqa: BLE001 -- fall back to a flat reply
+                log.warning('cat: threaded reply failed in %s; flat', cat.chat)
+            else:
+                return
         await self.client.send_message(
-            chat,
+            cat.chat,
             message.text,
             formatting_entities=message.entities,
-            reply_to=reply_to,
+            reply_to=cat.reply_to,
+            link_preview=False,
+        )
+
+    async def _reply_in_thread(
+        self, cat: cats.Cat, message: PremiumMessage
+    ) -> None:
+        """Reply to a comment inside its discussion thread (top=root)."""
+        reply = InputReplyToMessage(
+            reply_to_msg_id=cat.reply_to, top_msg_id=cat.root
+        )
+        await self.client(
+            SendMessageRequest(
+                peer=cat.chat,
+                message=message.text,
+                entities=message.entities,
+                reply_to=reply,
+                no_webpage=True,
+            )
         )
 
     async def status_report(self) -> None:
@@ -1237,7 +1305,7 @@ class Aggregator:
             f'  learned on-hours=[{learned}]',
             *self._last_posts_lines(labels),
             counters,
-            '  (/requeue to refresh the pending queue)',
+            '  (/catnow = answer all now | /requeue = recompute)',
         ]
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
@@ -1329,10 +1397,13 @@ class Aggregator:
         plain group target, the post message id itself is the comment target.
         """
         if self.cats.params.comments_in_discussion:
+            # Channel: only watch a post whose discussion thread resolves; a
+            # post with comments off (or deleted) adds nothing rather than a
+            # useless channel-id entry that could evict a real one.
             thread = await self._discussion_thread(target, post_id)
             if thread is not None:
                 self.cats.note_post(*thread)
-                return
+            return
         self.cats.note_post(target, post_id)
 
     async def _discussion_thread(
