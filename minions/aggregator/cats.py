@@ -178,12 +178,6 @@ def _density_weight(ts: float, params: CatParams) -> float:
     return _mixture(when.hour + when.minute / 60.0, peaks)
 
 
-def _peak_weight(params: CatParams) -> float:
-    """The largest possible density weight, for accept/reject snapping."""
-    both = (*params.hours_weekday, *params.hours_weekend)
-    return max((sum(w for _, _, w in both), 1e-9))
-
-
 def _lognormal(rng: random.Random, mu: float, sigma: float) -> float:
     """A heavy-tailed positive draw (principle 2): exp of a normal."""
     return math.exp(rng.gauss(mu, sigma))
@@ -323,18 +317,22 @@ class CatBrain:
         ]
         self._save()
 
-    def rearm(self) -> list[tuple[int, int, float]]:
-        """The pending cats to re-arm at startup, renewing any missed ones.
+    def rearm(
+        self, *, renew_all: bool = False
+    ) -> list[tuple[int, int, float]]:
+        """The pending cats to re-arm, renewing missed ones (or all).
 
         A cat whose time passed while the host was down is given a fresh
-        near-future slot (snapped back into the uptime window and spread by the
-        spacing cursor), so a night's worth does not fire at once on boot.
+        near-future slot (snapped into the uptime window and spread by the
+        spacing cursor), so a night's worth does not fire at once on boot. With
+        ``renew_all`` (the /requeue command) every pending cat is recomputed --
+        used to flush a queue scheduled under stale timing.
         """
         now = self.clock()
         out: list[tuple[int, int, float]] = []
         for entry in self.state.pending:
             when = float(entry['when'])
-            if when <= now:
+            if renew_all or when <= now:
                 when = self._fire_time(now, engaged=False)
                 entry['when'] = when
             out.append((int(entry['chat']), int(entry['reply_to']), when))
@@ -414,8 +412,20 @@ class CatBrain:
         return _density_weight(ts, self.params) * self._alive_fraction(ts)
 
     def _snap(self, ts: float) -> float:
-        """Hop forward to an hour that is both awake-shaped and host-up."""
-        peak = _peak_weight(self.params)
+        """Hop forward to an hour that is both awake-shaped and host-up.
+
+        Accept/reject is normalized by the BEST hour in the next day (the real
+        max of the schedulable weight), so a candidate already at a good, host-
+        up hour is accepted at once (fires soon) and only genuinely dead hours
+        hop forward. Normalizing by a loose upper bound instead would reject
+        even good hours and push every cat far into the future.
+        """
+        peak = max(
+            (self._effective_weight(ts + h * 3600.0) for h in range(24)),
+            default=0.0,
+        )
+        if peak <= 0.0:
+            return ts  # nothing active in the next day -- do not loop
         candidate = ts
         for _ in range(_MAX_HOUR_HOPS):
             if self.rng.random() < self._effective_weight(candidate) / peak:
