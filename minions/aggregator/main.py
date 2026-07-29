@@ -111,6 +111,9 @@ COMMAND_REQUEUE = '/requeue'
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
 CAT_REPLY_SCAN = 200
+# How many existing comments per watched thread to consider at startup, so
+# comments made before the bot started can still get a (delayed) cat.
+COMMENT_SCAN = 50
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -901,18 +904,35 @@ class Aggregator:
         person = str(getattr(event, 'sender_id', None) or '')
         if not person:
             return
-        # Once per (post, commenter): the dedup key ties the person to THIS
-        # post's thread, so re-commenting under the same post gets no second
-        # cat, but the same person on another post is eligible again.
-        key = f'{chat}:{top}:{person}'
         # Feedback (principle 8): a reply to our freshest post reads as active
         # engagement, so the reaction comes faster.
         engaged = bool(self.cats.posts) and self.cats.posts[-1] == (chat, top)
+        self._schedule_comment(
+            chat, top, int(event.message.id), person, engaged=engaged
+        )
+
+    def _schedule_comment(
+        self,
+        chat: int,
+        root: int,
+        comment_id: int,
+        person: str,
+        *,
+        engaged: bool,
+    ) -> None:
+        """Schedule (and arm) a cat for one commenter under a watched post.
+
+        Once per (post, commenter): the dedup key ties the person to THIS
+        post's thread, so re-commenting under the same post gets no second cat,
+        but the same person on another post is eligible again. The engine may
+        return nothing (skipped, silent day, already catted here).
+        """
+        key = f'{chat}:{root}:{person}'
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        self.cats.add_pending(chat, event.message.id, when)
-        self._arm_cat(chat, event.message.id, when)
+        self.cats.add_pending(chat, comment_id, when)
+        self._arm_cat(chat, comment_id, when)
 
     def _arm_cat(self, chat: int, reply_to: int, when: float) -> None:
         """Create the fire-later task for a scheduled (persisted) cat."""
@@ -964,6 +984,46 @@ class Aggregator:
             msg_id = int(getattr(message, 'id', 0) or 0)
             if msg_id:
                 await self._watch_post(target, msg_id)
+
+    async def backfill_cat_comments(self) -> None:
+        """Schedule cats for comments already sitting under the watched posts.
+
+        Live events only cover comments that arrive WHILE the bot runs, so
+        comments made before it started would never get a cat. Here we scan the
+        existing comments in each watched thread and schedule the ones not yet
+        catted (dedup, skip and the manual-reply check still apply), spread by
+        the engine's heavy-tailed spacing so they trickle out, not burst.
+        """
+        if not self.cats.params.enabled:
+            return
+        for chat, root in list(self.cats.posts):
+            await self._seed_thread_comments(chat, root)
+        log.info('cats: %d comment(s) queued', len(self.cats.state.pending))
+
+    async def _seed_thread_comments(self, chat: int, root: int) -> None:
+        """Schedule cats for the recent comments in one watched thread."""
+        try:
+            comments = await self.client.get_messages(
+                chat, reply_to=root, limit=COMMENT_SCAN
+            )
+        except Exception:  # noqa: BLE001 -- no thread/unreachable: skip quietly
+            log.warning('cats: could not read comments of %s/%s', chat, root)
+            return
+        for message in reversed(list(comments)):  # oldest first
+            self._schedule_from_message(chat, root, message)
+
+    def _schedule_from_message(
+        self, chat: int, root: int, message: object
+    ) -> None:
+        """Schedule a cat for one existing comment message (skip our own)."""
+        if getattr(message, 'out', False):
+            return
+        person = str(getattr(message, 'sender_id', None) or '')
+        comment_id = int(getattr(message, 'id', 0) or 0)
+        if person and comment_id:
+            self._schedule_comment(
+                chat, root, comment_id, person, engaged=False
+            )
 
     async def requeue_cats(self) -> None:
         """Refresh the pending-cat queue on demand (the /requeue command).
@@ -1404,9 +1464,8 @@ async def main() -> None:
     await client.start(**start_kwargs)
     agg.restore()
     agg.rearm_cats()  # re-arm cats scheduled before a restart (NAS downtime)
-    await (
-        agg.backfill_cat_posts()
-    )  # watch the last posts already in the target
+    await agg.backfill_cat_posts()  # watch the last posts already there
+    await agg.backfill_cat_comments()  # queue cats for comments already there
     if agg.cats.params.enabled:
         agg.cats.mark_alive(time.time())  # a boot is an uptime observation
     log.info(
