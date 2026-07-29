@@ -289,8 +289,13 @@ class CatBrain:
         Only the last ``watch_posts`` posts are ever matched, so once a post
         falls out of the window its (post, person) keys can never fire again --
         pruning them keeps the persisted ``catted`` set bounded (principle 9).
+        Re-noting a known post just moves it to the freshest slot (idempotent),
+        so the startup backfill never doubles an entry.
         """
-        self.state.posts.append((chat, msg_id))
+        pair = (chat, msg_id)
+        if pair in self.state.posts:
+            self.state.posts.remove(pair)
+        self.state.posts.append(pair)
         del self.state.posts[: -self.params.watch_posts]  # keep the last N
         live = tuple(f'{c}:{m}:' for c, m in self.state.posts)
         self.state.catted = {

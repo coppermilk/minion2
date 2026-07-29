@@ -929,6 +929,42 @@ class Aggregator:
         for chat, reply_to, when in self.cats.rearm():
             self._arm_cat(chat, reply_to, when)
 
+    async def backfill_cat_posts(self) -> None:
+        """Seed the cat watch-list from the posts already in each target.
+
+        Without this, cats only watch posts made AFTER the bot starts noting
+        them, so posts that predate a deploy/restart are ignored. Here we look
+        up the last ``watch_posts`` real posts per target and register them (in
+        the channel case, resolving each one's discussion thread), so comments
+        on the existing last posts get cats right away.
+        """
+        if not self.cats.params.enabled:
+            return
+        for target in self.config.targets:
+            await self._seed_target_posts(target)
+        log.info('cats: watch-list has %d post(s)', len(self.cats.posts))
+
+    async def _recent_target_posts(self, target: int, want: int) -> object:
+        """The last ``want`` posts in a target (channel: any; group: ours)."""
+        if self.cats.params.comments_in_discussion:
+            return await self.client.get_messages(target, limit=want)
+        return await self.client.get_messages(
+            target, limit=want, from_user='me'
+        )
+
+    async def _seed_target_posts(self, target: int) -> None:
+        """Register the last posts of one target into the cat watch-list."""
+        want = self.cats.params.watch_posts
+        try:
+            history = await self._recent_target_posts(target, want)
+        except Exception:  # noqa: BLE001 -- unreachable target: skip, no crash
+            log.warning('cats: could not read %s post history', target)
+            return
+        for message in reversed(list(history)):  # oldest first -> newest last
+            msg_id = int(getattr(message, 'id', 0) or 0)
+            if msg_id:
+                await self._watch_post(target, msg_id)
+
     async def requeue_cats(self) -> None:
         """Refresh the pending-cat queue on demand (the /requeue command).
 
@@ -1013,23 +1049,54 @@ class Aggregator:
 
     async def status_report(self) -> None:
         """Post the pending/posted/cat diagnostics to the source chat."""
-        await self.client.send_message(self.config.source, self._status_text())
+        labels = await self._chat_labels()
+        await self.client.send_message(
+            self.config.source, self._status_text(labels)
+        )
         log.info('sent status report to %s', self.config.source)
 
-    def _status_text(self) -> str:
-        """The full status message: pending, posted, cats, and the legend."""
+    async def _chat_labels(self) -> dict[int, str]:
+        """Resolve every chat shown in /status to a readable @name or title."""
+        ids = {self.config.source, *self.config.targets}
+        ids |= {chat for chat, _ in self.cats.posts}
+        return {cid: await self._chat_label(cid) for cid in ids}
+
+    async def _chat_label(self, chat_id: int) -> str:
+        """A chat's @username (or "title") for /status, else the raw id."""
+        try:
+            entity = await self.client.get_entity(chat_id)
+        except Exception:  # noqa: BLE001 -- not cached/reachable: show the id
+            return str(chat_id)
+        username = getattr(entity, 'username', None)
+        if username:
+            return f'@{username} ({chat_id})'
+        title = getattr(entity, 'title', None) or getattr(
+            entity, 'first_name', None
+        )
+        return f'"{title}" ({chat_id})' if title else str(chat_id)
+
+    def _status_text(self, labels: dict[int, str]) -> str:
+        """The full status message: routing, pending, posted, cats, legend."""
         parts = [
             'Aggregator status',
+            '',
+            *self._routing_lines(labels),
             '',
             *self._pending_lines(),
             '',
             *self._posted_lines(),
             '',
-            *self._cat_status_lines(),
+            *self._cat_status_lines(labels),
         ]
         if self.consts.status_help:
             parts += ['', self.consts.status_help]
         return '\n'.join(parts)
+
+    def _routing_lines(self, labels: dict[int, str]) -> list[str]:
+        """Where the bot reads (source) and posts (targets), by name."""
+        source = labels.get(self.config.source, str(self.config.source))
+        targets = ', '.join(labels.get(t, str(t)) for t in self.config.targets)
+        return [f'source (reads JSON): {source}', f'target (posts): {targets}']
 
     def _pending_lines(self) -> list[str]:
         """One line per pending video, and which platforms it awaits."""
@@ -1063,7 +1130,7 @@ class Aggregator:
             )
         return lines
 
-    def _cat_status_lines(self) -> list[str]:
+    def _cat_status_lines(self, labels: dict[int, str]) -> list[str]:
         """The cat engine's live state (empty-ish when it is disabled)."""
         brain = self.cats
         window = f'{brain.params.active_start:g}-{brain.params.active_end:g}h'
@@ -1080,17 +1147,19 @@ class Aggregator:
             f'  enabled={brain.params.enabled} pool={len(brain.params.pool)}',
             f'  uptime window (prior)={window}',
             f'  learned on-hours=[{learned}]',
-            *self._last_posts_lines(),
+            *self._last_posts_lines(labels),
             counters,
             '  (/requeue to refresh the pending queue)',
         ]
 
-    def _last_posts_lines(self) -> list[str]:
-        """The watched posts (the last ``watch_posts``), one per line."""
+    def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
+        """The watched comment chats + post ids, one per line, by name."""
         posts = self.cats.posts
-        lines = [f'  last posts ({len(posts)}):']
-        lines.extend(f'    - chat {ch}, post {mid}' for ch, mid in posts)
-        return lines or ['  last posts (0):']
+        lines = [f'  watching comments in ({len(posts)}):']
+        lines.extend(
+            f'    - {labels.get(ch, str(ch))} post {mid}' for ch, mid in posts
+        )
+        return lines
 
     async def show_constants(self) -> None:
         """Post a preview of every premium emoji constant to the watcher."""
@@ -1335,6 +1404,9 @@ async def main() -> None:
     await client.start(**start_kwargs)
     agg.restore()
     agg.rearm_cats()  # re-arm cats scheduled before a restart (NAS downtime)
+    await (
+        agg.backfill_cat_posts()
+    )  # watch the last posts already in the target
     if agg.cats.params.enabled:
         agg.cats.mark_alive(time.time())  # a boot is an uptime observation
     log.info(
