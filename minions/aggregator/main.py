@@ -104,6 +104,9 @@ POSTED_CAP = 300
 COMMAND_EMOJIS = '/emojis'
 COMMAND_PREVIEW = '/preview'
 COMMAND_STATUS = '/status'
+# How many recent messages to scan when checking whether the operator already
+# replied to a comment by hand (so the bot does not pile a cat on top).
+CAT_REPLY_SCAN = 200
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -908,16 +911,54 @@ class Aggregator:
             self._arm_cat(chat, reply_to, when)
 
     async def _cat_later(self, chat: int, reply_to: int, when: float) -> None:
-        """Sleep until ``when``, then reply to the comment with the cat(s)."""
+        """Sleep until ``when``, then reply unless already answered by hand."""
         delay = when - time.time()
         if delay > 0:
             await asyncio.sleep(delay)
+        if not await self._should_skip_cat(chat, reply_to):
+            await self._send_cats(chat, reply_to)
+        self.cats.done_pending(chat, reply_to)
+
+    async def _should_skip_cat(self, chat: int, reply_to: int) -> bool:
+        """Skip the cat when the operator already replied to the comment."""
+        if not self.cats.params.skip_if_manually_replied:
+            return False
+        replied = await self._human_replied(chat, reply_to)
+        if replied:
+            log.info('cat: %s already answered by hand, skipping', reply_to)
+        return replied
+
+    async def _human_replied(self, chat: int, comment_id: int) -> bool:
+        """Whether an outgoing (manual) reply to ``comment_id`` already exists.
+
+        Scans recent history for a message sent by this account that replies to
+        the comment. The cat itself has not been sent yet, so any such reply is
+        the operator's own -- do not pile a cat on top of it.
+        """
+        try:
+            history = await self.client.get_messages(
+                chat, limit=CAT_REPLY_SCAN
+            )
+        except Exception:  # noqa: BLE001 -- unreachable: fail open, send anyway
+            log.warning(
+                'cat: could not check a manual reply to %s', comment_id
+            )
+            return False
+        for message in history:
+            if not getattr(message, 'out', False):
+                continue
+            reply = getattr(message, 'reply_to', None)
+            if getattr(reply, 'reply_to_msg_id', None) == comment_id:
+                return True
+        return False
+
+    async def _send_cats(self, chat: int, reply_to: int) -> None:
+        """Send the chosen cat(s) as a reply to the commenter."""
         specs = self.cats.emit()
         for index, spec in enumerate(specs):
             if index:  # the rare second cat trails the first (principle 7)
                 await asyncio.sleep(self.cats.params.double_gap_sec)
             await self._send_cat(chat, reply_to, spec)
-        self.cats.done_pending(chat, reply_to)
         if specs:
             log.info('cat: replied with %d emoji in %s', len(specs), chat)
 
@@ -991,6 +1032,9 @@ class Aggregator:
         brain = self.cats
         posts = ', '.join(f'{ch}:{mid}' for ch, mid in brain.posts) or '-'
         window = f'{brain.params.active_start:g}-{brain.params.active_end:g}h'
+        alive = brain.state.alive
+        top = sorted(alive, key=lambda h: alive[h], reverse=True)[:6]
+        learned = ', '.join(f'{h}h' for h in top) or '(learning)'
         counters = (
             f'  catted={len(brain.state.catted)}'
             f' pending={len(brain.state.pending)}'
@@ -999,7 +1043,8 @@ class Aggregator:
         return [
             'Cat engine:',
             f'  enabled={brain.params.enabled} pool={len(brain.params.pool)}',
-            f'  uptime window={window}',
+            f'  uptime window (prior)={window}',
+            f'  learned on-hours=[{learned}]',
             f'  watching posts=[{posts}]',
             counters,
         ]
@@ -1030,9 +1075,11 @@ class Aggregator:
         )
 
     async def status_loop(self) -> None:
-        """Periodically log which videos are pending and what they await."""
+        """Periodically log pending videos and learn the host's real uptime."""
         while True:
             await asyncio.sleep(STATUS_INTERVAL)
+            if self.cats.params.enabled:
+                self.cats.mark_alive(time.time())  # learn actual on-hours
             if not self.groups:
                 continue
             for group in self.groups:
@@ -1245,6 +1292,8 @@ async def main() -> None:
     await client.start(**start_kwargs)
     agg.restore()
     agg.rearm_cats()  # re-arm cats scheduled before a restart (NAS downtime)
+    if agg.cats.params.enabled:
+        agg.cats.mark_alive(time.time())  # a boot is an uptime observation
     log.info(
         'Listening on %s; posting to %s; platforms=%s',
         config.source,
