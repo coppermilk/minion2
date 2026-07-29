@@ -1059,12 +1059,24 @@ class Aggregator:
         log.info('requeued %d pending cats', count)
 
     async def _cat_later(self, chat: int, reply_to: int, when: float) -> None:
-        """Sleep until ``when``, then reply unless already answered by hand."""
+        """Sleep until ``when``, then reply unless already answered by hand.
+
+        A send failure is logged loudly (not swallowed) and the entry is
+        dropped so one poison comment cannot wedge the queue; the person stays
+        catted, so it is not rescheduled.
+        """
         delay = when - time.time()
         if delay > 0:
             await asyncio.sleep(delay)
-        if not await self._should_skip_cat(chat, reply_to):
-            await self._send_cats(chat, reply_to)
+        try:
+            if not await self._should_skip_cat(chat, reply_to):
+                await self._send_cats(chat, reply_to)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                'cat: send failed in %s (reply_to %s)', chat, reply_to
+            )
         self.cats.done_pending(chat, reply_to)
 
     async def _should_skip_cat(self, chat: int, reply_to: int) -> bool:
@@ -1479,11 +1491,17 @@ async def main() -> None:
     log.info('Session store: %s.session', session_path)
     await client.start(**start_kwargs)
     agg.restore()
-    agg.rearm_cats()  # re-arm cats scheduled before a restart (NAS downtime)
-    await agg.backfill_cat_posts()  # watch the last posts already there
-    await agg.backfill_cat_comments()  # queue cats for comments already there
-    if agg.cats.params.enabled:
-        agg.cats.mark_alive(time.time())  # a boot is an uptime observation
+    # The cat startup (re-arm + backfills + heartbeat) must NEVER stop the bot
+    # from listening: any failure here is logged and swallowed so we still
+    # reach run_until_disconnected below.
+    try:
+        agg.rearm_cats()  # re-arm cats scheduled before a restart (downtime)
+        await agg.backfill_cat_posts()  # watch the last posts already there
+        await agg.backfill_cat_comments()  # queue comments already there
+        if agg.cats.params.enabled:
+            agg.cats.mark_alive(time.time())  # a boot is an uptime observation
+    except Exception:
+        log.exception('cats: startup step failed; listening anyway')
     log.info(
         'Listening on %s; posting to %s; platforms=%s',
         config.source,
