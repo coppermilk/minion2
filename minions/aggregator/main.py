@@ -1042,14 +1042,16 @@ class Aggregator:
     async def requeue_cats(self) -> None:
         """Refresh the pending-cat queue on demand (the /requeue command).
 
-        Cancels the in-flight timers and re-arms from the PERSISTED queue, so
-        nothing is duplicated (a cat is only forgotten once actually sent) and
-        anything stuck or overdue is renewed to a fresh slot.
+        Cancels the in-flight timers and re-arms from the PERSISTED queue,
+        recomputing EVERY pending cat's time (so a queue scheduled under stale
+        timing is flushed). Nothing is duplicated -- a cat is only forgotten
+        once actually sent.
         """
         for task in list(self._cat_tasks):
             task.cancel()
         self._cat_tasks.clear()
-        self.rearm_cats()
+        for chat, reply_to, when in self.cats.rearm(renew_all=True):
+            self._arm_cat(chat, reply_to, when)
         count = len(self.cats.state.pending)
         await self.client.send_message(
             self.config.source, f'Requeued {count} pending cat(s).'
