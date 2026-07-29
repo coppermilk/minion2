@@ -58,6 +58,9 @@ _MAX_HOUR_HOPS = 48
 _HOP_SEC = 1800.0
 # One observation added to the current hour bucket per heartbeat (mark_alive).
 _ALIVE_STEP = 1.0
+# How many median spacing gaps the heavy-tailed cursor may lead 'now' by, so a
+# burst of comments cannot push cats unboundedly into the future.
+_CURSOR_LEAD_UNITS = 8.0
 
 
 @dataclass(frozen=True)
@@ -329,6 +332,12 @@ class CatBrain:
         used to flush a queue scheduled under stale timing.
         """
         now = self.clock()
+        if renew_all:
+            # Re-spread the whole queue from NOW: the heavy-tailed spacing
+            # cursor may have run far into the future (a burst under the slow
+            # production spacing), which would otherwise keep every cat days
+            # out. /requeue is the operator's reset.
+            self.state.next_earliest = now
         out: list[tuple[int, int, float]] = []
         for entry in self.state.pending:
             when = float(entry['when'])
@@ -369,7 +378,13 @@ class CatBrain:
         spacing = _lognormal(
             self.rng, self.params.spacing_log_mu, self.params.spacing_log_sigma
         )
-        cursor = max(now, self.state.next_earliest) + spacing
+        # The spacing cursor may not lead now by more than a few median gaps:
+        # otherwise a burst of comments (faster than the spacing) would push
+        # the cursor unboundedly ahead and schedule cats days/weeks out.
+        lead_cap = now + _CURSOR_LEAD_UNITS * math.exp(
+            self.params.spacing_log_mu
+        )
+        cursor = min(max(now, self.state.next_earliest), lead_cap) + spacing
         candidate = max(now + latency, cursor)
         return _jitter(self._snap(candidate), self.params, self.rng)
 
