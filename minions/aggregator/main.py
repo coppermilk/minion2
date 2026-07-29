@@ -929,6 +929,42 @@ class Aggregator:
         for chat, reply_to, when in self.cats.rearm():
             self._arm_cat(chat, reply_to, when)
 
+    async def backfill_cat_posts(self) -> None:
+        """Seed the cat watch-list from the posts already in each target.
+
+        Without this, cats only watch posts made AFTER the bot starts noting
+        them, so posts that predate a deploy/restart are ignored. Here we look
+        up the last ``watch_posts`` real posts per target and register them (in
+        the channel case, resolving each one's discussion thread), so comments
+        on the existing last posts get cats right away.
+        """
+        if not self.cats.params.enabled:
+            return
+        for target in self.config.targets:
+            await self._seed_target_posts(target)
+        log.info('cats: watch-list has %d post(s)', len(self.cats.posts))
+
+    async def _recent_target_posts(self, target: int, want: int) -> object:
+        """The last ``want`` posts in a target (channel: any; group: ours)."""
+        if self.cats.params.comments_in_discussion:
+            return await self.client.get_messages(target, limit=want)
+        return await self.client.get_messages(
+            target, limit=want, from_user='me'
+        )
+
+    async def _seed_target_posts(self, target: int) -> None:
+        """Register the last posts of one target into the cat watch-list."""
+        want = self.cats.params.watch_posts
+        try:
+            history = await self._recent_target_posts(target, want)
+        except Exception:  # noqa: BLE001 -- unreachable target: skip, no crash
+            log.warning('cats: could not read %s post history', target)
+            return
+        for message in reversed(list(history)):  # oldest first -> newest last
+            msg_id = int(getattr(message, 'id', 0) or 0)
+            if msg_id:
+                await self._watch_post(target, msg_id)
+
     async def requeue_cats(self) -> None:
         """Refresh the pending-cat queue on demand (the /requeue command).
 
@@ -1335,6 +1371,9 @@ async def main() -> None:
     await client.start(**start_kwargs)
     agg.restore()
     agg.rearm_cats()  # re-arm cats scheduled before a restart (NAS downtime)
+    await (
+        agg.backfill_cat_posts()
+    )  # watch the last posts already in the target
     if agg.cats.params.enabled:
         agg.cats.mark_alive(time.time())  # a boot is an uptime observation
     log.info(
