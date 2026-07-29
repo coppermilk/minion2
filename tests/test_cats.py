@@ -33,6 +33,9 @@ def _params(**over):
         'quiet_hours': frozenset({0, 1, 2, 3, 4, 5, 6}),
         'active_start': 0.0,
         'active_end': 24.0,
+        'uptime_half_life_sec': 864000.0,
+        'uptime_learn_obs': 2000.0,
+        'skip_if_manually_replied': True,
         'tz_offset_hours': 0.0,
         'latency_log_mu': 3.0,
         'latency_log_sigma': 0.5,
@@ -67,13 +70,13 @@ def _brain(tmp_path, seed=0, **over):
 # --- principle 1: timing is a per-hour distribution, dead in the small hours
 
 
-def test_hour_weight_is_zero_in_quiet_hours() -> None:
-    assert cats._hour_weight(_ts(hour=3), _params()) == 0.0
+def test_density_is_zero_in_quiet_hours() -> None:
+    assert cats._density_weight(_ts(hour=3), _params()) == 0.0
 
 
-def test_hour_weight_peaks_at_the_active_mean() -> None:
+def test_density_peaks_at_the_active_mean() -> None:
     params = _params()
-    assert cats._hour_weight(_ts(hour=12), params) > cats._hour_weight(
+    assert cats._density_weight(_ts(hour=12), params) > cats._density_weight(
         _ts(hour=16), params
     )
 
@@ -86,7 +89,9 @@ def test_weekday_and_weekend_curves_are_independent() -> None:
     )
     sat = _ts(year=2026, month=7, day=18, hour=23)  # Saturday
     wed = _ts(year=2026, month=7, day=15, hour=23)  # Wednesday
-    assert cats._hour_weight(sat, params) > cats._hour_weight(wed, params)
+    assert cats._density_weight(sat, params) > cats._density_weight(
+        wed, params
+    )
 
 
 # --- principle 2: heavy-tailed intervals
@@ -246,20 +251,47 @@ def test_catted_keys_are_pruned_when_a_post_rolls_off(tmp_path: Path) -> None:
     assert '1:10:alice' not in brain.state.catted
 
 
-# --- host uptime window (NAS 7-17): no cat scheduled off-hours
+# --- adaptive uptime: cold start follows the declared window, then learns
 
 
-def test_hour_weight_is_zero_outside_the_uptime_window() -> None:
-    params = _params(
+def _window_brain(tmp_path: Path) -> cats.CatBrain:
+    brain = _brain(
+        tmp_path,
         active_start=7.0,
         active_end=17.0,
         quiet_hours=frozenset(),
-        hours_weekday=((12.0, 3.0, 1.0),),
-        hours_weekend=((12.0, 3.0, 1.0),),
+        hours_weekday=((12.0, 6.0, 1.0),),
+        hours_weekend=((12.0, 6.0, 1.0),),
+        uptime_learn_obs=2.0,  # trust the learned curve fast, for the test
     )
-    assert cats._hour_weight(_ts(hour=3), params) == 0.0  # host down
-    assert cats._hour_weight(_ts(hour=20), params) == 0.0  # host down
-    assert cats._hour_weight(_ts(hour=12), params) > 0.0  # host up
+    brain.clock = _ts
+    return brain
+
+
+def test_cold_start_uptime_follows_the_declared_window(tmp_path: Path) -> None:
+    brain = _window_brain(tmp_path)
+    assert brain._alive_fraction(_ts(hour=3)) == 0.0  # outside 7-17 prior
+    assert brain._alive_fraction(_ts(hour=20)) == 0.0
+    assert brain._alive_fraction(_ts(hour=12)) == 1.0  # inside the prior
+
+
+def test_learned_uptime_adapts_beyond_the_declared_window(
+    tmp_path: Path,
+) -> None:
+    brain = _window_brain(tmp_path)
+    # The NAS is actually up at 20:00 (outside the 7-17 rule of thumb).
+    brain.mark_alive(_ts(hour=20))
+    brain.mark_alive(_ts(hour=20))
+    brain.mark_alive(_ts(hour=20))
+    assert brain._alive_fraction(_ts(hour=20)) > 0.5  # learned it is up then
+    # And an hour it was never seen up decays toward zero.
+    assert brain._alive_fraction(_ts(hour=12)) < 0.5
+
+
+def test_effective_weight_gates_when_host_is_down(tmp_path: Path) -> None:
+    brain = _window_brain(tmp_path)
+    assert brain._effective_weight(_ts(hour=3)) == 0.0  # host down (prior)
+    assert brain._effective_weight(_ts(hour=12)) > 0.0  # host up + awake
 
 
 # --- principle 9: watched posts and pending cats survive a restart

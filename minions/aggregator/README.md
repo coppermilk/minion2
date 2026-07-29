@@ -145,13 +145,23 @@ How it stays human (the nine principles, all tunable in the JSON):
    posts, and the cats scheduled but not yet sent** -- so a nightly NAS
    shutdown loses nothing.
 
-**Host uptime window** (`active_start_hour` / `active_end_hour`, local hours):
-if the NAS runs only, say, 7-17, set the window and no cat is ever scheduled
-for a dead hour. A cat that would land after shutdown is kept in the persisted
-pending queue and **re-armed on the next boot** (missed ones are renewed to a
-fresh in-window slot so a night's worth doesn't fire at once). The watched
-posts survive the restart too, so comments on pre-restart posts are still
-recognised. Keep the `hours_*` peaks inside the window.
+**Host uptime -- declared *and* learned.** `active_start_hour` /
+`active_end_hour` (local hours) are a **prior** -- a starting guess like 7-17.
+The bot also **learns the NAS's real on-hours**: a heartbeat records the
+current hour while it runs, and the schedule blends the learned curve with the
+declared window by confidence (`uptime_learn_obs` heartbeats for full trust,
+`uptime_half_life_sec` fades old data). So it adapts to whatever hours the NAS
+is actually up -- even outside 7-17 -- and follows a changed schedule on its
+own. Set the window to `0`/`24` to lean entirely on learning. A cat that would
+land while the host is down is kept in the persisted pending queue and
+**re-armed on the next boot** (missed ones renewed to a fresh slot so a night's
+worth doesn't fire at once). Watched posts and the learned uptime survive the
+restart too.
+
+**Don't double-answer** (`skip_if_manually_replied`, default true): before a
+cat fires (which can be hours after the comment), the bot checks whether the
+operator has **already replied to that comment by hand** -- if so, it skips the
+cat instead of piling on.
 
 **Channel vs. group target** (`comments_in_discussion`, default `true`):
 - **Channel with a linked discussion** (`true`): each post's comments live in

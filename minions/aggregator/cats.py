@@ -8,9 +8,11 @@ client and calls in here for the *when* and the *what*.
 
 The nine principles, mapped to code:
 
-1. Timing is a distribution, not uniform: ``_hour_weight`` is a mixture of
-   Gaussians over the day, with separate weekday/weekend curves and near-zero
-   weight in the small hours.
+1. Timing is a distribution, not uniform: ``_density_weight`` is a mixture of
+   Gaussians over the day (separate weekday/weekend curves), multiplied by how
+   likely the host is actually up then -- a curve LEARNED from real uptime
+   (``mark_alive``) blended with the declared window -- so the schedule adapts
+   to any NAS on-time, not just the rule of thumb.
 2. Inter-send gaps are heavy-tailed (log-normal), not a flat cadence: a running
    ``next_earliest`` cursor advances by a log-normal draw, so cats come in
    bursts and then long silences.
@@ -54,6 +56,8 @@ if TYPE_CHECKING:
 # just sent at the last hop -- a guard so snapping can never loop unbounded.
 _MAX_HOUR_HOPS = 48
 _HOP_SEC = 1800.0
+# One observation added to the current hour bucket per heartbeat (mark_alive).
+_ALIVE_STEP = 1.0
 
 
 @dataclass(frozen=True)
@@ -80,12 +84,20 @@ class CatParams:
     hours_weekday: tuple[tuple[float, float, float], ...]
     hours_weekend: tuple[tuple[float, float, float], ...]
     quiet_hours: frozenset[int]
-    # The host's uptime window in local hours [start, end): outside it the
-    # weight is 0, so cats are only ever scheduled while the NAS is up (a cat
-    # planned for a dead hour survives the shutdown via the pending queue and
-    # fires when it is back). start >= end (or 0/24) means always up.
+    # The DECLARED uptime window in local hours [start, end) -- a prior only.
+    # The engine also LEARNS the real on-hours (mark_alive), and blends the two
+    # by confidence, so it adapts to whatever hours the NAS is actually up, not
+    # just this rule of thumb. start >= end (or 0/24) means "up all day".
     active_start: float
     active_end: float
+    # How the learned uptime is weighed: uptime_half_life_sec fades old
+    # observations (so a changed schedule is followed), uptime_learn_obs is how
+    # many heartbeats of history earn full trust in the learned curve over the
+    # declared window. skip_if_manually_replied drops the cat when the operator
+    # has already replied to that comment by hand.
+    uptime_half_life_sec: float
+    uptime_learn_obs: float
+    skip_if_manually_replied: bool
     # The persona's UTC offset: hours/dates are read in THIS timezone, so the
     # cadence matches the legend, not the server's clock (principle 9).
     tz_offset_hours: float
@@ -122,6 +134,10 @@ class CatState:
     catted: set[str] = field(default_factory=set)  # (post, person) keys done
     posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
     pending: list[dict[str, float]] = field(default_factory=list)  # due cats
+    alive: dict[str, float] = field(
+        default_factory=dict
+    )  # hour -> decayed obs
+    alive_ts: float = 0.0  # last heartbeat, for decay
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -147,19 +163,23 @@ def _in_window(hour: float, params: CatParams) -> bool:
     return params.active_start <= hour < params.active_end
 
 
-def _hour_weight(ts: float, params: CatParams) -> float:
-    """Activity weight in [0, ~) at ``ts``: 0 off-hours (principles 1, 9)."""
+def _density_weight(ts: float, params: CatParams) -> float:
+    """The day's activity density at ``ts`` (principle 1), 0 in quiet hours.
+
+    This is the *shape* of a waking day; whether the host is actually up at
+    that hour is a separate factor (the observed-uptime multiplier), so the
+    schedule adapts to any NAS on-time, not just the declared window.
+    """
     when = _local(ts, params)
-    hour = when.hour + when.minute / 60.0
-    if when.hour in params.quiet_hours or not _in_window(hour, params):
+    if when.hour in params.quiet_hours:
         return 0.0
     weekend = when.weekday() >= 5  # noqa: PLR2004 -- Sat/Sun
     peaks = params.hours_weekday if not weekend else params.hours_weekend
-    return _mixture(hour, peaks)
+    return _mixture(when.hour + when.minute / 60.0, peaks)
 
 
 def _peak_weight(params: CatParams) -> float:
-    """The largest possible hour weight, for accept/reject snapping."""
+    """The largest possible density weight, for accept/reject snapping."""
     both = (*params.hours_weekday, *params.hours_weekend)
     return max((sum(w for _, _, w in both), 1e-9))
 
@@ -167,21 +187,6 @@ def _peak_weight(params: CatParams) -> float:
 def _lognormal(rng: random.Random, mu: float, sigma: float) -> float:
     """A heavy-tailed positive draw (principle 2): exp of a normal."""
     return math.exp(rng.gauss(mu, sigma))
-
-
-def _snap_to_active(ts: float, params: CatParams, rng: random.Random) -> float:
-    """Nudge ``ts`` forward until it lands in an active hour (principle 1).
-
-    Accept/reject against the day's density: dead hours are rejected and the
-    candidate hops forward, so cats cluster where a human is awake.
-    """
-    peak = _peak_weight(params)
-    candidate = ts
-    for _ in range(_MAX_HOUR_HOPS):
-        if rng.random() < _hour_weight(candidate, params) / peak:
-            return candidate
-        candidate += _HOP_SEC
-    return candidate
 
 
 def _jitter(ts: float, params: CatParams, rng: random.Random) -> float:
@@ -363,8 +368,55 @@ class CatBrain:
         )
         cursor = max(now, self.state.next_earliest) + spacing
         candidate = max(now + latency, cursor)
-        candidate = _snap_to_active(candidate, self.params, self.rng)
-        return _jitter(candidate, self.params, self.rng)
+        return _jitter(self._snap(candidate), self.params, self.rng)
+
+    def mark_alive(self, now: float) -> None:
+        """Heartbeat: record that the host is up at this hour (decayed).
+
+        Called on a timer while running, this builds the real on-hours curve.
+        A long gap (a shutdown) just decays the old buckets -- the dead hours
+        are never credited, so the learned uptime tracks reality.
+        """
+        prev = self.state.alive_ts
+        if prev > 0 and self.params.uptime_half_life_sec > 0:
+            decay = 0.5 ** ((now - prev) / self.params.uptime_half_life_sec)
+            self.state.alive = {
+                h: w * decay for h, w in self.state.alive.items()
+            }
+        hour = str(_local(now, self.params).hour)
+        self.state.alive[hour] = self.state.alive.get(hour, 0.0) + _ALIVE_STEP
+        self.state.alive_ts = now
+        self._save()
+
+    def _alive_fraction(self, ts: float) -> float:
+        """How up the host tends to be at ``ts``'s hour, in [0, 1].
+
+        Blends the LEARNED uptime with the declared-window prior by confidence:
+        cold, it follows the window; with history, it follows what the NAS
+        actually does -- even hours outside the declared window.
+        """
+        peak = max(self.state.alive.values(), default=0.0)
+        hour = _local(ts, self.params).hour
+        observed = self.state.alive.get(str(hour), 0.0) / peak if peak else 0.0
+        prior = 1.0 if _in_window(float(hour), self.params) else 0.0
+        target = self.params.uptime_learn_obs
+        total = sum(self.state.alive.values())
+        conf = min(1.0, total / target) if target > 0 else 1.0
+        return conf * observed + (1.0 - conf) * prior
+
+    def _effective_weight(self, ts: float) -> float:
+        """Density x how likely the host is up -- the schedulable weight."""
+        return _density_weight(ts, self.params) * self._alive_fraction(ts)
+
+    def _snap(self, ts: float) -> float:
+        """Hop forward to an hour that is both awake-shaped and host-up."""
+        peak = _peak_weight(self.params)
+        candidate = ts
+        for _ in range(_MAX_HOUR_HOPS):
+            if self.rng.random() < self._effective_weight(candidate) / peak:
+                return candidate
+            candidate += _HOP_SEC
+        return candidate
 
     def emit(self) -> list[CatEmoji]:
         """Pick the cat(s) to send now and record the send (principles 3,4,7).
@@ -431,6 +483,10 @@ class CatBrain:
             catted={str(p) for p in (raw.get('catted') or [])},
             posts=[(int(c), int(m)) for c, m in (raw.get('posts') or [])],
             pending=[dict(p) for p in (raw.get('pending') or [])],
+            alive={
+                str(k): float(v) for k, v in (raw.get('alive') or {}).items()
+            },
+            alive_ts=float(raw.get('alive_ts', 0.0)),
         )
 
     def _save(self) -> None:
@@ -444,6 +500,8 @@ class CatBrain:
             'catted': sorted(self.state.catted),
             'posts': [[c, m] for c, m in self.state.posts],
             'pending': self.state.pending,
+            'alive': self.state.alive,
+            'alive_ts': self.state.alive_ts,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(
@@ -493,6 +551,11 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         ),
         active_start=float(cats.get('active_start_hour', 0.0)),
         active_end=float(cats.get('active_end_hour', 24.0)),
+        uptime_half_life_sec=float(cats.get('uptime_half_life_sec', 864000.0)),
+        uptime_learn_obs=float(cats.get('uptime_learn_obs', 2000.0)),
+        skip_if_manually_replied=bool(
+            cats.get('skip_if_manually_replied', True)
+        ),
         tz_offset_hours=float(cats.get('tz_offset_hours', 3.0)),
         latency_log_mu=float(cats.get('latency_log_mu', 7.0)),
         latency_log_sigma=float(cats.get('latency_log_sigma', 1.2)),
