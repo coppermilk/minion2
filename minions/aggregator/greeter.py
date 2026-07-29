@@ -45,6 +45,7 @@ class GreeterParams:
     enabled: bool
     channel: int  # the channel to watch (resolved: JSON value or the target)
     welcome: str
+    welcome_back: str  # for someone who LEFT and later re-subscribed
     farewell: str
     poll_sec: float
     dm_min_gap_sec: float
@@ -58,6 +59,7 @@ class GreeterState:
     """Persisted: member set, baseline flag, and the daily DM counter."""
 
     members: set[int] = field(default_factory=set)
+    left: set[int] = field(default_factory=set)  # unsubscribed -> welcome_back
     started: bool = False  # the silent baseline has been established
     dm_day: str = ''  # UTC date of dm_today
     dm_today: int = 0  # DMs already sent today (against max_dm_per_day)
@@ -82,6 +84,7 @@ def load_greeter_params(
         enabled=bool(cfg.get('enabled', False)),
         channel=int(cfg.get('channel') or default_channel),
         welcome=str(cfg.get('welcome') or 'Welcome!'),
+        welcome_back=str(cfg.get('welcome_back') or ''),
         farewell=str(cfg.get('farewell') or ''),
         poll_sec=float(cfg.get('poll_sec') or 600.0),
         dm_min_gap_sec=float(cfg.get('dm_min_gap_sec') or 30.0),
@@ -144,7 +147,8 @@ class Greeter:
             event, 'user_kicked', False
         )
         if joined and uid not in self.state.members:
-            await self._live_dm(uid, self.params.welcome, add=True)
+            text = self._join_text(uid, self.state.left)
+            await self._live_dm(uid, text, add=True)
         elif left and uid in self.state.members:
             await self._live_dm(uid, self.params.farewell, add=False)
 
@@ -161,8 +165,10 @@ class Greeter:
         """Update the member set for a live event, then DM (skip if empty)."""
         if add:
             self.state.members.add(uid)
+            self.state.left.discard(uid)  # they came back
         else:
             self.state.members.discard(uid)
+            self.state.left.add(uid)  # remember for a welcome_back later
         self._save()
         if text:
             try:
@@ -171,15 +177,36 @@ class Greeter:
                 log.warning('greeter: flood on live DM, backing off')
 
     async def _process(self, joined: set[int], left: set[int]) -> None:
-        """DM the joiners then the leavers, within the per-cycle cap."""
+        """DM the joiners (welcome / welcome_back) then the leavers, capped."""
+        returning = joined & self.state.left
         try:
-            budget = await self._greet(
-                joined, self.params.welcome, self.params.max_dm_per_run
+            budget = await self._greet_joiners(
+                joined, returning, self.params.max_dm_per_run
             )
             if self.params.farewell:
                 await self._greet(left, self.params.farewell, budget)
         except _FloodStop:
             log.warning('greeter: flood limit hit, backing off this cycle')
+        # Remember who left (welcome_back later) and forget who came back.
+        self.state.left = (self.state.left - joined) | left
+        self._save()
+
+    def _join_text(self, uid: int, returning: set[int]) -> str:
+        """A returning subscriber gets welcome_back (falls back to welcome)."""
+        if uid in returning:
+            return self.params.welcome_back or self.params.welcome
+        return self.params.welcome
+
+    async def _greet_joiners(
+        self, ids: set[int], returning: set[int], budget: int
+    ) -> int:
+        """DM up to ``budget`` joiners, welcome_back for returning ones."""
+        for uid in list(ids):
+            if budget <= 0:
+                break
+            if await self._dm(uid, self._join_text(uid, returning)):
+                budget -= 1
+        return budget
 
     async def _greet(self, ids: set[int], text: str, budget: int) -> int:
         """DM up to ``budget`` of ``ids``; return the remaining budget."""
@@ -258,6 +285,7 @@ class Greeter:
             return GreeterState()
         return GreeterState(
             members={int(m) for m in (raw.get('members') or [])},
+            left={int(m) for m in (raw.get('left') or [])},
             started=bool(raw.get('started', False)),
             dm_day=str(raw.get('dm_day', '')),
             dm_today=int(raw.get('dm_today', 0)),
@@ -267,6 +295,7 @@ class Greeter:
         """Persist the member set atomically as readable JSON."""
         data = {
             'members': sorted(self.state.members),
+            'left': sorted(self.state.left),
             'started': self.state.started,
             'dm_day': self.state.dm_day,
             'dm_today': self.state.dm_today,

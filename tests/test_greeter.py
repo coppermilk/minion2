@@ -21,6 +21,7 @@ def _params(**over):
         'enabled': True,
         'channel': -100,
         'welcome': 'hi',
+        'welcome_back': 'whale',
         'farewell': 'bye',
         'poll_sec': 600.0,
         'dm_min_gap_sec': 0.0,
@@ -76,6 +77,46 @@ def test_join_gets_welcome_and_leave_gets_farewell(tmp_path: Path) -> None:
     assert (3, 'hi') in client.dms
     assert (1, 'bye') in client.dms
     assert g.state.members == {2, 3}
+
+
+def test_returning_subscriber_gets_welcome_back(tmp_path: Path) -> None:
+    client = _FakeClient({1, 2})
+    g = _greeter(tmp_path, client)
+    asyncio.run(g.sync())  # baseline {1, 2}
+    client.members = [1]  # 2 left -> remembered
+    asyncio.run(g.sync())
+    assert (2, 'bye') in client.dms
+    assert 2 in g.state.left
+    client.members = [1, 2]  # 2 came back
+    asyncio.run(g.sync())
+    assert (2, 'whale') in client.dms  # welcome_back, not the plain welcome
+    assert (2, 'hi') not in client.dms
+    assert 2 not in g.state.left
+
+
+def test_returning_via_live_action_gets_welcome_back(tmp_path: Path) -> None:
+    client = _FakeClient({1, 2})
+    g = _greeter(tmp_path, client)
+    asyncio.run(g.sync())  # baseline -> started
+    leave = types.SimpleNamespace(
+        user_id=2,
+        user_joined=False,
+        user_added=False,
+        user_left=True,
+        user_kicked=False,
+    )
+    asyncio.run(g.on_action(leave))
+    assert (2, 'bye') in client.dms
+    rejoin = types.SimpleNamespace(
+        user_id=2,
+        user_joined=True,
+        user_added=False,
+        user_left=False,
+        user_kicked=False,
+    )
+    asyncio.run(g.on_action(rejoin))
+    assert (2, 'whale') in client.dms
+    assert 2 not in g.state.left
 
 
 def test_daily_cap_stops_dms(tmp_path: Path) -> None:
