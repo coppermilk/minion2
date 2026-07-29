@@ -70,6 +70,7 @@ from telethon.tl.functions.messages import SendMessageRequest
 from telethon.tl.types import InputReplyToMessage
 
 from minions.aggregator import cats
+from minions.aggregator import greeter
 from minions.aggregator.premium_emoji import RichText
 
 if TYPE_CHECKING:
@@ -745,6 +746,14 @@ class Aggregator:
             self.state_path.with_name('cats_state.json'),
         )
         self._cat_tasks: set[asyncio.Task[None]] = set()
+        # The subscriber greeter: welcome/farewell DMs (opt-in, rate-limited).
+        # The channel defaults to the first target; disabled unless 'enabled'.
+        default_channel = config.targets[0] if config.targets else 0
+        self.greeter = greeter.Greeter(
+            client,
+            greeter.load_greeter_params(raw, default_channel),
+            self.state_path.with_name('greeter_state.json'),
+        )
 
     async def on_message(self, message: object) -> None:
         """Route one incoming message into its video group."""
@@ -1243,10 +1252,21 @@ class Aggregator:
             *self._posted_lines(),
             '',
             *self._cat_status_lines(labels),
+            '',
+            self._greeter_line(),
         ]
         if self.consts.status_help:
             parts += ['', self.consts.status_help]
         return '\n'.join(parts)
+
+    def _greeter_line(self) -> str:
+        """One-line greeter summary: on/off, members, DMs sent today."""
+        gp = self.greeter.params
+        gs = self.greeter.state
+        return (
+            f'Greeter: enabled={gp.enabled} members={len(gs.members)}'
+            f' dm_today={gs.dm_today}/{gp.max_dm_per_day}'
+        )
 
     def _routing_lines(self, labels: dict[int, str]) -> list[str]:
         """Where the bot reads (source) and posts (targets), by name."""
@@ -1513,6 +1533,17 @@ def _targets() -> tuple[int, ...]:
     return tuple(int(p.strip()) for p in raw.split(',') if p.strip())
 
 
+def _wire_greeter(
+    client: TelegramClient, greeter_obj: greeter.Greeter
+) -> None:
+    """Register the live subscribe/leave handler when the greeter is on."""
+    if greeter_obj.params.enabled and greeter_obj.params.channel:
+        client.add_event_handler(
+            greeter_obj.on_action,
+            events.ChatAction(chats=greeter_obj.params.channel),
+        )
+
+
 def _load_config() -> Config:
     """Chats come from the env; all behaviour from the constants JSON."""
     data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
@@ -1552,6 +1583,7 @@ async def main() -> None:
     # from ANY chat and for ANYONE (it renders back into the source chat);
     # aggregation itself stays scoped to the source chat inside agg.handle.
     client.add_event_handler(agg.handle, events.NewMessage())
+    _wire_greeter(client, agg.greeter)
 
     # TELEGRAM_PASSWORD supplies the 2FA/cloud password non-interactively;
     # unset, Telethon prompts for it (getpass) only if the account has 2FA.
@@ -1581,8 +1613,10 @@ async def main() -> None:
     )
     await agg.backfill()
     status_task = asyncio.create_task(agg.status_loop())
+    greeter_task = asyncio.create_task(agg.greeter.loop())
     await client.run_until_disconnected()
     status_task.cancel()
+    greeter_task.cancel()
 
 
 if __name__ == '__main__':
