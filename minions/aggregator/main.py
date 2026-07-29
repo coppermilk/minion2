@@ -98,12 +98,16 @@ STATUS_INTERVAL = 60
 # restart-dedup window (300 videos >> the backfill scan, so no re-posts).
 POSTED_CAP = 300
 # Chat commands (from ANY chat, ANYONE), always rendered into the source chat:
-# /emojis previews the premium emoji constants; /preview renders sample posts
-# (partial + full platform coverage) for QC; /status reports what is pending,
-# what was posted/rejected, and the cat engine's live state.
+# /emojis previews the premium emoji constants and the cat pool; /preview
+# renders sample posts (partial + full platform coverage) for QC; /status
+# reports what is pending, what was posted/rejected, the last posts and the cat
+# engine's live state; /requeue refreshes the pending-cat queue.
 COMMAND_EMOJIS = '/emojis'
 COMMAND_PREVIEW = '/preview'
 COMMAND_STATUS = '/status'
+# /requeue safely refreshes the pending-cat queue: cancel the in-flight timers
+# and re-arm from the persisted queue (renewing any that are due).
+COMMAND_REQUEUE = '/requeue'
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
 CAT_REPLY_SCAN = 200
@@ -600,8 +604,19 @@ def _emoji_section(rich: RichText, label: str, specs: list[object]) -> None:
     rich.text('\n')
 
 
-def _render_constants(consts: Consts) -> PremiumMessage:
-    """A preview of every premium emoji constant, rendered with its id."""
+def _cat_section(rich: RichText, pool: tuple[CatEmoji, ...]) -> None:
+    """Append the cat-emoji pool, each with its id and tags."""
+    rich.text(f'cats ({len(pool)}):\n')
+    for cat in pool:
+        spec = {'id': cat.emoji_id, 'fallback': cat.fallback}
+        rich.emoji(spec).text(f' {cat.emoji_id} [{",".join(cat.tags)}]\n')
+    rich.text('\n')
+
+
+def _render_constants(
+    consts: Consts, pool: tuple[CatEmoji, ...]
+) -> PremiumMessage:
+    """A preview of every premium emoji constant (and the cats), with ids."""
     rich = RichText()
     rich.text('Premium emoji constants\n\n')
     _emoji_section(rich, 'love', consts.love)
@@ -610,6 +625,9 @@ def _render_constants(consts: Consts) -> PremiumMessage:
     rich.text('platforms:\n')
     for name, spec in consts.platform_emoji.items():
         rich.emoji(spec).text(f' {name} {_emoji_id_str(spec)}\n')
+    rich.text('\n')
+    if pool:
+        _cat_section(rich, pool)
     return rich.build()
 
 
@@ -858,6 +876,7 @@ class Aggregator:
             COMMAND_EMOJIS: self.show_constants,
             COMMAND_PREVIEW: self.preview_posts,
             COMMAND_STATUS: self.status_report,
+            COMMAND_REQUEUE: self.requeue_cats,
         }
         handler = handlers.get(text)
         if handler is None:
@@ -909,6 +928,23 @@ class Aggregator:
         """
         for chat, reply_to, when in self.cats.rearm():
             self._arm_cat(chat, reply_to, when)
+
+    async def requeue_cats(self) -> None:
+        """Refresh the pending-cat queue on demand (the /requeue command).
+
+        Cancels the in-flight timers and re-arms from the PERSISTED queue, so
+        nothing is duplicated (a cat is only forgotten once actually sent) and
+        anything stuck or overdue is renewed to a fresh slot.
+        """
+        for task in list(self._cat_tasks):
+            task.cancel()
+        self._cat_tasks.clear()
+        self.rearm_cats()
+        count = len(self.cats.state.pending)
+        await self.client.send_message(
+            self.config.source, f'Requeued {count} pending cat(s).'
+        )
+        log.info('requeued %d pending cats', count)
 
     async def _cat_later(self, chat: int, reply_to: int, when: float) -> None:
         """Sleep until ``when``, then reply unless already answered by hand."""
@@ -1030,14 +1066,13 @@ class Aggregator:
     def _cat_status_lines(self) -> list[str]:
         """The cat engine's live state (empty-ish when it is disabled)."""
         brain = self.cats
-        posts = ', '.join(f'{ch}:{mid}' for ch, mid in brain.posts) or '-'
         window = f'{brain.params.active_start:g}-{brain.params.active_end:g}h'
         alive = brain.state.alive
         top = sorted(alive, key=lambda h: alive[h], reverse=True)[:6]
         learned = ', '.join(f'{h}h' for h in top) or '(learning)'
         counters = (
             f'  catted={len(brain.state.catted)}'
-            f' pending={len(brain.state.pending)}'
+            f' pending comments={len(brain.state.pending)}'
             f' mood={brain.state.mood:.2f}'
         )
         return [
@@ -1045,13 +1080,21 @@ class Aggregator:
             f'  enabled={brain.params.enabled} pool={len(brain.params.pool)}',
             f'  uptime window (prior)={window}',
             f'  learned on-hours=[{learned}]',
-            f'  watching posts=[{posts}]',
+            *self._last_posts_lines(),
             counters,
+            '  (/requeue to refresh the pending queue)',
         ]
+
+    def _last_posts_lines(self) -> list[str]:
+        """The watched posts (the last ``watch_posts``), one per line."""
+        posts = self.cats.posts
+        lines = [f'  last posts ({len(posts)}):']
+        lines.extend(f'    - chat {ch}, post {mid}' for ch, mid in posts)
+        return lines or ['  last posts (0):']
 
     async def show_constants(self) -> None:
         """Post a preview of every premium emoji constant to the watcher."""
-        message = _render_constants(self.consts)
+        message = _render_constants(self.consts, self.cats.params.pool)
         await self.client.send_message(
             self.config.source,
             message.text,
