@@ -98,7 +98,7 @@ STATUS_INTERVAL = 60
 # restart-dedup window (300 videos >> the backfill scan, so no re-posts).
 POSTED_CAP = 300
 # Chat commands (from ANY chat, ANYONE), always rendered into the source chat:
-# /emojis previews the premium emoji constants and the cat pool; /preview
+# /emojis previews the whole unified emoji array (all types) with ids; /preview
 # renders sample posts (partial + full platform coverage) for QC; /status
 # reports what is pending, what was posted/rejected, the last posts and the cat
 # engine's live state; /requeue refreshes the pending-cat queue.
@@ -211,6 +211,9 @@ class Consts:
     sample_short: str
     sample_long: str
     status_help: str  # the /status legend (expected behaviour), from JSON
+    emoji_all: list[
+        dict[str, object]
+    ]  # unified emoji catalog (new JSON), else []
 
 
 def _str_list(value: object, default: str) -> list[str]:
@@ -245,25 +248,48 @@ def _read_json(path: Path) -> dict[str, object]:
     return data
 
 
+# Every premium emoji lives in ONE top-level "emoji" array in the JSON, each
+# entry tagged with its "type"; the post-composition lists (love/lead/arrow/
+# platform) and the cat pool are all derived from it, and /emojis renders it in
+# this order.
+_EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat')
+
+
+def emoji_catalog(data: dict[str, object]) -> list[dict[str, object]]:
+    """The unified top-level emoji array (each entry a dict)."""
+    raw = data.get('emoji')
+    if not isinstance(raw, list):
+        return []
+    return [dict(e) for e in raw if isinstance(e, dict)]
+
+
+def emoji_of(catalog: list[dict[str, object]], etype: str) -> list[dict]:
+    """Every emoji entry of one ``type`` from the unified catalog."""
+    return [e for e in catalog if e.get('type') == etype]
+
+
 def _load_constants(path: Path) -> Consts:
     """Load the post constants from JSON, ignoring unknown keys."""
     data = _read_json(path)
     samples = dict(data.get('sample_titles') or {})
+    catalog = emoji_catalog(data)
+    platforms = emoji_of(catalog, 'platform')
     return Consts(
         fields={**DEFAULT_FIELDS, **(data.get('fields') or {})},
         action_value=str(data.get('action_value', '')),
         author=str(data.get('author', '')),
         announce=list(data.get('announce') or ['']),
-        love=list(data.get('love') or ['']),
-        lead=list(data.get('lead_emoji') or ['']),
-        arrow_down=list(data.get('arrow_down') or ['']),
+        love=emoji_of(catalog, 'love') or [''],
+        lead=emoji_of(catalog, 'lead') or [''],
+        arrow_down=emoji_of(catalog, 'arrow') or [''],
         view_label=_str_list(data.get('view_label'), 'View'),
         column_separator=str(data.get('column_separator', '  |  ')),
         rows=list(data.get('rows') or []),
-        platform_emoji=dict(data.get('platform_emoji') or {}),
+        platform_emoji={str(e['name']): e for e in platforms if e.get('name')},
         sample_short=str(samples.get('short') or 'Sample short video'),
         sample_long=str(samples.get('long') or 'Sample long video'),
         status_help=str(data.get('status_help') or ''),
+        emoji_all=catalog,
     )
 
 
@@ -592,45 +618,33 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
             rich.text('\n')
 
 
-def _emoji_id_str(spec: object) -> str:
-    """The document id of a premium emoji spec, or '(plain)' for a glyph."""
-    if isinstance(spec, dict):
-        return str(spec.get('id', '?'))
-    return '(plain)'
+def _catalog_suffix(entry: dict[str, object]) -> str:
+    """The trailing id + platform name / cat tags for one catalog entry."""
+    parts = [str(entry.get('id', '?'))]
+    if entry.get('name'):
+        parts.append(str(entry['name']))
+    tags = entry.get('tags')
+    if tags:
+        parts.append('[' + ','.join(str(t) for t in tags) + ']')
+    return ' '.join(parts)
 
 
-def _emoji_section(rich: RichText, label: str, specs: list[object]) -> None:
-    """Append one labelled block of emoji, each with its id, to ``rich``."""
-    rich.text(label + ':\n')
-    for spec in specs:
-        rich.emoji(spec).text(' ' + _emoji_id_str(spec) + '\n')
-    rich.text('\n')
-
-
-def _cat_section(rich: RichText, pool: tuple[CatEmoji, ...]) -> None:
-    """Append the cat-emoji pool, each with its id and tags."""
-    rich.text(f'cats ({len(pool)}):\n')
-    for cat in pool:
-        spec = {'id': cat.emoji_id, 'fallback': cat.fallback}
-        rich.emoji(spec).text(f' {cat.emoji_id} [{",".join(cat.tags)}]\n')
-    rich.text('\n')
-
-
-def _render_constants(
-    consts: Consts, pool: tuple[CatEmoji, ...]
-) -> PremiumMessage:
-    """A preview of every premium emoji constant (and the cats), with ids."""
+def _render_constants(consts: Consts) -> PremiumMessage:
+    """Render the whole unified emoji array for /emojis, grouped by type."""
     rich = RichText()
-    rich.text('Premium emoji constants\n\n')
-    _emoji_section(rich, 'love', consts.love)
-    _emoji_section(rich, 'lead_emoji', consts.lead)
-    _emoji_section(rich, 'arrow_down', consts.arrow_down)
-    rich.text('platforms:\n')
-    for name, spec in consts.platform_emoji.items():
-        rich.emoji(spec).text(f' {name} {_emoji_id_str(spec)}\n')
-    rich.text('\n')
-    if pool:
-        _cat_section(rich, pool)
+    rich.text(f'Premium emoji ({len(consts.emoji_all)})\n\n')
+    by_type: dict[str, list[dict[str, object]]] = {}
+    for entry in consts.emoji_all:
+        by_type.setdefault(str(entry.get('type', 'other')), []).append(entry)
+    extra = [t for t in by_type if t not in _EMOJI_ORDER]
+    for etype in (*_EMOJI_ORDER, *extra):
+        items = by_type.get(etype)
+        if not items:
+            continue
+        rich.text(f'{etype} ({len(items)}):\n')
+        for entry in items:
+            rich.emoji(entry).text(' ' + _catalog_suffix(entry) + '\n')
+        rich.text('\n')
     return rich.build()
 
 
@@ -1222,8 +1236,8 @@ class Aggregator:
         return lines
 
     async def show_constants(self) -> None:
-        """Post a preview of every premium emoji constant to the watcher."""
-        message = _render_constants(self.consts, self.cats.params.pool)
+        """Post a preview of the whole unified emoji array to the watcher."""
+        message = _render_constants(self.consts)
         await self.client.send_message(
             self.config.source,
             message.text,

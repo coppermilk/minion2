@@ -382,17 +382,23 @@ def test_load_cat_params_defaults_to_disabled() -> None:
 
 
 def test_load_cat_params_reads_the_pool() -> None:
+    # The cat pool is the type=cat entries of the unified top-level array.
     params = cats.load_cat_params(
         {
-            'cats': {
-                'enabled': True,
-                'emoji': [
-                    {'id': '9', 'fallback': 'c', 'base': 2, 'tags': ['bodry']}
-                ],
-            }
+            'cats': {'enabled': True},
+            'emoji': [
+                {'type': 'love', 'id': '1', 'fallback': 'l'},
+                {
+                    'type': 'cat',
+                    'id': '9',
+                    'fallback': 'c',
+                    'base': 2,
+                    'tags': ['bodry'],
+                },
+            ],
         }
     )
     assert params.enabled is True
-    assert len(params.pool) == 1
+    assert len(params.pool) == 1  # only the type=cat entry
     assert params.pool[0].emoji_id == '9'
     assert params.pool[0].tags == ('bodry',)
