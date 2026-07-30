@@ -13,9 +13,11 @@ The nine principles, mapped to code:
    likely the host is actually up then -- a curve LEARNED from real uptime
    (``mark_alive``) blended with the declared window -- so the schedule adapts
    to any NAS on-time, not just the rule of thumb.
-2. Inter-send gaps are heavy-tailed (log-normal), not a flat cadence: a running
-   ``next_earliest`` cursor advances by a log-normal draw, so cats come in
-   bursts and then long silences.
+2. Answering happens in SESSIONS: a human opens the comments now and then,
+   clears the pile in a quick burst (short intra-session gaps), then closes the
+   app for a long, heavy-tailed while. ``spacing_*`` is the gap BETWEEN
+   sessions; ``session_gap_*`` is the gap between cats INSIDE one -- so bursts
+   then silence, and co-occurring comments land in the same burst.
 3. Selection has memory: weight = base preference * recency penalty (an
    exponential recovery from the last time that cat was used), so favourites
    lead and just-used cats fade.
@@ -52,15 +54,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-# A cat that is scheduled but lands past this many active-hour hops ahead is
-# just sent at the last hop -- a guard so snapping can never loop unbounded.
-_MAX_HOUR_HOPS = 48
-_HOP_SEC = 1800.0
+# When a session start lands in a dead hour we sample a real send moment on
+# this grid across the reachable awake time (see _place); 5 min is fine-grained
+# enough to spread a morning burst without leaving a HH:00 fingerprint.
+_PLACE_STEP_SEC = 300.0
 # One observation added to the current hour bucket per heartbeat (mark_alive).
 _ALIVE_STEP = 1.0
-# How many median spacing gaps the heavy-tailed cursor may lead 'now' by, so a
-# burst of comments cannot push cats unboundedly into the future.
-_CURSOR_LEAD_UNITS = 8.0
 
 
 @dataclass(frozen=True)
@@ -143,6 +142,13 @@ class CatParams:
     mood_phi: float
     mood_sigma: float
     feedback_speedup: float
+    # Session model (see CatBrain._plan): spacing_* is the long gap BETWEEN
+    # comment-answering sessions; the fields below shape ONE session.
+    session_gap_log_mu: float  # log-mean of the short intra-session gap
+    session_gap_log_sigma: float
+    session_idle_sec: float  # a silence longer than this ends the session
+    session_max_sec: float  # hard cap on one session's span
+    max_reply_delay_sec: float  # a cat older than this is too stale -> skip
     pool: tuple[CatEmoji, ...]
 
 
@@ -158,7 +164,11 @@ class CatState:
     mood: float = 0.0
     mood_day: str = ''  # ISO date of the last mood step (drift once a day)
     last_send: float = 0.0  # unix ts of the most recent cat sent
-    next_earliest: float = 0.0  # heavy-tailed spacing cursor
+    next_session_at: float = (
+        0.0  # earliest the NEXT session may open (spacing)
+    )
+    session_start_at: float = 0.0  # when the current burst began
+    session_last_at: float = 0.0  # last cat placed in the current burst
     cat_last: dict[str, float] = field(default_factory=dict)  # id -> last ts
     catted: set[str] = field(default_factory=set)  # (post, person) keys done
     posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
@@ -279,6 +289,19 @@ def _weighted_choice(
     return pool[-1]
 
 
+def _pick_slot(
+    slots: list[float], weights: list[float], rng: random.Random
+) -> float:
+    """Pick one time slot proportional to its weight (last as fallback)."""
+    threshold = rng.random() * sum(weights)
+    upto = 0.0
+    for slot, weight in zip(slots, weights, strict=True):
+        upto += weight
+        if upto >= threshold:
+            return slot
+    return slots[-1]
+
+
 class CatBrain:
     """The stateful engine: track posts, decide when, and choose which cat.
 
@@ -366,7 +389,9 @@ class CatBrain:
             # cursor may have run far into the future (a burst under the slow
             # production spacing), which would otherwise keep every cat days
             # out. /requeue is the operator's reset.
-            self.state.next_earliest = now
+            self.state.next_session_at = now
+            self.state.session_start_at = 0.0
+            self.state.session_last_at = 0.0
         out: list[Cat] = []
         for entry in self.state.pending:
             when = float(entry['when'])
@@ -398,33 +423,86 @@ class CatBrain:
             return None
         if self.rng.random() < self.params.skip_prob:  # principle 7
             return None
-        when = self._fire_time(now, engaged=engaged)
+        when = self._plan(now, engaged=engaged)
+        if when is None:  # asleep / too stale (principle 7)
+            return None
         if _is_silent_day(when, self.params):  # principle 7
             return None
         self.state.catted.add(key)
-        self.state.next_earliest = when
         self._save()
         return when
 
-    def _fire_time(self, now: float, *, engaged: bool) -> float:
-        """When to send: heavy-tailed latency + spacing, snapped + jittered."""
+    def _plan(self, now: float, *, engaged: bool) -> float | None:
+        """Session-aware send time: bursts inside a session, long gaps between.
+
+        A human does not answer each comment on its own heavy-tailed clock --
+        they open the comments now and then, clear whatever piled up in a quick
+        BURST (short intra-session gaps), then close the app for a long,
+        heavy-tailed while. So ``spacing_*`` is the gap BETWEEN sessions (the
+        silence) and ``session_gap_*`` is the gap between cats INSIDE one, so
+        two comments written close together land in the SAME burst, seconds
+        apart, not smeared an hour apart by a global cursor.
+
+        Returns the send ts, or None when the comment cannot be answered at an
+        awake, host-up moment within ``max_reply_delay_sec`` -- a human does
+        not reply to something they only saw many hours late.
+        """
         latency = _lognormal(
             self.rng, self.params.latency_log_mu, self.params.latency_log_sigma
         )
         if engaged:  # principle 8: an engaged commenter gets a faster reaction
             latency *= self.params.feedback_speedup
+        earliest = now + latency
+
+        # Still inside the current session? Then this comment joins the burst.
+        # The test is on PLACED time (session_last_at may sit in the future
+        # when the session itself is scheduled ahead), so a whole gap's backlog
+        # funnels into one upcoming burst, not each opening its own session.
+        s_last = self.state.session_last_at
+        s_start = self.state.session_start_at
+        in_session = (
+            s_last > 0.0
+            and earliest <= s_last + self.params.session_idle_sec
+            and (s_last - s_start) < self.params.session_max_sec
+        )
+        if in_session:
+            gap = _lognormal(
+                self.rng,
+                self.params.session_gap_log_mu,
+                self.params.session_gap_log_sigma,
+            )
+            when = max(earliest, s_last + gap)
+            self.state.session_last_at = when
+            return _jitter(when, self.params, self.rng)
+
+        # Otherwise open a NEW session, no earlier than the between-session
+        # cursor, placed at a plausibly-awake moment (not the window's edge).
+        start = max(earliest, self.state.next_session_at)
+        placed = self._place(start)
+        if placed is None or placed - now > self.params.max_reply_delay_sec:
+            return None  # nothing awake in reach -> the comment goes stale
         spacing = _lognormal(
             self.rng, self.params.spacing_log_mu, self.params.spacing_log_sigma
         )
-        # The spacing cursor may not lead now by more than a few median gaps:
-        # otherwise a burst of comments (faster than the spacing) would push
-        # the cursor unboundedly ahead and schedule cats days/weeks out.
-        lead_cap = now + _CURSOR_LEAD_UNITS * math.exp(
-            self.params.spacing_log_mu
+        self.state.session_start_at = placed
+        self.state.session_last_at = placed
+        self.state.next_session_at = placed + spacing
+        return _jitter(placed, self.params, self.rng)
+
+    def _fire_time(self, now: float, *, engaged: bool) -> float:
+        """Re-slot a committed pending cat (rearm) into the next session.
+
+        Unlike ``schedule`` a pending cat is already committed, so it must land
+        somewhere: if the session planner would drop it (asleep / stale), fall
+        back to the next awake moment rather than returning nothing.
+        """
+        when = self._plan(now, engaged=engaged)
+        if when is not None:
+            return when
+        placed = self._place(max(now, self.state.next_session_at))
+        return _jitter(
+            placed if placed is not None else now, self.params, self.rng
         )
-        cursor = min(max(now, self.state.next_earliest), lead_cap) + spacing
-        candidate = max(now + latency, cursor)
-        return _jitter(self._snap(candidate), self.params, self.rng)
 
     def mark_alive(self, now: float) -> None:
         """Heartbeat: record that the host is up at this hour (decayed).
@@ -464,27 +542,43 @@ class CatBrain:
         """Density x how likely the host is up -- the schedulable weight."""
         return _density_weight(ts, self.params) * self._alive_fraction(ts)
 
-    def _snap(self, ts: float) -> float:
-        """Hop forward to an hour that is both awake-shaped and host-up.
+    def _place(self, ts: float) -> float | None:
+        """A plausibly-awake, host-up send moment at or after ``ts``.
 
-        Accept/reject is normalized by the BEST hour in the next day (the real
-        max of the schedulable weight), so a candidate already at a good, host-
-        up hour is accepted at once (fires soon) and only genuinely dead hours
-        hop forward. Normalizing by a loose upper bound instead would reject
-        even good hours and push every cat far into the future.
+        If ``ts`` already sits at a live moment it is usually kept (a daytime
+        comment is answered promptly). Otherwise we SAMPLE a moment across the
+        reachable awake time in proportion to the activity density -- so an
+        overnight backlog scatters across the morning by shape instead of
+        piling on the window's leading edge at HH:00 (the old
+        hop-to-first-live-hour fingerprint). Returns None when no awake moment
+        is reachable within ``max_reply_delay_sec`` (the comment goes stale).
         """
         peak = max(
             (self._effective_weight(ts + h * 3600.0) for h in range(24)),
             default=0.0,
         )
         if peak <= 0.0:
-            return ts  # nothing active in the next day -- do not loop
-        candidate = ts
-        for _ in range(_MAX_HOUR_HOPS):
-            if self.rng.random() < self._effective_weight(candidate) / peak:
-                return candidate
-            candidate += _HOP_SEC
-        return candidate
+            return None
+        here = self._effective_weight(ts)
+        if here > 0.0 and self.rng.random() < here / peak:
+            return ts  # already awake -> answer promptly
+        return self._sample_awake(ts)
+
+    def _sample_awake(self, ts: float) -> float | None:
+        """Density-weighted pick of an awake 5-min slot within the horizon."""
+        deadline = ts + self.params.max_reply_delay_sec
+        slots: list[float] = []
+        weights: list[float] = []
+        t = ts
+        while t <= deadline:
+            weight = self._effective_weight(t)
+            if weight > 0.0:
+                slots.append(t)
+                weights.append(weight)
+            t += _PLACE_STEP_SEC
+        if not slots:
+            return None
+        return _pick_slot(slots, weights, self.rng)
 
     def emit(self) -> list[CatEmoji]:
         """Pick the cat(s) to send now and record the send (principles 3,4,7).
@@ -543,7 +637,11 @@ class CatBrain:
             mood=float(raw.get('mood', 0.0)),
             mood_day=str(raw.get('mood_day', '')),
             last_send=float(raw.get('last_send', 0.0)),
-            next_earliest=float(raw.get('next_earliest', 0.0)),
+            next_session_at=float(
+                raw.get('next_session_at', raw.get('next_earliest', 0.0))
+            ),
+            session_start_at=float(raw.get('session_start_at', 0.0)),
+            session_last_at=float(raw.get('session_last_at', 0.0)),
             cat_last={
                 str(k): float(v)
                 for k, v in (raw.get('cat_last') or {}).items()
@@ -563,7 +661,9 @@ class CatBrain:
             'mood': self.state.mood,
             'mood_day': self.state.mood_day,
             'last_send': self.state.last_send,
-            'next_earliest': self.state.next_earliest,
+            'next_session_at': self.state.next_session_at,
+            'session_start_at': self.state.session_start_at,
+            'session_last_at': self.state.session_last_at,
             'cat_last': self.state.cat_last,
             'catted': sorted(self.state.catted),
             'posts': [[c, m] for c, m in self.state.posts],
@@ -648,5 +748,10 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         mood_phi=float(cats.get('mood_phi', 0.8)),
         mood_sigma=float(cats.get('mood_sigma', 0.35)),
         feedback_speedup=float(cats.get('feedback_speedup', 0.4)),
+        session_gap_log_mu=float(cats.get('session_gap_log_mu', 3.8)),
+        session_gap_log_sigma=float(cats.get('session_gap_log_sigma', 0.6)),
+        session_idle_sec=float(cats.get('session_idle_sec', 900.0)),
+        session_max_sec=float(cats.get('session_max_sec', 1200.0)),
+        max_reply_delay_sec=float(cats.get('max_reply_delay_sec', 21600.0)),
         pool=pool,
     )
