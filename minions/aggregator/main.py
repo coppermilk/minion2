@@ -105,6 +105,10 @@ POSTED_CAP = 300
 # renders sample posts (partial + full platform coverage) for QC; /status
 # reports what is pending, what was posted/rejected, the last posts and the cat
 # engine's live state; /requeue refreshes the pending-cat queue.
+# /help (and its natural alias /start) print a plain-language command menu --
+# the friendly front door for anyone who has never used the bot.
+COMMAND_HELP = '/help'
+COMMAND_START = '/start'
 COMMAND_EMOJIS = '/emojis'
 COMMAND_PREVIEW = '/preview'
 COMMAND_STATUS = '/status'
@@ -229,6 +233,8 @@ class Consts:
     sample_short: str
     sample_long: str
     status_help: str  # the /status legend (expected behaviour), from JSON
+    help_text: str  # the /help menu (plain-language command list), from JSON
+    help_hint: str  # nudge shown for an unknown /command, from JSON
     emoji_all: list[
         dict[str, object]
     ]  # unified emoji catalog (new JSON), else []
@@ -307,6 +313,8 @@ def _load_constants(path: Path) -> Consts:
         sample_short=str(samples.get('short') or 'Sample short video'),
         sample_long=str(samples.get('long') or 'Sample long video'),
         status_help=str(data.get('status_help') or ''),
+        help_text=str(data.get('help') or ''),
+        help_hint=str(data.get('help_hint') or 'Unknown command. Try /help'),
         emoji_all=catalog,
     )
 
@@ -908,14 +916,31 @@ class Aggregator:
         text = (event.raw_text or '').strip().lower()
         if await self._command(text):
             return
+        if await self._unknown_command(event, text):
+            return
         if self.cats.params.enabled:
             self._maybe_cat(event)
         if event.chat_id == self.config.source:
             await self.on_message(event.message)
 
+    async def _unknown_command(
+        self, event: events.NewMessage.Event, text: str
+    ) -> bool:
+        """In the source chat, nudge a lone unknown /command toward /help."""
+        if event.chat_id != self.config.source:
+            return False
+        if not text.startswith('/') or ' ' in text or not text[1:].isalpha():
+            return False
+        await self.client.send_message(
+            self.config.source, self.consts.help_hint
+        )
+        return True
+
     async def _command(self, text: str) -> bool:
         """Run a matching /command, returning True if one handled the text."""
         handlers = {
+            COMMAND_HELP: self.help_report,
+            COMMAND_START: self.help_report,
             COMMAND_EMOJIS: self.show_constants,
             COMMAND_PREVIEW: self.preview_posts,
             COMMAND_STATUS: self.status_report,
@@ -1221,6 +1246,13 @@ class Aggregator:
                 no_webpage=True,
             )
         )
+
+    async def help_report(self) -> None:
+        """Send the plain-language command menu (/help and /start)."""
+        await self.client.send_message(
+            self.config.source, self.consts.help_text, link_preview=False
+        )
+        log.info('sent help menu to %s', self.config.source)
 
     async def status_report(self) -> None:
         """Post the pending/posted/cat diagnostics to the source chat."""
