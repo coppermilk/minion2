@@ -249,8 +249,9 @@ services:
       TELEGRAM_SESSION_FILE: /data/bots/aggregator/telethon
       AGGREGATOR_STATE_DIR: /data/bots/aggregator
     command: python -m minions.aggregator.main
-    stdin_open: true            # for the one-time interactive login
-    tty: true
+    # No tty/stdin here: a TTY makes Synology Container Manager's Log tab show
+    # "No logs available". The one-time login uses `docker compose run --rm
+    # aggregator`, which allocates its own TTY, so interactive login still works.
     mem_limit: 256m
 
   # donate: a SECOND Telethon USER account (a Telethon session is one account,
@@ -267,8 +268,8 @@ services:
       <<: *minion-env
       DONATE_SESSION_FILE: /data/bots/donate/telethon
     command: python -m minions.donate.main
-    stdin_open: true            # for the one-time interactive login
-    tty: true
+    # No tty/stdin here (see aggregator): a TTY blanks Synology's Log tab. The
+    # one-time login uses `docker compose run --rm donate ...`, its own TTY.
     mem_limit: 256m
 
 # Ollama's model blobs: a disposable, re-pullable CACHE. A named volume

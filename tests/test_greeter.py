@@ -143,6 +143,28 @@ def test_name_placeholder_falls_back_when_unknown(tmp_path: Path) -> None:
     assert (7, 'hi friend') in client.dms
 
 
+def test_sync_now_reports_baseline_then_greets(tmp_path: Path) -> None:
+    client = _FakeClient({1, 2})
+    g = _greeter(tmp_path, client)
+    first = asyncio.run(g.sync_now())  # baseline run
+    assert 'baseline' in first
+    assert client.dms == []
+    client.members = [1, 2, 3]  # 3 joined
+    second = asyncio.run(g.sync_now())
+    assert '1 DM' in second
+    assert (3, 'hi') in client.dms
+
+
+def test_sync_now_when_members_unreadable(tmp_path: Path) -> None:
+    class _NoAdmin(_FakeClient):
+        async def get_participants(self, _channel):
+            raise RuntimeError('ChatAdminRequiredError')
+
+    g = _greeter(tmp_path, _NoAdmin({1}))
+    summary = asyncio.run(g.sync_now())
+    assert 'cannot read members' in summary
+
+
 def test_daily_cap_stops_dms(tmp_path: Path) -> None:
     client = _FakeClient({1})
     g = _greeter(tmp_path, client, max_dm_per_day=2)
