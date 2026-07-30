@@ -293,6 +293,29 @@ def test_on_action_before_baseline_does_nothing(tmp_path: Path) -> None:
     assert client.dms == []
 
 
+def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
+    path = tmp_path / 'g.json'
+    client = _FakeClient({1, 2})
+    g = greeter.Greeter(client, _params(channel=-100), path)
+    asyncio.run(g.sync())  # baseline on channel -100
+    assert g.state.started
+    # Reopen pointing at a DIFFERENT channel: the old snapshot must be dropped
+    # (fresh baseline) so no diff-DM storm hits either channel's members.
+    g2 = greeter.Greeter(client, _params(channel=-200), path)
+    assert g2.state.started is False
+    assert g2.state.members == set()
+
+
+def test_same_channel_keeps_the_baseline(tmp_path: Path) -> None:
+    path = tmp_path / 'g.json'
+    client = _FakeClient({1, 2})
+    g = greeter.Greeter(client, _params(channel=-100), path)
+    asyncio.run(g.sync())
+    g2 = greeter.Greeter(client, _params(channel=-100), path)
+    assert g2.state.started  # same channel -> snapshot kept
+    assert g2.state.members == {1, 2}
+
+
 def test_load_greeter_params_defaults_off_with_target_channel() -> None:
     params = greeter.load_greeter_params({}, -999)
     assert params.enabled is False
