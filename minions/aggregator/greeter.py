@@ -113,6 +113,7 @@ class Greeter:
         self._last_dm = 0.0
         self._channel_at = ''  # '@username' cache for {channel}
         self._channel_url = ''  # 't.me/username' cache for {channel_url}
+        self.next_sync = 0.0  # epoch of the next scheduled poll (0 = not set)
 
     async def sync(self) -> None:
         """Poll the member list; baseline on first run, else DM the diff."""
@@ -179,6 +180,7 @@ class Greeter:
                 await self.sync()
             except Exception:
                 log.exception('greeter: sync failed')
+            self.next_sync = time.time() + self.params.poll_sec
             await asyncio.sleep(self.params.poll_sec)
 
     async def _live_dm(self, uid: int, text: str, *, add: bool) -> None:
