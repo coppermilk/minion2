@@ -172,14 +172,18 @@ _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
 
 
 _SECS_PER_MIN = 60
+_MINS_PER_HOUR = 60
 
 
 def _fmt_eta(seconds: float) -> str:
-    """A short countdown like '45s' or '8m 12s'."""
-    total = int(seconds)
+    """A short countdown like '45s', '8m 12s' or '2h 15m'."""
+    total = max(0, int(seconds))
     if total < _SECS_PER_MIN:
         return f'{total}s'
-    return f'{total // _SECS_PER_MIN}m {total % _SECS_PER_MIN}s'
+    mins = total // _SECS_PER_MIN
+    if mins < _MINS_PER_HOUR:
+        return f'{mins}m {total % _SECS_PER_MIN}s'
+    return f'{mins // _MINS_PER_HOUR}h {mins % _MINS_PER_HOUR}m'
 
 
 @dataclass(frozen=True)
@@ -1383,7 +1387,8 @@ class Aggregator:
 
     def _pending_lines(self) -> list[str]:
         """One line per pending video, and which platforms it awaits."""
-        lines = [f'Pending videos: {len(self.groups)}']
+        window = _fmt_eta(self.config.timeout)
+        lines = [f'Pending videos: {len(self.groups)} (timeout {window})']
         for group in self.groups:
             have = ', '.join(sorted(group.items)) or '-'
             missing = (
@@ -1392,10 +1397,10 @@ class Aggregator:
                 )
                 or 'complete'
             )
-            left = int(self.config.timeout - (time.time() - group.created_at))
+            left = self.config.timeout - (time.time() - group.created_at)
             lines.append(
                 f'  - "{_trim(group.title)}" have [{have}]'
-                f' wait [{missing}] ~{left}s'
+                f' wait [{missing}] posts in ~{_fmt_eta(left)}'
             )
         return lines
 
