@@ -166,6 +166,8 @@ CAT_REPLY_SCAN = 200
 # How many existing comments per watched thread to consider at startup, so
 # comments made before the bot started can still get a (delayed) cat.
 COMMENT_SCAN = 50
+# How many pending cats to list individually in /status (the rest are summed).
+STATUS_PENDING_CATS = 12
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -235,11 +237,12 @@ class Posted:
 
 @dataclass(frozen=True)
 class _Comment:
-    """A comment to maybe cat: its chat, thread root (post) and message id."""
+    """A comment to maybe cat: chat, thread root, message id and text."""
 
     chat: int
     root: int
     msg_id: int
+    text: str = ''  # a snippet of what the commenter wrote (for /status)
 
 
 def _iso(ts: float) -> str:
@@ -1030,7 +1033,10 @@ class Aggregator:
         # Feedback (principle 8): a reply to our freshest post reads as active
         # engagement, so the reaction comes faster.
         engaged = bool(self.cats.posts) and self.cats.posts[-1] == (chat, top)
-        ref = _Comment(chat=chat, root=top, msg_id=int(event.message.id))
+        text = _trim(str(getattr(event.message, 'message', '') or ''))
+        ref = _Comment(
+            chat=chat, root=top, msg_id=int(event.message.id), text=text
+        )
         self._schedule_comment(ref, person, engaged=engaged)
 
     def _schedule_comment(
@@ -1052,6 +1058,7 @@ class Aggregator:
             reply_to=comment.msg_id,
             root=comment.root,
             when=when,
+            text=comment.text,
         )
         self.cats.add_pending(cat)
         self._arm_cat(cat)
@@ -1143,7 +1150,8 @@ class Aggregator:
         person = str(getattr(message, 'sender_id', None) or '')
         comment_id = int(getattr(message, 'id', 0) or 0)
         if person and comment_id:
-            ref = _Comment(chat=chat, root=root, msg_id=comment_id)
+            text = _trim(str(getattr(message, 'message', '') or ''))
+            ref = _Comment(chat=chat, root=root, msg_id=comment_id, text=text)
             self._schedule_comment(ref, person, engaged=False)
 
     async def requeue_cats(self) -> None:
@@ -1437,8 +1445,31 @@ class Aggregator:
             f'  learned on-hours=[{learned}]',
             *self._last_posts_lines(labels),
             counters,
+            *self._pending_cat_lines(labels),
             '  (/catnow = answer all now | /requeue = recompute)',
         ]
+
+    def _pending_cat_lines(self, labels: dict[int, str]) -> list[str]:
+        """Each pending cat: the comment, its chat, and when it fires."""
+        pending = self.cats.state.pending
+        if not pending:
+            return []
+        now = time.time()
+        lines = ['  pending cats:']
+        for entry in pending[:STATUS_PENDING_CATS]:
+            chat = int(entry.get('chat', 0))
+            msg = int(entry.get('reply_to', 0))
+            root = int(entry.get('root', msg))
+            body = str(entry.get('text', ''))
+            what = f'"{body}"' if body else f'comment {msg}'
+            eta = float(entry.get('when', now)) - now
+            when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
+            name = labels.get(chat, chat)
+            lines.append(f'    - {name} post {root}: {what} {when}')
+        extra = len(pending) - STATUS_PENDING_CATS
+        if extra > 0:
+            lines.append(f'    ... (+{extra} more)')
+        return lines
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
         """The watched comment chats + post ids, one per line, by name."""

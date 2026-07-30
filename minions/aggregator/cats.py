@@ -85,9 +85,10 @@ class Cat:
     reply_to: int  # the commenter's message id
     root: int  # the thread root (post) for discussion threading
     when: float
+    text: str = ''  # a snippet of the comment being answered (for status)
 
 
-def _cat_from_entry(entry: dict[str, float], when: float) -> Cat:
+def _cat_from_entry(entry: dict[str, object], when: float) -> Cat:
     """Rebuild a Cat from a persisted dict (root defaults to reply_to)."""
     reply_to = int(entry['reply_to'])
     return Cat(
@@ -95,6 +96,7 @@ def _cat_from_entry(entry: dict[str, float], when: float) -> Cat:
         reply_to=reply_to,
         root=int(entry.get('root', reply_to)),
         when=when,
+        text=str(entry.get('text', '')),
     )
 
 
@@ -172,7 +174,7 @@ class CatState:
     cat_last: dict[str, float] = field(default_factory=dict)  # id -> last ts
     catted: set[str] = field(default_factory=set)  # (post, person) keys done
     posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
-    pending: list[dict[str, float]] = field(default_factory=list)  # due cats
+    pending: list[dict[str, object]] = field(default_factory=list)  # due cats
     alive: dict[str, float] = field(
         default_factory=dict
     )  # hour -> decayed obs
@@ -361,6 +363,7 @@ class CatBrain:
                 'reply_to': cat.reply_to,
                 'root': cat.root,
                 'when': cat.when,
+                'text': cat.text,
             }
         )
         self._save()
