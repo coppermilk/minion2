@@ -132,8 +132,6 @@ class Greeter:
             )
             return
         joined, left = diff_members(self.state.members, current)
-        self.state.members = current
-        self._save()
         if joined or left:
             log.info('greeter: +%d joined, -%d left', len(joined), len(left))
             await self._process(joined, left)
@@ -184,13 +182,17 @@ class Greeter:
             await asyncio.sleep(self.params.poll_sec)
 
     async def _live_dm(self, uid: int, text: str, *, add: bool) -> None:
-        """Update the member set for a live event, then DM (skip if empty)."""
-        if add:
-            self.state.members.add(uid)
-            self.state.left.discard(uid)  # they came back
-        else:
-            self.state.members.discard(uid)
-            self.state.left.add(uid)  # remember for a welcome_back later
+        """DM a live join/leave, then commit membership (defer on the cap).
+
+        If today's cap is already spent we do NOT touch membership, so the
+        person stays a diff and the poll greets them on a later cycle (tomorrow
+        once the counter resets) -- nobody is dropped just because a burst of
+        joins hit the ceiling.
+        """
+        if text and not self._daily_budget_left():
+            log.info('greeter: cap reached, live event deferred to a poll')
+            return
+        self._commit_member(uid, add=add)
         self._save()
         if text:
             try:
@@ -198,19 +200,32 @@ class Greeter:
             except _FloodStop:
                 log.warning('greeter: flood on live DM, backing off')
 
+    def _commit_member(self, uid: int, *, add: bool) -> None:
+        """Mark a joiner/leaver as handled: move it in members and left."""
+        if add:
+            self.state.members.add(uid)
+            self.state.left.discard(uid)  # they came back
+        else:
+            self.state.members.discard(uid)
+            self.state.left.add(uid)  # remember for a welcome_back later
+
     async def _process(self, joined: set[int], left: set[int]) -> None:
-        """DM the joiners (welcome / welcome_back) then the leavers, capped."""
+        """Greet joiners then leavers; commit only who we actually reach.
+
+        A person is moved into the member snapshot (via _commit_member) only
+        after we DM or intentionally skip them. When the daily cap raises
+        _FloodStop mid-way, the rest are left uncommitted -- so the next poll
+        (tomorrow, after the counter resets) still sees them as a diff and
+        greets them. No pending queue: the members/left snapshot IS the queue.
+        """
         returning = joined & self.state.left
         try:
             budget = await self._greet_joiners(
                 joined, returning, self.params.max_dm_per_run
             )
-            if self.params.farewell:
-                await self._greet(left, self.params.farewell, budget)
+            await self._greet_leavers(left, budget)
         except _FloodStop:
-            log.warning('greeter: flood limit hit, backing off this cycle')
-        # Remember who left (welcome_back later) and forget who came back.
-        self.state.left = (self.state.left - joined) | left
+            log.warning('greeter: cap hit; the rest wait for a later poll')
         self._save()
 
     def _join_text(self, uid: int, returning: set[int]) -> str:
@@ -226,16 +241,28 @@ class Greeter:
         for uid in list(ids):
             if budget <= 0:
                 break
-            if await self._dm(uid, self._join_text(uid, returning)):
+            sent = await self._dm(uid, self._join_text(uid, returning))
+            self._commit_member(uid, add=True)  # reached -> stop re-diffing it
+            if sent:
                 budget -= 1
         return budget
+
+    async def _greet_leavers(self, left: set[int], budget: int) -> None:
+        """Farewell the leavers; an empty farewell just commits them."""
+        if not self.params.farewell:
+            for uid in list(left):
+                self._commit_member(uid, add=False)
+            return
+        await self._greet(left, self.params.farewell, budget)
 
     async def _greet(self, ids: set[int], text: str, budget: int) -> int:
         """DM up to ``budget`` of ``ids``; return the remaining budget."""
         for uid in list(ids):
             if budget <= 0:
                 break
-            if await self._dm(uid, text):
+            sent = await self._dm(uid, text)
+            self._commit_member(uid, add=False)  # reached -> stop re-diffing
+            if sent:
                 budget -= 1
         return budget
 

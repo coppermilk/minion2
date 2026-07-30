@@ -219,6 +219,22 @@ def test_daily_cap_stops_dms(tmp_path: Path) -> None:
     assert len(client.dms) == 2  # hard daily ceiling
 
 
+def test_over_cap_joiners_wait_for_the_next_day(tmp_path: Path) -> None:
+    client = _FakeClient({1})
+    g = _greeter(tmp_path, client, max_dm_per_day=1, max_dm_per_run=10)
+    asyncio.run(g.sync())  # baseline {1}
+    client.members = [1, 10, 11]  # 2 joined, cap is 1
+    asyncio.run(g.sync())
+    assert len(client.dms) == 1  # only one greeted today
+    # the un-greeted joiner is NOT absorbed -> exactly one of them is committed
+    assert (10 in g.state.members) != (11 in g.state.members)
+    # a new day resets the counter; the deferred joiner is greeted now
+    g.state.dm_today = 0
+    asyncio.run(g.sync())
+    assert len(client.dms) == 2
+    assert g.state.members == {1, 10, 11}  # both eventually greeted
+
+
 def test_privacy_failure_is_skipped_others_continue(tmp_path: Path) -> None:
     client = _FakeClient({1})
     g = _greeter(tmp_path, client)
