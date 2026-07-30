@@ -1364,11 +1364,11 @@ class Aggregator:
         return '\n'.join(parts)
 
     def _greeter_line(self) -> str:
-        """Greeter summary: on/off, members, DMs today, poll schedule."""
+        """Greeter summary: on/off, admin-log cursor, DMs today, schedule."""
         gp = self.greeter.params
         gs = self.greeter.state
         head = (
-            f'Greeter: enabled={gp.enabled} members={len(gs.members)}'
+            f'Greeter: enabled={gp.enabled} last_event={gs.last_event_id}'
             f' dm_today={gs.dm_today}/{gp.max_dm_per_day}'
         )
         if not gp.enabled:
@@ -1676,17 +1676,6 @@ def _targets() -> tuple[int, ...]:
     return tuple(int(p.strip()) for p in raw.split(',') if p.strip())
 
 
-def _wire_greeter(
-    client: TelegramClient, greeter_obj: greeter.Greeter
-) -> None:
-    """Register the live subscribe/leave handler when the greeter is on."""
-    if greeter_obj.params.enabled and greeter_obj.params.channel:
-        client.add_event_handler(
-            greeter_obj.on_action,
-            events.ChatAction(chats=greeter_obj.params.channel),
-        )
-
-
 def _load_config() -> Config:
     """Chats come from the env; all behaviour from the constants JSON."""
     data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
@@ -1726,7 +1715,6 @@ async def main() -> None:
     # from ANY chat and for ANYONE (it renders back into the source chat);
     # aggregation itself stays scoped to the source chat inside agg.handle.
     client.add_event_handler(agg.handle, events.NewMessage())
-    _wire_greeter(client, agg.greeter)
 
     # TELEGRAM_PASSWORD supplies the 2FA/cloud password non-interactively;
     # unset, Telethon prompts for it (getpass) only if the account has 2FA.
