@@ -6,17 +6,25 @@ and limits the account. Many DMs also simply fail (the person closed their DMs
 or is not a contact -> UserPrivacyRestricted). DMing someone who UNSUBSCRIBED
 is worse on both counts. Treat this as best-effort and low-volume.
 
-Safety built in here:
-    * The FIRST run is a silent baseline -- the existing member list is stored,
-      nobody is greeted. Only people who join AFTER that are greeted, so
-      enabling it never mass-DMs your whole channel.
-    * Every DM is rate-limited (a human-like gap + jitter) and each cycle is
-      capped (max_dm_per_run).
-    * Privacy failures are skipped; a flood error aborts the cycle (back off).
-    * Disabled by default; the account must be an ADMIN of the channel to read
-      its members.
+Detection uses the channel's ADMIN LOG (Recent Actions), not the member list:
+``iter_admin_log`` streams join/leave events with a monotonic id, so it is not
+capped at ~200 like the member list of a broadcast channel, and it catches
+subscribe/unsubscribe reliably where a user account never sees a live event.
+We track the id of the last handled event (a high-water mark) and only act on
+newer ones. The account must be an ADMIN (to read the log); the log retains
+events for a limited window (a few days), so a very long outage may miss some.
 
-Telethon-free (the client is passed in and duck-typed), so the diff/baseline
+Safety built in here:
+    * The FIRST run is a silent baseline -- it records the newest event id and
+      greets nobody, so enabling it never mass-DMs the backlog.
+    * Every DM is rate-limited (a human-like gap + jitter); each cycle is
+      capped (max_dm_per_run) and each day is capped (max_dm_per_day).
+    * Over-cap events are NOT marked handled, so they are retried on a later
+      poll (tomorrow, once the daily counter resets) -- nobody is dropped.
+    * Privacy failures are skipped; a flood error backs off the cycle.
+    * Disabled by default.
+
+Telethon-free (the client is passed in and duck-typed), so the event-handling
 logic is unit-testable. All texts live in the constants JSON, keeping this
 source ASCII.
 """
@@ -58,11 +66,11 @@ class GreeterParams:
 
 @dataclass
 class GreeterState:
-    """Persisted: member set, baseline flag, and the daily DM counter."""
+    """Persisted: welcome-back memory, baseline flag, cursor, DM counter."""
 
-    members: set[int] = field(default_factory=set)
     left: set[int] = field(default_factory=set)  # unsubscribed -> welcome_back
     started: bool = False  # the silent baseline has been established
+    last_event_id: int = 0  # highest admin-log event id already handled
     dm_day: str = ''  # UTC date of dm_today
     dm_today: int = 0  # DMs already sent today (against max_dm_per_day)
 
@@ -71,9 +79,18 @@ class _FloodStop(Exception):
     """Raised to abort a DM cycle when Telegram flags us for flooding."""
 
 
-def diff_members(old: set[int], new: set[int]) -> tuple[set[int], set[int]]:
-    """(joined, left) between two member snapshots."""
-    return new - old, old - new
+def _norm_event(event: object) -> tuple[int, int, bool, bool]:
+    """(event_id, user_id, joined, left) from a Telethon AdminLogEvent."""
+    joined = bool(
+        getattr(event, 'joined', False)
+        or getattr(event, 'joined_invite', False)
+    )
+    return (
+        int(getattr(event, 'id', 0) or 0),
+        int(getattr(event, 'user_id', 0) or 0),
+        joined,
+        bool(getattr(event, 'left', False)),
+    )
 
 
 def load_greeter_params(
@@ -116,45 +133,23 @@ class Greeter:
         self.next_sync = 0.0  # epoch of the next scheduled poll (0 = not set)
 
     async def sync(self) -> None:
-        """Poll the member list; baseline on first run, else DM the diff."""
+        """Poll the admin log; baseline on first run, else greet new events."""
         if not self.params.enabled or not self.params.channel:
             return
-        current = await self._fetch_members()
-        if current is None:
+        events = await self._fetch_events()
+        if events is None:
             return
         if not self.state.started:
-            self.state.members = current
+            newest = max(
+                (eid for eid, *_ in events), default=self.state.last_event_id
+            )
+            self.state.last_event_id = newest
             self.state.started = True
             self._save()
-            log.info(
-                'greeter: baseline %d members (no greetings sent)',
-                len(current),
-            )
+            log.info('greeter: baseline at event %d (no greetings)', newest)
             return
-        joined, left = diff_members(self.state.members, current)
-        if joined or left:
-            log.info('greeter: +%d joined, -%d left', len(joined), len(left))
-            await self._process(joined, left)
-
-    async def on_action(self, event: object) -> None:
-        """A live join/leave (Telethon ChatAction) -- DM once, idempotently."""
-        if not self.params.enabled or not self.state.started:
-            return  # never act before the baseline exists
-        uid = getattr(event, 'user_id', None)
-        if uid is None:
-            return
-        uid = int(uid)
-        joined = getattr(event, 'user_joined', False) or getattr(
-            event, 'user_added', False
-        )
-        left = getattr(event, 'user_left', False) or getattr(
-            event, 'user_kicked', False
-        )
-        if joined and uid not in self.state.members:
-            text = self._join_text(uid, self.state.left)
-            await self._live_dm(uid, text, add=True)
-        elif left and uid in self.state.members:
-            await self._live_dm(uid, self.params.farewell, add=False)
+        if events:
+            await self._process_events(events)
 
     async def sync_now(self) -> str:
         """Force a poll right now; return a one-line summary for /greetnow."""
@@ -164,15 +159,15 @@ class Greeter:
         started_before = self.state.started
         await self.sync()
         if not self.state.started:
-            return 'greeter: cannot read members (admin?)'
+            return 'greeter: cannot read admin log (admin?)'
+        cursor = self.state.last_event_id
         if not started_before:
-            n = len(self.state.members)
-            return f'greeter: baseline {n} members (no DMs sent)'
+            return f'greeter: baseline at event {cursor} (no DMs sent)'
         sent = self.state.dm_today - before
-        return f'greeter: {len(self.state.members)} members, {sent} DM(s) sent'
+        return f'greeter: {sent} DM(s) sent (up to event {cursor})'
 
     async def loop(self) -> None:
-        """Poll forever at ``poll_sec`` (a safety net for missed events)."""
+        """Poll the admin log forever at ``poll_sec``."""
         while True:
             try:
                 await self.sync()
@@ -181,90 +176,65 @@ class Greeter:
             self.next_sync = time.time() + self.params.poll_sec
             await asyncio.sleep(self.params.poll_sec)
 
-    async def _live_dm(self, uid: int, text: str, *, add: bool) -> None:
-        """DM a live join/leave, then commit membership (defer on the cap).
-
-        If today's cap is already spent we do NOT touch membership, so the
-        person stays a diff and the poll greets them on a later cycle (tomorrow
-        once the counter resets) -- nobody is dropped just because a burst of
-        joins hit the ceiling.
-        """
-        if text and not self._daily_budget_left():
-            log.info('greeter: cap reached, live event deferred to a poll')
-            return
-        self._commit_member(uid, add=add)
-        self._save()
-        if text:
-            try:
-                await self._dm(uid, text)
-            except _FloodStop:
-                log.warning('greeter: flood on live DM, backing off')
-
-    def _commit_member(self, uid: int, *, add: bool) -> None:
-        """Mark a joiner/leaver as handled: move it in members and left."""
-        if add:
-            self.state.members.add(uid)
-            self.state.left.discard(uid)  # they came back
-        else:
-            self.state.members.discard(uid)
-            self.state.left.add(uid)  # remember for a welcome_back later
-
-    async def _process(self, joined: set[int], left: set[int]) -> None:
-        """Greet joiners then leavers; commit only who we actually reach.
-
-        A person is moved into the member snapshot (via _commit_member) only
-        after we DM or intentionally skip them. When the daily cap raises
-        _FloodStop mid-way, the rest are left uncommitted -- so the next poll
-        (tomorrow, after the counter resets) still sees them as a diff and
-        greets them. No pending queue: the members/left snapshot IS the queue.
-        """
-        returning = joined & self.state.left
+    async def _fetch_events(self) -> list[tuple[int, int, bool, bool]] | None:
+        """New join/leave events (id > cursor) from the admin log, or None."""
         try:
-            budget = await self._greet_joiners(
-                joined, returning, self.params.max_dm_per_run
+            return [
+                _norm_event(event)
+                async for event in self.client.iter_admin_log(
+                    self.params.channel,
+                    min_id=self.state.last_event_id,
+                    join=True,
+                    leave=True,
+                )
+            ]
+        except Exception:  # noqa: BLE001 -- not admin / unreachable: skip cycle
+            log.warning(
+                'greeter: cannot read admin log of %s (admin?)',
+                self.params.channel,
             )
-            await self._greet_leavers(left, budget)
-        except _FloodStop:
-            log.warning('greeter: cap hit; the rest wait for a later poll')
+            return None
+
+    async def _process_events(
+        self, events: list[tuple[int, int, bool, bool]]
+    ) -> None:
+        """Greet each new event oldest-first; defer the rest when the cap hits.
+
+        ``last_event_id`` advances only past events we actually handle, so a
+        cap or flood leaves the rest to be re-read on a later poll (tomorrow,
+        once the daily counter resets) -- the cursor IS the queue.
+        """
+        sent = 0
+        for eid, uid, joined, left in sorted(events):
+            try:
+                did = await self._handle(uid, joined=joined, left=left)
+            except _FloodStop:
+                log.warning('greeter: cap hit; the rest wait for a later poll')
+                break
+            self.state.last_event_id = max(self.state.last_event_id, eid)
+            sent += int(did)
+            if sent >= self.params.max_dm_per_run:
+                break
         self._save()
 
-    def _join_text(self, uid: int, returning: set[int]) -> str:
+    async def _handle(self, uid: int, *, joined: bool, left: bool) -> bool:
+        """DM a joiner/leaver; return whether a DM went out (updates left)."""
+        if uid <= 0 or not (joined or left):
+            return False
+        if joined:
+            sent = await self._dm(uid, self._welcome_text(uid))
+            self.state.left.discard(uid)  # they came back
+            return sent
+        self.state.left.add(uid)  # remember for a welcome_back later
+        if not self.params.farewell:
+            return False
+        return await self._dm(uid, self.params.farewell)
+
+    def _welcome_text(self, uid: int) -> str:
         """A returning subscriber gets welcome_back (falls back to welcome)."""
-        if uid in returning:
+        if uid in self.state.left:
             return self.params.welcome_back or self.params.welcome
         return self.params.welcome
-
-    async def _greet_joiners(
-        self, ids: set[int], returning: set[int], budget: int
-    ) -> int:
-        """DM up to ``budget`` joiners, welcome_back for returning ones."""
-        for uid in list(ids):
-            if budget <= 0:
-                break
-            sent = await self._dm(uid, self._join_text(uid, returning))
-            self._commit_member(uid, add=True)  # reached -> stop re-diffing it
-            if sent:
-                budget -= 1
-        return budget
-
-    async def _greet_leavers(self, left: set[int], budget: int) -> None:
-        """Farewell the leavers; an empty farewell just commits them."""
-        if not self.params.farewell:
-            for uid in list(left):
-                self._commit_member(uid, add=False)
-            return
-        await self._greet(left, self.params.farewell, budget)
-
-    async def _greet(self, ids: set[int], text: str, budget: int) -> int:
-        """DM up to ``budget`` of ``ids``; return the remaining budget."""
-        for uid in list(ids):
-            if budget <= 0:
-                break
-            sent = await self._dm(uid, text)
-            self._commit_member(uid, add=False)  # reached -> stop re-diffing
-            if sent:
-                budget -= 1
-        return budget
 
     async def _dm(self, uid: int, text: str) -> bool:
         """One rate-limited DM; False on a skip, raise _FloodStop to stop.
@@ -351,25 +321,15 @@ class Greeter:
             await asyncio.sleep(wait)
         self._last_dm = time.time()
 
-    async def _fetch_members(self) -> set[int] | None:
-        """The channel's current member ids, or None if unreadable."""
-        try:
-            users = await self.client.get_participants(self.params.channel)
-        except Exception:  # noqa: BLE001 -- not admin / unreachable: skip cycle
-            log.warning(
-                'greeter: cannot read members of %s (admin?)',
-                self.params.channel,
-            )
-            return None
-        return {int(getattr(u, 'id', 0) or 0) for u in users} - {0}
-
     def _load(self) -> GreeterState:
-        """Reload state, or start fresh -- including on a channel switch.
+        """Reload state, or start fresh on a channel switch / an old file.
 
-        The state file records the channel it belongs to. If that no longer
-        matches the configured channel, the member snapshot is for a DIFFERENT
-        channel, so we drop it and re-baseline (started=False) -- otherwise the
-        first sync would diff two unrelated member lists and mass-DM everyone.
+        The file records the channel it belongs to; a mismatch means the
+        cursor is for a DIFFERENT channel, so we drop it and re-baseline.
+        A pre-admin-log file (member-diff format: has 'members', no
+        'last_event_id') is also re-baselined -- keeping its cursor at 0 would
+        re-read the whole admin log and mass-DM. The welcome_back memory
+        (``left``) is carried over in that migration.
         """
         if not self.path.exists():
             return GreeterState()
@@ -380,27 +340,30 @@ class Greeter:
         stored = int(raw.get('channel', 0) or 0)
         if stored and stored != self.params.channel:
             log.warning(
-                'greeter: state was for channel %s, now %s -- '
-                're-baselining (no mass DM)',
+                'greeter: state was for channel %s, now %s -- re-baselining',
                 stored,
                 self.params.channel,
             )
             return GreeterState()
+        carried = {int(m) for m in (raw.get('left') or [])}
+        if 'last_event_id' not in raw:
+            log.info('greeter: migrating to admin-log, re-baselining')
+            return GreeterState(left=carried)
         return GreeterState(
-            members={int(m) for m in (raw.get('members') or [])},
-            left={int(m) for m in (raw.get('left') or [])},
+            left=carried,
             started=bool(raw.get('started', False)),
+            last_event_id=int(raw.get('last_event_id', 0) or 0),
             dm_day=str(raw.get('dm_day', '')),
             dm_today=int(raw.get('dm_today', 0)),
         )
 
     def _save(self) -> None:
-        """Persist the member set atomically as readable JSON."""
+        """Persist the state atomically as readable JSON."""
         data = {
             'channel': self.params.channel,  # which channel this state is for
-            'members': sorted(self.state.members),
             'left': sorted(self.state.left),
             'started': self.state.started,
+            'last_event_id': self.state.last_event_id,
             'dm_day': self.state.dm_day,
             'dm_today': self.state.dm_today,
         }

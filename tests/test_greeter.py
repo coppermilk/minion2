@@ -1,12 +1,14 @@
 """The subscriber greeter (minions/aggregator/greeter.py).
 
 Telethon-free: the client is duck-typed, so a fake async client drives the
-welcome/farewell logic, the silent baseline, and the anti-flood caps.
+admin-log detection, the silent baseline, the welcome/farewell logic and the
+anti-flood caps.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import types
 from typing import TYPE_CHECKING
 
@@ -34,16 +36,38 @@ def _params(**over):
     return greeter.GreeterParams(**base)
 
 
+def _join(eid, uid):
+    return types.SimpleNamespace(
+        id=eid, user_id=uid, joined=True, joined_invite=False, left=False
+    )
+
+
+def _leave(eid, uid):
+    return types.SimpleNamespace(
+        id=eid, user_id=uid, joined=False, joined_invite=False, left=True
+    )
+
+
+class _PeerFlood(Exception):
+    """Its type name contains 'Flood', which greeter._dm treats as a flood."""
+
+
+async def _aiter(items):
+    for item in items:
+        yield item
+
+
 class _FakeClient:
-    def __init__(self, members):
-        self.members = list(members)
+    def __init__(self, log=()):
+        self.log = list(log)  # admin-log events (SimpleNamespace)
         self.dms = []
         self.fail = {}
         self.names = {}
         self.usernames = {}
 
-    async def get_participants(self, _channel):
-        return [types.SimpleNamespace(id=i) for i in self.members]
+    def iter_admin_log(self, _channel, *, min_id=0, join=False, leave=False):
+        events = [e for e in self.log if e.id > min_id]
+        return _aiter(events)
 
     async def get_entity(self, uid):
         return types.SimpleNamespace(
@@ -62,274 +86,193 @@ def _greeter(tmp_path, client, **over):
     return greeter.Greeter(client, _params(**over), tmp_path / 'g.json')
 
 
-def test_diff_members() -> None:
-    joined, left = greeter.diff_members({1, 2, 3}, {2, 3, 4})
-    assert joined == {4}
-    assert left == {1}
-
-
 def test_first_run_is_a_silent_baseline(tmp_path: Path) -> None:
-    client = _FakeClient({1, 2, 3})
+    client = _FakeClient([_join(1, 100), _join(2, 101)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())
-    assert client.dms == []  # the existing members are NEVER greeted
-    assert g.state.members == {1, 2, 3}
+    assert client.dms == []  # the backlog is NEVER greeted
     assert g.state.started
+    assert g.state.last_event_id == 2  # cursor at the newest event
 
 
 def test_join_gets_welcome_and_leave_gets_farewell(tmp_path: Path) -> None:
-    client = _FakeClient({1, 2})
+    client = _FakeClient([_join(1, 100)])
     g = _greeter(tmp_path, client)
-    asyncio.run(g.sync())  # baseline {1, 2}
-    client.members = [2, 3]  # 3 joined, 1 left
+    asyncio.run(g.sync())  # baseline at event 1
+    client.log += [_join(2, 3), _leave(3, 100)]
     asyncio.run(g.sync())
     assert (3, 'hi') in client.dms
-    assert (1, 'bye') in client.dms
-    assert g.state.members == {2, 3}
+    assert (100, 'bye') in client.dms
+    assert g.state.last_event_id == 3
 
 
 def test_returning_subscriber_gets_welcome_back(tmp_path: Path) -> None:
-    client = _FakeClient({1, 2})
+    client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client)
-    asyncio.run(g.sync())  # baseline {1, 2}
-    client.members = [1]  # 2 left -> remembered
+    asyncio.run(g.sync())  # baseline
+    client.log += [_leave(2, 5)]
     asyncio.run(g.sync())
-    assert (2, 'bye') in client.dms
-    assert 2 in g.state.left
-    client.members = [1, 2]  # 2 came back
+    assert (5, 'bye') in client.dms
+    assert 5 in g.state.left
+    client.log += [_join(3, 5)]  # 5 comes back
     asyncio.run(g.sync())
-    assert (2, 'whale') in client.dms  # welcome_back, not the plain welcome
-    assert (2, 'hi') not in client.dms
-    assert 2 not in g.state.left
-
-
-def test_returning_via_live_action_gets_welcome_back(tmp_path: Path) -> None:
-    client = _FakeClient({1, 2})
-    g = _greeter(tmp_path, client)
-    asyncio.run(g.sync())  # baseline -> started
-    leave = types.SimpleNamespace(
-        user_id=2,
-        user_joined=False,
-        user_added=False,
-        user_left=True,
-        user_kicked=False,
-    )
-    asyncio.run(g.on_action(leave))
-    assert (2, 'bye') in client.dms
-    rejoin = types.SimpleNamespace(
-        user_id=2,
-        user_joined=True,
-        user_added=False,
-        user_left=False,
-        user_kicked=False,
-    )
-    asyncio.run(g.on_action(rejoin))
-    assert (2, 'whale') in client.dms
-    assert 2 not in g.state.left
+    assert (5, 'whale') in client.dms  # welcome_back, not the plain welcome
+    assert (5, 'hi') not in client.dms
+    assert 5 not in g.state.left
 
 
 def test_name_placeholder_is_filled(tmp_path: Path) -> None:
-    client = _FakeClient({1})
+    client = _FakeClient([_join(1, 1)])
     client.names = {7: 'Alice'}
     g = _greeter(tmp_path, client, welcome='hi {name}')
-    asyncio.run(g.sync())  # baseline {1}
-    client.members = [1, 7]  # 7 joined
+    asyncio.run(g.sync())  # baseline
+    client.log += [_join(2, 7)]
     asyncio.run(g.sync())
     assert (7, 'hi Alice') in client.dms
 
 
 def test_name_placeholder_falls_back_when_unknown(tmp_path: Path) -> None:
-    client = _FakeClient({1})  # no name registered for 7
+    client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client, welcome='hi {name}')
     asyncio.run(g.sync())
-    client.members = [1, 7]
+    client.log += [_join(2, 7)]  # no name registered for 7
     asyncio.run(g.sync())
     assert (7, 'hi friend') in client.dms
 
 
-def test_sync_now_reports_baseline_then_greets(tmp_path: Path) -> None:
-    client = _FakeClient({1, 2})
-    g = _greeter(tmp_path, client)
-    first = asyncio.run(g.sync_now())  # baseline run
-    assert 'baseline' in first
-    assert client.dms == []
-    client.members = [1, 2, 3]  # 3 joined
-    second = asyncio.run(g.sync_now())
-    assert '1 DM' in second
-    assert (3, 'hi') in client.dms
-
-
-def test_sync_now_when_members_unreadable(tmp_path: Path) -> None:
-    class _NoAdmin(_FakeClient):
-        async def get_participants(self, _channel):
-            raise RuntimeError('ChatAdminRequiredError')
-
-    g = _greeter(tmp_path, _NoAdmin({1}))
-    summary = asyncio.run(g.sync_now())
-    assert 'cannot read members' in summary
-
-
 def test_channel_placeholders_are_filled(tmp_path: Path) -> None:
-    client = _FakeClient({1})
+    client = _FakeClient([_join(1, 1)])
     client.usernames = {-100: 'mychan'}  # channel id from _params
     g = _greeter(tmp_path, client, welcome='join {channel} at {channel_url}')
-    asyncio.run(g.sync())  # baseline {1}
-    client.members = [1, 5]  # 5 joined
+    asyncio.run(g.sync())
+    client.log += [_join(2, 5)]
     asyncio.run(g.sync())
     assert (5, 'join @mychan at https://t.me/mychan') in client.dms
 
 
-def test_no_message_when_membership_unchanged(tmp_path: Path) -> None:
-    client = _FakeClient({1})
-    g = _greeter(tmp_path, client)
-    asyncio.run(g.sync())  # baseline {1}
-    client.members = [1, 9]  # 9 joins
-    asyncio.run(g.sync())
-    assert client.dms == [(9, 'hi')]  # one welcome
-    asyncio.run(g.sync())  # nothing changed -> must NOT re-message
-    asyncio.run(g.sync())
-    assert client.dms == [(9, 'hi')]  # still exactly one
-
-
-def test_each_action_sends_one_and_repeats_on_new_action(
-    tmp_path: Path,
-) -> None:
-    client = _FakeClient({1, 2})
-    g = _greeter(tmp_path, client)
-    asyncio.run(g.sync())  # baseline {1, 2}
-    client.members = [1]  # 2 leaves
-    asyncio.run(g.sync())
-    asyncio.run(g.sync())  # idle -> no extra message
-    client.members = [1, 2]  # 2 rejoins
-    asyncio.run(g.sync())
-    asyncio.run(g.sync())  # idle -> no extra message
-    client.members = [1]  # 2 leaves again
-    asyncio.run(g.sync())
-    to_2 = [text for uid, text in client.dms if uid == 2]
-    # exactly one message per action; the repeat action is messaged again
-    assert to_2 == ['bye', 'whale', 'bye']
-
-
-def test_daily_cap_stops_dms(tmp_path: Path) -> None:
-    client = _FakeClient({1})
-    g = _greeter(tmp_path, client, max_dm_per_day=2)
-    asyncio.run(g.sync())  # baseline
-    client.members = [1, 10, 11, 12, 13]  # 4 joined
-    asyncio.run(g.sync())
-    assert len(client.dms) == 2  # hard daily ceiling
-
-
-def test_over_cap_joiners_wait_for_the_next_day(tmp_path: Path) -> None:
-    client = _FakeClient({1})
+def test_over_cap_events_wait_for_the_next_day(tmp_path: Path) -> None:
+    client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client, max_dm_per_day=1, max_dm_per_run=10)
-    asyncio.run(g.sync())  # baseline {1}
-    client.members = [1, 10, 11]  # 2 joined, cap is 1
+    asyncio.run(g.sync())  # baseline at event 1
+    client.log += [_join(2, 10), _join(3, 11)]  # 2 joins, cap is 1
     asyncio.run(g.sync())
-    assert len(client.dms) == 1  # only one greeted today
-    # the un-greeted joiner is NOT absorbed -> exactly one of them is committed
-    assert (10 in g.state.members) != (11 in g.state.members)
-    # a new day resets the counter; the deferred joiner is greeted now
-    g.state.dm_today = 0
+    assert len(client.dms) == 1  # one greeted today
+    assert g.state.last_event_id == 2  # cursor advanced only past the greeted
+    g.state.dm_today = 0  # a new day resets the counter
     asyncio.run(g.sync())
-    assert len(client.dms) == 2
-    assert g.state.members == {1, 10, 11}  # both eventually greeted
+    assert len(client.dms) == 2  # the deferred event is greeted now
+    assert g.state.last_event_id == 3
 
 
-def test_privacy_failure_is_skipped_others_continue(tmp_path: Path) -> None:
-    client = _FakeClient({1})
+def test_per_run_cap_limits_one_cycle(tmp_path: Path) -> None:
+    client = _FakeClient([_join(1, 1)])
+    g = _greeter(tmp_path, client, max_dm_per_run=2, max_dm_per_day=100)
+    asyncio.run(g.sync())  # baseline
+    client.log += [_join(2, 10), _join(3, 11), _join(4, 12)]
+    asyncio.run(g.sync())
+    assert len(client.dms) == 2  # capped per cycle
+    asyncio.run(g.sync())  # the rest on the next poll
+    assert len(client.dms) == 3
+
+
+def test_privacy_failure_is_skipped_but_committed(tmp_path: Path) -> None:
+    client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())
-    client.members = [1, 10, 11]
-    client.fail[10] = RuntimeError('UserPrivacyRestrictedError')  # not flood
+    client.fail[10] = RuntimeError('UserPrivacyRestrictedError')
+    client.log += [_join(2, 10), _join(3, 11)]
     asyncio.run(g.sync())
     assert (10, 'hi') not in client.dms
     assert (11, 'hi') in client.dms
+    assert g.state.last_event_id == 3  # privacy is committed, not retried
 
 
-def test_flood_aborts_the_whole_cycle(tmp_path: Path) -> None:
-    client = _FakeClient({1})
+def test_flood_defers_the_rest(tmp_path: Path) -> None:
+    client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())
-    client.members = [1, 10, 11, 12]
-    for uid in (10, 11, 12):
-        client.fail[uid] = RuntimeError('PeerFloodError')  # name carries Flood
+    client.log += [_join(2, 10), _join(3, 11)]
+    for uid in (10, 11):
+        client.fail[uid] = _PeerFlood()
     asyncio.run(g.sync())
-    assert client.dms == []  # aborted on the first flood, no DMs
+    assert client.dms == []  # aborted on the first flood
+    assert g.state.last_event_id == 1  # cursor NOT advanced -> retried later
 
 
 def test_empty_farewell_sends_nothing_on_leave(tmp_path: Path) -> None:
-    client = _FakeClient({1, 2})
+    client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client, farewell='')
     asyncio.run(g.sync())
-    client.members = [2]  # 1 left
+    client.log += [_leave(2, 5)]
     asyncio.run(g.sync())
-    assert not any(uid == 1 for uid, _ in client.dms)
+    assert not any(uid == 5 for uid, _ in client.dms)
+    assert 5 in g.state.left  # still remembered for a welcome_back
+    assert g.state.last_event_id == 2  # committed
 
 
-def test_state_persists_members_and_daily_counter(tmp_path: Path) -> None:
+def test_cannot_read_admin_log_is_reported(tmp_path: Path) -> None:
+    class _NoAdmin(_FakeClient):
+        def iter_admin_log(self, _channel, **_kw):
+            raise RuntimeError('ChatAdminRequiredError')
+
+    g = _greeter(tmp_path, _NoAdmin())
+    summary = asyncio.run(g.sync_now())
+    assert 'cannot read admin log' in summary
+
+
+def test_sync_now_reports_baseline_then_dms(tmp_path: Path) -> None:
+    client = _FakeClient([_join(1, 1)])
+    g = _greeter(tmp_path, client)
+    first = asyncio.run(g.sync_now())
+    assert 'baseline' in first
+    client.log += [_join(2, 5)]
+    second = asyncio.run(g.sync_now())
+    assert '1 DM' in second
+    assert (5, 'hi') in client.dms
+
+
+def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
     path = tmp_path / 'g.json'
-    client = _FakeClient({1, 2})
+    client = _FakeClient([_join(1, 1)])
     g = greeter.Greeter(client, _params(), path)
     asyncio.run(g.sync())
     g.state.dm_today = 3
     g._save()
     fresh = greeter.Greeter(client, _params(), path)
-    assert fresh.state.members == {1, 2}
     assert fresh.state.started
+    assert fresh.state.last_event_id == 1
     assert fresh.state.dm_today == 3
-
-
-def test_on_action_join_dms_and_tracks(tmp_path: Path) -> None:
-    client = _FakeClient({1, 2})
-    g = _greeter(tmp_path, client)
-    asyncio.run(g.sync())  # baseline -> started
-    event = types.SimpleNamespace(
-        user_id=5,
-        user_joined=True,
-        user_added=False,
-        user_left=False,
-        user_kicked=False,
-    )
-    asyncio.run(g.on_action(event))
-    assert (5, 'hi') in client.dms
-    assert 5 in g.state.members
-
-
-def test_on_action_before_baseline_does_nothing(tmp_path: Path) -> None:
-    client = _FakeClient({1})
-    g = _greeter(tmp_path, client)  # never synced -> not started
-    event = types.SimpleNamespace(
-        user_id=9,
-        user_joined=True,
-        user_added=False,
-        user_left=False,
-        user_kicked=False,
-    )
-    asyncio.run(g.on_action(event))
-    assert client.dms == []
 
 
 def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
     path = tmp_path / 'g.json'
-    client = _FakeClient({1, 2})
+    client = _FakeClient([_join(9, 1)])
     g = greeter.Greeter(client, _params(channel=-100), path)
-    asyncio.run(g.sync())  # baseline on channel -100
+    asyncio.run(g.sync())  # baseline on channel -100 (cursor 9)
     assert g.state.started
-    # Reopen pointing at a DIFFERENT channel: the old snapshot must be dropped
-    # (fresh baseline) so no diff-DM storm hits either channel's members.
     g2 = greeter.Greeter(client, _params(channel=-200), path)
-    assert g2.state.started is False
-    assert g2.state.members == set()
+    assert g2.state.started is False  # different channel -> re-baseline
+    assert g2.state.last_event_id == 0
 
 
-def test_same_channel_keeps_the_baseline(tmp_path: Path) -> None:
+def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
     path = tmp_path / 'g.json'
-    client = _FakeClient({1, 2})
-    g = greeter.Greeter(client, _params(channel=-100), path)
-    asyncio.run(g.sync())
-    g2 = greeter.Greeter(client, _params(channel=-100), path)
-    assert g2.state.started  # same channel -> snapshot kept
-    assert g2.state.members == {1, 2}
+    # An old member-diff state file (has 'members', no 'last_event_id').
+    path.write_text(
+        json.dumps(
+            {
+                'channel': -100,
+                'members': [1, 2, 3],
+                'left': [9],
+                'started': True,
+            }
+        ),
+        encoding='utf-8',
+    )
+    g = greeter.Greeter(_FakeClient(), _params(channel=-100), path)
+    assert g.state.started is False  # re-baseline (no mass DM)
+    assert g.state.last_event_id == 0
+    assert g.state.left == {9}  # welcome_back memory carried over
 
 
 def test_load_greeter_params_defaults_off_with_target_channel() -> None:
