@@ -337,12 +337,27 @@ class Greeter:
         return {int(getattr(u, 'id', 0) or 0) for u in users} - {0}
 
     def _load(self) -> GreeterState:
-        """Reload the persisted member set, or start fresh."""
+        """Reload state, or start fresh -- including on a channel switch.
+
+        The state file records the channel it belongs to. If that no longer
+        matches the configured channel, the member snapshot is for a DIFFERENT
+        channel, so we drop it and re-baseline (started=False) -- otherwise the
+        first sync would diff two unrelated member lists and mass-DM everyone.
+        """
         if not self.path.exists():
             return GreeterState()
         try:
             raw = json.loads(self.path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
+            return GreeterState()
+        stored = int(raw.get('channel', 0) or 0)
+        if stored and stored != self.params.channel:
+            log.warning(
+                'greeter: state was for channel %s, now %s -- '
+                're-baselining (no mass DM)',
+                stored,
+                self.params.channel,
+            )
             return GreeterState()
         return GreeterState(
             members={int(m) for m in (raw.get('members') or [])},
@@ -355,6 +370,7 @@ class Greeter:
     def _save(self) -> None:
         """Persist the member set atomically as readable JSON."""
         data = {
+            'channel': self.params.channel,  # which channel this state is for
             'members': sorted(self.state.members),
             'left': sorted(self.state.left),
             'started': self.state.started,
