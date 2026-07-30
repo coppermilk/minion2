@@ -63,6 +63,15 @@ exec >>"$LOG" 2>&1
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update start ====="
 
 # Single-flight: a slow model pull must not overlap the next schedule.
+# The lock is released by the EXIT trap -- but a hard kill (NAS reboot,
+# OOM, DSM killing the task, `kill -9`) skips the trap and leaves a STALE
+# lock that would then block EVERY future run forever. So first clear a
+# lock older than 2h (no healthy run lasts that long), then acquire.
+if [ -d "$LOCKDIR" ] \
+    && [ -n "$(find "$LOCKDIR" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
+    echo 'stale lock (>2h old); clearing it'
+    rmdir "$LOCKDIR" 2>/dev/null || true
+fi
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
     echo 'another update is still running; skip'
     exit 0
@@ -94,19 +103,44 @@ echo "at $("$GIT" rev-parse --short HEAD)"
 # image -- a failed pull never leaves them stopped.
 compose pull
 
-# --- 3. Clean recreate -----------------------------------------------
+# --- 3. Clean recreate (resilient to broken/stuck containers) --------
 # down --remove-orphans drops containers (incl. any renamed/removed
 # service) for a clean slate; up -d recreates from the pulled image.
 # The ollama-models named volume and the /data weights survive `down`,
 # so nothing re-downloads and the gap is seconds.
-compose down --remove-orphans
+#
+# Relax `set -e` for the teardown+up: a single broken container (state
+# Dead/Removing, or a leftover from an interrupted run causing a
+# "container name already in use" conflict) must NOT abort the script
+# and leave the whole stack stopped. Tear down best-effort, force-remove
+# any project containers that survived, then bring the stack up with one
+# retry -- and only then fail loudly if it truly did not come up.
+set +e
+compose down --remove-orphans --timeout 30
+
+# Force-remove any project containers still lingering (stuck/broken), so
+# the recreate below can never die on a name conflict.
+strays="$(compose ps -aq 2>/dev/null)"
+[ -n "$strays" ] && "$DOCKER" rm -f $strays 2>/dev/null
 
 # The aggregator now rides the shared image; drop the obsolete standalone
 # premium-emoji image if an earlier version of this deploy built it
 # (`image prune` only removes DANGLING images, not this tagged one).
-"$DOCKER" image rm -f minion2-premium-emoji 2>/dev/null || true
+"$DOCKER" image rm -f minion2-premium-emoji 2>/dev/null
 
-compose up -d
+compose up -d --remove-orphans
+up_rc=$?
+if [ "$up_rc" -ne 0 ]; then
+    echo "up failed (rc=$up_rc); retrying once after 5s"
+    sleep 5
+    compose up -d --remove-orphans
+    up_rc=$?
+fi
+set -e
+if [ "$up_rc" -ne 0 ]; then
+    echo 'ERROR: stack did not come up (see errors above)'
+    exit 1
+fi
 
 # Remove now-dangling old layers so the NAS stays bounded.
 "$DOCKER" image prune -f
