@@ -54,12 +54,14 @@ import logging
 import os
 import random
 import re
+import sys
 import time
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import UTC
 from datetime import datetime
 from difflib import SequenceMatcher
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -79,9 +81,44 @@ if TYPE_CHECKING:
     from minions.aggregator.cats import CatEmoji
     from minions.aggregator.premium_emoji import PremiumMessage
 
+
+def _log_file() -> Path | None:
+    """The on-disk log path under the state dir, or None if unavailable."""
+    base = os.environ.get('AGGREGATOR_STATE_DIR')
+    if not base:
+        drive = os.environ.get('DRIVE')
+        base = str(Path(drive) / 'bots' / 'aggregator') if drive else ''
+    if not base:
+        return None
+    try:
+        Path(base).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return Path(base) / 'aggregator.log'
+
+
+def _log_handlers() -> list[logging.Handler]:
+    """Console (for `docker logs`) plus a rotating file (always on disk)."""
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    path = _log_file()
+    if path is not None:
+        handlers.append(
+            RotatingFileHandler(
+                path, maxBytes=5_000_000, backupCount=2, encoding='utf-8'
+            )
+        )
+    return handlers
+
+
+# force=True reconfigures even if an imported library already installed a root
+# handler -- which would make a plain basicConfig a no-op and silently drop our
+# INFO level (a likely cause of "no logs"). The file handler means the log is
+# always readable on disk, regardless of the container log tab.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
+    handlers=_log_handlers(),
+    force=True,
 )
 log = logging.getLogger('aggregator')
 
