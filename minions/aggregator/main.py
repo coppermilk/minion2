@@ -60,6 +60,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from difflib import SequenceMatcher
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -167,6 +169,17 @@ COMMENT_SCAN = 50
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
+
+
+_SECS_PER_MIN = 60
+
+
+def _fmt_eta(seconds: float) -> str:
+    """A short countdown like '45s' or '8m 12s'."""
+    total = int(seconds)
+    if total < _SECS_PER_MIN:
+        return f'{total}s'
+    return f'{total // _SECS_PER_MIN}m {total % _SECS_PER_MIN}s'
 
 
 @dataclass(frozen=True)
@@ -1339,13 +1352,28 @@ class Aggregator:
         return '\n'.join(parts)
 
     def _greeter_line(self) -> str:
-        """One-line greeter summary: on/off, members, DMs sent today."""
+        """Greeter summary: on/off, members, DMs today, poll schedule."""
         gp = self.greeter.params
         gs = self.greeter.state
-        return (
+        head = (
             f'Greeter: enabled={gp.enabled} members={len(gs.members)}'
             f' dm_today={gs.dm_today}/{gp.max_dm_per_day}'
         )
+        if not gp.enabled:
+            return head
+        return head + '\n' + self._greeter_schedule_line()
+
+    def _greeter_schedule_line(self) -> str:
+        """The greeter's check period and next-check time (persona clock)."""
+        period = int(self.greeter.params.poll_sec)
+        nxt = self.greeter.next_sync
+        if nxt <= 0:
+            return f'  check every {period}s | next check: pending first run'
+        tz = timezone(timedelta(hours=self.cats.params.tz_offset_hours))
+        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M:%S')
+        eta = nxt - time.time()
+        when = 'now' if eta <= 0 else _fmt_eta(eta)
+        return f'  check every {period}s | next check {clock} (in {when})'
 
     def _routing_lines(self, labels: dict[int, str]) -> list[str]:
         """Where the bot reads (source) and posts (targets), by name."""
