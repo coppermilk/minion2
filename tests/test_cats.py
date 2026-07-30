@@ -50,6 +50,11 @@ def _params(**over):
         'mood_phi': 0.8,
         'mood_sigma': 0.3,
         'feedback_speedup': 0.4,
+        'session_gap_log_mu': 3.0,
+        'session_gap_log_sigma': 0.5,
+        'session_idle_sec': 900.0,
+        'session_max_sec': 1200.0,
+        'max_reply_delay_sec': 86400.0,
         'pool': (
             cats.CatEmoji('1', 'a', 1.0, ('bodry',)),
             cats.CatEmoji('2', 'b', 1.0, ('sleepy',)),
@@ -212,6 +217,33 @@ def test_silent_day_yields_no_cat(tmp_path: Path) -> None:
     assert brain.schedule('u', engaged=False) is None
 
 
+# --- principle 2: sessions -- close comments share a burst, stale ones drop
+
+
+def test_comments_close_together_share_one_burst(tmp_path: Path) -> None:
+    brain = _brain(tmp_path)
+    first = brain.schedule('a', engaged=False)
+    second = brain.schedule('b', engaged=False)
+    assert first is not None
+    assert second is not None
+    # Same session: seconds apart, not smeared an hour apart by a cursor.
+    assert abs(second - first) < brain.params.session_idle_sec
+
+
+def test_a_comment_out_of_reach_goes_stale(tmp_path: Path) -> None:
+    brain = _brain(
+        tmp_path,
+        active_start=7.0,
+        active_end=17.0,
+        quiet_hours=frozenset(),
+        max_reply_delay_sec=3600.0,  # only 1h of reach
+        uptime_learn_obs=2.0,
+    )
+    brain.clock = lambda: _ts(hour=20)  # host down; window 07:00 is >1h off
+    assert brain.schedule('late', engaged=False) is None
+    assert 'late' not in brain.state.catted  # stale, not a committed cat
+
+
 # --- once-per-person, enabled gate
 
 
@@ -365,13 +397,13 @@ def test_state_round_trips_through_disk(tmp_path: Path) -> None:
     brain.state.mood = 0.5
     brain.state.catted = {'x', 'y'}
     brain.state.cat_last = {'1': 123.0}
-    brain.state.next_earliest = 999.0
+    brain.state.next_session_at = 999.0
     brain._save()
     fresh = cats.CatBrain(_params(), path, random.Random(0))
     assert fresh.state.mood == 0.5
     assert fresh.state.catted == {'x', 'y'}
     assert fresh.state.cat_last == {'1': 123.0}
-    assert fresh.state.next_earliest == 999.0
+    assert fresh.state.next_session_at == 999.0
 
 
 def test_corrupt_state_starts_fresh(tmp_path: Path) -> None:
@@ -380,6 +412,13 @@ def test_corrupt_state_starts_fresh(tmp_path: Path) -> None:
     brain = cats.CatBrain(_params(), path, random.Random(0))
     assert brain.state.mood == 0.0
     assert brain.state.catted == set()
+
+
+def test_old_state_migrates_next_earliest_to_session(tmp_path: Path) -> None:
+    path = tmp_path / 'cats_state.json'
+    path.write_text('{"next_earliest": 555.0}', encoding='utf-8')
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    assert brain.state.next_session_at == 555.0  # migrated from the old key
 
 
 # --- loader
