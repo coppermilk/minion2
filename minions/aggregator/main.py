@@ -114,6 +114,9 @@ COMMAND_REQUEUE = '/requeue'
 # /catnow answers EVERY pending commenter immediately (bypass the human-like
 # wait) -- an operator override for "reply to everyone now".
 COMMAND_CATNOW = '/catnow'
+# /greetnow forces the greeter to poll+process now (no waiting for poll_sec) --
+# for testing welcome/farewell DMs.
+COMMAND_GREETNOW = '/greetnow'
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
 CAT_REPLY_SCAN = 200
@@ -918,6 +921,7 @@ class Aggregator:
             COMMAND_STATUS: self.status_report,
             COMMAND_REQUEUE: self.requeue_cats,
             COMMAND_CATNOW: self.answer_all_now,
+            COMMAND_GREETNOW: self.greet_now,
         }
         handler = handlers.get(text)
         if handler is None:
@@ -1094,6 +1098,12 @@ class Aggregator:
             self.config.source, f'Answering {len(due)} pending cat(s) now.'
         )
         log.info('answering %d pending cats now', len(due))
+
+    async def greet_now(self) -> None:
+        """Force the greeter to poll+process now (the /greetnow command)."""
+        summary = await self.greeter.sync_now()
+        await self.client.send_message(self.config.source, summary)
+        log.info('greetnow: %s', summary)
 
     def _cancel_cat_tasks(self) -> None:
         """Cancel every in-flight fire-later cat task."""

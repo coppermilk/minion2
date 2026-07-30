@@ -155,6 +155,21 @@ class Greeter:
         elif left and uid in self.state.members:
             await self._live_dm(uid, self.params.farewell, add=False)
 
+    async def sync_now(self) -> str:
+        """Force a poll right now; return a one-line summary for /greetnow."""
+        if not self.params.enabled or not self.params.channel:
+            return 'greeter: disabled'
+        before = self.state.dm_today
+        started_before = self.state.started
+        await self.sync()
+        if not self.state.started:
+            return 'greeter: cannot read members (admin?)'
+        if not started_before:
+            n = len(self.state.members)
+            return f'greeter: baseline {n} members (no DMs sent)'
+        sent = self.state.dm_today - before
+        return f'greeter: {len(self.state.members)} members, {sent} DM(s) sent'
+
     async def loop(self) -> None:
         """Poll forever at ``poll_sec`` (a safety net for missed events)."""
         while True:
