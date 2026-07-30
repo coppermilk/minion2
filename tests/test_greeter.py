@@ -179,6 +179,37 @@ def test_channel_placeholders_are_filled(tmp_path: Path) -> None:
     assert (5, 'join @mychan at https://t.me/mychan') in client.dms
 
 
+def test_no_message_when_membership_unchanged(tmp_path: Path) -> None:
+    client = _FakeClient({1})
+    g = _greeter(tmp_path, client)
+    asyncio.run(g.sync())  # baseline {1}
+    client.members = [1, 9]  # 9 joins
+    asyncio.run(g.sync())
+    assert client.dms == [(9, 'hi')]  # one welcome
+    asyncio.run(g.sync())  # nothing changed -> must NOT re-message
+    asyncio.run(g.sync())
+    assert client.dms == [(9, 'hi')]  # still exactly one
+
+
+def test_each_action_sends_one_and_repeats_on_new_action(
+    tmp_path: Path,
+) -> None:
+    client = _FakeClient({1, 2})
+    g = _greeter(tmp_path, client)
+    asyncio.run(g.sync())  # baseline {1, 2}
+    client.members = [1]  # 2 leaves
+    asyncio.run(g.sync())
+    asyncio.run(g.sync())  # idle -> no extra message
+    client.members = [1, 2]  # 2 rejoins
+    asyncio.run(g.sync())
+    asyncio.run(g.sync())  # idle -> no extra message
+    client.members = [1]  # 2 leaves again
+    asyncio.run(g.sync())
+    to_2 = [text for uid, text in client.dms if uid == 2]
+    # exactly one message per action; the repeat action is messaged again
+    assert to_2 == ['bye', 'whale', 'bye']
+
+
 def test_daily_cap_stops_dms(tmp_path: Path) -> None:
     client = _FakeClient({1})
     g = _greeter(tmp_path, client, max_dm_per_day=2)
