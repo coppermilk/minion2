@@ -111,6 +111,8 @@ class Greeter:
         self.path = path
         self.state = self._load()
         self._last_dm = 0.0
+        self._channel_at = ''  # '@username' cache for {channel}
+        self._channel_url = ''  # 't.me/username' cache for {channel_url}
 
     async def sync(self) -> None:
         """Poll the member list; baseline on first run, else DM the diff."""
@@ -247,8 +249,11 @@ class Greeter:
         await self._rate_limit()
         body = await self._personalize(uid, text)
         try:
-            # parse_mode='html' renders <tg-emoji> premium emoji and <a> links.
-            await self.client.send_message(uid, body, parse_mode='html')
+            # parse_mode='html' renders <tg-emoji> emoji and <a> links;
+            # link_preview=False stops the return link expanding a preview.
+            await self.client.send_message(
+                uid, body, parse_mode='html', link_preview=False
+            )
         except Exception as exc:
             name = type(exc).__name__
             log.warning('greeter: DM to %s failed (%s)', uid, name)
@@ -266,10 +271,29 @@ class Greeter:
         return True
 
     async def _personalize(self, uid: int, text: str) -> str:
-        """Fill {name} with the user's (HTML-escaped) first name."""
-        if '{name}' not in text:
-            return text
-        return text.replace('{name}', await self._first_name(uid))
+        """Fill {name} and the channel placeholders in the message text."""
+        if '{name}' in text:
+            text = text.replace('{name}', await self._first_name(uid))
+        if '{channel}' in text or '{channel_url}' in text:
+            at, url = await self._channel_links()
+            # {channel_url} first: {channel} is a substring of it.
+            text = text.replace('{channel_url}', url).replace('{channel}', at)
+        return text
+
+    async def _channel_links(self) -> tuple[str, str]:
+        """(@username, t.me/username) for the channel, resolved once."""
+        if self._channel_at or self._channel_url:
+            return self._channel_at, self._channel_url
+        username = ''
+        try:
+            entity = await self.client.get_entity(self.params.channel)
+            username = str(getattr(entity, 'username', '') or '')
+        except Exception:  # noqa: BLE001 -- unresolvable: leave placeholders empty
+            log.warning('greeter: cannot resolve channel username')
+        if username:
+            self._channel_at = '@' + username
+            self._channel_url = 'https://t.me/' + username
+        return self._channel_at, self._channel_url
 
     async def _first_name(self, uid: int) -> str:
         """The user's first name (HTML-escaped), or the fallback name."""

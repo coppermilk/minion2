@@ -40,12 +40,16 @@ class _FakeClient:
         self.dms = []
         self.fail = {}
         self.names = {}
+        self.usernames = {}
 
     async def get_participants(self, _channel):
         return [types.SimpleNamespace(id=i) for i in self.members]
 
     async def get_entity(self, uid):
-        return types.SimpleNamespace(first_name=self.names.get(uid, ''))
+        return types.SimpleNamespace(
+            first_name=self.names.get(uid, ''),
+            username=self.usernames.get(uid, ''),
+        )
 
     async def send_message(self, uid, text, **_kw):
         exc = self.fail.get(uid)
@@ -163,6 +167,16 @@ def test_sync_now_when_members_unreadable(tmp_path: Path) -> None:
     g = _greeter(tmp_path, _NoAdmin({1}))
     summary = asyncio.run(g.sync_now())
     assert 'cannot read members' in summary
+
+
+def test_channel_placeholders_are_filled(tmp_path: Path) -> None:
+    client = _FakeClient({1})
+    client.usernames = {-100: 'mychan'}  # channel id from _params
+    g = _greeter(tmp_path, client, welcome='join {channel} at {channel_url}')
+    asyncio.run(g.sync())  # baseline {1}
+    client.members = [1, 5]  # 5 joined
+    asyncio.run(g.sync())
+    assert (5, 'join @mychan at https://t.me/mychan') in client.dms
 
 
 def test_daily_cap_stops_dms(tmp_path: Path) -> None:
