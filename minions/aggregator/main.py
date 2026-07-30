@@ -166,6 +166,8 @@ CAT_REPLY_SCAN = 200
 # How many existing comments per watched thread to consider at startup, so
 # comments made before the bot started can still get a (delayed) cat.
 COMMENT_SCAN = 50
+# How many pending cats to list individually in /status (the rest are summed).
+STATUS_PENDING_CATS = 12
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
@@ -1437,8 +1439,29 @@ class Aggregator:
             f'  learned on-hours=[{learned}]',
             *self._last_posts_lines(labels),
             counters,
+            *self._pending_cat_lines(labels),
             '  (/catnow = answer all now | /requeue = recompute)',
         ]
+
+    def _pending_cat_lines(self, labels: dict[int, str]) -> list[str]:
+        """Each pending cat: the comment, its chat, and when it fires."""
+        pending = self.cats.state.pending
+        if not pending:
+            return []
+        now = time.time()
+        lines = ['  pending cats:']
+        for entry in pending[:STATUS_PENDING_CATS]:
+            chat = int(entry.get('chat', 0))
+            msg = int(entry.get('reply_to', 0))
+            root = int(entry.get('root', msg))
+            eta = float(entry.get('when', now)) - now
+            when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
+            name = labels.get(chat, chat)
+            lines.append(f'    - {name} post {root} comment {msg} {when}')
+        extra = len(pending) - STATUS_PENDING_CATS
+        if extra > 0:
+            lines.append(f'    ... (+{extra} more)')
+        return lines
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
         """The watched comment chats + post ids, one per line, by name."""
