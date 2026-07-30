@@ -85,18 +85,25 @@ if TYPE_CHECKING:
 
 
 def _log_file() -> Path | None:
-    """The on-disk log path under the state dir, or None if unavailable."""
-    base = os.environ.get('AGGREGATOR_STATE_DIR')
-    if not base:
-        drive = os.environ.get('DRIVE')
-        base = str(Path(drive) / 'bots' / 'aggregator') if drive else ''
-    if not base:
+    """The shared logs dir path, matching the other bots' convention.
+
+    Logs live at <DRIVE>/bots/_data/logs/aggregator.log (settings.logs), so
+    the aggregator's log sits next to every other bot's <name>.log. Falls back
+    to the state dir, then None, when DRIVE is unset.
+    """
+    drive = os.environ.get('DRIVE')
+    if drive:
+        logs = Path(drive) / 'bots' / '_data' / 'logs'
+    else:
+        base = os.environ.get('AGGREGATOR_STATE_DIR')
+        logs = Path(base) if base else None
+    if logs is None:
         return None
     try:
-        Path(base).mkdir(parents=True, exist_ok=True)
+        logs.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    return Path(base) / 'aggregator.log'
+    return logs / 'aggregator.log'
 
 
 def _log_handlers() -> list[logging.Handler]:
