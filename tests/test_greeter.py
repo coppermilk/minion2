@@ -23,6 +23,7 @@ def _params(**over):
         'welcome': 'hi',
         'welcome_back': 'whale',
         'farewell': 'bye',
+        'fallback_name': 'friend',
         'poll_sec': 600.0,
         'dm_min_gap_sec': 0.0,
         'dm_jitter_sec': 0.0,
@@ -38,11 +39,15 @@ class _FakeClient:
         self.members = list(members)
         self.dms = []
         self.fail = {}
+        self.names = {}
 
     async def get_participants(self, _channel):
         return [types.SimpleNamespace(id=i) for i in self.members]
 
-    async def send_message(self, uid, text):
+    async def get_entity(self, uid):
+        return types.SimpleNamespace(first_name=self.names.get(uid, ''))
+
+    async def send_message(self, uid, text, **_kw):
         exc = self.fail.get(uid)
         if exc is not None:
             raise exc
@@ -117,6 +122,25 @@ def test_returning_via_live_action_gets_welcome_back(tmp_path: Path) -> None:
     asyncio.run(g.on_action(rejoin))
     assert (2, 'whale') in client.dms
     assert 2 not in g.state.left
+
+
+def test_name_placeholder_is_filled(tmp_path: Path) -> None:
+    client = _FakeClient({1})
+    client.names = {7: 'Alice'}
+    g = _greeter(tmp_path, client, welcome='hi {name}')
+    asyncio.run(g.sync())  # baseline {1}
+    client.members = [1, 7]  # 7 joined
+    asyncio.run(g.sync())
+    assert (7, 'hi Alice') in client.dms
+
+
+def test_name_placeholder_falls_back_when_unknown(tmp_path: Path) -> None:
+    client = _FakeClient({1})  # no name registered for 7
+    g = _greeter(tmp_path, client, welcome='hi {name}')
+    asyncio.run(g.sync())
+    client.members = [1, 7]
+    asyncio.run(g.sync())
+    assert (7, 'hi friend') in client.dms
 
 
 def test_daily_cap_stops_dms(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@ source ASCII.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import random
@@ -47,6 +48,7 @@ class GreeterParams:
     welcome: str
     welcome_back: str  # for someone who LEFT and later re-subscribed
     farewell: str
+    fallback_name: str  # fills {name} when the real name is unresolvable
     poll_sec: float
     dm_min_gap_sec: float
     dm_jitter_sec: float
@@ -86,6 +88,7 @@ def load_greeter_params(
         welcome=str(cfg.get('welcome') or 'Welcome!'),
         welcome_back=str(cfg.get('welcome_back') or ''),
         farewell=str(cfg.get('farewell') or ''),
+        fallback_name=str(cfg.get('fallback_name') or 'friend'),
         poll_sec=float(cfg.get('poll_sec') or 600.0),
         dm_min_gap_sec=float(cfg.get('dm_min_gap_sec') or 30.0),
         dm_jitter_sec=float(cfg.get('dm_jitter_sec') or 30.0),
@@ -227,8 +230,10 @@ class Greeter:
             log.info('greeter: daily DM cap reached, stopping for today')
             raise _FloodStop
         await self._rate_limit()
+        body = await self._personalize(uid, text)
         try:
-            await self.client.send_message(uid, text)
+            # parse_mode='html' renders <tg-emoji> premium emoji and <a> links.
+            await self.client.send_message(uid, body, parse_mode='html')
         except Exception as exc:
             name = type(exc).__name__
             log.warning('greeter: DM to %s failed (%s)', uid, name)
@@ -244,6 +249,21 @@ class Greeter:
             self.params.max_dm_per_day,
         )
         return True
+
+    async def _personalize(self, uid: int, text: str) -> str:
+        """Fill {name} with the user's (HTML-escaped) first name."""
+        if '{name}' not in text:
+            return text
+        return text.replace('{name}', await self._first_name(uid))
+
+    async def _first_name(self, uid: int) -> str:
+        """The user's first name (HTML-escaped), or the fallback name."""
+        try:
+            entity = await self.client.get_entity(uid)
+        except Exception:  # noqa: BLE001 -- unresolvable name: use the fallback
+            return html.escape(self.params.fallback_name)
+        raw = str(getattr(entity, 'first_name', '') or '').strip()
+        return html.escape(raw or self.params.fallback_name)
 
     def _daily_budget_left(self) -> bool:
         """Whether we may still DM today (resets the counter on a new date)."""
