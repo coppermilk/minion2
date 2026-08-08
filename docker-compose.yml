@@ -17,9 +17,12 @@
 # and catch are NOT here: they live on the Windows machine.
 #
 # Images are built on GitHub and published to GHCR (image.yml); the NAS only
-# `docker compose pull`s. svc-* carry a `build:` for local dev (`up --build`);
-# pull_policy: missing means the NAS never builds. Base image local build:
-# docker build -t ghcr.io/coppermilk/minion2:latest -f docker/Dockerfile .
+# PULLS. There is deliberately NO `build:` here: a `build:` makes Synology
+# Container Manager (and `docker compose up` when the image is absent) BUILD
+# the image locally -- slow (it apt-installs ffmpeg, pip-installs torch...)
+# and it ships whatever is on disk, not the published :latest. For local dev,
+# build the base image by hand instead:
+#   docker build -t ghcr.io/coppermilk/minion2:latest -f docker/Dockerfile .
 x-minion: &minion
   image: ghcr.io/coppermilk/minion2:latest
   pull_policy: missing
@@ -47,9 +50,6 @@ x-minion: &minion
 x-service: &svc
   image: ghcr.io/coppermilk/minion2:latest
   pull_policy: missing
-  build:
-    context: .
-    dockerfile: docker/Dockerfile
   environment: &svc-env
     SKIN: http
   # A small logs-only volume (NOT /data): each service writes
