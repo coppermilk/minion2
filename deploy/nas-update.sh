@@ -39,10 +39,6 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG="$REPO/deploy/update.log"
 LOCKDIR="$REPO/deploy/.update.lock"
 IMAGE='ghcr.io/coppermilk/minion2:latest'
-# The aggregator runs as its OWN compose project (isolated CPU, independent
-# restart); this file + project name deploy it alongside the main stack.
-AGG_FILE="$REPO/docker-compose.aggregator.yml"
-AGG_PROJECT='minion2-agg'
 
 # DSM Task Scheduler hands the script a minimal PATH; locate tools by
 # absolute path when `command -v` comes up empty.
@@ -144,24 +140,6 @@ set -e
 if [ "$up_rc" -ne 0 ]; then
     echo 'ERROR: stack did not come up (see errors above)'
     exit 1
-fi
-
-# --- 3b. The aggregator: its OWN compose project ---------------------
-# Separate project so its CPU is capped and a runaway can be restarted alone
-# without touching the main stack (the main `down --remove-orphans` above
-# drops the old in-project aggregator container; this recreates it here).
-# Best-effort: a failure is logged but never aborts the rest of the deploy.
-if [ -f "$AGG_FILE" ]; then
-    set +e
-    compose -p "$AGG_PROJECT" -f "$AGG_FILE" pull
-    compose -p "$AGG_PROJECT" -f "$AGG_FILE" up -d --remove-orphans
-    agg_rc=$?
-    set -e
-    if [ "$agg_rc" -eq 0 ]; then
-        echo 'aggregator project up'
-    else
-        echo 'WARN: aggregator project did not come up (see above)'
-    fi
 fi
 
 # Remove now-dangling old layers so the NAS stays bounded.
