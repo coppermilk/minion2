@@ -1338,15 +1338,10 @@ class Aggregator:
     async def _set_test_mode(self, *, on: bool) -> None:
         """Set test mode explicitly, persist it, and reply where posts go now.
 
-        Persisted, so the mode survives a restart. The reply spells out exactly
-        the destination, so it is unambiguous right after the command.
+        Persisted, so the mode survives a restart. Never refuses: with no
+        TEST_CHAT_ID, test posts simply go to this control chat. The reply
+        spells out the destination, so it is unambiguous after the command.
         """
-        if on and not self.config.test_target:
-            await self.client.send_message(
-                self.config.source,
-                'Cannot enter test mode: TEST_CHAT_ID is not set in .env.',
-            )
-            return
         self.test_mode = on
         self._save()
         labels = await self._chat_labels()
@@ -1596,9 +1591,12 @@ class Aggregator:
         log.info('backfill: done (%d messages scanned)', len(history))
 
     def _live_targets(self) -> tuple[int, ...]:
-        """Where posts go NOW: the test channel in test mode, else targets."""
-        if self.test_mode and self.config.test_target:
-            return (self.config.test_target,)
+        """Post destination now: test channel / control chat, or live targets.
+
+        In test mode: TEST_CHAT_ID, or the source control chat if it is unset.
+        """
+        if self.test_mode:
+            return (self.config.test_target or self.config.source,)
         return self.config.targets
 
     async def _post(self, message: PremiumMessage, thumb: str) -> None:
