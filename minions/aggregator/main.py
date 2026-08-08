@@ -160,6 +160,9 @@ COMMAND_CATNOW = '/catnow'
 # /greetnow forces the greeter to poll+process now (no waiting for poll_sec) --
 # for testing welcome/farewell DMs.
 COMMAND_GREETNOW = '/greetnow'
+# /test flips test mode: ALL posts go to TEST_CHAT_ID (a test channel) instead
+# of the live targets, and back. Persisted, so it survives a restart.
+COMMAND_TEST = '/test'
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
 CAT_REPLY_SCAN = 200
@@ -194,6 +197,7 @@ class Config:
 
     source: int
     targets: tuple[int, ...]
+    test_target: int  # TEST_CHAT_ID: where posts go in test mode (0 = unset)
     platforms: tuple[str, ...]
     threshold: float
     timeout: float
@@ -804,6 +808,9 @@ class Aggregator:
         # (kept for O(1) dedup) and is always rebuilt from posted.
         self.posted: list[Posted] = []
         self.processed_ids: set[int] = set()
+        # Test mode: when on, ALL posts go to TEST_CHAT_ID instead of the live
+        # targets. Persisted, so it survives a restart; toggled with /test.
+        self.test_mode = False
         # The human-like cat-reply engine: it tracks the last posts, decides
         # whether/when to reply to a commenter, and picks the cat emoji. Its
         # params/pool come from the constants JSON 'cats' section; idle unless
@@ -1004,6 +1011,7 @@ class Aggregator:
             COMMAND_REQUEUE: self.requeue_cats,
             COMMAND_CATNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
+            COMMAND_TEST: self.toggle_test,
         }
         handler = handlers.get(text)
         if handler is None:
@@ -1089,7 +1097,7 @@ class Aggregator:
         """
         if not self.cats.params.enabled:
             return
-        for target in self.config.targets:
+        for target in self._live_targets():  # test mode -> the test channel
             await self._seed_target_posts(target)
         log.info('cats: watch-list has %d post(s)', len(self.cats.posts))
 
@@ -1316,6 +1324,29 @@ class Aggregator:
         )
         log.info('sent help menu to %s', self.config.source)
 
+    async def toggle_test(self) -> None:
+        """Flip test mode (/test): route ALL posts to the test channel or back.
+
+        Persisted, so the mode survives a restart. The reply spells out exactly
+        where posts go now, so it is unambiguous right after the command.
+        """
+        if not self.config.test_target:
+            await self.client.send_message(
+                self.config.source,
+                'Cannot enter test mode: TEST_CHAT_ID is not set in .env.',
+            )
+            return
+        self.test_mode = not self.test_mode
+        self._save()
+        labels = await self._chat_labels()
+        dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
+        mode = 'ON -- TEST' if self.test_mode else 'OFF -- LIVE'
+        await self.client.send_message(
+            self.config.source,
+            f'Test mode {mode}. ALL posts now go to: {dest}',
+        )
+        log.info('test mode %s -> posting to %s', mode, self._live_targets())
+
     async def status_report(self) -> None:
         """Post the pending/posted/cat diagnostics to the source chat."""
         labels = await self._chat_labels()
@@ -1327,6 +1358,8 @@ class Aggregator:
     async def _chat_labels(self) -> dict[int, str]:
         """Resolve every chat shown in /status to a readable @name or title."""
         ids = {self.config.source, *self.config.targets}
+        if self.config.test_target:
+            ids.add(self.config.test_target)
         ids |= {chat for chat, _ in self.cats.posts}
         return {cid: await self._chat_label(cid) for cid in ids}
 
@@ -1388,10 +1421,16 @@ class Aggregator:
         return f'  check every {period}s | next check {clock} (in {when})'
 
     def _routing_lines(self, labels: dict[int, str]) -> list[str]:
-        """Where the bot reads (source) and posts (targets), by name."""
+        """Source, the live targets, and where posts go NOW (test vs live)."""
         source = labels.get(self.config.source, str(self.config.source))
         targets = ', '.join(labels.get(t, str(t)) for t in self.config.targets)
-        return [f'source (reads JSON): {source}', f'target (posts): {targets}']
+        dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
+        flag = 'TEST' if self.test_mode else 'LIVE'
+        return [
+            f'source (reads JSON): {source}',
+            f'target (live): {targets}',
+            f'>>> MODE: {flag} -- posts go to: {dest} <<<',
+        ]
 
     def _pending_lines(self) -> list[str]:
         """One line per pending video, and which platforms it awaits."""
@@ -1545,9 +1584,15 @@ class Aggregator:
             await self.on_message(message)
         log.info('backfill: done (%d messages scanned)', len(history))
 
+    def _live_targets(self) -> tuple[int, ...]:
+        """Where posts go NOW: the test channel in test mode, else targets."""
+        if self.test_mode and self.config.test_target:
+            return (self.config.test_target,)
+        return self.config.targets
+
     async def _post(self, message: PremiumMessage, thumb: str) -> None:
         """Send to every target; remember each post as a cat-comment target."""
-        for target in self.config.targets:
+        for target in self._live_targets():
             sent = await self._send_post(target, message, thumb)
             await self._watch_post(target, int(getattr(sent, 'id', 0) or 0))
 
@@ -1617,6 +1662,7 @@ class Aggregator:
                 _pending_dict(g, self.config.platforms) for g in self.groups
             ],
             'rejected': sorted(self.rejected),
+            'test_mode': self.test_mode,  # survives a restart
         }
         tmp = self.state_path.with_suffix('.tmp')
         tmp.write_text(
@@ -1630,13 +1676,15 @@ class Aggregator:
             return
         data = json.loads(self.state_path.read_text(encoding='utf-8'))
         self.rejected = set(data.get('rejected') or [])
+        self.test_mode = bool(data.get('test_mode', False))
         self._restore_posted(data)
         self._restore_pending(data)
         log.info(
-            'restored %d pending videos, %d posted (%d dedup ids) from disk',
+            'restored %d pending, %d posted (%d dedup ids); test_mode=%s',
             len(self.groups),
             len(self.posted),
             len(self.processed_ids),
+            self.test_mode,
         )
 
     def _restore_posted(self, data: dict[str, object]) -> None:
@@ -1676,6 +1724,11 @@ def _targets() -> tuple[int, ...]:
     return tuple(int(p.strip()) for p in raw.split(',') if p.strip())
 
 
+def _test_target() -> int:
+    """The test channel id from TEST_CHAT_ID (0 = unset -> test mode off)."""
+    return int(os.environ.get('TEST_CHAT_ID') or 0)
+
+
 def _load_config() -> Config:
     """Chats come from the env; all behaviour from the constants JSON."""
     data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
@@ -1684,6 +1737,7 @@ def _load_config() -> Config:
     return Config(
         source=_source(),
         targets=_targets(),
+        test_target=_test_target(),
         platforms=platforms,
         threshold=float(data.get('title_match') or 0.9),
         # Three hours by default: platforms can arrive far apart. The wait is
