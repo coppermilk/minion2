@@ -160,9 +160,11 @@ COMMAND_CATNOW = '/catnow'
 # /greetnow forces the greeter to poll+process now (no waiting for poll_sec) --
 # for testing welcome/farewell DMs.
 COMMAND_GREETNOW = '/greetnow'
-# /test flips test mode: ALL posts go to TEST_CHAT_ID (a test channel) instead
-# of the live targets, and back. Persisted, so it survives a restart.
+# /test and /live switch where posts go: /test routes ALL posts to TEST_CHAT_ID
+# (a test channel), /live routes them back to the live targets. Persisted, so
+# the mode survives a restart.
 COMMAND_TEST = '/test'
+COMMAND_LIVE = '/live'
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
 CAT_REPLY_SCAN = 200
@@ -1011,7 +1013,8 @@ class Aggregator:
             COMMAND_REQUEUE: self.requeue_cats,
             COMMAND_CATNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
-            COMMAND_TEST: self.toggle_test,
+            COMMAND_TEST: self.enter_test,
+            COMMAND_LIVE: self.enter_live,
         }
         handler = handlers.get(text)
         if handler is None:
@@ -1324,28 +1327,36 @@ class Aggregator:
         )
         log.info('sent help menu to %s', self.config.source)
 
-    async def toggle_test(self) -> None:
-        """Flip test mode (/test): route ALL posts to the test channel or back.
+    async def enter_test(self) -> None:
+        """Route ALL posts to the test channel (the /test command)."""
+        await self._set_test_mode(on=True)
+
+    async def enter_live(self) -> None:
+        """Route posts back to the live target(s) (the /live command)."""
+        await self._set_test_mode(on=False)
+
+    async def _set_test_mode(self, *, on: bool) -> None:
+        """Set test mode explicitly, persist it, and reply where posts go now.
 
         Persisted, so the mode survives a restart. The reply spells out exactly
-        where posts go now, so it is unambiguous right after the command.
+        the destination, so it is unambiguous right after the command.
         """
-        if not self.config.test_target:
+        if on and not self.config.test_target:
             await self.client.send_message(
                 self.config.source,
                 'Cannot enter test mode: TEST_CHAT_ID is not set in .env.',
             )
             return
-        self.test_mode = not self.test_mode
+        self.test_mode = on
         self._save()
         labels = await self._chat_labels()
         dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
-        mode = 'ON -- TEST' if self.test_mode else 'OFF -- LIVE'
+        mode = 'TEST' if on else 'LIVE'
         await self.client.send_message(
             self.config.source,
-            f'Test mode {mode}. ALL posts now go to: {dest}',
+            f'Mode: {mode}. ALL posts now go to: {dest}',
         )
-        log.info('test mode %s -> posting to %s', mode, self._live_targets())
+        log.info('mode -> %s, posting to %s', mode, self._live_targets())
 
     async def status_report(self) -> None:
         """Post the pending/posted/cat diagnostics to the source chat."""
