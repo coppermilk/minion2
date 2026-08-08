@@ -227,32 +227,11 @@ services:
     volumes:
       - ./deploy/reactflow:/usr/share/nginx/html:ro
 
-  # aggregator: a Telethon USER account (not a bot-token minion) -- the only
-  # kind that may send premium emoji. It listens to a source chat, groups a
-  # Short's per-platform links, and posts the collected message to one or more
-  # target chats. It rides the ONE shared image now: telethon is baked in
-  # (pyproject `tg` extra), so there is no separate image to build.
-  #
-  # Config lives in .env: SOURCE_CHAT_ID, TARGET_CHAT_ID (comma-separated for
-  # several chats), plus TELEGRAM_API_ID / TELEGRAM_API_HASH (my.telegram.org).
-  # The session is a FILE on the shared /data mount, so a one-time login (or a
-  # session file generated on Windows and dropped at
-  # /data/bots/aggregator/telethon.session) survives restarts and shutdowns --
-  # no rebuild. Same base name as the bare-run default (telethon.session), so a
-  # file generated on Windows drops straight in -- no rename. First login
-  # (once): docker compose run --rm aggregator, then
-  # `docker compose up -d aggregator` runs it silently.
-  aggregator:
-    <<: *minion
-    environment:
-      <<: *minion-env
-      TELEGRAM_SESSION_FILE: /data/bots/aggregator/telethon
-      AGGREGATOR_STATE_DIR: /data/bots/aggregator
-    command: python -m minions.aggregator.main
-    # No tty/stdin here: a TTY makes Synology Container Manager's Log tab show
-    # "No logs available". The one-time login uses `docker compose run --rm
-    # aggregator`, which allocates its own TTY, so interactive login still works.
-    mem_limit: 256m
+  # aggregator: MOVED OUT to its own compose project (docker-compose.aggregator
+  # .yml). It is a long-running Telethon userbot that has been seen to climb
+  # toward 100% CPU on a long run; running it as a separate project with a
+  # `cpus` cap keeps a runaway from freezing the NAS and lets it be restarted
+  # on its own. nas-update.sh deploys both this stack and that one.
 
   # donate: TEMPORARILY DISABLED -- it keeps crash-looping and is not needed
   # right now, so it is commented out (not deleted) for easy restore. To bring
