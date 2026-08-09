@@ -132,9 +132,11 @@ convention = 'pep257'
 # minions/aggregator: the userbot's operator tools print to the console for the
 # person running them -- login.py reports where it wrote the session file, and
 # dump_emoji_ids.py prints each premium emoji's id: that IS their output, so the
-# no-print rule is waived there (T201).
+# no-print rule is waived there (T201). cats_proof.py is a runnable proof whose
+# printed narration IS the deliverable, so it is waived the same way.
 'minions/aggregator/login.py' = ['T201']
 'minions/aggregator/dump_emoji_ids.py' = ['T201']
+'minions/aggregator/cats_proof.py' = ['T201']
 # The donate userbot's login helper prints where it wrote the session file --
 # that IS its output, so the no-print rule is waived there (like login.py).
 'minions/donate/login.py' = ['T201']
