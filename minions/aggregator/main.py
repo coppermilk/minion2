@@ -134,6 +134,9 @@ MAX_SHORT_SEC = 180
 # Files next to this script: the editable constants and the saved state.
 CONSTANTS_FILE = 'aggregator_constants.json'
 STATE_FILE = 'aggregator_state.json'
+# Which profile is active (live/test). Lives in the base state dir, OUTSIDE the
+# per-profile state, so we know which profile to load at startup.
+MODE_FILE = 'aggregator_mode.json'
 # How often to log the pending videos and what each still awaits.
 STATUS_INTERVAL = 60
 # How many posted videos to keep in the readable log; this doubles as the
@@ -801,36 +804,124 @@ class Aggregator:
         self.client = client
         self.config = config
         self.consts = _load_constants(here.with_name(CONSTANTS_FILE))
-        self.state_path = _resolve_state_path(here.with_name(STATE_FILE))
+        self._raw = _read_json(here.with_name(CONSTANTS_FILE))
         keys = [*self.consts.fields.values(), *_THUMB_ALIASES]
         self._keys = tuple(dict.fromkeys(keys))
+        # State is per PROFILE (live vs test): each mode has its OWN channel
+        # AND its own state files (cats, greeter, posted, dedup), so a test run
+        # never touches live state and any future stateful feature is isolated
+        # for free. The active mode is a marker in the base state dir; live
+        # uses that dir (unchanged), test a 'test/' subdir under it.
+        base_state = _resolve_state_path(here.with_name(STATE_FILE))
+        self._state_base = base_state.parent
+        self._mode_path = self._state_base / MODE_FILE
+        self._cat_tasks: set[asyncio.Task[None]] = set()
+        self._greeter_task: asyncio.Task[None] | None = None
+        self._build_profile(self._load_mode())
+
+    def _build_profile(self, mode: str) -> None:
+        """(Re)bind every mode-scoped part -- channel + state files -- to MODE.
+
+        Live and test are full profiles: each has its own destination channel
+        and its own cats/greeter/posted state on disk, so switching is a total,
+        automatic sandbox. Resets the in-memory containers; ``start_profile``
+        then hydrates them from THIS profile's files.
+        """
+        self.mode = mode
+        pdir = self._profile_dir(mode)
+        pdir.mkdir(parents=True, exist_ok=True)
+        self.state_path = pdir / STATE_FILE
         self.groups: list[Group] = []
         self.rejected: set[str] = set()
-        # posted is the readable log; processed_ids is its flattened msg-id set
-        # (kept for O(1) dedup) and is always rebuilt from posted.
         self.posted: list[Posted] = []
         self.processed_ids: set[int] = set()
-        # Test mode: when on, ALL posts go to TEST_CHAT_ID instead of the live
-        # targets. Persisted, so it survives a restart; toggled with /test.
-        self.test_mode = False
-        # The human-like cat-reply engine: it tracks the last posts, decides
-        # whether/when to reply to a commenter, and picks the cat emoji. Its
-        # params/pool come from the constants JSON 'cats' section; idle unless
-        # 'enabled'. Fire-later tasks are held so they are not GC'd mid-sleep.
-        raw = _read_json(here.with_name(CONSTANTS_FILE))
+        self._cat_tasks = set()
         self.cats = cats.CatBrain(
-            cats.load_cat_params(raw),
-            self.state_path.with_name('cats_state.json'),
+            cats.load_cat_params(self._raw), pdir / 'cats_state.json'
         )
-        self._cat_tasks: set[asyncio.Task[None]] = set()
-        # The subscriber greeter: welcome/farewell DMs (opt-in, rate-limited).
-        # The channel defaults to the first target; disabled unless 'enabled'.
-        default_channel = config.targets[0] if config.targets else 0
+        gchannel = self._profile_channel(mode)
         self.greeter = greeter.Greeter(
-            client,
-            greeter.load_greeter_params(raw, default_channel),
-            self.state_path.with_name('greeter_state.json'),
+            self.client,
+            greeter.load_greeter_params(self._raw, gchannel),
+            pdir / 'greeter_state.json',
         )
+
+    def _profile_dir(self, mode: str) -> Path:
+        """The state dir for MODE: base dir for live, base/test for test."""
+        test = self._state_base / 'test'
+        return test if mode == 'test' else self._state_base
+
+    def _profile_channel(self, mode: str) -> int:
+        """The greeter's default channel for MODE (test uses the test chat)."""
+        if mode == 'test':
+            return self.config.test_target or self.config.source
+        return self.config.targets[0] if self.config.targets else 0
+
+    def _load_mode(self) -> str:
+        """The persisted active profile ('live' or 'test'), default 'live'."""
+        try:
+            raw = json.loads(self._mode_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return 'live'
+        return 'test' if str(raw.get('mode')) == 'test' else 'live'
+
+    def _save_mode(self) -> None:
+        """Persist the active profile so a restart resumes the same mode."""
+        self._mode_path.write_text(
+            json.dumps({'mode': self.mode}), encoding='utf-8'
+        )
+
+    async def start_profile(self, *, source_backfill: bool = True) -> None:
+        """Hydrate the active profile and start its background loops.
+
+        ``source_backfill`` re-scans the source for missed videos -- wanted at
+        boot, but skipped on a live<->test switch so entering test never dumps
+        a burst of recent videos into the test channel.
+        """
+        self.restore()
+        try:
+            self.rearm_cats()
+            await self.backfill_cat_posts()
+            await self.backfill_cat_comments()
+            if self.cats.params.enabled:
+                self.cats.mark_alive(time.time())
+        except Exception:
+            log.exception('cats: startup step failed; listening anyway')
+        if source_backfill:
+            await self.backfill()
+        self._greeter_task = asyncio.create_task(self.greeter.loop())
+
+    async def stop_profile(self) -> None:
+        """Cancel the active profile's timers and loops (before a switch)."""
+        self._cancel_cat_tasks()
+        for group in self.groups:
+            task = getattr(group, 'task', None)
+            if task is not None:
+                task.cancel()
+        if self._greeter_task is not None:
+            self._greeter_task.cancel()
+            self._greeter_task = None
+
+    async def switch_mode(self, mode: str) -> None:
+        """Switch the WHOLE bot to MODE (the /test and /live commands).
+
+        Total sandbox: tear the current profile down, rebind channel + state
+        files to MODE, hydrate it. Posts, cats, greeter and any future feature
+        all follow -- isolated -- with nothing carried across. Persisted, so a
+        restart comes up in the same mode.
+        """
+        if mode != self.mode:
+            await self.stop_profile()
+            self._build_profile(mode)
+            self._save_mode()
+            await self.start_profile(source_backfill=False)
+        labels = await self._chat_labels()
+        dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
+        await self.client.send_message(
+            self.config.source,
+            f'Mode: {self.mode.upper()}. ALL posts now go to: {dest}',
+        )
+        log.info('mode -> %s, posting to %s', self.mode, self._live_targets())
 
     async def on_message(self, message: object) -> None:
         """Route one incoming message into its video group."""
@@ -1328,30 +1419,12 @@ class Aggregator:
         log.info('sent help menu to %s', self.config.source)
 
     async def enter_test(self) -> None:
-        """Route ALL posts to the test channel (the /test command)."""
-        await self._set_test_mode(on=True)
+        """Switch the whole bot to the TEST profile (the /test command)."""
+        await self.switch_mode('test')
 
     async def enter_live(self) -> None:
-        """Route posts back to the live target(s) (the /live command)."""
-        await self._set_test_mode(on=False)
-
-    async def _set_test_mode(self, *, on: bool) -> None:
-        """Set test mode explicitly, persist it, and reply where posts go now.
-
-        Persisted, so the mode survives a restart. Never refuses: with no
-        TEST_CHAT_ID, test posts simply go to this control chat. The reply
-        spells out the destination, so it is unambiguous after the command.
-        """
-        self.test_mode = on
-        self._save()
-        labels = await self._chat_labels()
-        dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
-        mode = 'TEST' if on else 'LIVE'
-        await self.client.send_message(
-            self.config.source,
-            f'Mode: {mode}. ALL posts now go to: {dest}',
-        )
-        log.info('mode -> %s, posting to %s', mode, self._live_targets())
+        """Switch the whole bot to the LIVE profile (the /live command)."""
+        await self.switch_mode('live')
 
     async def status_report(self) -> None:
         """Post the pending/posted/cat diagnostics to the source chat."""
@@ -1431,7 +1504,7 @@ class Aggregator:
         source = labels.get(self.config.source, str(self.config.source))
         targets = ', '.join(labels.get(t, str(t)) for t in self.config.targets)
         dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
-        flag = 'TEST' if self.test_mode else 'LIVE'
+        flag = 'TEST' if self.mode == 'test' else 'LIVE'
         return [
             f'source (reads JSON): {source}',
             f'target (live): {targets}',
@@ -1591,11 +1664,13 @@ class Aggregator:
         log.info('backfill: done (%d messages scanned)', len(history))
 
     def _live_targets(self) -> tuple[int, ...]:
-        """Post destination now: test channel / control chat, or live targets.
+        """Post destination for the active profile.
 
-        In test mode: TEST_CHAT_ID, or the source control chat if it is unset.
+        Test: TEST_CHAT_ID, or the source control chat if it is unset. Live:
+        the configured targets. Every channel-touching part reads this, so the
+        whole bot follows the profile.
         """
-        if self.test_mode:
+        if self.mode == 'test':
             return (self.config.test_target or self.config.source,)
         return self.config.targets
 
@@ -1671,7 +1746,6 @@ class Aggregator:
                 _pending_dict(g, self.config.platforms) for g in self.groups
             ],
             'rejected': sorted(self.rejected),
-            'test_mode': self.test_mode,  # survives a restart
         }
         tmp = self.state_path.with_suffix('.tmp')
         tmp.write_text(
@@ -1685,15 +1759,14 @@ class Aggregator:
             return
         data = json.loads(self.state_path.read_text(encoding='utf-8'))
         self.rejected = set(data.get('rejected') or [])
-        self.test_mode = bool(data.get('test_mode', False))
         self._restore_posted(data)
         self._restore_pending(data)
         log.info(
-            'restored %d pending, %d posted (%d dedup ids); test_mode=%s',
+            'restored %d pending, %d posted (%d dedup ids); mode=%s',
             len(self.groups),
             len(self.posted),
             len(self.processed_ids),
-            self.test_mode,
+            self.mode,
         )
 
     def _restore_posted(self, data: dict[str, object]) -> None:
@@ -1787,30 +1860,20 @@ async def main() -> None:
         start_kwargs['password'] = password
     log.info('Session store: %s.session', session_path)
     await client.start(**start_kwargs)
-    agg.restore()
-    # The cat startup (re-arm + backfills + heartbeat) must NEVER stop the bot
-    # from listening: any failure here is logged and swallowed so we still
-    # reach run_until_disconnected below.
-    try:
-        agg.rearm_cats()  # re-arm cats scheduled before a restart (downtime)
-        await agg.backfill_cat_posts()  # watch the last posts already there
-        await agg.backfill_cat_comments()  # queue comments already there
-        if agg.cats.params.enabled:
-            agg.cats.mark_alive(time.time())  # a boot is an uptime observation
-    except Exception:
-        log.exception('cats: startup step failed; listening anyway')
+    # Hydrate the active profile (live or test) and start its loops. The cat
+    # startup inside can fail without stopping the bot from listening.
+    await agg.start_profile()
     log.info(
-        'Listening on %s; posting to %s; platforms=%s',
+        'Listening on %s; mode=%s posting to %s; platforms=%s',
         config.source,
-        ','.join(str(t) for t in config.targets),
+        agg.mode,
+        ','.join(str(t) for t in agg._live_targets()),  # noqa: SLF001
         ','.join(config.platforms),
     )
-    await agg.backfill()
     status_task = asyncio.create_task(agg.status_loop())
-    greeter_task = asyncio.create_task(agg.greeter.loop())
     await client.run_until_disconnected()
     status_task.cancel()
-    greeter_task.cancel()
+    await agg.stop_profile()
 
 
 if __name__ == '__main__':
