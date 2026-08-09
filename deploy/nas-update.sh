@@ -2,10 +2,8 @@
 # Synology NAS: the one self-healing deploy command. Run it and forget:
 # it force-syncs the repo to origin/main (even into a non-empty folder,
 # keeping your .env), recreates the whole stack -- bots, atomic services,
-# thin transports, n8n and the canvas placeholder, all one compose project
-# -- from the freshly published images, prunes old images, and pulls the
-# local model itself so you never run `docker compose exec ... ollama pull`
-# by hand.
+# thin transports and the canvas placeholder, all one compose project --
+# from the freshly published image, and prunes old images.
 #
 # The image is built on GitHub and published to GHCR (image.yml), so the
 # NAS never compiles torch -- it just downloads the ready image. The
@@ -106,8 +104,7 @@ compose pull
 # --- 3. Clean recreate (resilient to broken/stuck containers) --------
 # down --remove-orphans drops containers (incl. any renamed/removed
 # service) for a clean slate; up -d recreates from the pulled image.
-# The ollama-models named volume and the /data weights survive `down`,
-# so nothing re-downloads and the gap is seconds.
+# The /data weights survive `down`, so the gap is just seconds.
 #
 # Relax `set -e` for the teardown+up: a single broken container (state
 # Dead/Removing, or a leftover from an interrupted run causing a
@@ -144,32 +141,5 @@ fi
 
 # Remove now-dangling old layers so the NAS stays bounded.
 "$DOCKER" image prune -f
-
-# --- 4. Ensure the local model is present ----------------------------
-# Read OLLAMA_MODEL from .env (default qwen2.5vl:7b), wait for the
-# ollama service to answer, then pull. Idempotent: a no-op once the
-# blob is present. Best-effort -- a failed pull is logged and retried
-# next run, never aborting the deploy (so `set -e` is relaxed here).
-MODEL="$(sed -n 's/^[[:space:]]*OLLAMA_MODEL[[:space:]]*=[[:space:]]*//p' \
-    .env 2>/dev/null | tail -n1)"
-[ -n "$MODEL" ] || MODEL='qwen2.5vl:7b'
-
-echo "ensuring model $MODEL"
-i=0
-until compose exec -T ollama ollama list >/dev/null 2>&1; do
-    i=$((i + 1))
-    if [ "$i" -ge 30 ]; then
-        echo 'ollama did not become ready; skipping model pull this run'
-        break
-    fi
-    sleep 2
-done
-if [ "$i" -lt 30 ]; then
-    if compose exec -T ollama ollama pull "$MODEL"; then
-        echo "model ready: $MODEL"
-    else
-        echo "model pull failed; will retry next run"
-    fi
-fi
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ====="

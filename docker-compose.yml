@@ -11,7 +11,7 @@
 #
 # The remaining bots are not file-processors coupled to Telegram, so they
 # stay as they are: inbox (ingest, no IP), moderator/props (chat commands),
-# sort/batch (folder watch + cron), ollama (the local model).
+# sort/batch (folder watch + cron).
 #
 # DRIVE_NAS points at the media tree on the host; .env holds secrets. print
 # and catch are NOT here: they live on the Windows machine.
@@ -69,18 +69,6 @@ x-service: &svc
       max-file: '3'
 
 services:
-  # "gem": the local model server (Qwen2.5-VL) for sort and props.
-  ollama:
-    image: ollama/ollama
-    environment:
-      OLLAMA_KEEP_ALIVE: '5m'
-    volumes:
-      - ollama-models:/root/.ollama
-    mem_limit: 10g
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-
   # --- Atomic services (svc-*): the processing IP, pure web, no Telegram
   svc-censor-blur:
     <<: *svc
@@ -174,8 +162,6 @@ services:
       SORT_WATCH: '1'
     command: python -m minions.bots.sort.main
     mem_limit: 4g
-    depends_on:
-      - ollama
 
   moderator:
     <<: *minion
@@ -192,8 +178,6 @@ services:
       TG_TOKEN: ${TG_TOKEN_PROPS:-}
     command: python -m minions.bots.props.main
     mem_limit: 4g
-    depends_on:
-      - ollama
 
   # donations: poll a donation platform (Streamlabs today; the feed is
   # platform-agnostic, so Revolut and others slot in later) and post each
@@ -238,11 +222,11 @@ services:
   # The session is a FILE on the shared /data mount, so a one-time login
   # survives restarts. First login (once): docker compose run --rm aggregator.
   #
-  # cpus: it is a long-running userbot that, on a long run, has been seen to
-  # climb toward 100% CPU; the cap means even a runaway takes at most one core,
-  # so the NAS and the other bots stay responsive. To clear a slow climb,
-  # restart just this container (Container Manager, or docker restart
-  # minion2-aggregator-1) -- no need to touch the rest of the project.
+  # NB: no `cpus:` cap here -- this Synology kernel has no CPU CFS quota, so
+  # `cpus` fails container creation ("NanoCPUs can not be set"). If it climbs
+  # to high CPU on a long run, restart just this container (Container Manager,
+  # or docker restart minion2-aggregator-1); a weekly restart via Task
+  # Scheduler avoids it entirely.
   aggregator:
     <<: *minion
     environment:
@@ -253,7 +237,6 @@ services:
     # No tty/stdin here: a TTY makes Synology Container Manager's Log tab show
     # "No logs available". The one-time login uses `docker compose run --rm
     # aggregator`, which allocates its own TTY, so interactive login still works.
-    cpus: 1.0
     mem_limit: 256m
 
   # donate: TEMPORARILY DISABLED -- it keeps crash-looping and is not needed
@@ -278,9 +261,7 @@ services:
   #   # one-time login uses `docker compose run --rm donate ...`, its own TTY.
   #   mem_limit: 256m
 
-# Ollama's model blobs: a disposable, re-pullable CACHE. A named volume
-# (Docker auto-creates it) rather than a bind, so a missing host subpath
-# can never fail the start; `image prune` never touches volumes.
+# A small logs-only named volume for the svc-* services (Docker auto-creates
+# it), so their /logs/<step>.log survive without a host bind.
 volumes:
-  ollama-models:
   svc-logs:
