@@ -1,11 +1,14 @@
-# One script, one Task Scheduler entry -- starts the Windows bots.
+# One script, one Task Scheduler entry -- installs everything and starts
+# the Windows bots. This single file does it ALL: load the .env, install
+# the requirements and build/install the editable `minions` library, then
+# launch the bots. Nothing else to run by hand.
 #
-# Windows runs exactly two bots: the printer (`print`) and the
-# Downloads watcher (`catch`); every other bot runs in Docker on the
-# NAS. It loads the same single .env the NAS uses (paths are validated
-# for either OS), refreshes the Python requirements (reinstalls the
-# minion_core package only when pyproject.toml changed, so logon stays
-# fast), and launches both bots.
+# Windows runs exactly two bots: the printer (`print`) and the Downloads
+# watcher (`catch`); every other bot runs in Docker on the NAS. It loads
+# the same single .env the NAS uses (paths are validated for either OS),
+# refreshes the Python requirements (reinstalls the editable library only
+# when pyproject.toml changed, so logon stays fast), and launches both
+# bots.
 #
 # DON'T run this .ps1 directly -- PowerShell's execution policy blocks
 # it ("running scripts is disabled on this system"). Use the sibling
@@ -57,7 +60,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 # Keep the Python env in step with the checked-out code: (re)install
 # the editable package + its requirements when pyproject.toml changed
-# since the last successful install, or when minion_core cannot be
+# since the last successful install, or when the library cannot be
 # imported at all (a fresh or broken env). A no-op on an unchanged env,
 # so logon stays fast. This is an editable install, not a compile --
 # every dependency ships a Windows wheel. We install the FULL runtime
@@ -76,17 +79,21 @@ $pyproject = Join-Path $repo 'pyproject.toml'
 $hash = (Get-FileHash $pyproject -Algorithm SHA256).Hash
 $prev = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { '' }
 
-# Probe the current env; a non-zero exit must not abort the script.
+# Probe the current env; a non-zero exit must not abort the script. Both
+# top-level packages must import: minion_core (the bots) AND minions (the
+# aggregator tools, e.g. python -m minions.aggregator.login) -- so a
+# partial env that only half-installed still triggers the reinstall, and
+# "No module named minions" is fixed here rather than at first run.
 $importOk = $true
 try {
-    & python -c 'import minion_core' 2>$null
+    & python -c 'import minion_core, minions' 2>$null
     $importOk = ($LASTEXITCODE -eq 0)
 } catch {
     $importOk = $false
 }
 
 if ($hash -ne $prev -or -not $importOk) {
-    Write-Output 'requirements changed: installing minion_core (.[ml,llm,links,tg])'
+    Write-Output 'requirements changed: installing minions (.[ml,llm,links,tg])'
     try {
         & python -m pip install -e '.[ml,llm,links,tg]' 2>&1 |
             Out-File -FilePath $depsLog -Encoding utf8
