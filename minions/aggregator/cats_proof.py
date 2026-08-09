@@ -33,6 +33,7 @@ the cat glyphs are read from the JSON at runtime (BLUEPRINT 4).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 import tempfile
@@ -81,15 +82,23 @@ def _load_params() -> cats.CatParams:
 
 
 def _payload(specs: list[cats.CatEmoji], cat: cats.Cat) -> str:
-    """The exact reaction main._send_cats would send, rendered for the proof.
+    """The exact request main would send, rendered for the proof.
 
-    A cat reaction is a ``ReactionCustomEmoji`` pointing at the emoji's
-    document id; the whole set is placed ON the comment message (msg_id =
-    the comment) in ONE ``SendReaction`` call -- a reaction pill under the
-    comment, not a reply in the thread. A Premium account may hold more than
-    one, so the rare second cat rides the same request.
+    'react': a ``ReactionCustomEmoji`` placed ON the comment message in one
+    ``SendReaction`` call (a reaction pill under the comment). 'reply': the
+    premium cat emoji sent as a THREAD MESSAGE replying to the comment (top =
+    the post root) -- it reads like a sticker.
     """
     glyphs = ' '.join(s.fallback for s in specs)
+    if cat.kind == 'reply':
+        ids = ', '.join(s.emoji_id for s in specs)
+        return (
+            f'      request  : SendMessage(peer={cat.chat}, '
+            f'reply_to=msg {cat.reply_to}, top_msg_id={cat.root})\n'
+            f'      sticker  : MessageEntityCustomEmoji(document_id={ids})\n'
+            f'      shows as : {glyphs}   (a premium-emoji "sticker" reply '
+            f'IN the thread of post {cat.root})'
+        )
     reactions = ', '.join(
         f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
     )
@@ -137,16 +146,22 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
     when = brain.schedule(key, engaged=engaged)
     if when is None:
         print(f'  comment {msg_id} by {person} under post {root}: '
-              f'no like (dedup / skip / silent day)')
+              f'no cat (dedup / skip / silent day)')
         return None
-    # pseudo-random but deterministic in the comment id (recomputable)
-    specs = brain.pick_like(f'{_CHAT}:{msg_id}')
+    # Default is a like REACTION; the deterministic gate turns some into a
+    # thread STICKER. The emoji is pseudo-random but deterministic in the
+    # comment id (recomputable after a restart).
+    seed = f'{_CHAT}:{msg_id}'
+    if brain.should_sticker(f'{_CHAT}:{root}'):
+        specs, kind, label = brain.pick_cat(seed), 'reply', 'STICKER in thread'
+    else:
+        specs, kind, label = brain.pick_like(seed), 'react', 'LIKE reaction'
     cat = cats.Cat(
         chat=_CHAT, reply_to=msg_id, root=root, when=when, text=text,
-        emojis=tuple((s.emoji_id, s.fallback) for s in specs),
+        emojis=tuple((s.emoji_id, s.fallback) for s in specs), kind=kind,
     )
     brain.add_pending(cat)
-    print(f'  comment {msg_id} by {person} under post {root}: LIKE REACTION '
+    print(f'  comment {msg_id} by {person} under post {root}: {label} '
           f'scheduled')
     print(f'      when     : {_local(when, brain.params)}   '
           f'(+{when - _NOW:.0f}s, jittered off :00)')
@@ -246,10 +261,36 @@ def main() -> None:
 
     print('STEP 8  the queue that survives a restart (persisted pending cats)')
     for entry in brain.state.pending:
-        print(f'  pending: react on comment {entry["reply_to"]} '
-              f'(post {entry["root"]}) in {entry["chat"]}  "{entry["text"]}"')
+        print(f'  pending: {entry.get("kind", "react")} on comment '
+              f'{entry["reply_to"]} (post {entry["root"]}) in {entry["chat"]}'
+              f'  "{entry["text"]}"')
+    print()
+
+    _sticker_gate_demo(brain.params)
     print()
     _closing(len(brain.state.pending))
+
+
+def _sticker_gate_demo(params: cats.CatParams) -> None:
+    """Show the deterministic react-vs-sticker gate firing under one post.
+
+    The live default (>= sticker_gap silence AND >= burst_count in the window)
+    is too slow for a short demo, so this uses a small 2/2 gate to make the
+    pattern visible: likes until BOTH conditions hold, then a sticker, then the
+    silence resets. Same code path as production (``should_sticker``).
+    """
+    print(f'STEP 9  the sticker gate (deterministic). Live default: >= '
+          f'{params.sticker_gap} since last')
+    print(f'        sticker AND >= {params.burst_count} engagements within '
+          f'{params.burst_window_sec:.0f}s. Demo with a 2/2 gate:')
+    tuned = dataclasses.replace(params, sticker_gap=2, burst_count=2)
+    path = Path(tempfile.gettempdir()) / 'cats_proof_gate.json'
+    path.unlink(missing_ok=True)
+    brain = cats.CatBrain(tuned, path, random.Random(0))  # noqa: S311 -- demo
+    brain.clock = lambda: _NOW  # one window, so the burst always holds
+    for i in range(1, 7):
+        kind = 'STICKER' if brain.should_sticker('demo:post') else 'like'
+        print(f'          engagement {i}: {kind}')
 
 
 if __name__ == '__main__':

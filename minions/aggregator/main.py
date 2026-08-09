@@ -70,7 +70,9 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
+from telethon.tl.functions.messages import SendMessageRequest
 from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.types import InputReplyToMessage
 from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
@@ -1173,10 +1175,17 @@ class Aggregator:
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        # Pseudo-random but deterministic in the comment id: the same comment
-        # always gets the same like (recomputable after a restart).
-        specs = self.cats.pick_like(f'{comment.chat}:{comment.msg_id}')
-        if not specs:  # empty like pool -> nothing to react with
+        # Default is a like REACTION; now and then (deterministic gate) it is a
+        # thread STICKER instead -- a premium cat emoji sent as a message. The
+        # emoji is pseudo-random but deterministic in the comment id, so the
+        # same comment always resolves to the same thing after a restart.
+        seed = f'{comment.chat}:{comment.msg_id}'
+        post_key = f'{comment.chat}:{comment.root}'
+        if self.cats.should_sticker(post_key):
+            specs, kind = self.cats.pick_cat(seed), 'reply'
+        else:
+            specs, kind = self.cats.pick_like(seed), 'react'
+        if not specs:  # empty pool -> nothing to place
             return
         cat = cats.Cat(
             chat=comment.chat,
@@ -1185,6 +1194,7 @@ class Aggregator:
             when=when,
             text=comment.text,
             emojis=tuple((s.emoji_id, s.fallback) for s in specs),
+            kind=kind,
         )
         self.cats.add_pending(cat)
         self._arm_cat(cat)
@@ -1360,7 +1370,7 @@ class Aggregator:
             await asyncio.sleep(delay)
         try:
             if not await self._should_skip_cat(cat.chat, cat.reply_to):
-                await self._send_cats(cat)
+                await self._deliver(cat)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1431,6 +1441,19 @@ class Aggregator:
         recent = getattr(reactions, 'recent_reactions', None) or []
         return any(getattr(r, 'my', False) for r in recent)
 
+    async def _deliver(self, cat: cats.Cat) -> None:
+        """Place the scheduled cat: a like REACTION, or a thread STICKER.
+
+        ``cat.kind`` was decided at schedule time and stored, so the delivery
+        is exactly what /status showed: 'react' puts a like reaction ON the
+        comment; 'reply' sends the chosen premium cat emoji as a message in the
+        comment's thread (it reads like a sticker).
+        """
+        if cat.kind == 'reply':
+            await self._send_sticker(cat)
+        else:
+            await self._send_cats(cat)
+
     async def _send_cats(self, cat: cats.Cat) -> None:
         """React to the commenter's message with the cat(s) chosen at schedule.
 
@@ -1444,6 +1467,58 @@ class Aggregator:
             glyphs = ''.join(fb for _, fb in cat.emojis)
             log.info('cat: reacted %s on comment %s in %s',
                      glyphs, cat.reply_to, cat.chat)
+
+    async def _send_sticker(self, cat: cats.Cat) -> None:
+        """Reply IN THE THREAD with the chosen premium cat emoji (a sticker).
+
+        The emoji is sent as a message that replies to the comment inside its
+        discussion thread (top=root), so it lands in the post's comments and
+        reads like a sticker -- not a reaction pill. Falls back to a flat reply
+        if the threaded send is refused (or it is a plain group), so a sticker
+        is never lost to threading.
+        """
+        if not cat.emojis:
+            return
+        emoji_id, fallback = cat.emojis[0]
+        spec = {'id': emoji_id, 'fallback': fallback}
+        message = RichText().emoji(spec).build()
+        threaded = bool(cat.root) and cat.root != cat.reply_to
+        if threaded:
+            try:
+                await self._reply_in_thread(cat, message)
+            except Exception:  # noqa: BLE001 -- fall back to a flat reply
+                log.warning('cat: threaded sticker failed in %s; flat',
+                            cat.chat)
+            else:
+                log.info('cat: sticker %s in thread %s of %s',
+                         fallback, cat.root, cat.chat)
+                return
+        await self.client.send_message(
+            cat.chat,
+            message.text,
+            formatting_entities=message.entities,
+            reply_to=cat.reply_to,
+            link_preview=False,
+        )
+        log.info('cat: sticker %s on comment %s in %s',
+                 fallback, cat.reply_to, cat.chat)
+
+    async def _reply_in_thread(
+        self, cat: cats.Cat, message: PremiumMessage
+    ) -> None:
+        """Send ``message`` as a reply inside the comment thread (top=root)."""
+        reply = InputReplyToMessage(
+            reply_to_msg_id=cat.reply_to, top_msg_id=cat.root
+        )
+        await self.client(
+            SendMessageRequest(
+                peer=cat.chat,
+                message=message.text,
+                entities=message.entities,
+                reply_to=reply,
+                no_webpage=True,
+            )
+        )
 
     async def _react(
         self, peer: int, msg_id: int, emojis: tuple[tuple[str, str], ...]
@@ -1670,10 +1745,11 @@ class Aggregator:
         body = str(entry.get('text', ''))
         what = f'"{body}"' if body else f'comment {msg}'
         glyphs = _pending_glyphs(entry)
+        verb = 'sticker' if entry.get('kind') == 'reply' else 'like'
         eta = float(entry.get('when', now)) - now
         when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
         name = labels.get(chat, chat)
-        return f'    - {name} post {root}: {glyphs} on {what} {when}'
+        return f'    - {name} post {root}: {glyphs} {verb} on {what} {when}'
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
         """The watched comment chats + post ids, one per line, by name."""
