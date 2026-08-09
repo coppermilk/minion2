@@ -96,6 +96,7 @@ class Cat:
     when: float
     text: str = ''  # a snippet of the comment being answered (for status)
     emojis: tuple[tuple[str, str], ...] = ()  # the chosen (id, fallback) cats
+    kind: str = 'react'  # 'react' = a like reaction; 'reply' = thread sticker
 
 
 def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
@@ -118,6 +119,7 @@ def _cat_from_entry(entry: dict[str, object], when: float) -> Cat:
         when=when,
         text=str(entry.get('text', '')),
         emojis=_emojis_from_entry(entry.get('emojis')),
+        kind=str(entry.get('kind', 'react')),
     )
 
 
@@ -183,6 +185,15 @@ class CatParams:
     # recomputable after a restart (no persisted cursor). Separate from the cat
     # ``pool``.
     like_pool: tuple[CatEmoji, ...]
+    # The sticker-reply gate (deterministic): now and then, INSTEAD of a like
+    # reaction, the bot replies in the thread with a premium cat emoji (a
+    # message that reads like a sticker). It fires for a comment only when BOTH
+    # hold for its post: at least ``sticker_gap`` engagements since the last
+    # sticker there (the "long silence"), AND a burst of >= ``burst_count``
+    # engaged comments within ``burst_window_sec``. All state-driven, no dice.
+    sticker_gap: int
+    burst_count: int
+    burst_window_sec: float
 
 
 @dataclass
@@ -210,6 +221,10 @@ class CatState:
         default_factory=dict
     )  # hour -> decayed obs
     alive_ts: float = 0.0  # last heartbeat, for decay
+    # Sticker gate, per post key 'chat:root': engagements since the last
+    # sticker there, and recent engagement timestamps (for the burst test).
+    since_sticker: dict[str, int] = field(default_factory=dict)
+    recent_engaged: dict[str, list[float]] = field(default_factory=dict)
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -380,6 +395,15 @@ class CatBrain:
         self.state.catted = {
             k for k in self.state.catted if k.startswith(live)
         }
+        # The sticker gate is per post 'chat:root'; drop rolled-off posts so
+        # the persisted maps stay bounded (like ``catted``).
+        keep = {f'{c}:{m}' for c, m in self.state.posts}
+        self.state.since_sticker = {
+            k: v for k, v in self.state.since_sticker.items() if k in keep
+        }
+        self.state.recent_engaged = {
+            k: v for k, v in self.state.recent_engaged.items() if k in keep
+        }
         self._save()
 
     def is_comment(self, chat: int, reply_to: int | None) -> bool:
@@ -401,6 +425,7 @@ class CatBrain:
                 'when': cat.when,
                 'text': cat.text,
                 'emojis': [[eid, fb] for eid, fb in cat.emojis],
+                'kind': cat.kind,
             }
         )
         self._save()
@@ -636,6 +661,44 @@ class CatBrain:
         roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible
         return [roll.choice(pool)]
 
+    def pick_cat(self, key: str) -> list[CatEmoji]:
+        """One cat (the thread sticker), pseudo-random, DETERMINISTIC in key.
+
+        Same rule as ``pick_like`` but drawn from the cat ``pool`` -- the emoji
+        sent as a message in the thread (it reads like a sticker). Seeded by
+        the target id, so it is recomputable after a restart.
+        """
+        pool = self.params.pool
+        if not pool:
+            return []
+        roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible
+        return [roll.choice(pool)]
+
+    def should_sticker(self, post_key: str) -> bool:
+        """Whether THIS engagement under ``post_key`` is a thread sticker.
+
+        Deterministic, state-driven (no dice): a sticker fires only when both
+        hold -- at least ``sticker_gap`` engagements have accrued under this
+        post since its last sticker (the long silence), AND at least
+        ``burst_count`` engagements landed within ``burst_window_sec`` (the
+        activity spike). On a sticker the silence counter resets; otherwise it
+        grows. Call once per engaged comment, in order.
+        """
+        now = self.clock()
+        recent = [
+            t
+            for t in self.state.recent_engaged.get(post_key, [])
+            if now - t < self.params.burst_window_sec
+        ]
+        recent.append(now)
+        self.state.recent_engaged[post_key] = recent
+        since = self.state.since_sticker.get(post_key, 0)
+        burst = len(recent) >= self.params.burst_count
+        fire = burst and since >= self.params.sticker_gap
+        self.state.since_sticker[post_key] = 0 if fire else since + 1
+        self._save()
+        return fire
+
     def emit(self) -> list[CatEmoji]:
         """Pick the cat(s) to send now and record the send (principles 3,4,7).
 
@@ -709,6 +772,14 @@ class CatBrain:
                 str(k): float(v) for k, v in (raw.get('alive') or {}).items()
             },
             alive_ts=float(raw.get('alive_ts', 0.0)),
+            since_sticker={
+                str(k): int(v)
+                for k, v in (raw.get('since_sticker') or {}).items()
+            },
+            recent_engaged={
+                str(k): [float(t) for t in v]
+                for k, v in (raw.get('recent_engaged') or {}).items()
+            },
         )
 
     def _save(self) -> None:
@@ -726,6 +797,8 @@ class CatBrain:
             'pending': self.state.pending,
             'alive': self.state.alive,
             'alive_ts': self.state.alive_ts,
+            'since_sticker': self.state.since_sticker,
+            'recent_engaged': self.state.recent_engaged,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(
@@ -813,4 +886,7 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         max_reply_delay_sec=float(cats.get('max_reply_delay_sec', 21600.0)),
         pool=pool,
         like_pool=like_pool,
+        sticker_gap=int(cats.get('sticker_gap', 6)),
+        burst_count=int(cats.get('burst_count', 4)),
+        burst_window_sec=float(cats.get('burst_window_sec', 3600.0)),
     )
