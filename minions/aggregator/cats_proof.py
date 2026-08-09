@@ -4,13 +4,19 @@ Run it -- no network, no Telegram, no session -- and watch the REAL engine
 (``cats.CatBrain``) and the REAL premium cat-emoji from
 ``aggregator_constants.json`` walk the whole path a comment takes:
 
-    a post goes out  ->  a cat REACTION lands on the post right away  ->  a
-    person comments under it  ->  the engine decides WHEN (human-timed) and
-    WHICH cat  ->  a custom-emoji cat REACTION is placed ON the comment message
-    (a reaction pill under it), NOT a reply in the thread.
+    a person comments under a post  ->  the engine decides WHEN (human-timed)
+    and WHICH cat  ->  a custom-emoji cat REACTION is placed ON the comment
+    message (a reaction pill under it), NOT a reply in the thread.
 
-New posts are reacted to IMMEDIATELY (no human-like wait) -- they are ours, so
-the cat goes on straight away; comments keep the distracted-human timing.
+Reacting to our OWN new posts is optional (``react_to_posts``, off by default)
+and immediate; the real job -- reacting to COMMENTERS -- keeps the
+distracted-human timing.
+
+This is a DRY RUN: it never connects to Telegram, it just prints the exact
+SendReaction payloads the live bot would send. To see real reactions, run the
+bot (python -m minions.aggregator.main); a live comment reaction is DELAYED on
+purpose (to read as human), so send /catnow in the control chat to fire the
+queue immediately.
 
 Nothing here mocks the decision code: ``schedule``, ``emit`` and ``is_comment``
 are the same functions ``main.py`` calls in production. Only the Telethon send
@@ -40,7 +46,7 @@ from minions.aggregator import cats
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
 # Midday on a weekday, inside the active window, so cats are answered promptly.
-_SEED = 1
+_SEED = 0
 _NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC).timestamp()
 
 # The target CHANNEL (posts live here; a post reaction goes on the channel
@@ -146,10 +152,41 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
     return cat
 
 
+def _banner(params: cats.CatParams) -> None:
+    """Print the header block: what this is and the live config it reads."""
+    pool = ', '.join(f'{c.emoji_id}({c.fallback})' for c in params.pool)
+    print('=' * 72)
+    print('PROOF OF WORK -- cat REACTIONS on comments (posts optional)')
+    print('=' * 72)
+    print(f'engine enabled          : {params.enabled}')
+    print(f'comments_in_discussion  : {params.comments_in_discussion} '
+          f'(channel + linked discussion group)')
+    print(f'react_to_posts          : {params.react_to_posts} '
+          f'(like our own posts -- optional, off by default)')
+    print(f'watch_posts             : {params.watch_posts} '
+          f'(only the last N posts are answered)')
+    print(f'premium cat pool ({len(params.pool):>2})    : {pool}')
+    print(f'now                     : {_local(_NOW, params)}')
+    print()
+
+
+def _closing(count: int) -> None:
+    """Print the result line and the how-to-see-it-live note."""
+    print(f'RESULT: {count} cat reaction(s) are queued ON comments -- once '
+          f'per (post, person), human-timed.')
+    print()
+    print('NOTE: this was a DRY RUN -- no Telegram, no real reactions. Live:')
+    print('  1) run the bot:  python -m minions.aggregator.main')
+    print('  2) a live comment reaction is DELAYED (human-like); to see it')
+    print('     now, send /catnow in the control chat.')
+    print('  3) the discussion group must ALLOW custom-emoji reactions (else')
+    print('     the bot falls back to the plain-emoji cat).')
+    print('=' * 72)
+
+
 def main() -> None:
     """Drive the real engine end to end and print the proof."""
     params = _load_params()
-    pool = ', '.join(f'{c.emoji_id}({c.fallback})' for c in params.pool)
     _STATE.unlink(missing_ok=True)  # start fresh: don't replay old dedup state
     brain = cats.CatBrain(
         params,
@@ -157,21 +194,15 @@ def main() -> None:
         random.Random(_SEED),  # noqa: S311 -- reproducible proof, not crypto
     )
     brain.clock = lambda: _NOW
+    _banner(params)
 
-    print('=' * 72)
-    print('PROOF OF WORK -- cat REACTIONS on new posts and on their comments')
-    print('=' * 72)
-    print(f'engine enabled          : {params.enabled}')
-    print(f'comments_in_discussion  : {params.comments_in_discussion} '
-          f'(channel + linked discussion group)')
-    print(f'watch_posts             : {params.watch_posts} '
-          f'(only the last N posts are answered)')
-    print(f'premium cat pool ({len(params.pool):>2})    : {pool}')
-    print(f'now                     : {_local(_NOW, params)}')
-    print()
-
-    print('STEP 1  a new post goes out -> react ON the post immediately')
-    _post_reaction(brain, _CHANNEL, 500)
+    print(f'STEP 1  optional post reaction (react_to_posts='
+          f'{params.react_to_posts}, off by default)')
+    if params.react_to_posts:
+        _post_reaction(brain, _CHANNEL, 500)
+    else:
+        print('  react_to_posts is off -> our own posts are NOT reacted to; '
+              'only comments are')
     print()
 
     print('STEP 2  watch the last posts (main.backfill_cat_posts)')
@@ -214,11 +245,7 @@ def main() -> None:
         print(f'  pending: react on comment {entry["reply_to"]} '
               f'(post {entry["root"]}) in {entry["chat"]}  "{entry["text"]}"')
     print()
-    count = len(brain.state.pending)
-    print(f'RESULT: the new post got a cat reaction immediately, and {count} '
-          f'cat reaction(s) are queued ON comments -- once per (post, '
-          f'person), human-timed.')
-    print('=' * 72)
+    _closing(len(brain.state.pending))
 
 
 if __name__ == '__main__':

@@ -113,6 +113,10 @@ class CatParams:
     # (so cats land in the channel post's comments). False: match replies to
     # the post id directly (the target is a plain group).
     comments_in_discussion: bool
+    # Whether to also drop a cat reaction on our OWN fresh posts (immediately,
+    # no human-like wait). Optional and off by default: the engine's job is
+    # reacting to COMMENTERS; liking our own posts is a separate extra.
+    react_to_posts: bool
     watch_posts: int
     hours_weekday: tuple[tuple[float, float, float], ...]
     hours_weekend: tuple[tuple[float, float, float], ...]
@@ -723,6 +727,7 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
     return CatParams(
         enabled=bool(cats.get('enabled', False)),
         comments_in_discussion=bool(cats.get('comments_in_discussion', False)),
+        react_to_posts=bool(cats.get('react_to_posts', False)),
         watch_posts=int(cats.get('watch_posts') or 4),
         hours_weekday=_peaks(cats.get('hours_weekday'))
         or ((9.0, 2.0, 1.0), (21.0, 2.5, 1.3)),

@@ -258,6 +258,7 @@
   "cats": {
     "enabled": true,
     "comments_in_discussion": true,
+    "react_to_posts": false,
     "watch_posts": 4,
     "tz_offset_hours": 3,
     "active_start_hour": 7,
