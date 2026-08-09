@@ -1409,15 +1409,23 @@ class Aggregator:
     async def _own_reaction(self, chat: int, comment_id: int) -> bool:
         """Whether this account's own reaction already sits on the comment.
 
-        Best-effort and fail-open: reaction shapes vary by layer, so every read
-        is guarded -- an unreadable comment or an older schema just reacts
-        anyway rather than crashing the queue.
+        The reliable signal is the reaction TALLY: Telegram sets
+        ``chosen_order`` on every ``results`` entry the current account
+        picked, so a non-None chosen_order means "we already reacted here" no
+        matter how many others reacted after (unlike ``recent_reactions``,
+        which is a short, capacity-capped list). We check the tally first and
+        fall back to ``recent_reactions[].my`` for older layers. Best-effort
+        and fail-open: an unreadable comment reacts anyway rather than wedging
+        the queue.
         """
         try:
             message = await self.client.get_messages(chat, ids=comment_id)
         except Exception:  # noqa: BLE001 -- unreachable: fail open, react anyway
             return False
         reactions = getattr(message, 'reactions', None)
+        results = getattr(reactions, 'results', None) or []
+        if any(getattr(r, 'chosen_order', None) is not None for r in results):
+            return True
         recent = getattr(reactions, 'recent_reactions', None) or []
         return any(getattr(r, 'my', False) for r in recent)
 
