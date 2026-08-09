@@ -82,6 +82,12 @@ class Cat:
     once-per-(post, person) dedup key and the /status readout, not for
     placement (a reaction needs no threading). For a plain group it equals
     ``reply_to``.
+
+    ``emojis`` is the exact cat(s) chosen for THIS reaction, decided when the
+    comment is scheduled (not at send time), so the queue is deterministic and
+    inspectable: /status and /requeue can show which cat lands where. Each item
+    is an ``(emoji_id, fallback)`` pair; usually one, occasionally two (the
+    rare double).
     """
 
     chat: int
@@ -89,6 +95,17 @@ class Cat:
     root: int  # the thread root (post) for discussion threading
     when: float
     text: str = ''  # a snippet of the comment being answered (for status)
+    emojis: tuple[tuple[str, str], ...] = ()  # the chosen (id, fallback) cats
+
+
+def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
+    """Parse a persisted ``emojis`` list of [id, fallback] pairs."""
+    rows = raw if isinstance(raw, list) else []
+    return tuple(
+        (str(row[0]), str(row[1]))
+        for row in rows
+        if isinstance(row, (list, tuple)) and len(row) == 2  # noqa: PLR2004
+    )
 
 
 def _cat_from_entry(entry: dict[str, object], when: float) -> Cat:
@@ -100,6 +117,7 @@ def _cat_from_entry(entry: dict[str, object], when: float) -> Cat:
         root=int(entry.get('root', reply_to)),
         when=when,
         text=str(entry.get('text', '')),
+        emojis=_emojis_from_entry(entry.get('emojis')),
     )
 
 
@@ -363,7 +381,12 @@ class CatBrain:
         return reply_to is not None and (chat, reply_to) in self.state.posts
 
     def add_pending(self, cat: Cat) -> None:
-        """Record a cat scheduled but not yet sent (survives a restart)."""
+        """Record a cat scheduled but not yet sent (survives a restart).
+
+        The chosen ``emojis`` ride along, so a restart, /requeue or /status
+        shows and then places exactly the cat that was picked when the comment
+        was scheduled -- not a fresh random one at send time.
+        """
         self.state.pending.append(
             {
                 'chat': cat.chat,
@@ -371,6 +394,7 @@ class CatBrain:
                 'root': cat.root,
                 'when': cat.when,
                 'text': cat.text,
+                'emojis': [[eid, fb] for eid, fb in cat.emojis],
             }
         )
         self._save()

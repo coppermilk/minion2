@@ -649,6 +649,19 @@ def _trim(title: str, width: int = 40) -> str:
     return flat if len(flat) <= width else flat[: width - 1] + '~'
 
 
+def _pending_glyphs(entry: dict[str, object]) -> str:
+    """The chosen cat glyph(s) for a pending entry (the fallbacks), or '?'.
+
+    Reactions scheduled before this field existed have no stored emoji, so
+    they show '?' -- a /requeue does not re-pick them (the choice is made at
+    schedule time), it only re-times what is already there.
+    """
+    raw = entry.get('emojis')
+    rows = raw if isinstance(raw, list) else []
+    glyphs = ''.join(str(row[1]) for row in rows if len(row) == 2)  # noqa: PLR2004
+    return glyphs or '?'
+
+
 def _thread_top(reply: object) -> int | None:
     """The thread-root id a reply belongs to (comment target), or None.
 
@@ -1150,10 +1163,18 @@ class Aggregator:
         post's thread, so re-commenting under the same post gets no second cat,
         but the same person on another post is eligible again. The engine may
         return nothing (skipped, silent day, already catted here).
+
+        The cat(s) are CHOSEN here, at schedule time, and stored on the pending
+        entry -- so /status and /requeue can show exactly which cat will land
+        on which comment, and the send places that same cat rather than a fresh
+        random one.
         """
         key = f'{comment.chat}:{comment.root}:{person}'
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
+            return
+        specs = self.cats.emit()  # decide WHICH cat(s) now, once, persisted
+        if not specs:  # empty pool -> nothing to react with
             return
         cat = cats.Cat(
             chat=comment.chat,
@@ -1161,6 +1182,7 @@ class Aggregator:
             root=comment.root,
             when=when,
             text=comment.text,
+            emojis=tuple((s.emoji_id, s.fallback) for s in specs),
         )
         self.cats.add_pending(cat)
         self._arm_cat(cat)
@@ -1269,7 +1291,7 @@ class Aggregator:
             self._arm_cat(cat)
         count = len(self.cats.state.pending)
         await self.client.send_message(
-            self.config.source, f'Requeued {count} pending cat(s).'
+            self.config.source, await self._plan_text(f'Requeued {count}')
         )
         log.info('requeued %d pending cats', count)
 
@@ -1277,16 +1299,40 @@ class Aggregator:
         """Answer EVERY pending commenter immediately (the /catnow command).
 
         The human-like wait is bypassed: all pending cats are set to fire now
-        (the manual-reply check still applies). An operator override.
+        (the manual-reply check still applies). An operator override. The reply
+        lists exactly which cat lands on which comment, so it is never a
+        mystery which reaction /catnow placed.
         """
         self._cancel_cat_tasks()
         due = self.cats.due_now()
         for cat in due:
             self._arm_cat(cat)
         await self.client.send_message(
-            self.config.source, f'Answering {len(due)} pending cat(s) now.'
+            self.config.source, await self._plan_text(f'Answering {len(due)}')
         )
         log.info('answering %d pending cats now', len(due))
+
+    async def _plan_text(self, head: str) -> str:
+        """`<head> pending cat(s):` then a which-cat-where line for each.
+
+        This is what makes /requeue and /catnow legible: every queued reaction
+        is listed with the exact cat, the comment, its post, and the eta -- so
+        the operator sees the plan instead of a count.
+        """
+        pending = self.cats.state.pending
+        if not pending:
+            return f'{head} pending cat(s). Nothing queued.'
+        labels = await self._chat_labels()
+        now = time.time()
+        lines = [f'{head} pending cat(s):']
+        lines.extend(
+            self._pending_cat_line(entry, labels, now)
+            for entry in pending[:STATUS_PENDING_CATS]
+        )
+        extra = len(pending) - STATUS_PENDING_CATS
+        if extra > 0:
+            lines.append(f'    ... (+{extra} more)')
+        return '\n'.join(lines)
 
     async def greet_now(self) -> None:
         """Force the greeter to poll+process now (the /greetnow command)."""
@@ -1376,32 +1422,34 @@ class Aggregator:
         return any(getattr(r, 'my', False) for r in recent)
 
     async def _send_cats(self, cat: cats.Cat) -> None:
-        """React to the commenter's message with the chosen premium cat(s).
+        """React to the commenter's message with the cat(s) chosen at schedule.
 
         The reaction is placed ON the comment itself -- the cat emoji shows as
         a reaction pill under the commenter's message, not as a reply in the
-        thread.
+        thread. The emoji were picked when the comment was scheduled and stored
+        on ``cat``, so what lands is exactly what /status showed.
         """
-        count = await self._react(cat.chat, cat.reply_to)
-        if count:
-            log.info('cat: reacted with %d emoji in %s', count, cat.chat)
+        placed = await self._react(cat.chat, cat.reply_to, cat.emojis)
+        if placed:
+            glyphs = ''.join(fb for _, fb in cat.emojis)
+            log.info('cat: reacted %s on comment %s in %s',
+                     glyphs, cat.reply_to, cat.chat)
 
-    async def _react(self, peer: int, msg_id: int) -> int:
-        """Place the chosen premium cat(s) as a reaction ON ``msg_id``.
+    async def _react(
+        self, peer: int, msg_id: int, emojis: tuple[tuple[str, str], ...]
+    ) -> bool:
+        """Place the given premium cat(s) as a reaction ON ``msg_id``.
 
-        The whole set goes in ONE ``SendReaction`` call (reactions are atomic:
-        one request carries the account's whole reaction set on the message). A
-        Premium account may hold more than one, so the rare second cat
-        (principle 7) rides the same request. Returns how many were placed (0
-        when the pool is empty). Shared by the post-react and comment-react
-        paths.
+        ``emojis`` are the ``(id, fallback)`` cats chosen up front. The whole
+        set goes in ONE ``SendReaction`` call (reactions are atomic: one
+        request carries the account's whole reaction set on the message).
+        Returns whether anything was placed (False for an empty set). Shared by
+        the post-react and comment-react paths.
         """
-        specs = self.cats.emit()
-        if not specs:
-            return 0
+        if not emojis:
+            return False
         custom = [
-            ReactionCustomEmoji(document_id=int(spec.emoji_id))
-            for spec in specs
+            ReactionCustomEmoji(document_id=int(eid)) for eid, _ in emojis
         ]
         try:
             await self._send_reaction(peer, msg_id, custom)
@@ -1411,13 +1459,11 @@ class Aggregator:
             # same cats (the fallback glyphs), so a cat reaction still lands
             # wherever standard reactions are allowed. If that fails too, it
             # propagates to the caller's guard (logged, never fatal).
-            standard = [
-                ReactionEmoji(emoticon=spec.fallback) for spec in specs
-            ]
+            standard = [ReactionEmoji(emoticon=fb) for _, fb in emojis]
             await self._send_reaction(peer, msg_id, standard)
             log.info('cat: custom reaction rejected in %s; used standard '
                      'emoji', peer)
-        return len(specs)
+        return True
 
     async def _send_reaction(
         self, peer: int, msg_id: int, reaction: list[object]
@@ -1595,20 +1641,29 @@ class Aggregator:
             return []
         now = time.time()
         lines = ['  pending cats:']
-        for entry in pending[:STATUS_PENDING_CATS]:
-            chat = int(entry.get('chat', 0))
-            msg = int(entry.get('reply_to', 0))
-            root = int(entry.get('root', msg))
-            body = str(entry.get('text', ''))
-            what = f'"{body}"' if body else f'comment {msg}'
-            eta = float(entry.get('when', now)) - now
-            when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
-            name = labels.get(chat, chat)
-            lines.append(f'    - {name} post {root}: {what} {when}')
+        lines.extend(
+            self._pending_cat_line(entry, labels, now)
+            for entry in pending[:STATUS_PENDING_CATS]
+        )
         extra = len(pending) - STATUS_PENDING_CATS
         if extra > 0:
             lines.append(f'    ... (+{extra} more)')
         return lines
+
+    def _pending_cat_line(
+        self, entry: dict[str, object], labels: dict[int, str], now: float
+    ) -> str:
+        """One '- <chat> post <root>: <cat> on <comment> <eta>' status line."""
+        chat = int(entry.get('chat', 0))
+        msg = int(entry.get('reply_to', 0))
+        root = int(entry.get('root', msg))
+        body = str(entry.get('text', ''))
+        what = f'"{body}"' if body else f'comment {msg}'
+        glyphs = _pending_glyphs(entry)
+        eta = float(entry.get('when', now)) - now
+        when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
+        name = labels.get(chat, chat)
+        return f'    - {name} post {root}: {glyphs} on {what} {when}'
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
         """The watched comment chats + post ids, one per line, by name."""
@@ -1717,14 +1772,18 @@ class Aggregator:
             return
         if not self.cats.params.react_to_posts:
             return
+        specs = self.cats.emit()
+        emojis = tuple((s.emoji_id, s.fallback) for s in specs)
         try:
-            count = await self._react(target, post_id)
+            placed = await self._react(target, post_id, emojis)
         except Exception:  # noqa: BLE001 -- reacting must never break posting
             log.warning('cat: could not react to new post %s in %s',
                         post_id, target)
             return
-        if count:
-            log.info('cat: reacted to new post %s in %s', post_id, target)
+        if placed:
+            glyphs = ''.join(fb for _, fb in emojis)
+            log.info('cat: reacted %s to new post %s in %s',
+                     glyphs, post_id, target)
 
     async def _watch_post(self, target: int, post_id: int) -> None:
         """Register where comments on this post will appear (the cat target).
