@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import random
+import tempfile
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -51,6 +52,12 @@ _CHANNEL = -1002431466060
 _CHAT = -1004402620527
 _POST_NEW = 1002
 _POST_OLD = 1001
+
+# Throwaway state for the run, in the OS temp dir (works on Windows and
+# POSIX alike -- a hardcoded /tmp resolves to \tmp on Windows and crashes
+# the atomic save). Cleared at the start of main() so every run is fresh
+# and reproducible, not replaying a previous run's dedup state.
+_STATE = Path(tempfile.gettempdir()) / 'cats_proof_state.json'
 
 
 def _local(ts: float, params: cats.CatParams) -> str:
@@ -143,9 +150,10 @@ def main() -> None:
     """Drive the real engine end to end and print the proof."""
     params = _load_params()
     pool = ', '.join(f'{c.emoji_id}({c.fallback})' for c in params.pool)
+    _STATE.unlink(missing_ok=True)  # start fresh: don't replay old dedup state
     brain = cats.CatBrain(
         params,
-        Path('/tmp/cats_proof_state.json'),  # noqa: S108 -- throwaway state
+        _STATE,
         random.Random(_SEED),  # noqa: S311 -- reproducible proof, not crypto
     )
     brain.clock = lambda: _NOW
