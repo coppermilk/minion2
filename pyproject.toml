@@ -87,6 +87,10 @@ ignore = [
     # OPERATIONS reason codes (Blocked, QuotaExceeded), never
     # Error-suffixed mechanism names.
     'N818',
+    # This repo carries no per-file copyright headers; CPY001 (missing
+    # copyright notice) stabilised out of preview in a newer ruff and would
+    # otherwise flag every file. Waived project-wide, not file by file.
+    'CPY001',
 ]
 
 [tool.ruff.lint.mccabe]
