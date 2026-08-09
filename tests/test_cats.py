@@ -60,6 +60,11 @@ def _params(**over):
             cats.CatEmoji('1', 'a', 1.0, ('bodry',)),
             cats.CatEmoji('2', 'b', 1.0, ('sleepy',)),
         ),
+        'like_pool': (
+            cats.CatEmoji('L1', 'x', 1.0, ()),
+            cats.CatEmoji('L2', 'y', 1.0, ()),
+            cats.CatEmoji('L3', 'z', 1.0, ()),
+        ),
     }
     base.update(over)
     return cats.CatParams(**base)
@@ -400,6 +405,43 @@ def test_emit_records_last_send_and_recency(tmp_path: Path) -> None:
 def test_emit_with_empty_pool_sends_nothing(tmp_path: Path) -> None:
     brain = _brain(tmp_path, pool=())
     assert brain.emit() == []
+
+
+# --- the like pool: deterministic round-robin reaction
+
+
+def test_pick_like_is_deterministic_round_robin(tmp_path: Path) -> None:
+    brain = _brain(tmp_path)
+    picks = [brain.pick_like()[0].emoji_id for _ in range(7)]
+    # cycles the 3-entry pool in order, wrapping, no randomness
+    assert picks == ['L1', 'L2', 'L3', 'L1', 'L2', 'L3', 'L1']
+
+
+def test_pick_like_cursor_survives_restart(tmp_path: Path) -> None:
+    path = tmp_path / 'cats_state.json'
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    assert brain.pick_like()[0].emoji_id == 'L1'
+    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    assert fresh.pick_like()[0].emoji_id == 'L2'  # resumed, not restarted
+
+
+def test_pick_like_empty_pool_sends_nothing(tmp_path: Path) -> None:
+    brain = _brain(tmp_path, like_pool=())
+    assert brain.pick_like() == []
+
+
+def test_load_reads_the_like_pool() -> None:
+    params = cats.load_cat_params(
+        {
+            'cats': {'enabled': True},
+            'emoji': [
+                {'type': 'cat', 'id': '9', 'fallback': 'c'},
+                {'type': 'like', 'id': '7', 'fallback': 'k'},
+            ],
+        }
+    )
+    assert [c.emoji_id for c in params.like_pool] == ['7']
+    assert [c.emoji_id for c in params.pool] == ['9']
 
 
 # --- principle 9 support: state persists across restarts

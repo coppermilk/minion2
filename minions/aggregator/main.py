@@ -342,7 +342,7 @@ def _read_json(path: Path) -> dict[str, object]:
 # entry tagged with its "type"; the post-composition lists (love/lead/arrow/
 # platform) and the cat pool are all derived from it, and /emojis renders it in
 # this order.
-_EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat')
+_EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat', 'like')
 
 
 def emoji_catalog(data: dict[str, object]) -> list[dict[str, object]]:
@@ -1173,8 +1173,8 @@ class Aggregator:
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        specs = self.cats.emit()  # decide WHICH cat(s) now, once, persisted
-        if not specs:  # empty pool -> nothing to react with
+        specs = self.cats.pick_like()  # deterministic like, chosen once now
+        if not specs:  # empty like pool -> nothing to react with
             return
         cat = cats.Cat(
             chat=comment.chat,
@@ -1780,7 +1780,7 @@ class Aggregator:
             return
         if not self.cats.params.react_to_posts:
             return
-        specs = self.cats.emit()
+        specs = self.cats.pick_like()
         emojis = tuple((s.emoji_id, s.fallback) for s in specs)
         try:
             placed = await self._react(target, post_id, emojis)

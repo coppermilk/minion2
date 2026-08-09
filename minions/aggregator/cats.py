@@ -177,6 +177,10 @@ class CatParams:
     session_max_sec: float  # hard cap on one session's span
     max_reply_delay_sec: float  # a cat older than this is too stale -> skip
     pool: tuple[CatEmoji, ...]
+    # The LIKE pool: the emoji placed as the default reaction. Chosen
+    # DETERMINISTICALLY (round-robin, not weighted-random), so which like lands
+    # is predictable and inspectable. Separate from ``pool`` (the cats).
+    like_pool: tuple[CatEmoji, ...]
 
 
 @dataclass
@@ -204,6 +208,7 @@ class CatState:
         default_factory=dict
     )  # hour -> decayed obs
     alive_ts: float = 0.0  # last heartbeat, for decay
+    like_cursor: int = 0  # round-robin position in the like pool
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -614,6 +619,21 @@ class CatBrain:
             return None
         return _pick_slot(slots, weights, self.rng)
 
+    def pick_like(self) -> list[CatEmoji]:
+        """The next like emoji, chosen DETERMINISTICALLY (round-robin).
+
+        No randomness, no mood/recency: the like pool is cycled in order via a
+        persisted cursor, so which like lands is fully predictable and shows in
+        /status. Always one like (no doubles). An empty like pool yields [].
+        """
+        pool = self.params.like_pool
+        if not pool:
+            return []
+        like = pool[self.state.like_cursor % len(pool)]
+        self.state.like_cursor = (self.state.like_cursor + 1) % len(pool)
+        self._save()
+        return [like]
+
     def emit(self) -> list[CatEmoji]:
         """Pick the cat(s) to send now and record the send (principles 3,4,7).
 
@@ -687,6 +707,7 @@ class CatBrain:
                 str(k): float(v) for k, v in (raw.get('alive') or {}).items()
             },
             alive_ts=float(raw.get('alive_ts', 0.0)),
+            like_cursor=int(raw.get('like_cursor', 0)),
         )
 
     def _save(self) -> None:
@@ -704,6 +725,7 @@ class CatBrain:
             'pending': self.state.pending,
             'alive': self.state.alive,
             'alive_ts': self.state.alive_ts,
+            'like_cursor': self.state.like_cursor,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(
@@ -735,19 +757,20 @@ def _peaks(
     return tuple(out)
 
 
-def _cat_entries(data: dict[str, object]) -> list[dict]:
-    """The cat-emoji dicts from the unified top-level ``emoji`` array."""
+def _entries_of_type(data: dict[str, object], etype: str) -> list[dict]:
+    """The emoji dicts of one ``type`` from the unified top-level array."""
     top = data.get('emoji')
     if not isinstance(top, list):
         return []
-    return [e for e in top if isinstance(e, dict) and e.get('type') == 'cat']
+    return [e for e in top if isinstance(e, dict) and e.get('type') == etype]
 
 
 def load_cat_params(data: dict[str, object]) -> CatParams:
     """Load the cat engine's parameters from the constants JSON 'cats' key."""
     cats = data.get('cats') if isinstance(data.get('cats'), dict) else {}
     cats = cats or {}
-    pool = tuple(_emoji(dict(e)) for e in _cat_entries(data))
+    pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'cat'))
+    like_pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'like'))
     return CatParams(
         enabled=bool(cats.get('enabled', False)),
         comments_in_discussion=bool(cats.get('comments_in_discussion', False)),
@@ -789,4 +812,5 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         session_max_sec=float(cats.get('session_max_sec', 1200.0)),
         max_reply_delay_sec=float(cats.get('max_reply_delay_sec', 21600.0)),
         pool=pool,
+        like_pool=like_pool,
     )
