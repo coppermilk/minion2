@@ -178,8 +178,10 @@ class CatParams:
     max_reply_delay_sec: float  # a cat older than this is too stale -> skip
     pool: tuple[CatEmoji, ...]
     # The LIKE pool: the emoji placed as the default reaction. Chosen
-    # DETERMINISTICALLY (round-robin, not weighted-random), so which like lands
-    # is predictable and inspectable. Separate from ``pool`` (the cats).
+    # pseudo-randomly but DETERMINISTICALLY -- seeded by the target id, so the
+    # same comment/post always yields the same like: varied across targets, yet
+    # recomputable after a restart (no persisted cursor). Separate from the cat
+    # ``pool``.
     like_pool: tuple[CatEmoji, ...]
 
 
@@ -208,7 +210,6 @@ class CatState:
         default_factory=dict
     )  # hour -> decayed obs
     alive_ts: float = 0.0  # last heartbeat, for decay
-    like_cursor: int = 0  # round-robin position in the like pool
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -619,20 +620,21 @@ class CatBrain:
             return None
         return _pick_slot(slots, weights, self.rng)
 
-    def pick_like(self) -> list[CatEmoji]:
-        """The next like emoji, chosen DETERMINISTICALLY (round-robin).
+    def pick_like(self, key: str) -> list[CatEmoji]:
+        """One like, pseudo-random but DETERMINISTIC in ``key``.
 
-        No randomness, no mood/recency: the like pool is cycled in order via a
-        persisted cursor, so which like lands is fully predictable and shows in
-        /status. Always one like (no doubles). An empty like pool yields [].
+        Seeded by ``key`` -- a stable per-target handle (the id of the message
+        the reaction lands on) -- so the same target always yields the same
+        like: it looks varied across targets (not a visible round-robin), yet
+        is recomputable after a restart because it is a pure function of the
+        key and the pool, with no persisted cursor. Always one like. An empty
+        like pool yields [].
         """
         pool = self.params.like_pool
         if not pool:
             return []
-        like = pool[self.state.like_cursor % len(pool)]
-        self.state.like_cursor = (self.state.like_cursor + 1) % len(pool)
-        self._save()
-        return [like]
+        roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible
+        return [roll.choice(pool)]
 
     def emit(self) -> list[CatEmoji]:
         """Pick the cat(s) to send now and record the send (principles 3,4,7).
@@ -707,7 +709,6 @@ class CatBrain:
                 str(k): float(v) for k, v in (raw.get('alive') or {}).items()
             },
             alive_ts=float(raw.get('alive_ts', 0.0)),
-            like_cursor=int(raw.get('like_cursor', 0)),
         )
 
     def _save(self) -> None:
@@ -725,7 +726,6 @@ class CatBrain:
             'pending': self.state.pending,
             'alive': self.state.alive,
             'alive_ts': self.state.alive_ts,
-            'like_cursor': self.state.like_cursor,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(

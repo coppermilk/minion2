@@ -108,7 +108,7 @@ def _post_reaction(brain: cats.CatBrain, channel: int, post_id: int) -> None:
     No schedule, no wait -- the post is ours, so the next deterministic like
     goes straight onto the channel message.
     """
-    specs = brain.pick_like()
+    specs = brain.pick_like(f'{channel}:{post_id}')
     reactions = ', '.join(
         f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
     )
@@ -139,7 +139,8 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
         print(f'  comment {msg_id} by {person} under post {root}: '
               f'no like (dedup / skip / silent day)')
         return None
-    specs = brain.pick_like()  # deterministic like, chosen once, persisted
+    # pseudo-random but deterministic in the comment id (recomputable)
+    specs = brain.pick_like(f'{_CHAT}:{msg_id}')
     cat = cats.Cat(
         chat=_CHAT, reply_to=msg_id, root=root, when=when, text=text,
         emojis=tuple((s.emoji_id, s.fallback) for s in specs),
@@ -167,7 +168,8 @@ def _banner(params: cats.CatParams) -> None:
     print(f'watch_posts             : {params.watch_posts} '
           f'(only the last N posts are answered)')
     print(f'like pool ({len(params.like_pool):>2})           : {likes}')
-    print('  (deterministic round-robin -- the next like is predictable)')
+    print('  (pseudo-random, seeded by the target id -- same target, same '
+          'like; recomputable after a restart)')
     print(f'now                     : {_local(_NOW, params)}')
     print()
 

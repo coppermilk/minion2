@@ -407,27 +407,37 @@ def test_emit_with_empty_pool_sends_nothing(tmp_path: Path) -> None:
     assert brain.emit() == []
 
 
-# --- the like pool: deterministic round-robin reaction
+# --- the like pool: pseudo-random but deterministic in the target key
 
 
-def test_pick_like_is_deterministic_round_robin(tmp_path: Path) -> None:
+def test_pick_like_is_deterministic_in_the_key(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
-    picks = [brain.pick_like()[0].emoji_id for _ in range(7)]
-    # cycles the 3-entry pool in order, wrapping, no randomness
-    assert picks == ['L1', 'L2', 'L3', 'L1', 'L2', 'L3', 'L1']
+    first = brain.pick_like('chat:5001')[0].emoji_id
+    # same key -> same like, every time (recomputable, no cursor)
+    assert all(
+        brain.pick_like('chat:5001')[0].emoji_id == first for _ in range(5)
+    )
 
 
-def test_pick_like_cursor_survives_restart(tmp_path: Path) -> None:
+def test_pick_like_survives_a_restart(tmp_path: Path) -> None:
     path = tmp_path / 'cats_state.json'
     brain = cats.CatBrain(_params(), path, random.Random(0))
-    assert brain.pick_like()[0].emoji_id == 'L1'
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
-    assert fresh.pick_like()[0].emoji_id == 'L2'  # resumed, not restarted
+    before = brain.pick_like('chat:900')[0].emoji_id
+    fresh = cats.CatBrain(_params(), path, random.Random(999))
+    # a fresh instance (different rng seed) recomputes the SAME like: the
+    # choice is a pure function of the key, not of engine state.
+    assert fresh.pick_like('chat:900')[0].emoji_id == before
+
+
+def test_pick_like_varies_across_keys(tmp_path: Path) -> None:
+    brain = _brain(tmp_path)
+    seen = {brain.pick_like(f'k{i}')[0].emoji_id for i in range(50)}
+    assert len(seen) > 1  # pseudo-random: not the same like for every target
 
 
 def test_pick_like_empty_pool_sends_nothing(tmp_path: Path) -> None:
     brain = _brain(tmp_path, like_pool=())
-    assert brain.pick_like() == []
+    assert brain.pick_like('any') == []
 
 
 def test_load_reads_the_like_pool() -> None:

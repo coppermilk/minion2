@@ -1173,7 +1173,9 @@ class Aggregator:
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        specs = self.cats.pick_like()  # deterministic like, chosen once now
+        # Pseudo-random but deterministic in the comment id: the same comment
+        # always gets the same like (recomputable after a restart).
+        specs = self.cats.pick_like(f'{comment.chat}:{comment.msg_id}')
         if not specs:  # empty like pool -> nothing to react with
             return
         cat = cats.Cat(
@@ -1780,7 +1782,7 @@ class Aggregator:
             return
         if not self.cats.params.react_to_posts:
             return
-        specs = self.cats.pick_like()
+        specs = self.cats.pick_like(f'{target}:{post_id}')
         emojis = tuple((s.emoji_id, s.fallback) for s in specs)
         try:
             placed = await self._react(target, post_id, emojis)
