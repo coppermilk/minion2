@@ -354,6 +354,19 @@ def test_pending_cats_are_re_armed_and_missed_ones_renewed(
     assert armed[901] > now  # missed one renewed to the future
 
 
+def test_pending_cat_emoji_round_trips(tmp_path: Path) -> None:
+    # The cat chosen at schedule time is persisted and restored, so a
+    # restart / requeue places (and /status shows) the SAME cat.
+    path = tmp_path / 'cats_state.json'
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    brain.add_pending(
+        cats.Cat(5, 900, 900, 111.0, emojis=(('42', 'x'), ('43', 'y')))
+    )
+    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    (restored,) = fresh.rearm(renew_all=True)
+    assert restored.emojis == (('42', 'x'), ('43', 'y'))
+
+
 def test_done_pending_forgets_a_sent_cat(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
     brain.add_pending(cats.Cat(5, 900, 900, 111.0))
