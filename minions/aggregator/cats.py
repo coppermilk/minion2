@@ -1,10 +1,10 @@
-"""Human-like cat-emoji replies to people who comment on the last posts.
+"""Human-like cat-emoji reactions to people who comment on the last posts.
 
-The aggregator posts announces; this module lets its user account reply to a
-commenter with a premium cat emoji ONCE, timed and chosen so the behaviour
-reads as a distracted human, not a scheduler. It is deliberately Telethon-free
-(pure Python + stdlib) so every decision is unit-testable; ``main.py`` owns the
-client and calls in here for the *when* and the *what*.
+The aggregator posts announces; this module lets its user account react to a
+commenter's comment with a premium cat emoji ONCE, timed and chosen so the
+behaviour reads as a distracted human, not a scheduler. It is deliberately
+Telethon-free (pure Python + stdlib) so every decision is unit-testable;
+``main.py`` owns the client and calls in here for the *when* and the *what*.
 
 The nine principles, mapped to code:
 
@@ -74,11 +74,14 @@ class CatEmoji:
 
 @dataclass(frozen=True)
 class Cat:
-    """A scheduled reply: cat ``reply_to`` in ``chat``, under ``root``.
+    """A scheduled cat reaction: react to ``reply_to`` in ``chat``.
 
-    ``root`` is the discussion thread root (the post), needed so the reply is
-    placed INSIDE the comment thread and shows as a real reply, not a flat
-    group message. For a plain group it equals ``reply_to`` (no threading).
+    ``reply_to`` is the commenter's message id -- the cat emoji reaction is
+    placed directly on it (not a reply in the thread). ``root`` is the post
+    (thread root) the comment sits under; it is kept for the
+    once-per-(post, person) dedup key and the /status readout, not for
+    placement (a reaction needs no threading). For a plain group it equals
+    ``reply_to``.
     """
 
     chat: int

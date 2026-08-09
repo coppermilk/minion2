@@ -4,14 +4,19 @@ Run it -- no network, no Telegram, no session -- and watch the REAL engine
 (``cats.CatBrain``) and the REAL premium cat-emoji from
 ``aggregator_constants.json`` walk the whole path a comment takes:
 
-    a post is watched  ->  a person comments under it  ->  the engine decides
-    WHEN (human-timed) and WHICH cat  ->  a threaded reply carrying that
-    premium cat-emoji is aimed at the comment, INSIDE the post's thread.
+    a post goes out  ->  a cat REACTION lands on the post right away  ->  a
+    person comments under it  ->  the engine decides WHEN (human-timed) and
+    WHICH cat  ->  a custom-emoji cat REACTION is placed ON the comment message
+    (a reaction pill under it), NOT a reply in the thread.
+
+New posts are reacted to IMMEDIATELY (no human-like wait) -- they are ours, so
+the cat goes on straight away; comments keep the distracted-human timing.
 
 Nothing here mocks the decision code: ``schedule``, ``emit`` and ``is_comment``
 are the same functions ``main.py`` calls in production. Only the Telethon send
-is stood in for -- we print the exact payload (message text, the custom-emoji
-entity, and the reply target) that ``main._send_cat`` would hand to Telethon.
+is stood in for -- we print the exact payload (the ``SendReaction`` request
+with its ``ReactionCustomEmoji`` and the target comment id) that
+``main._send_cats`` would hand to Telethon.
 
     python -m minions.aggregator.cats_proof
 
@@ -34,21 +39,18 @@ from minions.aggregator import cats
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
 # Midday on a weekday, inside the active window, so cats are answered promptly.
-_SEED = 0
+_SEED = 1
 _NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC).timestamp()
 
-# A stand-in channel discussion group and two of its posts (thread roots): the
-# real target is a channel whose comments live in a linked discussion group
-# (comments_in_discussion), so a comment is a reply whose thread root is the
-# post. 1002 is the freshest post, 1001 the previous one.
-_CHAT = -1002431466060
+# The target CHANNEL (posts live here; a post reaction goes on the channel
+# message) and its linked DISCUSSION group (comments live here; a comment
+# reaction goes on the comment message). comments_in_discussion is True, so a
+# comment is a reply whose thread root is the post. 1002 is the freshest post's
+# thread, 1001 the previous one.
+_CHANNEL = -1002431466060
+_CHAT = -1004402620527
 _POST_NEW = 1002
 _POST_OLD = 1001
-
-
-def _utf16_len(text: str) -> int:
-    """UTF-16 code units -- Telegram's entity unit (see premium_emoji)."""
-    return len(text.encode('utf-16-le')) // 2
 
 
 def _local(ts: float, params: cats.CatParams) -> str:
@@ -65,27 +67,45 @@ def _load_params() -> cats.CatParams:
     return cats.load_cat_params(data)
 
 
-def _payload(spec: cats.CatEmoji, cat: cats.Cat) -> str:
-    """The exact reply main._send_cat would send, rendered for the proof.
+def _payload(specs: list[cats.CatEmoji], cat: cats.Cat) -> str:
+    """The exact reaction main._send_cats would send, rendered for the proof.
 
-    A premium emoji is one visible glyph (the fallback) plus a custom-emoji
-    entity pointing that span at the emoji's document id, and the reply is
-    threaded: reply_to = the comment, top = the post's thread root -- so it
-    lands INSIDE that comment's thread, not as a flat group message.
+    A cat reaction is a ``ReactionCustomEmoji`` pointing at the emoji's
+    document id; the whole set is placed ON the comment message (msg_id =
+    the comment) in ONE ``SendReaction`` call -- a reaction pill under the
+    comment, not a reply in the thread. A Premium account may hold more than
+    one, so the rare second cat rides the same request.
     """
-    length = _utf16_len(spec.fallback)
-    entity = (
-        f'MessageEntityCustomEmoji(offset=0, length={length}, '
-        f'document_id={spec.emoji_id})'
+    glyphs = ' '.join(s.fallback for s in specs)
+    reactions = ', '.join(
+        f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
     )
     return (
-        f'      text      : {spec.fallback!r}  (premium cat)\n'
-        f'      entity    : {entity}\n'
-        f'      reply_to  : {cat.reply_to}   (the comment)\n'
-        f'      top_msg_id: {cat.root}   (the post thread -- keeps it in '
-        f'the comments)\n'
-        f'      peer      : {cat.chat}'
+        f'      request  : SendReaction(peer={cat.chat}, '
+        f'msg_id={cat.reply_to}, add_to_recent=True)\n'
+        f'      reaction : [{reactions}]\n'
+        f'      shows as : {glyphs}   (a reaction pill ON comment '
+        f'{cat.reply_to}, under post {cat.root})'
     )
+
+
+def _post_reaction(brain: cats.CatBrain, channel: int, post_id: int) -> None:
+    """Immediately react to a freshly-created post (main._react_to_post).
+
+    No schedule, no wait -- the post is ours, so ``_react`` emits and the cat
+    goes straight onto the channel message.
+    """
+    specs = brain.emit()
+    reactions = ', '.join(
+        f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
+    )
+    glyphs = ' '.join(s.fallback for s in specs)
+    print(f'  new post {post_id} in channel {channel}: CAT REACTION now '
+          f'(immediate, no wait)')
+    print(f'      request  : SendReaction(peer={channel}, msg_id={post_id}, '
+          f'add_to_recent=True)')
+    print(f'      reaction : [{reactions}]')
+    print(f'      shows as : {glyphs}   (a reaction pill ON the post itself)')
 
 
 def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # noqa: PLR0913 -- a proof reads clearest with every field named at the call site
@@ -94,7 +114,7 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
 
     Mirrors main._maybe_cat/_schedule_comment: recognise the comment, key it
     once-per-(post, person), let the engine decide when, then (on a cat) emit
-    which premium cat-emoji to send. Returns the scheduled Cat, or None.
+    which premium cat-emoji to react with. Returns the scheduled Cat, or None.
     """
     if not brain.is_comment(_CHAT, root):
         print(f'  comment {msg_id} by {person}: NOT under a watched post '
@@ -111,12 +131,11 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
     )
     brain.add_pending(cat)
     specs = brain.emit()
-    params = brain.params
-    print(f'  comment {msg_id} by {person} under post {root}: CAT scheduled')
-    print(f'      when      : {_local(when, params)}   '
+    print(f'  comment {msg_id} by {person} under post {root}: CAT REACTION '
+          f'scheduled')
+    print(f'      when     : {_local(when, brain.params)}   '
           f'(+{when - _NOW:.0f}s, jittered off :00)')
-    for spec in specs:
-        print(_payload(spec, cat))
+    print(_payload(specs, cat))
     return cat
 
 
@@ -132,7 +151,7 @@ def main() -> None:
     brain.clock = lambda: _NOW
 
     print('=' * 72)
-    print('PROOF OF WORK -- cat reactions to comments under the last posts')
+    print('PROOF OF WORK -- cat REACTIONS on new posts and on their comments')
     print('=' * 72)
     print(f'engine enabled          : {params.enabled}')
     print(f'comments_in_discussion  : {params.comments_in_discussion} '
@@ -143,7 +162,11 @@ def main() -> None:
     print(f'now                     : {_local(_NOW, params)}')
     print()
 
-    print('STEP 1  watch the last posts (main.backfill_cat_posts)')
+    print('STEP 1  a new post goes out -> react ON the post immediately')
+    _post_reaction(brain, _CHANNEL, 500)
+    print()
+
+    print('STEP 2  watch the last posts (main.backfill_cat_posts)')
     brain.note_post(_CHAT, _POST_OLD)
     brain.note_post(_CHAT, _POST_NEW)
     print(f'  watch-list: {brain.posts}')
@@ -153,39 +176,40 @@ def main() -> None:
           f'{brain.is_comment(_CHAT, 9999)}')
     print()
 
-    print('STEP 2  a person comments under the freshest post -> a cat')
+    print('STEP 3  a person comments under the freshest post -> react on it')
     _comment(brain, root=_POST_NEW, msg_id=5001, person='alice', engaged=True,
              text='love this one!')
     print()
 
-    print('STEP 3  once per (post, person): the same person, same post again')
+    print('STEP 4  once per (post, person): the same person, same post again')
     _comment(brain, root=_POST_NEW, msg_id=5002, person='alice', engaged=True,
              text='and again')
     print()
 
-    print('STEP 4  a DIFFERENT person, same post -> eligible again')
+    print('STEP 5  a DIFFERENT person, same post -> eligible again')
     _comment(brain, root=_POST_NEW, msg_id=5003, person='bob', engaged=True,
              text='haha nice')
     print()
 
-    print('STEP 5  the SAME person under a DIFFERENT post -> eligible again')
+    print('STEP 6  the SAME person under a DIFFERENT post -> eligible again')
     _comment(brain, root=_POST_OLD, msg_id=5004, person='alice', engaged=False,
              text='saw this yesterday')
     print()
 
-    print('STEP 6  a message that is not a comment on a watched post')
+    print('STEP 7  a message that is not a comment on a watched post')
     _comment(brain, root=7777, msg_id=5005, person='carol', engaged=False,
              text='off-topic chatter')
     print()
 
-    print('STEP 7  the queue that survives a restart (persisted pending cats)')
+    print('STEP 8  the queue that survives a restart (persisted pending cats)')
     for entry in brain.state.pending:
-        print(f'  pending: reply_to={entry["reply_to"]} '
-              f'root={entry["root"]} in {entry["chat"]}  "{entry["text"]}"')
+        print(f'  pending: react on comment {entry["reply_to"]} '
+              f'(post {entry["root"]}) in {entry["chat"]}  "{entry["text"]}"')
     print()
     count = len(brain.state.pending)
-    print(f'RESULT: {count} cat reply(ies) aimed at comments inside their '
-          f'posts -- once per (post, person), human-timed.')
+    print(f'RESULT: the new post got a cat reaction immediately, and {count} '
+          f'cat reaction(s) are queued ON comments -- once per (post, '
+          f'person), human-timed.')
     print('=' * 72)
 
 
