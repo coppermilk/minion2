@@ -60,6 +60,11 @@ def _params(**over):
             cats.CatEmoji('1', 'a', 1.0, ('bodry',)),
             cats.CatEmoji('2', 'b', 1.0, ('sleepy',)),
         ),
+        'like_pool': (
+            cats.CatEmoji('L1', 'x', 1.0, ()),
+            cats.CatEmoji('L2', 'y', 1.0, ()),
+            cats.CatEmoji('L3', 'z', 1.0, ()),
+        ),
     }
     base.update(over)
     return cats.CatParams(**base)
@@ -400,6 +405,53 @@ def test_emit_records_last_send_and_recency(tmp_path: Path) -> None:
 def test_emit_with_empty_pool_sends_nothing(tmp_path: Path) -> None:
     brain = _brain(tmp_path, pool=())
     assert brain.emit() == []
+
+
+# --- the like pool: pseudo-random but deterministic in the target key
+
+
+def test_pick_like_is_deterministic_in_the_key(tmp_path: Path) -> None:
+    brain = _brain(tmp_path)
+    first = brain.pick_like('chat:5001')[0].emoji_id
+    # same key -> same like, every time (recomputable, no cursor)
+    assert all(
+        brain.pick_like('chat:5001')[0].emoji_id == first for _ in range(5)
+    )
+
+
+def test_pick_like_survives_a_restart(tmp_path: Path) -> None:
+    path = tmp_path / 'cats_state.json'
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    before = brain.pick_like('chat:900')[0].emoji_id
+    fresh = cats.CatBrain(_params(), path, random.Random(999))
+    # a fresh instance (different rng seed) recomputes the SAME like: the
+    # choice is a pure function of the key, not of engine state.
+    assert fresh.pick_like('chat:900')[0].emoji_id == before
+
+
+def test_pick_like_varies_across_keys(tmp_path: Path) -> None:
+    brain = _brain(tmp_path)
+    seen = {brain.pick_like(f'k{i}')[0].emoji_id for i in range(50)}
+    assert len(seen) > 1  # pseudo-random: not the same like for every target
+
+
+def test_pick_like_empty_pool_sends_nothing(tmp_path: Path) -> None:
+    brain = _brain(tmp_path, like_pool=())
+    assert brain.pick_like('any') == []
+
+
+def test_load_reads_the_like_pool() -> None:
+    params = cats.load_cat_params(
+        {
+            'cats': {'enabled': True},
+            'emoji': [
+                {'type': 'cat', 'id': '9', 'fallback': 'c'},
+                {'type': 'like', 'id': '7', 'fallback': 'k'},
+            ],
+        }
+    )
+    assert [c.emoji_id for c in params.like_pool] == ['7']
+    assert [c.emoji_id for c in params.pool] == ['9']
 
 
 # --- principle 9 support: state persists across restarts

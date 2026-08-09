@@ -342,7 +342,7 @@ def _read_json(path: Path) -> dict[str, object]:
 # entry tagged with its "type"; the post-composition lists (love/lead/arrow/
 # platform) and the cat pool are all derived from it, and /emojis renders it in
 # this order.
-_EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat')
+_EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat', 'like')
 
 
 def emoji_catalog(data: dict[str, object]) -> list[dict[str, object]]:
@@ -1173,8 +1173,10 @@ class Aggregator:
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        specs = self.cats.emit()  # decide WHICH cat(s) now, once, persisted
-        if not specs:  # empty pool -> nothing to react with
+        # Pseudo-random but deterministic in the comment id: the same comment
+        # always gets the same like (recomputable after a restart).
+        specs = self.cats.pick_like(f'{comment.chat}:{comment.msg_id}')
+        if not specs:  # empty like pool -> nothing to react with
             return
         cat = cats.Cat(
             chat=comment.chat,
@@ -1409,15 +1411,23 @@ class Aggregator:
     async def _own_reaction(self, chat: int, comment_id: int) -> bool:
         """Whether this account's own reaction already sits on the comment.
 
-        Best-effort and fail-open: reaction shapes vary by layer, so every read
-        is guarded -- an unreadable comment or an older schema just reacts
-        anyway rather than crashing the queue.
+        The reliable signal is the reaction TALLY: Telegram sets
+        ``chosen_order`` on every ``results`` entry the current account
+        picked, so a non-None chosen_order means "we already reacted here" no
+        matter how many others reacted after (unlike ``recent_reactions``,
+        which is a short, capacity-capped list). We check the tally first and
+        fall back to ``recent_reactions[].my`` for older layers. Best-effort
+        and fail-open: an unreadable comment reacts anyway rather than wedging
+        the queue.
         """
         try:
             message = await self.client.get_messages(chat, ids=comment_id)
         except Exception:  # noqa: BLE001 -- unreachable: fail open, react anyway
             return False
         reactions = getattr(message, 'reactions', None)
+        results = getattr(reactions, 'results', None) or []
+        if any(getattr(r, 'chosen_order', None) is not None for r in results):
+            return True
         recent = getattr(reactions, 'recent_reactions', None) or []
         return any(getattr(r, 'my', False) for r in recent)
 
@@ -1772,7 +1782,7 @@ class Aggregator:
             return
         if not self.cats.params.react_to_posts:
             return
-        specs = self.cats.emit()
+        specs = self.cats.pick_like(f'{target}:{post_id}')
         emojis = tuple((s.emoji_id, s.fallback) for s in specs)
         try:
             placed = await self._react(target, post_id, emojis)

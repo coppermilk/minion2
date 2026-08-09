@@ -105,15 +105,15 @@ def _payload(specs: list[cats.CatEmoji], cat: cats.Cat) -> str:
 def _post_reaction(brain: cats.CatBrain, channel: int, post_id: int) -> None:
     """Immediately react to a freshly-created post (main._react_to_post).
 
-    No schedule, no wait -- the post is ours, so ``_react`` emits and the cat
+    No schedule, no wait -- the post is ours, so the next deterministic like
     goes straight onto the channel message.
     """
-    specs = brain.emit()
+    specs = brain.pick_like(f'{channel}:{post_id}')
     reactions = ', '.join(
         f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
     )
     glyphs = ' '.join(s.fallback for s in specs)
-    print(f'  new post {post_id} in channel {channel}: CAT REACTION now '
+    print(f'  new post {post_id} in channel {channel}: LIKE REACTION now '
           f'(immediate, no wait)')
     print(f'      request  : SendReaction(peer={channel}, msg_id={post_id}, '
           f'add_to_recent=True)')
@@ -137,14 +137,16 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
     when = brain.schedule(key, engaged=engaged)
     if when is None:
         print(f'  comment {msg_id} by {person} under post {root}: '
-              f'no cat (dedup / skip / silent day)')
+              f'no like (dedup / skip / silent day)')
         return None
+    # pseudo-random but deterministic in the comment id (recomputable)
+    specs = brain.pick_like(f'{_CHAT}:{msg_id}')
     cat = cats.Cat(
-        chat=_CHAT, reply_to=msg_id, root=root, when=when, text=text
+        chat=_CHAT, reply_to=msg_id, root=root, when=when, text=text,
+        emojis=tuple((s.emoji_id, s.fallback) for s in specs),
     )
     brain.add_pending(cat)
-    specs = brain.emit()
-    print(f'  comment {msg_id} by {person} under post {root}: CAT REACTION '
+    print(f'  comment {msg_id} by {person} under post {root}: LIKE REACTION '
           f'scheduled')
     print(f'      when     : {_local(when, brain.params)}   '
           f'(+{when - _NOW:.0f}s, jittered off :00)')
@@ -154,9 +156,9 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
 
 def _banner(params: cats.CatParams) -> None:
     """Print the header block: what this is and the live config it reads."""
-    pool = ', '.join(f'{c.emoji_id}({c.fallback})' for c in params.pool)
+    likes = ', '.join(f'{c.emoji_id}({c.fallback})' for c in params.like_pool)
     print('=' * 72)
-    print('PROOF OF WORK -- cat REACTIONS on comments (posts optional)')
+    print('PROOF OF WORK -- LIKE REACTIONS on comments (deterministic)')
     print('=' * 72)
     print(f'engine enabled          : {params.enabled}')
     print(f'comments_in_discussion  : {params.comments_in_discussion} '
@@ -165,22 +167,24 @@ def _banner(params: cats.CatParams) -> None:
           f'(like our own posts -- optional, off by default)')
     print(f'watch_posts             : {params.watch_posts} '
           f'(only the last N posts are answered)')
-    print(f'premium cat pool ({len(params.pool):>2})    : {pool}')
+    print(f'like pool ({len(params.like_pool):>2})           : {likes}')
+    print('  (pseudo-random, seeded by the target id -- same target, same '
+          'like; recomputable after a restart)')
     print(f'now                     : {_local(_NOW, params)}')
     print()
 
 
 def _closing(count: int) -> None:
     """Print the result line and the how-to-see-it-live note."""
-    print(f'RESULT: {count} cat reaction(s) are queued ON comments -- once '
-          f'per (post, person), human-timed.')
+    print(f'RESULT: {count} like reaction(s) are queued ON comments -- once '
+          f'per (post, person), human-timed, deterministic emoji.')
     print()
     print('NOTE: this was a DRY RUN -- no Telegram, no real reactions. Live:')
     print('  1) run the bot:  python -m minions.aggregator.main')
     print('  2) a live comment reaction is DELAYED (human-like); to see it')
     print('     now, send /catnow in the control chat.')
     print('  3) the discussion group must ALLOW custom-emoji reactions (else')
-    print('     the bot falls back to the plain-emoji cat).')
+    print('     the bot falls back to the plain-emoji like).')
     print('=' * 72)
 
 

@@ -235,7 +235,17 @@
       "tags": [
         "bodry"
       ]
-    }
+    },
+    { "type": "like", "id": "5413808716149467908", "fallback": "🤩" },
+    { "type": "like", "id": "5285268883375169145", "fallback": "🤍" },
+    { "type": "like", "id": "5413441397661409586", "fallback": "🐰" },
+    { "type": "like", "id": "5413842126700060975", "fallback": "🤍" },
+    { "type": "like", "id": "5458580949891589643", "fallback": "🤩" },
+    { "type": "like", "id": "5461051092957700947", "fallback": "🤝" },
+    { "type": "like", "id": "5461072816902285831", "fallback": "🤩" },
+    { "type": "like", "id": "5458670315276116087", "fallback": "🤍" },
+    { "type": "like", "id": "5458472746780502747", "fallback": "🤩" },
+    { "type": "like", "id": "5458884526770005216", "fallback": "🤍" }
   ],
   "view_label": [
     "Посмотреть"
