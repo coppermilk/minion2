@@ -70,8 +70,8 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
-from telethon.tl.functions.messages import SendMessageRequest
-from telethon.tl.types import InputReplyToMessage
+from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.types import ReactionCustomEmoji
 
 from minions.aggregator import cats
 from minions.aggregator import greeter
@@ -80,7 +80,6 @@ from minions.aggregator.premium_emoji import RichText
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from minions.aggregator.cats import CatEmoji
     from minions.aggregator.premium_emoji import PremiumMessage
 
 
@@ -1114,7 +1113,7 @@ class Aggregator:
         return True
 
     def _maybe_cat(self, event: events.NewMessage.Event) -> None:
-        """If this message comments on one of our posts, schedule a cat reply.
+        """If this message comments on one of our posts, schedule a cat react.
 
         A "comment" is a reply whose target is one of the last posts. Each
         commenter is catted at most once PER POST -- a second comment under the
@@ -1123,7 +1122,7 @@ class Aggregator:
         nothing -- skipped, silent day, already catted here).
         """
         if getattr(event.message, 'out', False):
-            return  # our own message (a post or a cat reply) -- never cat it
+            return  # our own message (a post) -- never cat it
         reply = getattr(event.message, 'reply_to', None)
         top = _thread_top(reply)
         chat = int(event.chat_id or 0)
@@ -1301,7 +1300,7 @@ class Aggregator:
         self._cat_tasks.clear()
 
     async def _cat_later(self, cat: cats.Cat) -> None:
-        """Sleep until the cat is due, then reply unless answered by hand.
+        """Sleep until the cat is due, then react unless answered by hand.
 
         A send failure is logged loudly (not swallowed) and the entry is
         dropped so one poison comment cannot wedge the queue; the person stays
@@ -1317,31 +1316,37 @@ class Aggregator:
             raise
         except Exception:
             log.exception(
-                'cat: send failed in %s (reply %s)', cat.chat, cat.reply_to
+                'cat: react failed in %s (comment %s)', cat.chat, cat.reply_to
             )
         self.cats.done_pending(cat.chat, cat.reply_to)
 
-    async def _should_skip_cat(self, chat: int, reply_to: int) -> bool:
-        """Skip the cat when the operator already replied to the comment."""
+    async def _should_skip_cat(self, chat: int, comment_id: int) -> bool:
+        """Skip the cat when the operator already answered the comment by hand.
+
+        "By hand" is either a manual reply to the comment OR a manual reaction
+        already sitting on it -- in both cases the operator has engaged, so the
+        bot does not pile a cat reaction on top.
+        """
         if not self.cats.params.skip_if_manually_replied:
             return False
-        replied = await self._human_replied(chat, reply_to)
-        if replied:
-            log.info('cat: %s already answered by hand, skipping', reply_to)
-        return replied
+        answered = await self._human_answered(chat, comment_id)
+        if answered:
+            log.info('cat: %s already answered by hand, skipping', comment_id)
+        return answered
 
-    async def _human_replied(self, chat: int, comment_id: int) -> bool:
-        """Whether an outgoing (manual) reply to ``comment_id`` already exists.
+    async def _human_answered(self, chat: int, comment_id: int) -> bool:
+        """Whether the operator already answered ``comment_id`` by hand.
 
-        Scans recent history for a message sent by this account that replies to
-        the comment. The cat itself has not been sent yet, so any such reply is
-        the operator's own -- do not pile a cat on top of it.
+        Two hand signals count, either one wins: an outgoing (manual) reply to
+        the comment, or this account's own reaction already sitting on it. The
+        cat has not been placed yet, so any such reply/reaction is the
+        operator's own -- do not pile a cat reaction on top of it.
         """
         try:
             history = await self.client.get_messages(
                 chat, limit=CAT_REPLY_SCAN
             )
-        except Exception:  # noqa: BLE001 -- unreachable: fail open, send anyway
+        except Exception:  # noqa: BLE001 -- unreachable: fail open, react anyway
             log.warning(
                 'cat: could not check a manual reply to %s', comment_id
             )
@@ -1352,64 +1357,60 @@ class Aggregator:
             reply = getattr(message, 'reply_to', None)
             if getattr(reply, 'reply_to_msg_id', None) == comment_id:
                 return True
-        return False
+        return await self._own_reaction(chat, comment_id)
+
+    async def _own_reaction(self, chat: int, comment_id: int) -> bool:
+        """Whether this account's own reaction already sits on the comment.
+
+        Best-effort and fail-open: reaction shapes vary by layer, so every read
+        is guarded -- an unreadable comment or an older schema just reacts
+        anyway rather than crashing the queue.
+        """
+        try:
+            message = await self.client.get_messages(chat, ids=comment_id)
+        except Exception:  # noqa: BLE001 -- unreachable: fail open, react anyway
+            return False
+        reactions = getattr(message, 'reactions', None)
+        recent = getattr(reactions, 'recent_reactions', None) or []
+        return any(getattr(r, 'my', False) for r in recent)
 
     async def _send_cats(self, cat: cats.Cat) -> None:
-        """Send the chosen cat(s) as a reply to the commenter."""
-        specs = self.cats.emit()
-        for index, spec in enumerate(specs):
-            if index:  # the rare second cat trails the first (principle 7)
-                await asyncio.sleep(self.cats.params.double_gap_sec)
-            await self._send_cat(cat, spec)
-        if specs:
-            log.info('cat: replied with %d emoji in %s', len(specs), cat.chat)
+        """React to the commenter's message with the chosen premium cat(s).
 
-    async def _send_cat(self, cat: cats.Cat, spec: CatEmoji) -> None:
-        """Send one premium cat emoji as a threaded reply to the commenter.
-
-        In a discussion group a bare reply lands as a FLAT group message; the
-        reply must carry the thread root (top_msg_id) to show as a real reply
-        inside the comment thread. If that fails (or it is a plain group), fall
-        back to the simple reply so a cat is never lost to this.
+        The reaction is placed ON the comment itself -- the cat emoji shows as
+        a reaction pill under the commenter's message, not as a reply in the
+        thread.
         """
-        emoji = {'id': spec.emoji_id, 'fallback': spec.fallback}
-        message = RichText().emoji(emoji).build()
-        threaded = (
-            self.cats.params.comments_in_discussion
-            and bool(cat.root)
-            and cat.root != cat.reply_to
-        )
-        if threaded:
-            try:
-                await self._reply_in_thread(cat, message)
-            except Exception:  # noqa: BLE001 -- fall back to a flat reply
-                log.warning('cat: threaded reply failed in %s; flat', cat.chat)
-            else:
-                return
-        await self.client.send_message(
-            cat.chat,
-            message.text,
-            formatting_entities=message.entities,
-            reply_to=cat.reply_to,
-            link_preview=False,
-        )
+        count = await self._react(cat.chat, cat.reply_to)
+        if count:
+            log.info('cat: reacted with %d emoji in %s', count, cat.chat)
 
-    async def _reply_in_thread(
-        self, cat: cats.Cat, message: PremiumMessage
-    ) -> None:
-        """Reply to a comment inside its discussion thread (top=root)."""
-        reply = InputReplyToMessage(
-            reply_to_msg_id=cat.reply_to, top_msg_id=cat.root
-        )
+    async def _react(self, peer: int, msg_id: int) -> int:
+        """Place the chosen premium cat(s) as a reaction ON ``msg_id``.
+
+        The whole set goes in ONE ``SendReaction`` call (reactions are atomic:
+        one request carries the account's whole reaction set on the message). A
+        Premium account may hold more than one, so the rare second cat
+        (principle 7) rides the same request. Returns how many were placed (0
+        when the pool is empty). Shared by the post-react and comment-react
+        paths.
+        """
+        specs = self.cats.emit()
+        if not specs:
+            return 0
+        reactions = [
+            ReactionCustomEmoji(document_id=int(spec.emoji_id))
+            for spec in specs
+        ]
         await self.client(
-            SendMessageRequest(
-                peer=cat.chat,
-                message=message.text,
-                entities=message.entities,
-                reply_to=reply,
-                no_webpage=True,
+            SendReactionRequest(
+                peer=peer,
+                msg_id=msg_id,
+                reaction=reactions,
+                add_to_recent=True,
             )
         )
+        return len(specs)
 
     async def help_report(self) -> None:
         """Send the plain-language command menu (/help and /start)."""
@@ -1675,10 +1676,31 @@ class Aggregator:
         return self.config.targets
 
     async def _post(self, message: PremiumMessage, thumb: str) -> None:
-        """Send to every target; remember each post as a cat-comment target."""
+        """Send to every target; react to the post, then watch its comments."""
         for target in self._live_targets():
             sent = await self._send_post(target, message, thumb)
-            await self._watch_post(target, int(getattr(sent, 'id', 0) or 0))
+            post_id = int(getattr(sent, 'id', 0) or 0)
+            await self._react_to_post(target, post_id)
+            await self._watch_post(target, post_id)
+
+    async def _react_to_post(self, target: int, post_id: int) -> None:
+        """Immediately place a cat reaction ON a freshly-posted message.
+
+        No human-like wait: the post is ours, so the cat goes on straight away
+        (a proof-of-work demo of the reaction path). A failure never blocks the
+        post -- it is logged and swallowed, unlike the comment path which owns
+        its own retry/skip machinery.
+        """
+        if not self.cats.params.enabled or not post_id:
+            return
+        try:
+            count = await self._react(target, post_id)
+        except Exception:  # noqa: BLE001 -- reacting must never break posting
+            log.warning('cat: could not react to new post %s in %s',
+                        post_id, target)
+            return
+        if count:
+            log.info('cat: reacted to new post %s in %s', post_id, target)
 
     async def _watch_post(self, target: int, post_id: int) -> None:
         """Register where comments on this post will appear (the cat target).

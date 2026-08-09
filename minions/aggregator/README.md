@@ -109,13 +109,27 @@ Docker, `<DRIVE_NAS>/bots/aggregator/telethon.session` (the host path behind
 > The `.session` file is full account access. It is git-ignored; don't share it,
 > and revoke it from **Telegram -> Settings -> Devices** if it leaks.
 
-## Human-like cat replies (`cats` engine)
+## Human-like cat reactions (`cats` engine)
 
-The same account replies to people who **comment on the last posts** with a
-**premium cat emoji** -- **once per (post, commenter)**, timed and chosen so it
-reads as a distracted human rather than a scheduler. The logic lives in
-`cats.py` (Telethon-free and unit-tested in `tests/test_cats.py`) and is driven
-entirely from the `cats` section of `aggregator_constants.json`.
+The same account **reacts** to people who **comment on the last posts** with a
+**premium cat emoji** -- the cat shows as a **reaction pill on the comment
+itself**, not a reply in the thread -- **once per (post, commenter)**, timed and
+chosen so it reads as a distracted human rather than a scheduler. The logic
+lives in `cats.py` (Telethon-free and unit-tested in `tests/test_cats.py`) and
+is driven entirely from the `cats` section of `aggregator_constants.json`.
+
+**New posts are reacted to immediately.** As soon as the aggregator posts, it
+drops a cat reaction on its own fresh post right away (no human-like wait) --
+the comment reactions keep the distracted-human timing.
+
+> Custom-emoji reactions need a **Premium** account (already required for the
+> premium emoji in posts) and a chat that **allows custom-emoji reactions**
+> (the channel/discussion admins enable them in the chat's Reactions setting).
+> If they are off, the send is logged and skipped -- nothing crashes.
+
+A runnable, network-free proof of the whole path (new post reaction -> comment
+reactions, with the dedup and timing) is `cats_proof.py`:
+`python -m minions.aggregator.cats_proof`.
 
 **Once per (post, commenter):** a person's *second* comment under the *same*
 post gets **no** reply; the *same* person commenting under a *different* post
@@ -160,13 +174,14 @@ restart too.
 
 **Don't double-answer** (`skip_if_manually_replied`, default true): before a
 cat fires (which can be hours after the comment), the bot checks whether the
-operator has **already replied to that comment by hand** -- if so, it skips the
-cat instead of piling on.
+operator has **already answered that comment by hand** -- a manual reply to it,
+or a manual reaction already on it -- if so, it skips the cat instead of piling
+on.
 
 **Channel vs. group target** (`comments_in_discussion`, default `true`):
 - **Channel with a linked discussion** (`true`): each post's comments live in
   the discussion group. The bot resolves the post's **discussion thread** and
-  replies **only inside that channel post's comments** -- off-topic discussion
+  reacts **only to comments on that channel post** -- off-topic discussion
   messages and channel messages are ignored. The account **must be a member of
   the discussion group** to receive those comments.
 - **Plain group** (`false`): comments are matched as direct replies to the post
