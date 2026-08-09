@@ -72,6 +72,7 @@ from telethon import events
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
 from telethon.tl.functions.messages import SendReactionRequest
 from telethon.tl.types import ReactionCustomEmoji
+from telethon.tl.types import ReactionEmoji
 
 from minions.aggregator import cats
 from minions.aggregator import greeter
@@ -1398,19 +1399,38 @@ class Aggregator:
         specs = self.cats.emit()
         if not specs:
             return 0
-        reactions = [
+        custom = [
             ReactionCustomEmoji(document_id=int(spec.emoji_id))
             for spec in specs
         ]
+        try:
+            await self._send_reaction(peer, msg_id, custom)
+        except Exception:  # noqa: BLE001 -- custom emoji may be disallowed
+            # The chat may not allow CUSTOM-emoji reactions (or the account
+            # is not Premium): fall back to the plain-emoji version of the
+            # same cats (the fallback glyphs), so a cat reaction still lands
+            # wherever standard reactions are allowed. If that fails too, it
+            # propagates to the caller's guard (logged, never fatal).
+            standard = [
+                ReactionEmoji(emoticon=spec.fallback) for spec in specs
+            ]
+            await self._send_reaction(peer, msg_id, standard)
+            log.info('cat: custom reaction rejected in %s; used standard '
+                     'emoji', peer)
+        return len(specs)
+
+    async def _send_reaction(
+        self, peer: int, msg_id: int, reaction: list[object]
+    ) -> None:
+        """One SendReaction call placing ``reaction`` on ``msg_id``."""
         await self.client(
             SendReactionRequest(
                 peer=peer,
                 msg_id=msg_id,
-                reaction=reactions,
+                reaction=reaction,
                 add_to_recent=True,
             )
         )
-        return len(specs)
 
     async def help_report(self) -> None:
         """Send the plain-language command menu (/help and /start)."""
@@ -1686,12 +1706,16 @@ class Aggregator:
     async def _react_to_post(self, target: int, post_id: int) -> None:
         """Immediately place a cat reaction ON a freshly-posted message.
 
-        No human-like wait: the post is ours, so the cat goes on straight away
-        (a proof-of-work demo of the reaction path). A failure never blocks the
-        post -- it is logged and swallowed, unlike the comment path which owns
-        its own retry/skip machinery.
+        Optional (``react_to_posts``, default off): reacting to our own posts
+        is an extra, separate from the engine's real job of reacting to
+        commenters. When on, there is no human-like wait -- the post is ours,
+        so the cat goes on straight away. A failure never blocks the post -- it
+        is logged and swallowed, unlike the comment path which owns its own
+        retry/skip machinery.
         """
         if not self.cats.params.enabled or not post_id:
+            return
+        if not self.cats.params.react_to_posts:
             return
         try:
             count = await self._react(target, post_id)

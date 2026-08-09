@@ -27,6 +27,7 @@ def _params(**over):
     base = {
         'enabled': True,
         'comments_in_discussion': False,
+        'react_to_posts': False,
         'watch_posts': 4,
         'hours_weekday': ((12.0, 3.0, 1.0), (20.0, 3.0, 1.0)),
         'hours_weekend': ((12.0, 3.0, 1.0), (20.0, 3.0, 1.0)),
