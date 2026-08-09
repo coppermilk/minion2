@@ -8,11 +8,17 @@ they will run in two places.
 
 Three steps:
 
-1. Install Python 3.12+ and the package from the repo root:
-   `pip install -e .[ml,llm,links,tg]` -- the full runtime stack
-   (torch/transformers for vision, google-genai, yt-dlp, telethon). The
-   launcher `run.ps1` installs the same set for you and re-runs it
-   whenever `pyproject.toml` changes.
+1. Install Python 3.11+ (tick **"Add python.exe to PATH"** in the
+   installer). That is all you install by hand -- **`run.cmd` does the
+   rest**: on every start it installs the full runtime stack and
+   builds/installs the editable `minions` library (then launches the
+   bots), and re-runs the install whenever `pyproject.toml` changes. So a
+   `ModuleNotFoundError: No module named 'minions'` just means `run.cmd`
+   has not run yet in this Python -- double-click it once and the library
+   is importable everywhere (including `python -m minions.aggregator.login`).
+   The full stack is `.[ml,llm,links,tg]` -- torch/transformers for
+   vision, google-genai, yt-dlp, telethon; the equivalent by hand from the
+   repo root is `pip install -e .[ml,llm,links,tg]`.
 2. Copy `.env.example` to `.env` at the repo root -- the **same**
    single `.env` the NAS uses works verbatim (paths are validated
    for either OS). The Windows-relevant lines:
