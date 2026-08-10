@@ -832,6 +832,8 @@ class Aggregator:
         self._mode_path = self._state_base / MODE_FILE
         self._cat_tasks: set[asyncio.Task[None]] = set()
         self._greeter_task: asyncio.Task[None] | None = None
+        self._cat_rescan_task: asyncio.Task[None] | None = None
+        self._cat_next_rescan: float = 0.0  # ts of the next auto-rescan
         self._build_profile(self._load_mode())
 
     def _build_profile(self, mode: str) -> None:
@@ -851,6 +853,7 @@ class Aggregator:
         self.posted: list[Posted] = []
         self.processed_ids: set[int] = set()
         self._cat_tasks = set()
+        self._cat_next_rescan = 0.0
         self.cats = cats.CatBrain(
             cats.load_cat_params(self._raw), pdir / 'cats_state.json'
         )
@@ -905,6 +908,7 @@ class Aggregator:
         if source_backfill:
             await self.backfill()
         self._greeter_task = asyncio.create_task(self.greeter.loop())
+        self._cat_rescan_task = asyncio.create_task(self.cat_rescan_loop())
 
     async def stop_profile(self) -> None:
         """Cancel the active profile's timers and loops (before a switch)."""
@@ -916,6 +920,9 @@ class Aggregator:
         if self._greeter_task is not None:
             self._greeter_task.cancel()
             self._greeter_task = None
+        if self._cat_rescan_task is not None:
+            self._cat_rescan_task.cancel()
+            self._cat_rescan_task = None
 
     async def switch_mode(self, mode: str) -> None:
         """Switch the WHOLE bot to MODE (the /test and /live commands).
@@ -1264,6 +1271,30 @@ class Aggregator:
         for chat, root in list(self.cats.posts):
             await self._seed_thread_comments(chat, root)
         log.info('cats: %d comment(s) queued', len(self.cats.state.pending))
+
+    async def cat_rescan_loop(self) -> None:
+        """Periodically re-scan targets so new posts are picked up by itself.
+
+        A post created (and commented on) while the bot runs is not
+        auto-watched by the event stream; without this the operator had to run
+        /requeue by hand. Every ``rescan_sec`` this re-seeds the watch-list
+        from each target's recent posts and schedules cats for new comments
+        (dedup skips what is already queued/answered). ``_cat_next_rescan`` is
+        published for the /status countdown. Off when rescan_sec <= 0.
+        """
+        period = self.cats.params.rescan_sec
+        if not self.cats.params.enabled or period <= 0:
+            return
+        while True:
+            self._cat_next_rescan = time.time() + period
+            await asyncio.sleep(period)
+            try:
+                await self.backfill_cat_posts()
+                await self.backfill_cat_comments()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception('cats: periodic rescan failed; will retry')
 
     async def _seed_thread_comments(self, chat: int, root: int) -> None:
         """Schedule cats for the recent comments in one watched thread."""
@@ -1715,14 +1746,33 @@ class Aggregator:
         )
         return [
             'Cat engine:',
-            f'  enabled={brain.params.enabled} pool={len(brain.params.pool)}',
+            (
+                f'  enabled={brain.params.enabled}'
+                f' pool={len(brain.params.pool)}'
+                f' like={len(brain.params.like_pool)}'
+            ),
             f'  uptime window (prior)={window}',
             f'  learned on-hours=[{learned}]',
+            self._cat_rescan_line(),
             *self._last_posts_lines(labels),
             counters,
             *self._pending_cat_lines(labels),
-            '  (/catnow = answer all now | /requeue = recompute)',
+            '  (/catnow = answer all now | /requeue = rescan now)',
         ]
+
+    def _cat_rescan_line(self) -> str:
+        """The auto-rescan period and the countdown to the next one."""
+        period = int(self.cats.params.rescan_sec)
+        if period <= 0:
+            return '  auto-rescan: off (use /requeue)'
+        nxt = self._cat_next_rescan
+        if nxt <= 0:
+            return f'  auto-rescan every {period}s | next: pending first run'
+        tz = timezone(timedelta(hours=self.cats.params.tz_offset_hours))
+        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M:%S')
+        eta = nxt - time.time()
+        when = 'now' if eta <= 0 else _fmt_eta(eta)
+        return f'  auto-rescan every {period}s | next {clock} (in {when})'
 
     def _pending_cat_lines(self, labels: dict[int, str]) -> list[str]:
         """Each pending cat: the comment, its chat, and when it fires."""

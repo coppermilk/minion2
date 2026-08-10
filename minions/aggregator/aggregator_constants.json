@@ -273,6 +273,7 @@
     "sticker_gap": 6,
     "burst_count": 4,
     "burst_window_sec": 3600,
+    "rescan_sec": 300,
     "tz_offset_hours": 3,
     "active_start_hour": 7,
     "active_end_hour": 17,

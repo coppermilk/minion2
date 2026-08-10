@@ -194,6 +194,10 @@ class CatParams:
     sticker_gap: int
     burst_count: int
     burst_window_sec: float
+    # How often (seconds) the bot re-scans the targets on its own -- picking up
+    # posts created (and commented on) while it runs, without waiting for a
+    # restart or a manual /requeue. 0 turns the auto-rescan off.
+    rescan_sec: float
 
 
 @dataclass
@@ -889,4 +893,5 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         sticker_gap=int(cats.get('sticker_gap', 6)),
         burst_count=int(cats.get('burst_count', 4)),
         burst_window_sec=float(cats.get('burst_window_sec', 3600.0)),
+        rescan_sec=float(cats.get('rescan_sec', 300.0)),
     )
