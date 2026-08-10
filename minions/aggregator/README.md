@@ -33,6 +33,8 @@ code units, as Telegram requires).
 | `aggregator_constants.json` | editable post texts + premium emoji ids (UTF-8) |
 | `login.py` | log in once and write the session file (`python -m minions.aggregator.login`) |
 | `dump_emoji_ids.py` | dev helper: print the id of every premium emoji you send |
+| `greeter.py` | welcome/farewell DMs from the channel admin log (opt-in) |
+| `users.py` | opt-in users database (SQLite): audience history + activity |
 
 ## Configuration
 
@@ -193,3 +195,38 @@ awaits), a tail of what was **posted**, the **rejected** (non-Short) count, and
 the cat engine's state (enabled, pool size, watched posts, people catted,
 pending replies, mood) -- followed by a plain-language legend of the expected
 behaviour (`status_help` in the JSON).
+
+## Users database (`users.py`, opt-in)
+
+A per-profile **SQLite** database (`users.db`, next to the other state files)
+that records the channel audience over time. **Off by default** -- it collects
+personal data. Turn it on in the `users` section of the constants JSON:
+
+```json
+"users": { "enabled": true, "store_message_text": true, "enrich": true }
+```
+
+What it records:
+
+- **Membership timeline** -- every subscribe/unsubscribe, in order
+  (join -> leave -> re-join -> ...), fed from the greeter's admin-log stream.
+  So membership needs the same **admin** rights the greeter does; the DB fills
+  from the moment you enable it (the admin log only retains a few days).
+- **Identity** -- user id, and (via `get_entity`, when `enrich` is on)
+  username and first/last name.
+- **Messages** -- every comment the account can see in the linked discussion
+  group (and the source chat), with the text unless `store_message_text` is
+  `false`. Counts, first/last-seen, and the full text are kept per user.
+
+Read it with **`/users`** (totals, top commenters, recent join/leave, rendered
+into the source chat); `/status` gains a one-line users summary. The file is a
+normal SQLite DB, so you can also query it directly:
+`sqlite3 <DRIVE>/bots/aggregator/users.db 'SELECT * FROM membership_events'`.
+
+> **Limits, on purpose.** **Phone is essentially never available** -- Telegram
+> exposes `User.phone` only to mutual contacts, so that column is null for
+> virtually everyone. Only messages the account **sees** are logged (discussion
+> comments and the source chat) -- never DMs or plain channel posts. Every write
+> is idempotent, so re-polls and comment rescans never double-count. This is
+> **PII**: it lives only on your own state disk, `test` and `live` keep separate
+> databases, and nothing is collected while `enabled` is `false`.

@@ -86,6 +86,20 @@ def _greeter(tmp_path, client, **over):
     return greeter.Greeter(client, _params(**over), tmp_path / 'g.json')
 
 
+def test_on_event_sink_fires_for_every_event_incl_baseline(
+    tmp_path: Path,
+) -> None:
+    # The users DB taps this sink: it must see every fetched event as a
+    # (admin_log_id, user_id, joined, left) tuple -- even on the silent
+    # baseline run where nobody is greeted.
+    seen: list[tuple[int, int, bool, bool]] = []
+    client = _FakeClient([_join(1, 100), _leave(2, 100)])
+    g = greeter.Greeter(client, _params(), tmp_path / 'g.json', seen.append)
+    asyncio.run(g.sync())  # baseline: no DMs, but the sink still fires
+    assert client.dms == []
+    assert seen == [(1, 100, True, False), (2, 100, False, True)]
+
+
 def test_first_run_is_a_silent_baseline(tmp_path: Path) -> None:
     client = _FakeClient([_join(1, 100), _join(2, 101)])
     g = _greeter(tmp_path, client)

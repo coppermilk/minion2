@@ -270,6 +270,12 @@
     "сотруднич", "реклам", "оффер", "предлож", "бартер", "интеграц",
     "прайс", "коллаб", "collab", "promo", "sponsor"
   ],
+  "users": {
+    "_note": "Opt-in users database (SQLite, per profile). enabled=false collects nothing. store_message_text=false keeps counts only, no text. enrich=true resolves username/name via get_entity (phone is essentially never available).",
+    "enabled": false,
+    "store_message_text": true,
+    "enrich": true
+  },
   "cats": {
     "enabled": true,
     "comments_in_discussion": true,

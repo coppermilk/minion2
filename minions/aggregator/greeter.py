@@ -42,6 +42,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 log = logging.getLogger('aggregator')
@@ -120,8 +121,12 @@ class Greeter:
     ``client`` is a Telethon client (duck-typed); ``path`` is the state file.
     """
 
-    def __init__(
-        self, client: object, params: GreeterParams, path: Path
+    def __init__(  # noqa: PLR0913, PLR0917 -- client + params + path + sink
+        self,
+        client: object,
+        params: GreeterParams,
+        path: Path,
+        on_event: Callable[[tuple[int, int, bool, bool]], None] | None = None,
     ) -> None:
         self.client = client
         self.params = params
@@ -131,6 +136,10 @@ class Greeter:
         self._channel_at = ''  # '@username' cache for {channel}
         self._channel_url = ''  # 't.me/username' cache for {channel_url}
         self.next_sync = 0.0  # epoch of the next scheduled poll (0 = not set)
+        # Optional sink for EVERY fetched admin-log event (admin_log_id,
+        # user_id, joined, left) -- the users DB taps this. Fired even during
+        # the silent baseline and on re-reads; the DB dedups on admin_log_id.
+        self._on_event = on_event
 
     async def sync(self) -> None:
         """Poll the admin log; baseline on first run, else greet new events."""
@@ -139,6 +148,7 @@ class Greeter:
         events = await self._fetch_events()
         if events is None:
             return
+        self._emit(events)  # feed the users DB before any baseline/DM logic
         if not self.state.started:
             newest = max(
                 (eid for eid, *_ in events), default=self.state.last_event_id
@@ -175,6 +185,23 @@ class Greeter:
                 log.exception('greeter: sync failed')
             self.next_sync = time.time() + self.params.poll_sec
             await asyncio.sleep(self.params.poll_sec)
+
+    def _emit(self, events: list[tuple[int, int, bool, bool]]) -> None:
+        """Hand every fetched event to the sink (the users DB), if wired.
+
+        Fired for ALL events -- baseline and re-reads included -- so the DB
+        captures membership even on the greeter's silent first run; the sink
+        dedups on ``admin_log_id``. A sink failure never disturbs greeting.
+        """
+        if self._on_event is None:
+            return
+        for event in events:
+            try:
+                self._on_event(event)
+            except Exception:
+                log.exception(
+                    'greeter: users sink failed for event %d', event[0]
+                )
 
     async def _fetch_events(self) -> list[tuple[int, int, bool, bool]] | None:
         """New join/leave events (id > cursor) from the admin log, or None."""
