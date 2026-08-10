@@ -650,33 +650,51 @@ class CatBrain:
         return _pick_slot(slots, weights, self.rng)
 
     def pick_like(self, key: str) -> list[CatEmoji]:
-        """One like, pseudo-random but DETERMINISTIC in ``key``.
+        """One like for a target, WEIGHTED and DETERMINISTIC in ``key``.
 
-        Seeded by ``key`` -- a stable per-target handle (the id of the message
-        the reaction lands on) -- so the same target always yields the same
-        like: it looks varied across targets (not a visible round-robin), yet
-        is recomputable after a restart because it is a pure function of the
-        key and the pool, with no persisted cursor. Always one like. An empty
-        like pool yields [].
+        Drawn from the like pool through the same human machinery as the cats
+        (principles 3,4,5): base favourites, recency suppression, mood and
+        context tags. Still seeded by ``key`` (the target message id) so the
+        pick is reproducible per target given the persisted state -- but now
+        the pick is recorded into ``cat_last``, so consecutive reactions in a
+        burst avoid repeating the same emoji, which the old uniform ``choice``
+        did not. Always one like; an empty pool yields [].
         """
-        pool = self.params.like_pool
-        if not pool:
-            return []
-        roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible
-        return [roll.choice(pool)]
+        return self._choose(self.params.like_pool, key)
 
     def pick_cat(self, key: str) -> list[CatEmoji]:
-        """One cat (the thread sticker), pseudo-random, DETERMINISTIC in key.
+        """One cat (the thread sticker), WEIGHTED and DETERMINISTIC in ``key``.
 
-        Same rule as ``pick_like`` but drawn from the cat ``pool`` -- the emoji
-        sent as a message in the thread (it reads like a sticker). Seeded by
-        the target id, so it is recomputable after a restart.
+        Same as ``pick_like`` but drawn from the cat ``pool``, so a sticker
+        honours base favourites, recency, mood and season/daypart tags (a
+        sleepy cat in the morning, a lively one when mood runs high) instead of
+        a flat uniform pick. Seeded by the target id; records recency. An empty
+        pool yields [].
         """
-        pool = self.params.pool
+        return self._choose(self.params.pool, key)
+
+    def _choose(
+        self, pool: tuple[CatEmoji, ...], key: str
+    ) -> list[CatEmoji]:
+        """Weighted, reproducible-in-key draw of one emoji; records recency.
+
+        Shared by ``pick_like`` and ``pick_cat``. Weights come from ``_weight``
+        (base * recency * mood * context), so the emoji people actually SEE
+        inherits the same human machinery that the (otherwise unused) ``emit``
+        path had. Seeded by ``key`` for per-target reproducibility, then the
+        pick is written to ``cat_last`` so the next draw suppresses it -- no
+        back-to-back repeats across a burst of reactions.
+        """
         if not pool:
             return []
-        roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible
-        return [roll.choice(pool)]
+        now = self.clock()
+        self._step_mood(now)  # principle 4: advance the daily mood first
+        weights = [self._weight(cat, now) for cat in pool]
+        roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible-in-key
+        chosen = _weighted_choice(pool, weights, roll)
+        self.state.cat_last[chosen.emoji_id] = now  # principle 3: recency
+        self._save()
+        return [chosen]
 
     def should_sticker(self, post_key: str) -> bool:
         """Whether THIS engagement under ``post_key`` is a thread sticker.
