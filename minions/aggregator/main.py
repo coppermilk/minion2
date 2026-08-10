@@ -303,6 +303,10 @@ class Consts:
     status_help: str  # the /status legend (expected behaviour), from JSON
     help_text: str  # the /help menu (plain-language command list), from JSON
     help_hint: str  # nudge shown for an unknown /command, from JSON
+    # Substrings that mark a comment as wanting a real reply (business/outreach
+    # terms + any non-ASCII marks): a sticker is suppressed there, a plain
+    # reaction goes instead. Non-ASCII, so it lives in the JSON, not here.
+    human_words: tuple[str, ...]
     emoji_all: list[
         dict[str, object]
     ]  # unified emoji catalog (new JSON), else []
@@ -383,6 +387,9 @@ def _load_constants(path: Path) -> Consts:
         status_help=str(data.get('status_help') or ''),
         help_text=str(data.get('help') or ''),
         help_hint=str(data.get('help_hint') or 'Unknown command. Try /help'),
+        human_words=tuple(
+            str(w).lower() for w in (data.get('human_words') or [])
+        ),
         emoji_all=catalog,
     )
 
@@ -662,6 +669,31 @@ def _pending_glyphs(entry: dict[str, object]) -> str:
     rows = raw if isinstance(raw, list) else []
     glyphs = ''.join(str(row[1]) for row in rows if len(row) == 2)  # noqa: PLR2004
     return glyphs or '?'
+
+
+# Link markers that mean a comment wants a real reply (ASCII, so inline);
+# the business/outreach words and any non-ASCII marks (e.g. a full-width '?')
+# live in the constants JSON's "human_words" (BLUEPRINT 4: source stays ASCII).
+_LINK_MARKERS = ('http://', 'https://', 't.me/', 'www.')
+
+
+def _needs_human(text: str, words: tuple[str, ...]) -> bool:
+    """Whether a comment wants a real reply, not an auto sticker.
+
+    A question, a link, or business/outreach wording is exactly where a canned
+    cat STICKER (a message-shaped reply) reads as a non-sequitur. The caller
+    uses this to downgrade such comments to a plain REACTION (safe on anything)
+    instead. It never blocks the reaction -- it only keeps message-stickers off
+    comments a human would actually answer. This is the one light content gate;
+    the engine is otherwise content-agnostic. ``words`` (from the JSON) carries
+    the business terms and any non-ASCII marks.
+    """
+    low = text.lower()
+    if '?' in text:
+        return True
+    if any(u in low for u in _LINK_MARKERS):
+        return True
+    return any(w in low for w in words)
 
 
 def _thread_top(reply: object) -> int | None:
@@ -1188,7 +1220,12 @@ class Aggregator:
         # same comment always resolves to the same thing after a restart.
         seed = f'{comment.chat}:{comment.msg_id}'
         post_key = f'{comment.chat}:{comment.root}'
-        if self.cats.should_sticker(post_key):
+        # A thread STICKER is a message-shaped reply, so it only fits plain
+        # enthusiasm; on a question / link / business comment it reads as a
+        # non-sequitur. Check content FIRST (so a suppressed sticker does not
+        # consume the burst gate), and downgrade to a safe REACTION there.
+        allow_sticker = not _needs_human(comment.text, self.consts.human_words)
+        if allow_sticker and self.cats.should_sticker(post_key):
             specs, kind = self.cats.pick_cat(seed), 'reply'
         else:
             specs, kind = self.cats.pick_like(seed), 'react'

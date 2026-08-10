@@ -411,32 +411,51 @@ def test_emit_with_empty_pool_sends_nothing(tmp_path: Path) -> None:
     assert brain.emit() == []
 
 
-# --- the like pool: pseudo-random but deterministic in the target key
+# --- the like/cat pools: weighted draw, seeded by the target key
 
 
-def test_pick_like_is_deterministic_in_the_key(tmp_path: Path) -> None:
+def test_pick_like_returns_one_from_the_pool(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
-    first = brain.pick_like('chat:5001')[0].emoji_id
-    # same key -> same like, every time (recomputable, no cursor)
-    assert all(
-        brain.pick_like('chat:5001')[0].emoji_id == first for _ in range(5)
+    ids = {c.emoji_id for c in brain.params.like_pool}
+    assert brain.pick_like('chat:5001')[0].emoji_id in ids
+
+
+def test_pick_is_reproducible_for_equal_state(tmp_path: Path) -> None:
+    # Weighted now, but still seeded by the key: two engines with the SAME
+    # (fresh) state and rng pick the same emoji for the same key.
+    a = cats.CatBrain(_params(), tmp_path / 'a.json', random.Random(0))
+    b = cats.CatBrain(_params(), tmp_path / 'b.json', random.Random(0))
+    a.clock = b.clock = _ts
+    assert a.pick_like('k')[0].emoji_id == b.pick_like('k')[0].emoji_id
+    assert a.pick_cat('k')[0].emoji_id == b.pick_cat('k')[0].emoji_id
+
+
+def test_pick_avoids_repeats_within_a_burst(tmp_path: Path) -> None:
+    # The main fix: each pick is recorded into cat_last (recency), so within a
+    # burst (one frozen instant) an already-used emoji is suppressed -- with a
+    # pool at least as large as the burst, every reaction is a different glyph.
+    pool = tuple(
+        cats.CatEmoji(f'L{i}', chr(97 + i), 1.0, ()) for i in range(6)
     )
+    brain = _brain(tmp_path, like_pool=pool)
+    picks = [brain.pick_like(f'k{i}')[0].emoji_id for i in range(6)]
+    assert len(set(picks)) == 6  # no repeats across the burst
 
 
-def test_pick_like_survives_a_restart(tmp_path: Path) -> None:
+def test_pick_records_recency_and_persists(tmp_path: Path) -> None:
     path = tmp_path / 'cats_state.json'
     brain = cats.CatBrain(_params(), path, random.Random(0))
-    before = brain.pick_like('chat:900')[0].emoji_id
-    fresh = cats.CatBrain(_params(), path, random.Random(999))
-    # a fresh instance (different rng seed) recomputes the SAME like: the
-    # choice is a pure function of the key, not of engine state.
-    assert fresh.pick_like('chat:900')[0].emoji_id == before
+    brain.clock = _ts
+    chosen = brain.pick_like('k')[0].emoji_id
+    assert brain.state.cat_last[chosen] == _ts()
+    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    assert fresh.state.cat_last[chosen] == _ts()  # recency survived a restart
 
 
 def test_pick_like_varies_across_keys(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
     seen = {brain.pick_like(f'k{i}')[0].emoji_id for i in range(50)}
-    assert len(seen) > 1  # pseudo-random: not the same like for every target
+    assert len(seen) > 1  # weighted draw: not the same like for every target
 
 
 def test_pick_like_empty_pool_sends_nothing(tmp_path: Path) -> None:
@@ -447,12 +466,10 @@ def test_pick_like_empty_pool_sends_nothing(tmp_path: Path) -> None:
 # --- the sticker gate: deterministic, both conditions, per post
 
 
-def test_pick_cat_is_deterministic_in_the_key(tmp_path: Path) -> None:
+def test_pick_cat_returns_one_from_the_cat_pool(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
-    first = brain.pick_cat('chat:5001')[0].emoji_id
-    assert all(
-        brain.pick_cat('chat:5001')[0].emoji_id == first for _ in range(5)
-    )
+    ids = {c.emoji_id for c in brain.params.pool}
+    assert brain.pick_cat('chat:5001')[0].emoji_id in ids
 
 
 def test_sticker_needs_both_silence_and_burst(tmp_path: Path) -> None:
