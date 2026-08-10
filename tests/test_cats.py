@@ -68,6 +68,7 @@ def _params(**over):
         'sticker_gap': 6,
         'burst_count': 4,
         'burst_window_sec': 3600.0,
+        'rescan_sec': 300.0,
     }
     base.update(over)
     return cats.CatParams(**base)
