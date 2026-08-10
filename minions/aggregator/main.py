@@ -1291,16 +1291,21 @@ class Aggregator:
             self._schedule_comment(ref, person, engaged=False)
 
     async def requeue_cats(self) -> None:
-        """Refresh the pending-cat queue on demand (the /requeue command).
+        """Rescan + refresh the pending-cat queue on demand (the /requeue cmd).
 
-        Cancels the in-flight timers and re-arms from the PERSISTED queue,
-        recomputing EVERY pending cat's time (so a queue scheduled under stale
-        timing is flushed). Nothing is duplicated -- a cat is only forgotten
-        once actually sent.
+        First re-times and re-arms the PERSISTED queue (so a queue scheduled
+        under stale timing is flushed). Then it RESCANS the targets: it
+        re-seeds the watch-list from each target's recent posts and schedules
+        cats for comments not yet queued -- so a post created (and commented
+        on) WHILE the bot was running, which is not auto-watched, is picked up
+        here instead of returning "nothing queued". Dedup, skip and the
+        manual-reply check still apply, so nothing is duplicated.
         """
         self._cancel_cat_tasks()
-        for cat in self.cats.rearm(renew_all=True):
+        for cat in self.cats.rearm(renew_all=True):  # re-time existing queue
             self._arm_cat(cat)
+        await self.backfill_cat_posts()  # pick up posts made since startup
+        await self.backfill_cat_comments()  # queue their new comments (armed)
         count = len(self.cats.state.pending)
         await self.client.send_message(
             self.config.source, await self._plan_text(f'Requeued {count}')
