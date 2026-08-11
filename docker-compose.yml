@@ -225,8 +225,17 @@ services:
   # NB: no `cpus:` cap here -- this Synology kernel has no CPU CFS quota, so
   # `cpus` fails container creation ("NanoCPUs can not be set"). If it climbs
   # to high CPU on a long run, restart just this container (Container Manager,
-  # or docker restart minion2-aggregator-1); a weekly restart via Task
-  # Scheduler avoids it entirely.
+  # or docker restart minion2-aggregator-1).
+  #
+  # SELF-HEALING. `restart: always` (overriding the anchor's unless-stopped)
+  # brings it back after any exit, reboot, or daemon restart. A HANG (process
+  # alive but wedged) is not an exit, so no restart policy alone would catch
+  # it -- the app runs an in-process watchdog that os._exit(1)s when its
+  # heartbeat goes stale, turning a hang into an exit the policy DOES restart.
+  # The heartbeat is a file the app stamps only after a successful Telegram
+  # probe; the healthcheck below reads it so Container Manager shows
+  # healthy/unhealthy (compose does not auto-restart on unhealthy -- the
+  # watchdog does). This replaces the old "weekly Task-Scheduler restart".
   aggregator:
     <<: *minion
     environment:
@@ -234,6 +243,15 @@ services:
       TELEGRAM_SESSION_FILE: /data/bots/aggregator/telethon
       AGGREGATOR_STATE_DIR: /data/bots/aggregator
     command: python -m minions.aggregator.main
+    restart: always
+    healthcheck:
+      # Unhealthy when the heartbeat file is older than 10 min (the app stamps
+      # it only when the Telegram probe succeeds). Visibility only.
+      test: ["CMD", "python", "-c", "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/data/bots/aggregator/health')<600 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     # No tty/stdin here: a TTY makes Synology Container Manager's Log tab show
     # "No logs available". The one-time login uses `docker compose run --rm
     # aggregator`, which allocates its own TTY, so interactive login still works.

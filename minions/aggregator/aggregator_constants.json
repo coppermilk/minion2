@@ -276,6 +276,11 @@
     "store_message_text": true,
     "enrich": true
   },
+  "runtime": {
+    "_note": "Self-healing watchdog. status_loop touches a health file only after a successful Telegram probe; a daemon thread os._exit(1)s if it goes stale (a hang), so Docker restart:always recreates the container. watchdog_sec=0 disables it.",
+    "watchdog_sec": 600,
+    "probe_timeout_sec": 30
+  },
   "cats": {
     "enabled": true,
     "comments_in_discussion": true,
@@ -285,6 +290,8 @@
     "burst_count": 4,
     "burst_window_sec": 3600,
     "rescan_sec": 300,
+    "rescan_sec_test": 300,
+    "rescan_sec_live": 3600,
     "tz_offset_hours": 3,
     "active_start_hour": 7,
     "active_end_hour": 17,

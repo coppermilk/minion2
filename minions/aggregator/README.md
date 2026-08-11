@@ -95,6 +95,22 @@ docker compose up -d aggregator       # 2) silent from the saved session
 docker compose logs -f aggregator
 ```
 
+## Self-healing (always comes back)
+
+The container is `restart: always`, so it returns after any exit, reboot, or
+Docker daemon restart. A crash already exits (and restarts); the hard case is a
+**hang** -- the process staying alive but wedged (Telethon stops talking, or the
+event loop stalls), which no `restart:` policy can catch because nothing exits.
+So the app runs an **in-process watchdog**: the status loop stamps a heartbeat
+file (`<state>/health`) each minute, but only after a successful Telegram probe
+(`get_me`); a daemon thread `os._exit(1)`s if that heartbeat goes stale past
+`runtime.watchdog_sec` (default 600s), turning the hang into an exit that
+`restart: always` recovers. State is committed per operation, so the abrupt exit
+loses nothing. The compose `healthcheck` reads the same file so Container
+Manager shows healthy/unhealthy (it does not itself restart -- the watchdog
+does). Tune or disable via the `runtime` section of the constants JSON
+(`watchdog_sec: 0` turns it off).
+
 ## Log in once -- reboots don't ask again
 
 After the first login the auth key is saved in the session **file**; later
@@ -188,6 +204,13 @@ on.
   the discussion group** to receive those comments.
 - **Plain group** (`false`): comments are matched as direct replies to the post
   message id, in the group itself.
+
+**Auto-rescan (per profile).** The bot re-scans the targets on a timer so a post
+made (and commented on) while it runs is picked up without a manual `/requeue`.
+The cadence differs by profile so you can iterate fast in test but stay quiet in
+production: **test = `rescan_sec_test` (5 min)**, **live = `rescan_sec_live`
+(1 hour)** in the `cats` JSON (both fall back to `rescan_sec`). `/status` shows a
+countdown to the next run.
 
 **Inspect it live** with the `/status` command (from any chat, renders into the
 source chat): it lists the videos still **pending** (and which platforms each

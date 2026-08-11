@@ -55,6 +55,7 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from dataclasses import field
@@ -87,8 +88,12 @@ if TYPE_CHECKING:
     from minions.aggregator.premium_emoji import PremiumMessage
 
 
-def _log_file() -> Path | None:
-    """The on-disk log path under the state dir, or None if unavailable."""
+def _state_base() -> Path | None:
+    """The base state dir (AGGREGATOR_STATE_DIR, else <DRIVE>/bots/aggregator).
+
+    Process-level (not per-profile): the log and the watchdog heartbeat live
+    here. Returns None (and the caller degrades) when neither is configured.
+    """
     base = os.environ.get('AGGREGATOR_STATE_DIR')
     if not base:
         drive = os.environ.get('DRIVE')
@@ -99,7 +104,71 @@ def _log_file() -> Path | None:
         Path(base).mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    return Path(base) / 'aggregator.log'
+    return Path(base)
+
+
+def _log_file() -> Path | None:
+    """The on-disk log path under the state dir, or None if unavailable."""
+    base = _state_base()
+    return base / 'aggregator.log' if base is not None else None
+
+
+def _health_file() -> Path | None:
+    """The watchdog heartbeat file (mtime = the last proven-alive time)."""
+    base = _state_base()
+    return base / 'health' if base is not None else None
+
+
+def _touch_health() -> None:
+    """Stamp the heartbeat file with 'now' -- called only when proven alive."""
+    path = _health_file()
+    if path is None:
+        return
+    try:
+        path.write_text(str(time.time()), encoding='ascii')
+    except OSError:
+        log.warning('watchdog: could not write the heartbeat file')
+
+
+# How often the watchdog thread checks the heartbeat's age.
+_WATCHDOG_POLL_SEC = 30.0
+
+
+def _watchdog(timeout: float) -> None:
+    """Daemon thread: exit the process if the heartbeat goes stale (a hang).
+
+    ``status_loop`` refreshes the heartbeat only after a successful Telegram
+    probe, so a stale file means the event loop stalled OR Telethon wedged --
+    cases no Docker ``restart:`` policy can catch, because the process never
+    exits on its own. Being a plain OS thread it keeps running even when the
+    asyncio loop is frozen, so it can ``os._exit(1)`` and let ``restart:
+    always`` recreate the container. State is committed per operation, so an
+    abrupt exit loses nothing. ``timeout <= 0`` disables it.
+    """
+    path = _health_file()
+    if path is None or timeout <= 0:
+        return
+    while True:
+        time.sleep(_WATCHDOG_POLL_SEC)
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            continue  # not written yet -> do not kill on a cold start
+        if age > timeout:
+            log.error(
+                'watchdog: no heartbeat for %.0fs (> %.0fs); exiting to force '
+                'a restart',
+                age,
+                timeout,
+            )
+            os._exit(1)  # deliberate hard exit so restart: always recreates us
+
+
+def _load_runtime() -> dict[str, object]:
+    """The 'runtime' section of the constants JSON (watchdog knobs), or {}."""
+    data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
+    rt = data.get('runtime')
+    return rt if isinstance(rt, dict) else {}
 
 
 def _log_handlers() -> list[logging.Handler]:
@@ -881,7 +950,11 @@ class Aggregator:
         self._greeter_task: asyncio.Task[None] | None = None
         self._cat_rescan_task: asyncio.Task[None] | None = None
         self._cat_next_rescan: float = 0.0  # ts of the next auto-rescan
+        self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
         self._enrich_tasks: set[asyncio.Task[None]] = set()
+        rt = self._raw.get('runtime')
+        rt = rt if isinstance(rt, dict) else {}
+        self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
         self._build_profile(self._load_mode())
 
     def _build_profile(self, mode: str) -> None:
@@ -902,6 +975,7 @@ class Aggregator:
         self.processed_ids: set[int] = set()
         self._cat_tasks = set()
         self._cat_next_rescan = 0.0
+        self._rescan_sec = self._rescan_interval(mode)
         self.cats = cats.CatBrain(
             cats.load_cat_params(self._raw), pdir / 'cats_state.json'
         )
@@ -925,6 +999,18 @@ class Aggregator:
         """The state dir for MODE: base dir for live, base/test for test."""
         test = self._state_base / 'test'
         return test if mode == 'test' else self._state_base
+
+    def _rescan_interval(self, mode: str) -> float:
+        """The auto-rescan period for MODE: test is fast, live is slow.
+
+        Test wants a tight loop while you iterate (default 5 min); live can be
+        relaxed (default 1 hour). Both fall back to ``rescan_sec``.
+        """
+        cfg = self._raw.get('cats')
+        cfg = cfg if isinstance(cfg, dict) else {}
+        default = float(cfg.get('rescan_sec', 300.0))
+        key = 'rescan_sec_test' if mode == 'test' else 'rescan_sec_live'
+        return float(cfg.get(key, default))
 
     def _profile_channel(self, mode: str) -> int:
         """The greeter's default channel for MODE (test uses the test chat)."""
@@ -1419,7 +1505,7 @@ class Aggregator:
         (dedup skips what is already queued/answered). ``_cat_next_rescan`` is
         published for the /status countdown. Off when rescan_sec <= 0.
         """
-        period = self.cats.params.rescan_sec
+        period = self._rescan_sec
         if not self.cats.params.enabled or period <= 0:
             return
         while True:
@@ -1943,7 +2029,7 @@ class Aggregator:
 
     def _cat_rescan_line(self) -> str:
         """The auto-rescan period and the countdown to the next one."""
-        period = int(self.cats.params.rescan_sec)
+        period = int(self._rescan_sec)
         if period <= 0:
             return '  auto-rescan: off (use /requeue)'
         nxt = self._cat_next_rescan
@@ -2022,9 +2108,10 @@ class Aggregator:
         )
 
     async def status_loop(self) -> None:
-        """Periodically log pending videos and learn the host's real uptime."""
+        """Periodically log pending videos, learn uptime, beat the watchdog."""
         while True:
             await asyncio.sleep(STATUS_INTERVAL)
+            await self._heartbeat()
             if self.cats.params.enabled:
                 self.cats.mark_alive(time.time())  # learn actual on-hours
             if not self.groups:
@@ -2039,6 +2126,24 @@ class Aggregator:
                     ', '.join(sorted(group.items)),
                     ', '.join(missing),
                 )
+
+    async def _heartbeat(self) -> None:
+        """Prove end-to-end liveness, then refresh the watchdog heartbeat.
+
+        A cheap Telegram round-trip (``get_me``) under a timeout: on success we
+        are both loop-alive AND actually talking to Telegram, so we stamp the
+        health file. On a hang/timeout we skip the stamp, letting the file age
+        until the watchdog thread restarts the process. Reaching this line at
+        all already proves the event loop is not stalled.
+        """
+        try:
+            await asyncio.wait_for(
+                self.client.get_me(), timeout=self._probe_timeout
+            )
+        except Exception:  # noqa: BLE001 -- wedged/unreachable: let it go stale
+            log.warning('watchdog: liveness probe failed; heartbeat stale')
+            return
+        _touch_health()
 
     async def backfill(self) -> None:
         """Scan recent source history for messages not yet processed."""
@@ -2298,6 +2403,15 @@ async def main() -> None:
         ','.join(config.platforms),
     )
     status_task = asyncio.create_task(agg.status_loop())
+    # Self-healing watchdog: seed the heartbeat now (so a cold start is not
+    # instantly "stale"), then a daemon thread exits the process if the
+    # heartbeat later goes stale -- a hang no restart: policy could catch --
+    # so Docker's restart: always recreates the container.
+    _touch_health()
+    watchdog_sec = float(_load_runtime().get('watchdog_sec', 600.0))
+    threading.Thread(
+        target=_watchdog, args=(watchdog_sec,), daemon=True
+    ).start()
     await client.run_until_disconnected()
     status_task.cancel()
     await agg.stop_profile()
