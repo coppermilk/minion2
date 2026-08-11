@@ -380,6 +380,9 @@ class Consts:
     # terms + any non-ASCII marks): a sticker is suppressed there, a plain
     # reaction goes instead. Non-ASCII, so it lives in the JSON, not here.
     human_words: tuple[str, ...]
+    # /status icons (emoji, so JSON not source): title/routing/videos/cats/
+    # greeter/users/legend section glyphs + on/off dots + bullet/arrow.
+    status: dict[str, str]
     emoji_all: list[
         dict[str, object]
     ]  # unified emoji catalog (new JSON), else []
@@ -463,6 +466,11 @@ def _load_constants(path: Path) -> Consts:
         human_words=tuple(
             str(w).lower() for w in (data.get('human_words') or [])
         ),
+        status={
+            str(k): str(v)
+            for k, v in (data.get('status') or {}).items()
+            if not str(k).startswith('_')
+        },
         emoji_all=catalog,
     )
 
@@ -1593,11 +1601,10 @@ class Aggregator:
         pending = self.cats.state.pending
         if not pending:
             return f'{head} pending cat(s). Nothing queued.'
-        labels = await self._chat_labels()
         now = time.time()
         lines = [f'{head} pending cat(s):']
         lines.extend(
-            self._pending_cat_line(entry, labels, now)
+            self._pending_cat_line(entry, now)
             for entry in pending[:STATUS_PENDING_CATS]
         )
         extra = len(pending) - STATUS_PENDING_CATS
@@ -1647,11 +1654,17 @@ class Aggregator:
     def _users_line(self) -> str:
         """A one-line users summary for /status (or 'off' when disabled)."""
         if not self._users_enabled:
-            return 'Users DB: off'
+            return self._head(
+                'users', 'Users DB', f'{self._dot(on=False)} off'
+            )
         s = self.users.summary()
-        return (
-            f'Users DB: total={s["total"]} subscribed={s["subscribed"]}'
-            f' left={s["left"]} messages={s["messages"]}'
+        return self._head(
+            'users',
+            'Users DB',
+            f'{self._dot(on=True)} on',
+            f'{s["total"]} users',
+            f'{s["subscribed"]} subscribed',
+            f'{s["messages"]} msgs',
         )
 
     def _cancel_cat_tasks(self) -> None:
@@ -1910,66 +1923,109 @@ class Aggregator:
         )
         return f'"{title}" ({chat_id})' if title else str(chat_id)
 
+    def _ic(self, key: str, fallback: str = '') -> str:
+        """A /status glyph from the JSON, or the fallback."""
+        return self.consts.status.get(key) or fallback
+
+    def _dot(self, *, on: bool) -> str:
+        """The green/red status dot."""
+        return self._ic('on', '[on]') if on else self._ic('off', '[off]')
+
+    def _bul(self) -> str:
+        """The bullet glyph that leads sub-lines and joins header pieces."""
+        return self._ic('bullet', '-')
+
+    def _arr(self) -> str:
+        """The arrow glyph ('next ...' / 'posting ...')."""
+        return self._ic('arrow', '->')
+
+    def _head(self, key: str, label: str, *tail: str) -> str:
+        """'icon label [ . tail . tail ]', skipping any blank piece."""
+        title = ' '.join(p for p in (self._ic(key), label) if p)
+        sep = f' {self._bul()} '
+        return sep.join([title, *(t for t in tail if t)])
+
     def _status_text(self, labels: dict[int, str]) -> str:
-        """The full status message: routing, pending, posted, cats, legend."""
+        """The full status: header, routing, videos, cats, greeter, users."""
+        flag = 'TEST' if self.mode == 'test' else 'LIVE'
         parts = [
-            'Aggregator status',
+            self._head('title', 'Aggregator', f'{self._dot(on=True)} {flag}'),
             '',
             *self._routing_lines(labels),
             '',
-            *self._pending_lines(),
-            '',
-            *self._posted_lines(),
+            *self._videos_lines(),
             '',
             *self._cat_status_lines(labels),
             '',
-            self._greeter_line(),
+            *self._greeter_lines(),
+            '',
             self._users_line(),
         ]
         if self.consts.status_help:
-            parts += ['', self.consts.status_help]
+            legend = ' '.join(
+                p for p in (self._ic('legend'), self.consts.status_help) if p
+            )
+            parts += ['', legend]
         return '\n'.join(parts)
 
-    def _greeter_line(self) -> str:
-        """Greeter summary: on/off, admin-log cursor, DMs today, schedule."""
+    def _greeter_lines(self) -> list[str]:
+        """Greeter section: on/off, DMs today, admin-log cursor, next check."""
         gp = self.greeter.params
         gs = self.greeter.state
-        head = (
-            f'Greeter: enabled={gp.enabled} last_event={gs.last_event_id}'
-            f' dm_today={gs.dm_today}/{gp.max_dm_per_day}'
+        state = 'on' if gp.enabled else 'off'
+        head = self._head(
+            'greeter',
+            'Greeter',
+            f'{self._dot(on=gp.enabled)} {state}',
+            f'DMs {gs.dm_today}/{gp.max_dm_per_day}',
+            f'last event {gs.last_event_id}',
         )
         if not gp.enabled:
-            return head
-        return head + '\n' + self._greeter_schedule_line()
+            return [head]
+        return [head, self._greeter_schedule_line()]
 
     def _greeter_schedule_line(self) -> str:
         """The greeter's check period and next-check time (persona clock)."""
         period = int(self.greeter.params.poll_sec)
         nxt = self.greeter.next_sync
+        b = self._bul()
         if nxt <= 0:
-            return f'  check every {period}s | next check: pending first run'
+            return f'{b} check {period}s {b} next: first run'
         tz = timezone(timedelta(hours=self.cats.params.tz_offset_hours))
-        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M:%S')
+        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
         eta = nxt - time.time()
         when = 'now' if eta <= 0 else _fmt_eta(eta)
-        return f'  check every {period}s | next check {clock} (in {when})'
+        return (
+            f'{self._bul()} check {period}s {self._arr()} '
+            f'next {clock} (in {when})'
+        )
 
     def _routing_lines(self, labels: dict[int, str]) -> list[str]:
         """Source, the live targets, and where posts go NOW (test vs live)."""
         source = labels.get(self.config.source, str(self.config.source))
         targets = ', '.join(labels.get(t, str(t)) for t in self.config.targets)
         dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
-        flag = 'TEST' if self.mode == 'test' else 'LIVE'
+        b = self._bul()
         return [
-            f'source (reads JSON): {source}',
-            f'target (live): {targets}',
-            f'>>> MODE: {flag} -- posts go to: {dest} <<<',
+            self._head('routing', 'Routing'),
+            f'{b} source: {source}',
+            f'{b} target: {targets}',
+            f'{b} posting {self._arr()} {dest}',
         ]
 
-    def _pending_lines(self) -> list[str]:
-        """One line per pending video, and which platforms it awaits."""
+    def _videos_lines(self) -> list[str]:
+        """Videos: counts on the header, then pending + recent posts."""
+        b = self._bul()
         window = _fmt_eta(self.config.timeout)
-        lines = [f'Pending videos: {len(self.groups)} (timeout {window})']
+        lines = [
+            self._head(
+                'videos',
+                'Videos',
+                f'pending {len(self.groups)} (timeout {window})',
+                f'posted {len(self.posted)}',
+                f'rejected {len(self.rejected)}',
+            )
+        ]
         for group in self.groups:
             have = ', '.join(sorted(group.items)) or '-'
             missing = (
@@ -1980,76 +2036,70 @@ class Aggregator:
             )
             left = self.config.timeout - (time.time() - group.created_at)
             lines.append(
-                f'  - "{_trim(group.title)}" have [{have}]'
-                f' wait [{missing}] posts in ~{_fmt_eta(left)}'
+                f'{b} "{_trim(group.title)}" have [{have}] wait [{missing}]'
+                f' {self._arr()} ~{_fmt_eta(left)}'
             )
-        return lines
-
-    def _posted_lines(self) -> list[str]:
-        """A tail of what went out, plus the rejected (non-Short) count."""
-        head = (
-            f'Recently posted: {len(self.posted)}'
-            f' | rejected (non-Shorts): {len(self.rejected)}'
+        lines.extend(
+            f'{b} "{_trim(post.title)}" {b} {post.at[:10]}'
+            f' {b} {len(post.links)} links'
+            for post in self.posted[-5:]
         )
-        lines = [head]
-        for post in self.posted[-5:]:
-            links = len(post.links)
-            lines.append(
-                f'  - "{_trim(post.title)}" {post.at} ({links} links)'
-            )
         return lines
 
     def _cat_status_lines(self, labels: dict[int, str]) -> list[str]:
         """The cat engine's live state (empty-ish when it is disabled)."""
         brain = self.cats
+        b = self._bul()
+        enabled = brain.params.enabled
+        state = 'on' if enabled else 'off'
         window = f'{brain.params.active_start:g}-{brain.params.active_end:g}h'
         alive = brain.state.alive
         top = sorted(alive, key=lambda h: alive[h], reverse=True)[:6]
         learned = ', '.join(f'{h}h' for h in top) or '(learning)'
-        counters = (
-            f'  catted={len(brain.state.catted)}'
-            f' pending comments={len(brain.state.pending)}'
-            f' mood={brain.state.mood:.2f}'
-        )
         return [
-            'Cat engine:',
-            (
-                f'  enabled={brain.params.enabled}'
-                f' pool={len(brain.params.pool)}'
-                f' like={len(brain.params.like_pool)}'
+            self._head(
+                'cats',
+                'Cats',
+                f'{self._dot(on=enabled)} {state}',
+                f'{len(brain.params.pool)} cats / '
+                f'{len(brain.params.like_pool)} likes',
             ),
-            f'  uptime window (prior)={window}',
-            f'  learned on-hours=[{learned}]',
+            (
+                f'{b} mood {brain.state.mood:.2f} {b} answered '
+                f'{len(brain.state.catted)} {b} pending '
+                f'{len(brain.state.pending)}'
+            ),
+            f'{b} window {window} (prior) {b} learned {learned}',
             self._cat_rescan_line(),
             *self._last_posts_lines(labels),
-            counters,
-            *self._pending_cat_lines(labels),
-            '  (/catnow = answer all now | /requeue = rescan now)',
+            *self._pending_cat_lines(),
+            f'{b} /catnow {b} /requeue',
         ]
 
     def _cat_rescan_line(self) -> str:
         """The auto-rescan period and the countdown to the next one."""
+        b = self._bul()
         period = int(self._rescan_sec)
         if period <= 0:
-            return '  auto-rescan: off (use /requeue)'
+            return f'{b} rescan: off (use /requeue)'
         nxt = self._cat_next_rescan
         if nxt <= 0:
-            return f'  auto-rescan every {period}s | next: pending first run'
+            return f'{b} rescan {period}s {b} next: first run'
         tz = timezone(timedelta(hours=self.cats.params.tz_offset_hours))
-        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M:%S')
+        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
         eta = nxt - time.time()
         when = 'now' if eta <= 0 else _fmt_eta(eta)
-        return f'  auto-rescan every {period}s | next {clock} (in {when})'
+        return f'{b} rescan {period}s {self._arr()} next {clock} (in {when})'
 
-    def _pending_cat_lines(self, labels: dict[int, str]) -> list[str]:
-        """Each pending cat: the comment, its chat, and when it fires."""
+    def _pending_cat_lines(self) -> list[str]:
+        """The queued cats: which cat lands on which comment, and when."""
         pending = self.cats.state.pending
         if not pending:
             return []
         now = time.time()
-        lines = ['  pending cats:']
+        lines = [f'{self._bul()} queued:']
         lines.extend(
-            self._pending_cat_line(entry, labels, now)
+            self._pending_cat_line(entry, now)
             for entry in pending[:STATUS_PENDING_CATS]
         )
         extra = len(pending) - STATUS_PENDING_CATS
@@ -2057,11 +2107,9 @@ class Aggregator:
             lines.append(f'    ... (+{extra} more)')
         return lines
 
-    def _pending_cat_line(
-        self, entry: dict[str, object], labels: dict[int, str], now: float
-    ) -> str:
-        """One '- <chat> post <root>: <cat> on <comment> <eta>' status line."""
-        chat = int(entry.get('chat', 0))
+    def _pending_cat_line(self, entry: dict[str, object], now: float) -> str:
+        """One queued line: '<cat> <verb> -> <comment> . post N . <eta>'."""
+        b = self._bul()
         msg = int(entry.get('reply_to', 0))
         root = int(entry.get('root', msg))
         body = str(entry.get('text', ''))
@@ -2070,15 +2118,24 @@ class Aggregator:
         verb = 'sticker' if entry.get('kind') == 'reply' else 'like'
         eta = float(entry.get('when', now)) - now
         when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
-        name = labels.get(chat, chat)
-        return f'    - {name} post {root}: {glyphs} {verb} on {what} {when}'
+        return (
+            f'    {glyphs} {verb} {self._arr()} {what}'
+            f' {b} post {root} {b} {when}'
+        )
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
-        """The watched comment chats + post ids, one per line, by name."""
+        """The watched comment threads, grouped one line per chat."""
         posts = self.cats.posts
-        lines = [f'  watching comments in ({len(posts)}):']
+        if not posts:
+            return []
+        by_chat: dict[int, list[int]] = {}
+        for chat, mid in posts:
+            by_chat.setdefault(chat, []).append(mid)
+        lines = [f'{self._bul()} watching {len(posts)} posts:']
         lines.extend(
-            f'    - {labels.get(ch, str(ch))} post {mid}' for ch, mid in posts
+            f'    {labels.get(chat, str(chat))}: '
+            f'{", ".join(str(m) for m in mids)}'
+            for chat, mids in by_chat.items()
         )
         return lines
 
