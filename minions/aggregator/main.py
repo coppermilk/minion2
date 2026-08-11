@@ -55,6 +55,7 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from dataclasses import field
@@ -78,6 +79,7 @@ from telethon.tl.types import ReactionEmoji
 
 from minions.aggregator import cats
 from minions.aggregator import greeter
+from minions.aggregator import users
 from minions.aggregator.premium_emoji import RichText
 
 if TYPE_CHECKING:
@@ -86,8 +88,12 @@ if TYPE_CHECKING:
     from minions.aggregator.premium_emoji import PremiumMessage
 
 
-def _log_file() -> Path | None:
-    """The on-disk log path under the state dir, or None if unavailable."""
+def _state_base() -> Path | None:
+    """The base state dir (AGGREGATOR_STATE_DIR, else <DRIVE>/bots/aggregator).
+
+    Process-level (not per-profile): the log and the watchdog heartbeat live
+    here. Returns None (and the caller degrades) when neither is configured.
+    """
     base = os.environ.get('AGGREGATOR_STATE_DIR')
     if not base:
         drive = os.environ.get('DRIVE')
@@ -98,7 +104,71 @@ def _log_file() -> Path | None:
         Path(base).mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    return Path(base) / 'aggregator.log'
+    return Path(base)
+
+
+def _log_file() -> Path | None:
+    """The on-disk log path under the state dir, or None if unavailable."""
+    base = _state_base()
+    return base / 'aggregator.log' if base is not None else None
+
+
+def _health_file() -> Path | None:
+    """The watchdog heartbeat file (mtime = the last proven-alive time)."""
+    base = _state_base()
+    return base / 'health' if base is not None else None
+
+
+def _touch_health() -> None:
+    """Stamp the heartbeat file with 'now' -- called only when proven alive."""
+    path = _health_file()
+    if path is None:
+        return
+    try:
+        path.write_text(str(time.time()), encoding='ascii')
+    except OSError:
+        log.warning('watchdog: could not write the heartbeat file')
+
+
+# How often the watchdog thread checks the heartbeat's age.
+_WATCHDOG_POLL_SEC = 30.0
+
+
+def _watchdog(timeout: float) -> None:
+    """Daemon thread: exit the process if the heartbeat goes stale (a hang).
+
+    ``status_loop`` refreshes the heartbeat only after a successful Telegram
+    probe, so a stale file means the event loop stalled OR Telethon wedged --
+    cases no Docker ``restart:`` policy can catch, because the process never
+    exits on its own. Being a plain OS thread it keeps running even when the
+    asyncio loop is frozen, so it can ``os._exit(1)`` and let ``restart:
+    always`` recreate the container. State is committed per operation, so an
+    abrupt exit loses nothing. ``timeout <= 0`` disables it.
+    """
+    path = _health_file()
+    if path is None or timeout <= 0:
+        return
+    while True:
+        time.sleep(_WATCHDOG_POLL_SEC)
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            continue  # not written yet -> do not kill on a cold start
+        if age > timeout:
+            log.error(
+                'watchdog: no heartbeat for %.0fs (> %.0fs); exiting to force '
+                'a restart',
+                age,
+                timeout,
+            )
+            os._exit(1)  # deliberate hard exit so restart: always recreates us
+
+
+def _load_runtime() -> dict[str, object]:
+    """The 'runtime' section of the constants JSON (watchdog knobs), or {}."""
+    data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
+    rt = data.get('runtime')
+    return rt if isinstance(rt, dict) else {}
 
 
 def _log_handlers() -> list[logging.Handler]:
@@ -165,6 +235,9 @@ COMMAND_CATNOW = '/catnow'
 # /greetnow forces the greeter to poll+process now (no waiting for poll_sec) --
 # for testing welcome/farewell DMs.
 COMMAND_GREETNOW = '/greetnow'
+# /users prints the users-DB summary (audience totals, top commenters, recent
+# join/leave) when the users database is enabled.
+COMMAND_USERS = '/users'
 # /test and /live switch where posts go: /test routes ALL posts to TEST_CHAT_ID
 # (a test channel), /live routes them back to the live targets. Persisted, so
 # the mode survives a restart.
@@ -677,6 +750,17 @@ def _pending_glyphs(entry: dict[str, object]) -> str:
 _LINK_MARKERS = ('http://', 'https://', 't.me/', 'www.')
 
 
+def _user_label(row: dict[str, object]) -> str:
+    """A readable handle for a users-DB row: @username, else name, else id."""
+    username = row.get('username')
+    if username:
+        return f'@{username}'
+    name = row.get('first_name')
+    if name:
+        return str(name)
+    return f'id {row.get("user_id", "?")}'
+
+
 def _needs_human(text: str, words: tuple[str, ...]) -> bool:
     """Whether a comment wants a real reply, not an auto sticker.
 
@@ -866,6 +950,11 @@ class Aggregator:
         self._greeter_task: asyncio.Task[None] | None = None
         self._cat_rescan_task: asyncio.Task[None] | None = None
         self._cat_next_rescan: float = 0.0  # ts of the next auto-rescan
+        self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
+        self._enrich_tasks: set[asyncio.Task[None]] = set()
+        rt = self._raw.get('runtime')
+        rt = rt if isinstance(rt, dict) else {}
+        self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
         self._build_profile(self._load_mode())
 
     def _build_profile(self, mode: str) -> None:
@@ -886,20 +975,42 @@ class Aggregator:
         self.processed_ids: set[int] = set()
         self._cat_tasks = set()
         self._cat_next_rescan = 0.0
+        self._rescan_sec = self._rescan_interval(mode)
         self.cats = cats.CatBrain(
             cats.load_cat_params(self._raw), pdir / 'cats_state.json'
         )
+        # Users DB (opt-in): its own SQLite file per profile, so live and test
+        # audiences never mix. Config lives in the 'users' JSON section.
+        ucfg = self._raw.get('users')
+        ucfg = ucfg if isinstance(ucfg, dict) else {}
+        self._users_enabled = bool(ucfg.get('enabled', False))
+        self._users_store_text = bool(ucfg.get('store_message_text', True))
+        self._users_enrich = bool(ucfg.get('enrich', True))
+        self.users = users.UserStore(pdir / 'users.db')
         gchannel = self._profile_channel(mode)
         self.greeter = greeter.Greeter(
             self.client,
             greeter.load_greeter_params(self._raw, gchannel),
             pdir / 'greeter_state.json',
+            self._on_membership_event,
         )
 
     def _profile_dir(self, mode: str) -> Path:
         """The state dir for MODE: base dir for live, base/test for test."""
         test = self._state_base / 'test'
         return test if mode == 'test' else self._state_base
+
+    def _rescan_interval(self, mode: str) -> float:
+        """The auto-rescan period for MODE: test is fast, live is slow.
+
+        Test wants a tight loop while you iterate (default 5 min); live can be
+        relaxed (default 1 hour). Both fall back to ``rescan_sec``.
+        """
+        cfg = self._raw.get('cats')
+        cfg = cfg if isinstance(cfg, dict) else {}
+        default = float(cfg.get('rescan_sec', 300.0))
+        key = 'rescan_sec_test' if mode == 'test' else 'rescan_sec_live'
+        return float(cfg.get(key, default))
 
     def _profile_channel(self, mode: str) -> int:
         """The greeter's default channel for MODE (test uses the test chat)."""
@@ -955,6 +1066,14 @@ class Aggregator:
         if self._cat_rescan_task is not None:
             self._cat_rescan_task.cancel()
             self._cat_rescan_task = None
+        self._cancel_enrich_tasks()
+        self.users.close()  # release the SQLite handle before a rebind
+
+    def _cancel_enrich_tasks(self) -> None:
+        """Cancel any in-flight identity-enrichment lookups."""
+        for task in list(self._enrich_tasks):
+            task.cancel()
+        self._enrich_tasks.clear()
 
     async def switch_mode(self, mode: str) -> None:
         """Switch the WHOLE bot to MODE (the /test and /live commands).
@@ -1129,10 +1248,76 @@ class Aggregator:
             return
         if await self._unknown_command(event, text):
             return
+        self._record_user_message(event)
         if self.cats.params.enabled:
             self._maybe_cat(event)
         if event.chat_id == self.config.source:
             await self.on_message(event.message)
+
+    def _record_user_message(self, event: events.NewMessage.Event) -> None:
+        """Log a seen audience message to the users DB (a discussion comment).
+
+        Records non-own messages in the source chat or a watched discussion
+        group (the chats the account actually sees), bumping the sender's count
+        and storing the text (unless store_message_text is off), then enriches
+        the sender's identity lazily. Idempotent per (chat, msg_id).
+        """
+        message = event.message
+        if not self._users_enabled or getattr(message, 'out', False):
+            return
+        uid = int(getattr(event, 'sender_id', 0) or 0)
+        chat = int(event.chat_id or 0)
+        disc_chats = {c for c, _ in self.cats.posts}
+        if uid <= 0 or (chat != self.config.source and chat not in disc_chats):
+            return
+        root = _thread_top(getattr(message, 'reply_to', None)) or 0
+        body = str(getattr(message, 'message', '') or '')
+        self.users.record_message(
+            uid,
+            chat,
+            int(getattr(message, 'id', 0) or 0),
+            root=int(root),
+            text=body if self._users_store_text else '',
+        )
+        self._maybe_enrich(uid)
+
+    def _on_membership_event(
+        self, event: tuple[int, int, bool, bool]
+    ) -> None:
+        """Greeter sink: persist a join/leave to the users DB (idempotent)."""
+        admin_log_id, user_id, joined, left = event
+        if not self._users_enabled or user_id <= 0:
+            return
+        self.users.record_membership(
+            user_id, joined=joined, left=left, admin_log_id=admin_log_id
+        )
+        self._maybe_enrich(user_id)
+
+    def _maybe_enrich(self, user_id: int) -> None:
+        """Schedule a one-off identity lookup for a user we do not know yet."""
+        if (
+            not self._users_enrich
+            or user_id <= 0
+            or self.users.has_identity(user_id)
+        ):
+            return
+        task = asyncio.create_task(self._enrich_user(user_id))
+        self._enrich_tasks.add(task)
+        task.add_done_callback(self._enrich_tasks.discard)
+
+    async def _enrich_user(self, user_id: int) -> None:
+        """Resolve a user's username/name (phone is almost always absent)."""
+        try:
+            entity = await self.client.get_entity(user_id)
+        except Exception:  # noqa: BLE001 -- unresolvable id: leave it bare
+            return
+        self.users.apply_identity(
+            user_id,
+            username=getattr(entity, 'username', None),
+            first_name=getattr(entity, 'first_name', None),
+            last_name=getattr(entity, 'last_name', None),
+            phone=getattr(entity, 'phone', None),
+        )
 
     async def _unknown_command(
         self, event: events.NewMessage.Event, text: str
@@ -1158,6 +1343,7 @@ class Aggregator:
             COMMAND_REQUEUE: self.requeue_cats,
             COMMAND_CATNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
+            COMMAND_USERS: self.users_report,
             COMMAND_TEST: self.enter_test,
             COMMAND_LIVE: self.enter_live,
         }
@@ -1319,7 +1505,7 @@ class Aggregator:
         (dedup skips what is already queued/answered). ``_cat_next_rescan`` is
         published for the /status countdown. Off when rescan_sec <= 0.
         """
-        period = self.cats.params.rescan_sec
+        period = self._rescan_sec
         if not self.cats.params.enabled or period <= 0:
             return
         while True:
@@ -1424,6 +1610,49 @@ class Aggregator:
         summary = await self.greeter.sync_now()
         await self.client.send_message(self.config.source, summary)
         log.info('greetnow: %s', summary)
+
+    async def users_report(self) -> None:
+        """Post the users-DB summary to the source chat (/users command)."""
+        await self.client.send_message(self.config.source, self._users_text())
+        log.info('sent users report to %s', self.config.source)
+
+    def _users_text(self) -> str:
+        """The /users message: totals, top commenters, recent join/leave."""
+        if not self._users_enabled:
+            return 'Users DB: disabled (set users.enabled in the JSON).'
+        s = self.users.summary()
+        lines = [
+            'Users DB',
+            (
+                f'  total={s["total"]} subscribed={s["subscribed"]}'
+                f' left={s["left"]} messages={s["messages"]}'
+            ),
+        ]
+        top = self.users.top_commenters(5)
+        if top:
+            lines.append('  top commenters:')
+            lines += [
+                f'    - {_user_label(r)}: {r["msg_count"]} msg' for r in top
+            ]
+        recent = self.users.recent_events(5)
+        if recent:
+            lines.append('  recent join/leave:')
+            lines += [
+                f'    - {r["event"]}: {_user_label(r)}'
+                f' {_iso(float(str(r["ts"])))}'
+                for r in recent
+            ]
+        return '\n'.join(lines)
+
+    def _users_line(self) -> str:
+        """A one-line users summary for /status (or 'off' when disabled)."""
+        if not self._users_enabled:
+            return 'Users DB: off'
+        s = self.users.summary()
+        return (
+            f'Users DB: total={s["total"]} subscribed={s["subscribed"]}'
+            f' left={s["left"]} messages={s["messages"]}'
+        )
 
     def _cancel_cat_tasks(self) -> None:
         """Cancel every in-flight fire-later cat task."""
@@ -1695,6 +1924,7 @@ class Aggregator:
             *self._cat_status_lines(labels),
             '',
             self._greeter_line(),
+            self._users_line(),
         ]
         if self.consts.status_help:
             parts += ['', self.consts.status_help]
@@ -1799,7 +2029,7 @@ class Aggregator:
 
     def _cat_rescan_line(self) -> str:
         """The auto-rescan period and the countdown to the next one."""
-        period = int(self.cats.params.rescan_sec)
+        period = int(self._rescan_sec)
         if period <= 0:
             return '  auto-rescan: off (use /requeue)'
         nxt = self._cat_next_rescan
@@ -1878,9 +2108,10 @@ class Aggregator:
         )
 
     async def status_loop(self) -> None:
-        """Periodically log pending videos and learn the host's real uptime."""
+        """Periodically log pending videos, learn uptime, beat the watchdog."""
         while True:
             await asyncio.sleep(STATUS_INTERVAL)
+            await self._heartbeat()
             if self.cats.params.enabled:
                 self.cats.mark_alive(time.time())  # learn actual on-hours
             if not self.groups:
@@ -1895,6 +2126,24 @@ class Aggregator:
                     ', '.join(sorted(group.items)),
                     ', '.join(missing),
                 )
+
+    async def _heartbeat(self) -> None:
+        """Prove end-to-end liveness, then refresh the watchdog heartbeat.
+
+        A cheap Telegram round-trip (``get_me``) under a timeout: on success we
+        are both loop-alive AND actually talking to Telegram, so we stamp the
+        health file. On a hang/timeout we skip the stamp, letting the file age
+        until the watchdog thread restarts the process. Reaching this line at
+        all already proves the event loop is not stalled.
+        """
+        try:
+            await asyncio.wait_for(
+                self.client.get_me(), timeout=self._probe_timeout
+            )
+        except Exception:  # noqa: BLE001 -- wedged/unreachable: let it go stale
+            log.warning('watchdog: liveness probe failed; heartbeat stale')
+            return
+        _touch_health()
 
     async def backfill(self) -> None:
         """Scan recent source history for messages not yet processed."""
@@ -2154,6 +2403,15 @@ async def main() -> None:
         ','.join(config.platforms),
     )
     status_task = asyncio.create_task(agg.status_loop())
+    # Self-healing watchdog: seed the heartbeat now (so a cold start is not
+    # instantly "stale"), then a daemon thread exits the process if the
+    # heartbeat later goes stale -- a hang no restart: policy could catch --
+    # so Docker's restart: always recreates the container.
+    _touch_health()
+    watchdog_sec = float(_load_runtime().get('watchdog_sec', 600.0))
+    threading.Thread(
+        target=_watchdog, args=(watchdog_sec,), daemon=True
+    ).start()
     await client.run_until_disconnected()
     status_task.cancel()
     await agg.stop_profile()

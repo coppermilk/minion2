@@ -33,6 +33,8 @@ code units, as Telegram requires).
 | `aggregator_constants.json` | editable post texts + premium emoji ids (UTF-8) |
 | `login.py` | log in once and write the session file (`python -m minions.aggregator.login`) |
 | `dump_emoji_ids.py` | dev helper: print the id of every premium emoji you send |
+| `greeter.py` | welcome/farewell DMs from the channel admin log (opt-in) |
+| `users.py` | opt-in users database (SQLite): audience history + activity |
 
 ## Configuration
 
@@ -92,6 +94,22 @@ docker compose run --rm aggregator    # 1) first login, interactive, once
 docker compose up -d aggregator       # 2) silent from the saved session
 docker compose logs -f aggregator
 ```
+
+## Self-healing (always comes back)
+
+The container is `restart: always`, so it returns after any exit, reboot, or
+Docker daemon restart. A crash already exits (and restarts); the hard case is a
+**hang** -- the process staying alive but wedged (Telethon stops talking, or the
+event loop stalls), which no `restart:` policy can catch because nothing exits.
+So the app runs an **in-process watchdog**: the status loop stamps a heartbeat
+file (`<state>/health`) each minute, but only after a successful Telegram probe
+(`get_me`); a daemon thread `os._exit(1)`s if that heartbeat goes stale past
+`runtime.watchdog_sec` (default 600s), turning the hang into an exit that
+`restart: always` recovers. State is committed per operation, so the abrupt exit
+loses nothing. The compose `healthcheck` reads the same file so Container
+Manager shows healthy/unhealthy (it does not itself restart -- the watchdog
+does). Tune or disable via the `runtime` section of the constants JSON
+(`watchdog_sec: 0` turns it off).
 
 ## Log in once -- reboots don't ask again
 
@@ -187,9 +205,51 @@ on.
 - **Plain group** (`false`): comments are matched as direct replies to the post
   message id, in the group itself.
 
+**Auto-rescan (per profile).** The bot re-scans the targets on a timer so a post
+made (and commented on) while it runs is picked up without a manual `/requeue`.
+The cadence differs by profile so you can iterate fast in test but stay quiet in
+production: **test = `rescan_sec_test` (5 min)**, **live = `rescan_sec_live`
+(1 hour)** in the `cats` JSON (both fall back to `rescan_sec`). `/status` shows a
+countdown to the next run.
+
 **Inspect it live** with the `/status` command (from any chat, renders into the
 source chat): it lists the videos still **pending** (and which platforms each
 awaits), a tail of what was **posted**, the **rejected** (non-Short) count, and
 the cat engine's state (enabled, pool size, watched posts, people catted,
 pending replies, mood) -- followed by a plain-language legend of the expected
 behaviour (`status_help` in the JSON).
+
+## Users database (`users.py`, opt-in)
+
+A per-profile **SQLite** database (`users.db`, next to the other state files)
+that records the channel audience over time. **Off by default** -- it collects
+personal data. Turn it on in the `users` section of the constants JSON:
+
+```json
+"users": { "enabled": true, "store_message_text": true, "enrich": true }
+```
+
+What it records:
+
+- **Membership timeline** -- every subscribe/unsubscribe, in order
+  (join -> leave -> re-join -> ...), fed from the greeter's admin-log stream.
+  So membership needs the same **admin** rights the greeter does; the DB fills
+  from the moment you enable it (the admin log only retains a few days).
+- **Identity** -- user id, and (via `get_entity`, when `enrich` is on)
+  username and first/last name.
+- **Messages** -- every comment the account can see in the linked discussion
+  group (and the source chat), with the text unless `store_message_text` is
+  `false`. Counts, first/last-seen, and the full text are kept per user.
+
+Read it with **`/users`** (totals, top commenters, recent join/leave, rendered
+into the source chat); `/status` gains a one-line users summary. The file is a
+normal SQLite DB, so you can also query it directly:
+`sqlite3 <DRIVE>/bots/aggregator/users.db 'SELECT * FROM membership_events'`.
+
+> **Limits, on purpose.** **Phone is essentially never available** -- Telegram
+> exposes `User.phone` only to mutual contacts, so that column is null for
+> virtually everyone. Only messages the account **sees** are logged (discussion
+> comments and the source chat) -- never DMs or plain channel posts. Every write
+> is idempotent, so re-polls and comment rescans never double-count. This is
+> **PII**: it lives only on your own state disk, `test` and `live` keep separate
+> databases, and nothing is collected while `enabled` is `false`.
