@@ -1709,7 +1709,8 @@ class Aggregator:
         try:
             return files.render_cabinet(
                 path,
-                comod.labels_for(residents),
+                # Biggest amount on the biggest shelf (area-ranked).
+                comod.assign_labels(residents, self._comod.slots),
                 list(self._comod.slots),
                 out,
                 font_path=self._comod.font_path,
@@ -1739,7 +1740,10 @@ class Aggregator:
         else:
             return str(tpl.get('empty', ''))
         line = str(tpl.get('roster_line', '- {label}'))
-        body = '\n'.join(line.format(label=nick) for nick, _ in residents)
+        # Same ranking as the shelves: biggest donor first.
+        body = '\n'.join(
+            line.format(label=nick) for nick, _ in comod.by_amount(residents)
+        )
         return f'{head}\n{body}' if head else body
 
     async def users_report(self) -> None:

@@ -128,6 +128,42 @@ def test_load_comod_params_reads_section() -> None:
     assert params.text_color == (1, 2, 3)
 
 
+def test_by_amount_orders_biggest_first() -> None:
+    """Residents rank by donated amount, largest first; non-numeric = 0."""
+    residents = [
+        ('Small', '5'),
+        ('Big', '$100'),
+        ('Zero', 'aa'),
+        ('Mid', '40'),
+    ]
+    assert comod.by_amount(residents) == [
+        ('Big', '$100'),
+        ('Mid', '40'),
+        ('Small', '5'),
+        ('Zero', 'aa'),
+    ]
+
+
+def test_assign_labels_puts_biggest_on_the_largest_slot() -> None:
+    """The largest square gets the largest sum; result is in slot order."""
+    slots = (
+        (0, 0, 10, 10),  # area 100 (smallest)
+        (0, 0, 40, 40),  # area 1600 (largest)
+        (0, 0, 20, 20),  # area 400 (middle)
+    )
+    residents = [('A', '5'), ('B', '100'), ('C', '40')]  # by recency
+    labels = comod.assign_labels(residents, slots)
+    # slot 1 (largest) -> B ($100); slot 2 -> C ($40); slot 0 -> A ($5)
+    assert labels == ['A\n$5', 'B\n$100', 'C\n$40']
+
+
+def test_assign_labels_leaves_spare_slots_blank() -> None:
+    """Fewer residents than slots leaves the smaller shelves empty."""
+    slots = ((0, 0, 40, 40), (0, 0, 10, 10))
+    labels = comod.assign_labels([('Big', '90')], slots)
+    assert labels == ['Big\n$90', '']  # biggest slot filled, spare blank
+
+
 def test_move_in_text_fills_placeholders() -> None:
     """{nick} (without '@') and {link} are substituted into the template."""
     templates = {'move_in': '@{nick} welcome -> {link}'}

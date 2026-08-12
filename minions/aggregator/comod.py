@@ -189,16 +189,56 @@ def _amount_label(amount: str) -> str:
     return f'${clean}' if clean else ''
 
 
+def _amount_value(amount: str) -> float:
+    """The numeric part of an amount, for ranking (0.0 when there is none)."""
+    digits = ''.join(c for c in amount if c.isdigit() or c == '.')
+    try:
+        return float(digits)
+    except ValueError:
+        return 0.0
+
+
+def _label(nick: str, amount: str) -> str:
+    """One shelf label: the nick, with its amount stacked underneath."""
+    money = _amount_label(amount)
+    return f'{nick}\n{money}' if money else nick
+
+
+def by_amount(residents: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Residents sorted by donated amount, biggest first (stable on ties)."""
+    return sorted(residents, key=lambda r: _amount_value(r[1]), reverse=True)
+
+
 def labels_for(residents: list[tuple[str, str]]) -> list[str]:
     r"""Each resident as a shelf label, nick over amount.
 
     The amount goes on its own line UNDER the nick (rendered centered), so a
     label is ``"nick\n$amount"`` -- or just the nick when no amount was given.
     """
-    labels = []
-    for nick, amount in residents:
-        money = _amount_label(amount)
-        labels.append(f'{nick}\n{money}' if money else nick)
+    return [_label(nick, amount) for nick, amount in residents]
+
+
+def assign_labels(
+    residents: list[tuple[str, str]],
+    slots: tuple[tuple[int, int, int, int], ...],
+) -> list[str]:
+    """Shelf labels aligned to ``slots``, biggest amount on the biggest shelf.
+
+    Residents are ranked by donated amount and slots by area, then paired
+    rank-for-rank, so the largest square holds the largest sum. The result is
+    in SLOT order (``label[i]`` belongs to ``slots[i]``); slots past the
+    resident count stay blank. Equal-area slots keep their listed order.
+    """
+    labels = [''] * len(slots)
+    ranked = sorted(
+        range(len(slots)),
+        key=lambda i: (slots[i][2] * slots[i][3], -i),
+        reverse=True,
+    )
+    for rank, (nick, amount) in enumerate(by_amount(residents)):
+        if rank >= len(slots):
+            break
+        labels[ranked[rank]] = _label(nick, amount)
     return labels
 
 
