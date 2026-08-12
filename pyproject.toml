@@ -50,8 +50,9 @@ minion_core = ['py.typed', 'prompts/*.md']
 'minions.bots.donations' = ['messages.json']
 # The wishlist bot's Russian thank-you template: same rationale.
 'minions.bots.wishlist' = ['messages.json']
-# The aggregator's editable post constants (UTF-8 texts + premium emoji ids).
-'minions.aggregator' = ['aggregator_constants.json']
+# The aggregator's editable post constants (UTF-8 texts + premium emoji ids)
+# and the cabinet ("/comod") template photo the operator drops in assets/.
+'minions.aggregator' = ['aggregator_constants.json', 'assets/*']
 # The donate userbot's editable shout-out texts + the leading premium emoji.
 'minions.donate' = ['donate_constants.json']
 

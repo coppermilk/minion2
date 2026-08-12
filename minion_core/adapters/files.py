@@ -392,6 +392,114 @@ def valid_image(path: Path) -> bool:
     return True
 
 
+_CABINET_FONT_PATHS = (
+    '/usr/share/fonts/truetype/liberation/LiberationSerif-BoldItalic.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
+)
+"""Serif fonts to try for shelf labels; DejaVu covers Cyrillic nicks."""
+
+_CABINET_MIN_FONT = 12
+"""Smallest font a label is shrunk to before it is left to overflow."""
+
+_CABINET_FIT_W = 0.8
+_CABINET_FIT_H = 0.7
+"""A label must fit within this fraction of its slot's width/height."""
+
+
+def _first_font_path(preferred: str) -> str:
+    """The first existing font file: the caller's choice, then known serifs."""
+    for candidate in (preferred, *_CABINET_FONT_PATHS):
+        if candidate and Path(candidate).exists():
+            return candidate
+    return ''
+
+
+def _fit_label(  # noqa: PLR0913, PLR0917 -- draw + text + box + font + size
+    draw: Any,  # noqa: ANN401 -- opaque Pillow ImageDraw handle
+    text: str,
+    box: tuple[int, int],
+    font_path: str,
+    base_size: int,
+) -> tuple[Any, float, float]:
+    """A font sized so ``text`` fits ``box`` (w, h), plus its measured w/h.
+
+    A TrueType font is shrunk two points at a time until it fits or hits the
+    floor; with no usable font file the bitmap default is used as-is (it
+    cannot be resized, so a long label may overflow rather than crash).
+    """
+    from PIL import ImageFont
+
+    width, height = box
+    size = max(base_size, _CABINET_MIN_FONT)
+    font: Any  # a Pillow font handle (FreeType or the bitmap default)
+    while True:
+        if font_path:
+            try:
+                font = ImageFont.truetype(font_path, size)
+            except OSError:
+                font, font_path = ImageFont.load_default(), ''
+        else:
+            font = ImageFont.load_default()
+        left, top, right, bottom = draw.textbbox(
+            (0, 0), text, font=font, align='center'
+        )
+        tw, th = right - left, bottom - top
+        fits = tw <= width * _CABINET_FIT_W and th <= height * _CABINET_FIT_H
+        if fits or not font_path or size <= _CABINET_MIN_FONT:
+            return font, tw, th
+        size -= 2
+
+
+def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
+    template: Path,
+    labels: list[str],
+    slots: list[tuple[int, int, int, int]],
+    out: Path,
+    *,
+    font_path: str = '',
+    base_size: int = 40,
+    text_color: tuple[int, int, int] = (255, 255, 255),
+    shadow_color: tuple[int, int, int] = (0, 0, 0),
+) -> Path:
+    """Draw each label centered in its shelf slot over the cabinet photo.
+
+    ``slots`` are (x, y, w, h) boxes; ``labels[i]`` is placed in ``slots[i]``
+    (extra labels or slots are ignored, so a half-full cabinet just leaves the
+    spare shelves blank). A label may hold newlines (the nick over its amount);
+    lines are centered on each other and the block is centered in the slot.
+    Each label's font shrinks until it fits its slot; a soft shadow is drawn
+    under the white text for legibility on any wood tone. Pillow stays behind
+    this file (REQ-ARC-002); callers pass paths only.
+    """
+    from PIL import Image
+    from PIL import ImageDraw
+
+    with Image.open(template) as opened:
+        img = opened.convert('RGB')
+    draw = ImageDraw.Draw(img)
+    resolved = _first_font_path(font_path)
+    for label, (x, y, width, height) in zip(labels, slots, strict=False):
+        if not label:
+            continue
+        font, tw, th = _fit_label(
+            draw, label, (width, height), resolved, base_size
+        )
+        tx = x + (width - tw) / 2
+        ty = y + (height - th) / 2
+        draw.multiline_text(
+            (tx + 2, ty + 2), label, font=font, fill=shadow_color,
+            align='center',
+        )
+        draw.multiline_text(
+            (tx, ty), label, font=font, fill=text_color, align='center',
+        )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out)
+    return out
+
+
 def tag_week(path: Path, tag: str) -> None:
     """Write the weekly EXIF tag into a JPEG (no-op otherwise)."""
     import piexif

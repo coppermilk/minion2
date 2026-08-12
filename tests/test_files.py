@@ -17,6 +17,7 @@ from minion_core.adapters.files import free_quota
 from minion_core.adapters.files import has_week
 from minion_core.adapters.files import next_free_path
 from minion_core.adapters.files import next_free_prim
+from minion_core.adapters.files import render_cabinet
 from minion_core.adapters.files import sanitize
 from minion_core.adapters.files import stem
 from minion_core.adapters.files import strip_week
@@ -296,3 +297,45 @@ def test_week_tag_round_trip(tmp_path: Path) -> None:
     assert has_week(pic, 'wk')
     strip_week(pic, 'wk')
     assert not has_week(pic, 'wk')
+
+
+def _template(path: Path, size: tuple[int, int]) -> Path:
+    from PIL import Image
+
+    Image.new('RGB', size, (200, 190, 180)).save(path)
+    return path
+
+
+def test_render_cabinet_draws_labels(tmp_path: Path) -> None:
+    """Labels land on the template and change pixels; the size is preserved."""
+    from PIL import Image
+
+    tpl = _template(tmp_path / 'tpl.png', (600, 400))
+    with Image.open(tpl) as opened:
+        before = opened.convert('RGB').tobytes()
+    # Two labels, each carrying a '$' amount; a nested out dir is created.
+    # (Cyrillic rendering is exercised via the roster in test_comod.py; the
+    # test source here stays pure ASCII per the repo-wide law.)
+    out = render_cabinet(
+        tpl,
+        ['Nick_01 $50', 'EpicGamer $5'],
+        [(20, 20, 260, 160), (320, 20, 260, 160)],
+        tmp_path / 'sub' / 'out.jpg',
+    )
+    assert out.exists()
+    with Image.open(out) as rendered:
+        img = rendered.convert('RGB')
+        assert img.size == (600, 400)
+        assert img.tobytes() != before  # something was drawn
+
+
+def test_render_cabinet_tolerates_shape_mismatch(tmp_path: Path) -> None:
+    """More labels than slots (and a blank label) never raises."""
+    tpl = _template(tmp_path / 'tpl.png', (200, 200))
+    out = render_cabinet(
+        tpl,
+        ['one', '', 'three'],  # a blank label is skipped
+        [(10, 10, 80, 40)],  # only one slot: extra labels are ignored
+        tmp_path / 'out.jpg',
+    )
+    assert out.exists()
