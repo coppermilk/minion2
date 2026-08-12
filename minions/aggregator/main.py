@@ -1682,9 +1682,7 @@ class Aggregator:
             else:
                 log.info('comod: posted cabinet (%d in) to %s', n, chat)
                 return
-        await self.client.send_message(
-            chat, self._cabinet_text(residents, caption), link_preview=False
-        )
+        await self.client.send_message(chat, caption, link_preview=False)
         log.info('comod: posted cabinet text (%d in) to %s', n, chat)
 
     def _comod_chat(self) -> object:
@@ -1726,33 +1724,23 @@ class Aggregator:
     def _cabinet_caption(
         self, moved_in: str, residents: list[tuple[str, str]]
     ) -> str:
-        """The photo caption: a move-in announcement, else a roster header."""
+        """The caption under the cabinet: a header, then a plain nick list.
+
+        The donated amounts live ONLY on the rendered shelves; the text below
+        the photo is just the move-in announcement (or the roster header) plus
+        a bulleted list of nicks, no money.
+        """
         tpl = self._comod.templates
         if moved_in:
-            return comod.move_in_text(
-                tpl, moved_in, self._comod.donate_link
-            )
-        if not residents:
+            head = comod.move_in_text(tpl, moved_in, self._comod.donate_link)
+        elif residents:
+            raw = str(tpl.get('roster_head', ''))
+            head = raw.format(count=len(residents)) if raw else ''
+        else:
             return str(tpl.get('empty', ''))
-        head = str(tpl.get('roster_head', ''))
-        return head.format(count=len(residents)) if head else ''
-
-    def _cabinet_text(
-        self, residents: list[tuple[str, str]], caption: str
-    ) -> str:
-        """The text fallback: the caption, plus a bulleted roster if anyone.
-
-        Shelf labels stack the amount under the nick for the image; in text
-        that newline is flattened to a space so each roster line is one line.
-        """
-        if not residents:
-            return caption or str(self._comod.templates.get('empty', ''))
-        line = str(self._comod.templates.get('roster_line', '- {label}'))
-        body = '\n'.join(
-            line.format(label=label.replace('\n', ' '))
-            for label in comod.labels_for(residents)
-        )
-        return f'{caption}\n{body}' if caption else body
+        line = str(tpl.get('roster_line', '- {label}'))
+        body = '\n'.join(line.format(label=nick) for nick, _ in residents)
+        return f'{head}\n{body}' if head else body
 
     async def users_report(self) -> None:
         """Post the users-DB summary to the source chat (/users command)."""
