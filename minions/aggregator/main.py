@@ -77,7 +77,9 @@ from telethon.tl.types import InputReplyToMessage
 from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
+from minion_core.adapters import files
 from minions.aggregator import cats
+from minions.aggregator import comod
 from minions.aggregator import greeter
 from minions.aggregator import users
 from minions.aggregator.premium_emoji import RichText
@@ -238,6 +240,12 @@ COMMAND_GREETNOW = '/greetnow'
 # /users prints the users-DB summary (audience totals, top commenters, recent
 # join/leave) when the users database is enabled.
 COMMAND_USERS = '/users'
+# /comod manages the cabinet ("shkaf"): '/comod <nick> <amount>' moves a
+# supporter onto a named shelf (a 7-day timer) and posts the rendered cabinet
+# photo plus a move-in announcement; '/comod' alone shows who is in now;
+# '/comod kick <nick>' evicts by hand. Takes arguments, so it is matched by
+# prefix, not by exact text like the others.
+COMMAND_COMOD = '/comod'
 # /test and /live switch where posts go: /test routes ALL posts to TEST_CHAT_ID
 # (a test channel), /live routes them back to the live targets. Persisted, so
 # the mode survives a restart.
@@ -1002,6 +1010,11 @@ class Aggregator:
             pdir / 'greeter_state.json',
             self._on_membership_event,
         )
+        # The cabinet ("shkaf"): a per-profile shelf roster with a 7-day timer,
+        # plus its render/announcement config. Its rendered image is written
+        # next to the roster so live and test never share a file.
+        self.comod = comod.CabinetRoster(pdir / 'comod.json')
+        self._comod = comod.load_comod_params(self._raw)
 
     def _profile_dir(self, mode: str) -> Path:
         """The state dir for MODE: base dir for live, base/test for test."""
@@ -1342,6 +1355,11 @@ class Aggregator:
 
     async def _command(self, text: str) -> bool:
         """Run a matching /command, returning True if one handled the text."""
+        # /comod carries arguments ('/comod <nick> <amount>'), so it is matched
+        # by its leading word rather than by the exact-text table below.
+        if text.split()[:1] == [COMMAND_COMOD]:
+            await self.cabinet_command(text)
+            return True
         handlers = {
             COMMAND_HELP: self.help_report,
             COMMAND_START: self.help_report,
@@ -1617,6 +1635,117 @@ class Aggregator:
         summary = await self.greeter.sync_now()
         await self.client.send_message(self.config.source, summary)
         log.info('greetnow: %s', summary)
+
+    async def cabinet_command(self, text: str) -> None:
+        """Move a nick into the cabinet, evict one, or show who is in now.
+
+        ``/comod <nick> <amount>`` seats NICK on a shelf (refreshing the 7-day
+        timer) and posts the rendered cabinet photo with a move-in
+        announcement; ``/comod kick <nick>`` evicts by hand and re-posts the
+        cabinet; a bare ``/comod`` just shows the current cabinet. Expired
+        nicks are pruned by the roster on every write and read, so a shelf
+        frees up ("s'ekhal") seven days after its move-in with no extra step.
+        """
+        args = text.split()[1:]
+        now = time.time()
+        moved_in = ''
+        if args and args[0].lower() == 'kick':
+            target = args[1].lstrip('@') if len(args) > 1 else ''
+            if not target:
+                hint = str(self._comod.templates.get('kick_hint', ''))
+                await self.client.send_message(self._comod_chat(), hint)
+                return
+            self.comod.remove(target)
+            log.info('comod: evicted %s', target)
+        elif args:
+            moved_in = args[0]
+            amount = args[1] if len(args) > 1 else ''
+            self.comod.add(moved_in, amount, now)
+            log.info('comod: moved in %s (%s)', moved_in, amount or '-')
+        await self._post_cabinet(moved_in, now)
+
+    async def _post_cabinet(self, moved_in: str, now: float) -> None:
+        """Render and post the cabinet; text-roster fallback on failure.
+
+        Always posts to the source chat (where the command was issued).
+        """
+        residents = self.comod.active(now)[: self._comod.max_shelves]
+        caption = self._cabinet_caption(moved_in, residents)
+        chat = self._comod_chat()
+        image = self._render_cabinet(residents)
+        n = len(residents)
+        if image is not None:
+            try:
+                await self.client.send_file(chat, str(image), caption=caption)
+            except Exception:  # noqa: BLE001 -- bad render falls back to text
+                log.warning('comod: image send failed; posting as text')
+            else:
+                log.info('comod: posted cabinet (%d in) to %s', n, chat)
+                return
+        await self.client.send_message(
+            chat, self._cabinet_text(residents, caption), link_preview=False
+        )
+        log.info('comod: posted cabinet text (%d in) to %s', n, chat)
+
+    def _comod_chat(self) -> object:
+        """Where the cabinet posts: the source chat, always (for now)."""
+        return self.config.source
+
+    def _render_cabinet(self, residents: list[tuple[str, str]]) -> Path | None:
+        """The rendered cabinet image, or None when it cannot be produced.
+
+        None whenever no template photo is configured (or is missing) or the
+        draw fails -- the caller then posts a plain-text roster instead.
+        """
+        template = self._comod.template_path
+        if not template or not Path(template).is_file():
+            return None
+        out = self.state_path.parent / 'comod_render.jpg'
+        try:
+            return files.render_cabinet(
+                Path(template),
+                comod.labels_for(residents),
+                list(self._comod.slots),
+                out,
+                font_path=self._comod.font_path,
+                base_size=self._comod.base_size,
+                text_color=self._comod.text_color,
+                shadow_color=self._comod.shadow_color,
+            )
+        except Exception:  # noqa: BLE001 -- any Pillow failure -> text roster
+            log.warning('comod: render failed for %s', template)
+            return None
+
+    def _cabinet_caption(
+        self, moved_in: str, residents: list[tuple[str, str]]
+    ) -> str:
+        """The photo caption: a move-in announcement, else a roster header."""
+        tpl = self._comod.templates
+        if moved_in:
+            return comod.move_in_text(
+                tpl, moved_in, self._comod.donate_link
+            )
+        if not residents:
+            return str(tpl.get('empty', ''))
+        head = str(tpl.get('roster_head', ''))
+        return head.format(count=len(residents)) if head else ''
+
+    def _cabinet_text(
+        self, residents: list[tuple[str, str]], caption: str
+    ) -> str:
+        """The text fallback: the caption, plus a bulleted roster if anyone.
+
+        Shelf labels stack the amount under the nick for the image; in text
+        that newline is flattened to a space so each roster line is one line.
+        """
+        if not residents:
+            return caption or str(self._comod.templates.get('empty', ''))
+        line = str(self._comod.templates.get('roster_line', '- {label}'))
+        body = '\n'.join(
+            line.format(label=label.replace('\n', ' '))
+            for label in comod.labels_for(residents)
+        )
+        return f'{caption}\n{body}' if caption else body
 
     async def users_report(self) -> None:
         """Post the users-DB summary to the source chat (/users command)."""
