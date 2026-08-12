@@ -1667,9 +1667,12 @@ class Aggregator:
     async def _post_cabinet(self, moved_in: str, now: float) -> None:
         """Render and post the cabinet; text-roster fallback on failure.
 
-        Always posts to the source chat (where the command was issued).
+        Always posts to the source chat (where the command was issued). When
+        there are more active residents than shelves, only the TOP donors by
+        amount are shown (the picture and the nick list both).
         """
-        residents = self.comod.active(now)[: self._comod.max_shelves]
+        active = self.comod.active(now)
+        residents = comod.by_amount(active)[: self._comod.max_shelves]
         caption = self._cabinet_caption(moved_in, residents)
         chat = self._comod_chat()
         image = self._render_cabinet(residents)
