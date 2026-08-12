@@ -1698,12 +1698,19 @@ class Aggregator:
         draw fails -- the caller then posts a plain-text roster instead.
         """
         template = self._comod.template_path
-        if not template or not Path(template).is_file():
+        if not template:
+            return None
+        # A relative template is resolved against the aggregator package, so it
+        # is found no matter the working directory (e.g. 'assets/cabinet.jpg').
+        path = Path(template)
+        if not path.is_absolute():
+            path = Path(__file__).parent / template
+        if not path.is_file():
             return None
         out = self.state_path.parent / 'comod_render.jpg'
         try:
             return files.render_cabinet(
-                Path(template),
+                path,
                 comod.labels_for(residents),
                 list(self._comod.slots),
                 out,
