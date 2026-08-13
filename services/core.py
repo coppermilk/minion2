@@ -98,7 +98,7 @@ def _store_output(
 def _store_result(
     store: Store, key: str, result: Path
 ) -> tuple[str | None, list[str]]:
-    """A file result is one ref; a directory result is one ref per file."""
+    """Return one ref for a file result, one ref per file for a dir."""
     if result.is_file():
         ref = store.put(key, result)
         return ref, [ref]

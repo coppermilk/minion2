@@ -34,7 +34,7 @@ log = logging.getLogger('dump-emoji-ids')
 
 
 def _glyph(text: str, offset: int, length: int) -> str:
-    """The fallback glyph a custom-emoji entity covers (UTF-16 units)."""
+    """Return the fallback glyph a custom-emoji entity covers (UTF-16)."""
     raw = text.encode('utf-16-le')
     return raw[offset * 2 : (offset + length) * 2].decode('utf-16-le')
 

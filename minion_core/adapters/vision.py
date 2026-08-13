@@ -121,7 +121,7 @@ class EmbeddingCache:
 
 
 def _identify(path: Path, witness: dict[str, Path]) -> str:
-    """The verified cache key for one live file.
+    """Return the verified cache key for one live file.
 
     ``witness`` maps each key to the first live file that claimed it this
     scan. A repeated key is settled by comparing the bytes themselves:
@@ -161,7 +161,7 @@ def _fandom_dirs(root: Path) -> list[Path]:
 def nearest_named(
     vec: Vector, library: dict[str, Vector]
 ) -> tuple[str, float]:
-    """The library key most similar to ``vec`` and its cosine.
+    """Return the library key most similar to ``vec`` and its cosine.
 
     Keeps the full key and the score (unlike ``nearest_fandom``), so a caller
     can threshold on similarity -- the props bot's have/need split. An empty
@@ -180,7 +180,7 @@ def nearest_named(
 def nearest_fandom(
     vec: Vector, library: dict[str, Vector], tau: float = 0.0
 ) -> str | None:
-    """The fandom of the most similar library vector above ``tau``.
+    """Return the fandom of the most similar library vector above ``tau``.
 
     ``tau`` is the minimum cosine to accept a match. Below it the image
     is too unlike anything in the library to belong to a fandom, so it

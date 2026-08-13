@@ -430,7 +430,7 @@ _CYRILLIC_HI = 0x04FF
 
 
 def _first_font_path(preferred: str) -> str:
-    """The first existing font file: the caller's choice, then known serifs."""
+    """Return the first existing font file: the caller's, then serifs."""
     for candidate in (preferred, *_CABINET_FONT_PATHS):
         if candidate and Path(candidate).exists():
             return candidate
@@ -450,7 +450,7 @@ def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
     font_path: str,
     base_size: int,
 ) -> tuple[_Font, float, float, int]:
-    """A font sizing single-line ``text`` into ``max_w`` x ``max_h``.
+    """Return a font sizing single-line ``text`` into ``max_w`` x ``max_h``.
 
     Returns the font, the measured width/height, and the point size chosen. A
     TrueType font is shrunk two points at a time until it fits or hits the
@@ -655,7 +655,7 @@ def tag_fandom(path: Path, fandom: str) -> None:
 
 
 def read_fandom(path: Path) -> str:
-    """The fandom recorded by ``tag_fandom``, or ''."""
+    """Return the fandom recorded by ``tag_fandom``, or ''."""
     import piexif
 
     if path.suffix.lower() not in _JPEG:

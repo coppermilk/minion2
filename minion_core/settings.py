@@ -145,11 +145,11 @@ class Settings:
         return self.drive / 'Scripts'
 
     def bot_dir(self, name: str) -> Path:
-        """A bot's work directory [MEDIA]."""
+        """Return a bot's work directory [MEDIA]."""
         return self.drive / 'bots' / name
 
     def bot_done(self, name: str) -> Path:
-        """A bot's archive directory [MEDIA]."""
+        """Return a bot's archive directory [MEDIA]."""
         return self.bot_dir(name) / 'done'
 
 
@@ -232,7 +232,7 @@ def _argv(raw: str) -> tuple[str, ...]:
 
 
 def _opt_dir(name: str, raw: str) -> Path | None:
-    """An optional watch dir; empty disables, relative still raises."""
+    """Return an optional watch dir; empty disables, relative still raises."""
     if not raw.strip():
         return None
     return _abs(name, raw.strip())

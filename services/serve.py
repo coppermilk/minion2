@@ -57,7 +57,7 @@ def run_service_app(step: str, make: Make) -> int:
 
 
 def _log_dir() -> Path | None:
-    """The mounted logs dir, or None when it is not writable (local dev).
+    """Return the mounted logs dir, or None if not writable (dev).
 
     A service is stateless, so its file sink is a small logs-only volume
     (compose), not /data. Where that volume is absent -- a bare local

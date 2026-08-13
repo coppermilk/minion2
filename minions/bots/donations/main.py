@@ -57,7 +57,7 @@ DEFAULT_PLATFORM = 'streamlabs'
 
 
 def load_messages() -> dict[str, str]:
-    """The Russian alert and bed templates, stored as UTF-8 package data."""
+    """Return the Russian alert and bed templates (UTF-8 package data)."""
     pkg = resources.files(__package__)
     raw = (pkg / 'messages.json').read_text(encoding='utf-8')
     return cast('dict[str, str]', json.loads(raw))
@@ -113,7 +113,7 @@ class _BedCommand:
 
 
 def _alerts(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
-    """The poll-and-post alert dock; chat and platforms are admin knobs."""
+    """Return the poll-and-post alert dock (chat/platforms are knobs)."""
     templates = load_messages()
     admin = admin_config(cfg.state)
     platform = admin.effective(
@@ -130,7 +130,7 @@ def _alerts(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
 
 
 def _commands(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
-    """The public "who is under the bed" command dock (any chat)."""
+    """Return the public "who is under the bed" command dock (any chat)."""
     handle = _BedCommand(bed_roster(cfg.state), load_messages())
     spec = TgSpec(
         spool=SpoolSpec(
@@ -144,7 +144,7 @@ def _commands(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
 
 
 def _broadcast(cfg: Settings, env: Mapping[str, str], api: TgApi) -> Stage:
-    """The timed bed-roster broadcast; interval and chat read live (admin)."""
+    """Return the timed bed-roster broadcast (interval/chat read live)."""
     templates = load_messages()
     admin = admin_config(cfg.state)
     default_chat = admin.effective(

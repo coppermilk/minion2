@@ -61,7 +61,7 @@ def invoke(step: Stage, call: Call) -> Verdict:
 
 
 def _verdict_of(out: list[Envelope]) -> Verdict:
-    """The single verdict a one-input Step run produces (defensive)."""
+    """Return the single verdict a one-input Step run produces (defensive)."""
     if not out or out[0].verdict is None:
         return Verdict(Disposition.FAILED, reason='no_verdict')
     return out[0].verdict

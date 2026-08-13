@@ -70,7 +70,7 @@ def _owned_props(cfg: Settings) -> dict[str, Vector]:
 
 
 def _semantic(req: str, owned: dict[str, Vector]) -> str:
-    """The nearest owned prop above the threshold, or '' (need it)."""
+    """Return the nearest owned prop above the threshold, or '' (need it)."""
     if not owned:
         return ''
     name, sim = nearest_named(embed_text(req), owned)

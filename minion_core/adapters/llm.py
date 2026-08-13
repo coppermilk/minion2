@@ -269,7 +269,7 @@ def _parse_classification(text: str) -> Classification:
 
 
 def list_props(script: str, backend: Backend) -> list[str]:
-    """The props a scenario calls for, as short UpperCamelCase labels.
+    """Return the props a scenario calls for, as short UpperCamelCase labels.
 
     A text task (no image), so any Backend serves it -- this is what
     the switch also governs. The model is untrusted input (BLUEPRINT
@@ -294,7 +294,7 @@ def _parse_props(text: str) -> list[str]:
 
 
 def _text_field(data: dict[str, Any], key: str) -> str:
-    """A string field of the reply; null and absence read as ''."""
+    """Return a string field of the reply; null and absence read as ''."""
     value = data.get(key)
     return value.strip() if isinstance(value, str) else ''
 

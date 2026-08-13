@@ -347,7 +347,7 @@ class SendResult(Sink):
 
 
 def _result_files(result: Path) -> list[Path]:
-    """The files a result stands for (itself, or its children)."""
+    """Return the files a result stands for (itself, or its children)."""
     if result.is_dir():
         return sorted(p for p in result.iterdir() if p.is_file())
     return [result] if result.is_file() else []
@@ -523,7 +523,7 @@ def _folder_envelope(path: Path, dest: Path) -> Envelope:
 
 
 def merge_watch(tg: Stage, watch: FolderSpec | None, seen: SeenPaths) -> Stage:
-    """The tg dock, merged with a watch dock when configured.
+    """Return the tg dock, merged with a watch dock when configured.
 
     Two docks, one belt (REQ-DOCK-001): an absent watch dir keeps
     the belt Telegram-only with zero caller branching.

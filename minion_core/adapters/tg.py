@@ -232,7 +232,7 @@ class TgChannel:
 
 
 def _chat(origin: Origin) -> str:
-    """The chat part of a ``chat:message:ack:spool`` origin ref."""
+    """Return the chat part of a ``chat:message:ack:spool`` origin ref."""
     return origin.ref.split(':', 1)[0]
 
 
@@ -241,7 +241,7 @@ _REF_PARTS = 4
 
 
 def _ack_id(origin: Origin) -> str | None:
-    """The ack message id in a tg ref, or None when there is none."""
+    """Return the ack message id in a tg ref, or None when there is none."""
     parts = origin.ref.split(':', _REF_PARTS - 1)
     return parts[2] if len(parts) >= _REF_PARTS - 1 and parts[2] else None
 
@@ -255,7 +255,7 @@ def spool_of(origin: Origin) -> Path | None:
 
 
 def spooled_or_dropped(origin: Origin) -> Path | None:
-    """The disposable input file for either transport.
+    """Return the disposable input file for either transport.
 
     A Telegram job carries its spool inside the ref (``spool_of``); a
     folder drop is a ``loc`` origin whose ref IS the dropped file. Used
@@ -268,13 +268,13 @@ def spooled_or_dropped(origin: Origin) -> Path | None:
 
 
 def chats_from(env: Mapping[str, str]) -> tuple[str, ...]:
-    """The chat allow-list (primary control, OPERATIONS 3)."""
+    """Return the chat allow-list (primary control, OPERATIONS 3)."""
     raw = env.get('TG_CHATS', '')
     return tuple(part.strip() for part in raw.split(',') if part.strip())
 
 
 def chat_title(api: TgApi, chat: str) -> str:
-    """A human name for a chat id via getChat, or '' when unavailable.
+    """Return a human name for a chat id via getChat, or '' when unavailable.
 
     A group/channel resolves to its title, a user to a username or first
     name. A refusal (unknown chat, no access, tokenless) is '', never a
@@ -290,7 +290,7 @@ def chat_title(api: TgApi, chat: str) -> str:
 
 
 def _chat_name(info: object) -> str:
-    """The first present name field of a getChat result, or ''."""
+    """Return the first present name field of a getChat result, or ''."""
     if not isinstance(info, dict):
         return ''
     for key in ('title', 'username', 'first_name'):
@@ -504,7 +504,7 @@ _COMPRESSED = ('photo', 'video', 'video_note', 'animation')
 
 
 def _document(msg: dict[str, Any]) -> dict[str, Any] | None:
-    """The document payload, if any (carries file_id + file_name).
+    """Return the document payload, if any (carries file_id + file_name).
 
     Files cross Telegram as documents only, both directions:
     compressed photo/video payloads are refused loudly so the sender

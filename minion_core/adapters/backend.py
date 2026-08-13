@@ -53,7 +53,7 @@ class BackendToggle:
         )
 
     def read(self) -> str:
-        """The stored backend name, or the default when unset."""
+        """Return the stored backend name, or the default when unset."""
         try:
             name = self._path.read_text(encoding='ascii').strip()
         except OSError:
@@ -69,7 +69,7 @@ class BackendToggle:
 
 
 def select_backend(cfg: Settings, env: Mapping[str, str]) -> Backend:
-    """The live backend per the toggle (default from MODEL_BACKEND)."""
+    """Return the live backend per the toggle (default from MODEL_BACKEND)."""
     if BackendToggle(cfg).read() == GEMINI:
         return GeminiBackend(spec_from(env))
     return OllamaBackend(cfg.ollama_url, cfg.ollama_model)

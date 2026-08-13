@@ -166,7 +166,7 @@ def classify_pass(cfg: Settings, deps: SortDeps, hint: str) -> None:
 def _clip_fallback(
     cfg: Settings, deps: SortDeps
 ) -> Callable[[str, Path], tuple[str, str]]:
-    """A lazy nearest-fandom decider for verdicts the model punted.
+    """Return a lazy nearest-fandom decider for verdicts the model punted.
 
     CLIP (and the embedding cache) load only if some verdict is
     Unknown; the library is refreshed at most once per pass.

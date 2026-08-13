@@ -60,7 +60,7 @@ def _ignoring_cfg(make: Callable[[], Step]) -> Callable[[Settings], Step]:
 
 
 def _restore(_cfg: Settings) -> Stage:
-    """The full restore pipeline: blur people, then LLM-repaint the scene.
+    """Return the full restore pipeline: blur people, then repaint.
 
     A two-step chain (the restore bot's whole belt, minus dock/sinks), so
     ``svc-restore`` does the same work the monolith did. Gemini config comes
@@ -70,7 +70,7 @@ def _restore(_cfg: Settings) -> Stage:
 
 
 def _frames(cfg: Settings) -> Stage:
-    """The full frames pipeline: fetch a link (or pass a file), extract.
+    """Return the full frames pipeline: fetch a link (or pass a file), extract.
 
     ``svc-frames`` runs the frames bot's whole belt (minus dock/sinks), so a
     link or a video both work: ``FetchLink`` downloads a ``.url``, passes a

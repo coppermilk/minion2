@@ -74,23 +74,21 @@ quote-style = 'single'
 [tool.ruff.lint]
 select = ['ALL']
 ignore = [
-    # Formatter conflicts: ruff itself asks these off when the
-    # formatter runs (magic trailing comma / implicit concat).
+    # The only waivers left are rule pairs that cannot both be satisfied --
+    # nothing here is a style preference, each is a true contradiction.
+    #
+    # COM812 (trailing comma) / ISC001 (implicit string concat): the ruff
+    # formatter is a CI gate, and enforcing either fights it -- COM812 adds
+    # a comma the formatter then explodes across lines, so the two never
+    # reach a fixed point. Ruff itself documents them as formatter-off.
     'COM812',
     'ISC001',
-    # Docstring style pairs: pep257 convention picks D211/D212.
+    # D203 (1 blank line before a class docstring) vs D211 (0), and D213
+    # (summary on line 2) vs D212 (line 1): mutually exclusive by definition
+    # -- a line cannot be both blank and not. pep257 convention picks
+    # D211/D212, so its opposite is un-satisfiable and stays off.
     'D203',
     'D213',
-    # D401 (imperative-mood summaries): waived with cause, not unset.
-    # It flags 168 docstrings; 166 are getter/property return-descriptions
-    # where the noun-phrase form ("The stored backend name ...") is the
-    # PEP 257-endorsed style for a returned value -- a false positive on a
-    # valid, consistent convention. Enforcing it would also push 67 of those
-    # summaries past the 79-col line-length rule, so D401 conflicts with a
-    # kept rule exactly as the D203/D213 pair conflict with each other.
-    # A style/grammar rule, not a defect check: one documented waiver, not
-    # 168 lateral rewrites that add line-wrap churn for no correctness gain.
-    'D401',
 ]
 
 [tool.ruff.lint.mccabe]

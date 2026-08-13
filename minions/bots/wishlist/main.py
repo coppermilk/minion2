@@ -80,7 +80,7 @@ class Deps:
 
 
 def load_messages() -> dict[str, object]:
-    """The Russian templates (strings and lists), UTF-8 package data."""
+    """Return the Russian templates (strings and lists), UTF-8 package data."""
     pkg = resources.files(__package__)
     raw = (pkg / 'messages.json').read_text(encoding='utf-8')
     return cast('dict[str, object]', json.loads(raw))
@@ -93,7 +93,7 @@ def _tmpl(templates: Mapping[str, object], key: str) -> str:
 
 
 def _form(entry: object, note: str) -> str:
-    """A template's note-aware form: with-note when a note exists."""
+    """Return a template's note-aware form: with-note when a note exists."""
     if not isinstance(entry, dict):
         return ''
     value = entry.get('with_note' if note else 'no_note')
@@ -101,18 +101,18 @@ def _form(entry: object, note: str) -> str:
 
 
 def _entries(templates: Mapping[str, object], key: str) -> list[object]:
-    """The template objects stored as a list under ``key`` (any count)."""
+    """Return the template objects listed under ``key`` (any count)."""
     value = templates.get(key)
     return value if isinstance(value, list) else []
 
 
 def _short(title: str) -> str:
-    """A card title trimmed to its first ``TITLE_WORDS`` words."""
+    """Return a card title trimmed to its first ``TITLE_WORDS`` words."""
     return ' '.join(title.split()[:TITLE_WORDS])
 
 
 def render(templates: Mapping[str, object], item: WishItem, link: str) -> str:
-    """The thank-you caption for one gifted item (note-aware form)."""
+    """Return the thank-you caption for one gifted item (note-aware form)."""
     form = _form(templates.get('gift'), item.note)
     return form.format(item=_short(item.title), note=item.note, link=link)
 
@@ -135,7 +135,7 @@ def render_added(
 def digest(
     templates: Mapping[str, object], items: list[WishItem], link: str
 ) -> str:
-    """A one-message summary of the current wishlist for the chat."""
+    """Return a one-message summary of the current wishlist for the chat."""
     lines = [
         _tmpl(templates, 'digest_line').format(title=_short(i.title))
         for i in items[:DIGEST_MAX]

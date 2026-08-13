@@ -83,7 +83,7 @@ class JobStore:
         return job_id
 
     def get(self, job_id: str) -> _Job | None:
-        """The job by id, or None."""
+        """Return the job by id, or None."""
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -131,7 +131,7 @@ class _JobSpec:
 
 
 def _summary(job: _Job) -> dict[str, object]:
-    """The public view of a job (status endpoint and webhook body)."""
+    """Return the public view of a job (status endpoint and webhook body)."""
     return {
         'job_id': job.id,
         'status': job.status,
@@ -285,7 +285,7 @@ def _zip_of(work: Path, refs: list[str]) -> Path:
 
 
 def store_at(work: Path) -> LocalStore:
-    """An ephemeral LocalStore for one bytes-in/bytes-out request."""
+    """Return an ephemeral LocalStore for one bytes-in/bytes-out request."""
     return LocalStore(work / 'store')
 
 

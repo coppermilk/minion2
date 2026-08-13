@@ -90,7 +90,7 @@ def reply_for(toggle: BackendToggle, text: str) -> str:
 
 
 def _unknown(key: str) -> str:
-    """The reply for a setting key the registry does not know."""
+    """Return the reply for a setting key the registry does not know."""
     return f'unknown setting "{html.escape(key)}"; send config for the list'
 
 
@@ -118,7 +118,7 @@ class _Moderator:
         return self._word(text.strip().lower(), text)
 
     def _verb(self, verb: str, key: str, rest: list[str]) -> str:
-        """A two-part command: set/get/reset a setting, or whois a chat."""
+        """Return a two-part command: set/get/reset a setting, or whois."""
         if verb == 'whois':
             return self._whois(key)
         admin = admin_config(self.cfg.state)
@@ -131,7 +131,7 @@ class _Moderator:
         return _set_reply(admin, key, ' '.join(rest))
 
     def _word(self, word: str, text: str) -> str:
-        """A single-word command, or the backend fallback."""
+        """Return a single-word command, or the backend fallback."""
         action = self._actions().get(word)
         return action() if action else reply_for(self.toggle, text)
 

@@ -224,12 +224,12 @@ class CallServiceLive(Step):
 
 
 def _name(env: Mapping[str, str]) -> str:
-    """The relay's identity: its work dir, offset, and done folder."""
+    """Return the relay's identity: its work dir, offset, and done folder."""
     return env.get('RELAY_NAME', 'relay')
 
 
 def _exts(env: Mapping[str, str]) -> tuple[str, ...]:
-    """The watched suffixes: RELAY_EXTS (csv) or the media default."""
+    """Return the watched suffixes: RELAY_EXTS (csv) or the media default."""
     raw = env.get('RELAY_EXTS', '')
     if not raw.strip():
         return _DEFAULT_EXTS
@@ -238,7 +238,7 @@ def _exts(env: Mapping[str, str]) -> tuple[str, ...]:
 
 
 def _dock(env: Mapping[str, str], api: TgApi, spec: TgSpec) -> Source:
-    """The Telegram dock chosen by RELAY_DOCK (media | any | links)."""
+    """Return the Telegram dock chosen by RELAY_DOCK (media | any | links)."""
     make = _DOCKS.get(env.get('RELAY_DOCK', 'media'), TgMedia)
     return make(api, spec)
 
@@ -250,7 +250,7 @@ download is never dropped as 'lost' before the service finishes it."""
 
 
 def _call(env: Mapping[str, str], channel: TgChannel, style: Style) -> Step:
-    """The service caller for this dock's speed.
+    """Return the service caller for this dock's speed.
 
     A live progress bar for links (slow downloads), with a generous wait so
     a long download is not dropped; the plain synchronous call otherwise
@@ -319,7 +319,7 @@ class Dispatch(Sink):
 
 
 def _spec(cfg: Settings, name: str, env: Mapping[str, str]) -> TgSpec:
-    """The Telegram dock spec for this bot (spool, offset, chats, ack)."""
+    """Return the Telegram dock spec (spool, offset, chats, ack)."""
     spool = cfg.bot_dir(name) / '_spool'
     return TgSpec(
         spool=SpoolSpec(into=spool, budget=functools.partial(free_quota, cfg)),

@@ -93,7 +93,7 @@ if TYPE_CHECKING:
 
 
 def _state_base() -> Path | None:
-    """The base state dir (AGGREGATOR_STATE_DIR, else <DRIVE>/bots/aggregator).
+    """Return the base state dir (AGGREGATOR_STATE_DIR or <DRIVE>).
 
     Process-level (not per-profile): the log and the watchdog heartbeat live
     here. Returns None (and the caller degrades) when neither is configured.
@@ -112,13 +112,13 @@ def _state_base() -> Path | None:
 
 
 def _log_file() -> Path | None:
-    """The on-disk log path under the state dir, or None if unavailable."""
+    """Return the on-disk log path under the state dir, or None if gone."""
     base = _state_base()
     return base / 'aggregator.log' if base is not None else None
 
 
 def _health_file() -> Path | None:
-    """The watchdog heartbeat file (mtime = the last proven-alive time)."""
+    """Return the watchdog heartbeat file (mtime = last alive time)."""
     base = _state_base()
     return base / 'health' if base is not None else None
 
@@ -169,7 +169,7 @@ def _watchdog(timeout: float) -> None:
 
 
 def _load_runtime() -> dict[str, object]:
-    """The 'runtime' section of the constants JSON (watchdog knobs), or {}."""
+    """Return the 'runtime' section of the constants JSON, or {}."""
     data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
     rt = data.get('runtime')
     return rt if isinstance(rt, dict) else {}
@@ -271,7 +271,7 @@ _MINS_PER_HOUR = 60
 
 
 def _fmt_eta(seconds: float) -> str:
-    """A short countdown like '45s', '8m 12s' or '2h 15m'."""
+    """Return a short countdown like '45s', '8m 12s' or '2h 15m'."""
     total = max(0, int(seconds))
     if total < _SECS_PER_MIN:
         return f'{total}s'
@@ -340,12 +340,12 @@ class _Comment:
 
 
 def _iso(ts: float) -> str:
-    """A unix timestamp as an ISO-8601 UTC string (second precision)."""
+    """Return a unix timestamp as an ISO-8601 UTC string (second precision)."""
     return datetime.fromtimestamp(ts, tz=UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def _parse_iso(text: str) -> float:
-    """An ISO-8601 UTC string back to a unix timestamp (now on bad input)."""
+    """Return an ISO-8601 UTC string to a unix timestamp (0 on bad)."""
     try:
         return datetime.fromisoformat(text).timestamp()
     except (ValueError, TypeError):
@@ -399,7 +399,7 @@ class Consts:
 
 
 def _str_list(value: object, default: str) -> list[str]:
-    """A list of label strings from a JSON list (or a single string)."""
+    """Return a list of label strings from a JSON list (or a single string)."""
     if isinstance(value, str):
         return [value]
     return [str(v) for v in value] if value else [default]
@@ -438,7 +438,7 @@ _EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat', 'like')
 
 
 def emoji_catalog(data: dict[str, object]) -> list[dict[str, object]]:
-    """The unified top-level emoji array (each entry a dict)."""
+    """Return the unified top-level emoji array (each entry a dict)."""
     raw = data.get('emoji')
     if not isinstance(raw, list):
         return []
@@ -517,7 +517,7 @@ DEFAULT_SESSION_PATH = Path(__file__).with_name('telethon')
 
 
 def _drive_dir() -> Path | None:
-    """The aggregator data dir <DRIVE>/bots/aggregator, or None if no DRIVE.
+    """Return the aggregator data dir <DRIVE>/bots/aggregator, or None.
 
     DRIVE is the project's library root -- the Google Drive folder on Windows,
     /data in the NAS container (compose forces it). Every bot keeps its files
@@ -531,7 +531,7 @@ def _drive_dir() -> Path | None:
 
 
 def _resolve_session_path() -> Path:
-    """The file-session base path (override, else <DRIVE>, else the package).
+    """Return the file-session base (override, else <DRIVE>, else package).
 
     A trailing '.session' is stripped so an override works whether you point at
     the file or its base name. With no TELEGRAM_SESSION_FILE, the session lives
@@ -653,7 +653,7 @@ def _pick(data: dict[str, object], *keys: str) -> str:
 
 
 def _primary(group: Group, order: Iterable[str]) -> Item:
-    """The highest-priority item present; its caption/thumbnail lead."""
+    """Return the highest-priority item present; its caption/thumbnail lead."""
     for key in order:
         item = group.items.get(key)
         if item is not None:
@@ -662,7 +662,7 @@ def _primary(group: Group, order: Iterable[str]) -> Item:
 
 
 def _posted_dict(post: Posted) -> dict[str, object]:
-    """A Posted record as a readable JSON dict."""
+    """Return a Posted record as a readable JSON dict."""
     return {
         'title': post.title,
         'at': post.at,
@@ -684,7 +684,7 @@ def _posted_from_dict(raw: dict[str, object]) -> Posted:
 def _pending_dict(
     group: Group, platforms: tuple[str, ...]
 ) -> dict[str, object]:
-    """A pending Group as a readable, resumable JSON dict."""
+    """Return a pending Group as a readable, resumable JSON dict."""
     items = {
         key: {
             'url': item.url,
@@ -733,7 +733,7 @@ def _pending_from_dict(raw: dict[str, object]) -> Group:
 
 
 def _youtube_thumb(group: Group) -> str:
-    """The thumbnail URL from the YouTube item only (per the spec), or ''."""
+    """Return the thumbnail URL from the YouTube item only, or ''."""
     item = group.items.get('youtube')
     return item.thumbnail if item else ''
 
@@ -744,7 +744,7 @@ def _strip_tags(caption: str) -> str:
 
 
 def _trim(title: str, width: int = 40) -> str:
-    """A one-line, length-capped title for the /status report."""
+    """Return a one-line, length-capped title for the /status report."""
     flat = ' '.join(title.split())
     return flat if len(flat) <= width else flat[: width - 1] + '~'
 
@@ -754,7 +754,7 @@ _EMOJI_ROW_LEN = 2
 
 
 def _pending_glyphs(entry: dict[str, object]) -> str:
-    """The chosen cat glyph(s) for a pending entry (the fallbacks), or '?'.
+    """Return the cat glyph(s) for a pending entry (fallbacks), or '?'.
 
     Reactions scheduled before this field existed have no stored emoji, so
     they show '?' -- a /requeue does not re-pick them (the choice is made at
@@ -773,7 +773,7 @@ _LINK_MARKERS = ('http://', 'https://', 't.me/', 'www.')
 
 
 def _user_label(row: dict[str, object]) -> str:
-    """A readable handle for a users-DB row: @username, else name, else id."""
+    """Return a readable handle for a users-DB row: @username/name/id."""
     username = row.get('username')
     if username:
         return f'@{username}'
@@ -803,7 +803,7 @@ def _needs_human(text: str, words: tuple[str, ...]) -> bool:
 
 
 def _thread_top(reply: object) -> int | None:
-    """The thread-root id a reply belongs to (comment target), or None.
+    """Return the thread-root id a reply belongs to (comment target), or None.
 
     A comment on a channel post is a reply in the discussion group: its
     ``reply_to_top_id`` is the post's thread root; a first-level comment has
@@ -834,7 +834,7 @@ def _grid_cells(group: Group, consts: Consts) -> list[list[tuple[str, str]]]:
 
 
 def _col_widths(rows: list[list[tuple[str, str]]]) -> dict[int, int]:
-    """The longest label actually used in each column (to align the '|')."""
+    """Return the longest label used in each column (to align '|')."""
     widths: dict[int, int] = {}
     for row in rows:
         for col, (_key, label) in enumerate(row):
@@ -864,7 +864,7 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
 
 
 def _catalog_suffix(entry: dict[str, object]) -> str:
-    """The trailing id + platform name / cat tags for one catalog entry."""
+    """Return the trailing id + platform / cat tags for one entry."""
     parts = [str(entry.get('id', '?'))]
     if entry.get('name'):
         parts.append(str(entry['name']))
@@ -929,7 +929,7 @@ def _sample_item(key: str, msg_id: int, title: str) -> Item:
 
 
 def _sample_group(platforms: Iterable[str], title: str) -> Group:
-    """A fake Group covering the given platforms, for a QC preview."""
+    """Return a fake Group covering the given platforms, for a QC preview."""
     group = Group(title=title)
     for msg_id, key in enumerate(platforms):
         group.items[key] = _sample_item(key, msg_id, title)
@@ -1024,12 +1024,12 @@ class Aggregator:
         self._comod = comod.load_comod_params(self._raw)
 
     def _profile_dir(self, mode: str) -> Path:
-        """The state dir for MODE: base dir for live, base/test for test."""
+        """Return the state dir for MODE: base for live, base/test for test."""
         test = self._state_base / 'test'
         return test if mode == 'test' else self._state_base
 
     def _rescan_interval(self, mode: str) -> float:
-        """The auto-rescan period for MODE: test is fast, live is slow.
+        """Return the auto-rescan period for MODE: test is fast, live is slow.
 
         Test wants a tight loop while you iterate (default 5 min); live can be
         relaxed (default 1 hour). Both fall back to ``rescan_sec``.
@@ -1041,13 +1041,13 @@ class Aggregator:
         return float(cfg.get(key, default))
 
     def _profile_channel(self, mode: str) -> int:
-        """The greeter's default channel for MODE (test uses the test chat)."""
+        """Return the greeter's default channel for MODE (test = test chat)."""
         if mode == 'test':
             return self.config.test_target or self.config.source
         return self.config.targets[0] if self.config.targets else 0
 
     def _load_mode(self) -> str:
-        """The persisted active profile ('live' or 'test'), default 'live'."""
+        """Return the active profile ('live' or 'test'), default 'live'."""
         try:
             raw = json.loads(self._mode_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
@@ -1203,7 +1203,7 @@ class Aggregator:
         self._save()
 
     def _match(self, title: str) -> Group | None:
-        """An existing group whose title is >= threshold similar, or None."""
+        """Return a group whose title is >= threshold similar, or None."""
         norm = _norm(title)
         for group in self.groups:
             if _similar(norm, _norm(group.title)) >= self.config.threshold:
@@ -1491,7 +1491,7 @@ class Aggregator:
         log.info('cats: watch-list has %d post(s)', len(self.cats.posts))
 
     async def _recent_target_posts(self, target: int, want: int) -> object:
-        """The last ``want`` posts in a target (channel: any; group: ours)."""
+        """Return the last ``want`` posts in a target (channel/group)."""
         if self.cats.params.comments_in_discussion:
             return await self.client.get_messages(target, limit=want)
         return await self.client.get_messages(
@@ -1698,7 +1698,7 @@ class Aggregator:
         return self.config.source
 
     def _render_cabinet(self, residents: list[tuple[str, str]]) -> Path | None:
-        """The rendered cabinet image, or None when it cannot be produced.
+        """Return the rendered cabinet image, or None if it cannot be made.
 
         None whenever no template photo is configured (or is missing) or the
         draw fails -- the caller then posts a plain-text roster instead.
@@ -1740,7 +1740,7 @@ class Aggregator:
         return path if path.is_absolute() else Path(__file__).parent / rel
 
     def _comod_font(self, rel: str) -> str:
-        """A bundled font path as a string, or '' when unset/missing.
+        """Return a bundled font path as a string, or '' when unset/missing.
 
         Empty lets ``render_cabinet`` fall back to its system-font search.
         """
@@ -1750,7 +1750,7 @@ class Aggregator:
     def _cabinet_caption(
         self, moved_in: str, residents: list[tuple[str, str]]
     ) -> str:
-        """The caption under the cabinet: a header, then a plain nick list.
+        """Return the caption under the cabinet: a header, then a nick list.
 
         The donated amounts live ONLY on the rendered shelves; the text below
         the photo is just the move-in announcement (or the roster header) plus
@@ -1777,7 +1777,7 @@ class Aggregator:
         log.info('sent users report to %s', self.config.source)
 
     def _users_text(self) -> str:
-        """The /users message: totals, top commenters, recent join/leave."""
+        """Return the /users message: totals, top commenters, join/leave."""
         if not self._users_enabled:
             return 'Users DB: disabled (set users.enabled in the JSON).'
         s = self.users.summary()
@@ -1805,7 +1805,7 @@ class Aggregator:
         return '\n'.join(lines)
 
     def _users_line(self) -> str:
-        """A one-line users summary for /status (or 'off' when disabled)."""
+        """Return a one-line users summary for /status ('off' if disabled)."""
         if not self._users_enabled:
             return self._head(
                 'users', 'Users DB', f'{self._dot(on=False)} off'
@@ -2078,7 +2078,7 @@ class Aggregator:
         return {cid: await self._chat_label(cid) for cid in ids}
 
     async def _chat_label(self, chat_id: int) -> str:
-        """A chat's @username (or "title") for /status, else the raw id."""
+        """Return a chat's @username (or "title") for /status, else id."""
         try:
             entity = await self.client.get_entity(chat_id)
         except Exception:  # noqa: BLE001 -- not cached/reachable: show the id
@@ -2092,19 +2092,19 @@ class Aggregator:
         return f'"{title}" ({chat_id})' if title else str(chat_id)
 
     def _ic(self, key: str, fallback: str = '') -> str:
-        """A /status glyph from the JSON, or the fallback."""
+        """Return a /status glyph from the JSON, or the fallback."""
         return self.consts.status.get(key) or fallback
 
     def _dot(self, *, on: bool) -> str:
-        """The green/red status dot."""
+        """Return the green/red status dot."""
         return self._ic('on', '[on]') if on else self._ic('off', '[off]')
 
     def _bul(self) -> str:
-        """The bullet glyph that leads sub-lines and joins header pieces."""
+        """Return the bullet glyph leading sub-lines and joining headers."""
         return self._ic('bullet', '-')
 
     def _arr(self) -> str:
-        """The arrow glyph ('next ...' / 'posting ...')."""
+        """Return the arrow glyph ('next ...' / 'posting ...')."""
         return self._ic('arrow', '->')
 
     def _head(self, key: str, label: str, *tail: str) -> str:
@@ -2114,7 +2114,7 @@ class Aggregator:
         return sep.join([title, *(t for t in tail if t)])
 
     def _status_text(self, labels: dict[int, str]) -> str:
-        """The full status: header, routing, videos, cats, greeter, users."""
+        """Return status: header, routing, videos, cats, greeter, users."""
         flag = 'TEST' if self.mode == 'test' else 'LIVE'
         parts = [
             self._head('title', 'Aggregator', f'{self._dot(on=True)} {flag}'),
@@ -2153,7 +2153,7 @@ class Aggregator:
         return [head, self._greeter_schedule_line()]
 
     def _greeter_schedule_line(self) -> str:
-        """The greeter's check period and next-check time (persona clock)."""
+        """Return the greeter's check period and next-check time (clock)."""
         period = int(self.greeter.params.poll_sec)
         nxt = self.greeter.next_sync
         b = self._bul()
@@ -2215,7 +2215,7 @@ class Aggregator:
         return lines
 
     def _cat_status_lines(self, labels: dict[int, str]) -> list[str]:
-        """The cat engine's live state (empty-ish when it is disabled)."""
+        """Return the cat engine's live state (empty-ish when disabled)."""
         brain = self.cats
         b = self._bul()
         enabled = brain.params.enabled
@@ -2245,7 +2245,7 @@ class Aggregator:
         ]
 
     def _cat_rescan_line(self) -> str:
-        """The auto-rescan period and the countdown to the next one."""
+        """Return the auto-rescan period and the countdown to the next one."""
         b = self._bul()
         period = int(self._rescan_sec)
         if period <= 0:
@@ -2260,7 +2260,7 @@ class Aggregator:
         return f'{b} rescan {period}s {self._arr()} next {clock} (in {when})'
 
     def _pending_cat_lines(self) -> list[str]:
-        """The queued cats: which cat lands on which comment, and when."""
+        """Return the queued cats: which cat lands on which comment, when."""
         pending = self.cats.state.pending
         if not pending:
             return []
@@ -2292,7 +2292,7 @@ class Aggregator:
         )
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
-        """The watched comment threads, grouped one line per chat."""
+        """Return the watched comment threads, grouped one line per chat."""
         posts = self.cats.posts
         if not posts:
             return []
@@ -2546,12 +2546,12 @@ class Aggregator:
 
 
 def _source() -> int:
-    """The monitoring (source) chat id from the env, else the default."""
+    """Return the monitoring (source) chat id from env, else default."""
     return int(os.environ.get('SOURCE_CHAT_ID') or DEFAULT_SOURCE_CHAT_ID)
 
 
 def _targets() -> tuple[int, ...]:
-    """The target chat ids from the env (comma-separated), else the default.
+    """Return the target chat ids from env (comma-separated), else default.
 
     Set TARGET_CHAT_ID (or TARGET_CHAT_IDS) to a comma-separated list to post
     the same message to several chats. Chats live in the env only, never in the
@@ -2566,7 +2566,7 @@ def _targets() -> tuple[int, ...]:
 
 
 def _test_target() -> int:
-    """The test channel id from TEST_CHAT_ID (0 = unset -> test mode off)."""
+    """Return the test channel id from TEST_CHAT_ID (0 = test off)."""
     return int(os.environ.get('TEST_CHAT_ID') or 0)
 
 

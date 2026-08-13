@@ -117,7 +117,7 @@ def _verdict(job: Job, resp: requests.Response) -> Verdict:
 
 
 def _result_name(resp: requests.Response, fallback: str) -> str:
-    """The service's own filename for the result, from Content-Disposition.
+    """Return the result filename from the Content-Disposition header.
 
     The relay uploads a ``.url`` (or spool) file, but the service names the
     result itself: a fetched video is ``Some Title.mp4``, not ``link.url``.
@@ -137,7 +137,7 @@ def _result_name(resp: requests.Response, fallback: str) -> str:
 
 
 def _skip_reason(resp: requests.Response) -> str:
-    """The service's stable skip code, parsed from its 422 detail."""
+    """Return the service's stable skip code, parsed from its 422 detail."""
     try:
         detail = resp.json().get('detail', '')
     except ValueError:
@@ -225,7 +225,7 @@ class JobClient:
 
 
 def _report_of(body: dict[str, Any]) -> progress.Report:
-    """A live job-status body as a progress Report (percent, bytes, ETA)."""
+    """Return a live job-status body as a Report (percent, bytes, ETA)."""
     return progress.Report(
         int(body.get('progress', 0)),
         int(body.get('done_bytes', 0)),
@@ -235,7 +235,7 @@ def _report_of(body: dict[str, Any]) -> progress.Report:
 
 
 def _failed(reason: str, reply: str) -> Verdict:
-    """A spoken failure verdict (the sender is always told what went wrong)."""
+    """Return a spoken failure verdict (the sender is always told why)."""
     return Verdict(Disposition.FAILED, reason=reason, reply=reply)
 
 

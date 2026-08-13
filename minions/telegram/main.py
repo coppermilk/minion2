@@ -60,7 +60,7 @@ class _Bot:
 
 
 def _names(env: Mapping[str, str]) -> list[str]:
-    """The configured bot names (csv in TELEGRAM_BOTS)."""
+    """Return the configured bot names (csv in TELEGRAM_BOTS)."""
     raw = env.get('TELEGRAM_BOTS', '')
     return [n.strip() for n in raw.split(',') if n.strip()]
 

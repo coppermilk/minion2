@@ -100,7 +100,7 @@ class AdminConfig:
     path: Path
 
     def _stored(self) -> dict[str, str]:
-        """The overrides on disk, unknown keys dropped."""
+        """Return the overrides on disk, unknown keys dropped."""
         try:
             data = json.loads(self.path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
@@ -122,7 +122,7 @@ class AdminConfig:
         return self.all().get(key, '')
 
     def effective(self, key: str, fallback: str) -> str:
-        """An explicit override if set, else ``fallback`` (e.g. an env var).
+        """Return the override if set, else ``fallback`` (e.g. an env var).
 
         Lets a non-secret env value seed a setting for a smooth migration:
         the moderator's override wins, otherwise the env/default stands.
@@ -153,5 +153,5 @@ class AdminConfig:
 
 
 def admin_config(state: Path) -> AdminConfig:
-    """The runtime config stored under a STATE directory."""
+    """Return the runtime config stored under a STATE directory."""
     return AdminConfig(state / ADMIN_FILE)

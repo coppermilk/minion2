@@ -76,7 +76,7 @@ class WishItem:
 
 
 def _attr(window: str, tag: str, ident: str) -> str:
-    """A ``title="..."`` value hanging off ``<tag>_<ident>``, unescaped."""
+    """Return a ``title="..."`` value off ``<tag>_<ident>``, unescaped."""
     match = re.search(
         r'id="' + tag + '_' + re.escape(ident) + r'"[^>]*?title="([^"]*)"',
         window,
@@ -85,7 +85,7 @@ def _attr(window: str, tag: str, ident: str) -> str:
 
 
 def _note(window: str, ident: str) -> str:
-    """The owner's note for the item (``itemComment_<id>``), unescaped."""
+    """Return the item's note (``itemComment_<id>``), unescaped."""
     match = re.search(
         r'id="itemComment_' + re.escape(ident) + r'"[^>]*>([^<]*)<',
         window,
@@ -126,7 +126,7 @@ def parse_items(page: str) -> list[WishItem]:
 
 
 def _next_lek(page: str) -> str | None:
-    """The pagination token for the next page, or None when last."""
+    """Return the pagination token for the next page, or None when last."""
     for pattern in _LEK:
         found = pattern.search(page)
         if found:
@@ -166,7 +166,7 @@ def _merge(items: list[WishItem], seen: set[str], page: str) -> None:
 
 
 def fetch_items(url: str) -> list[WishItem] | None:
-    """The whole wishlist across lek pages, or None on any failure.
+    """Return the whole wishlist across lek pages, or None on any failure.
 
     Any page that fails to fetch fails the whole run (None): a partial
     list would make the missing page's items look gifted next day. An
@@ -213,7 +213,7 @@ class SnapshotStore:
     path: Path
 
     def load(self) -> list[WishItem]:
-        """The last saved snapshot, or [] when there is none/bad."""
+        """Return the last saved snapshot, or [] when there is none/bad."""
         try:
             data = json.loads(self.path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
@@ -238,7 +238,7 @@ class SnapshotStore:
 
 
 def _str(value: object) -> str:
-    """A field coerced to str, '' when absent or not a string."""
+    """Return a field coerced to str, '' when absent or not a string."""
     return value if isinstance(value, str) else ''
 
 

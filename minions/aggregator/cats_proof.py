@@ -70,21 +70,21 @@ _STATE = Path(tempfile.gettempdir()) / 'cats_proof_state.json'
 
 
 def _local(ts: float, params: cats.CatParams) -> str:
-    """A send time in the persona's timezone, to show it reads as human."""
+    """Return a send time in the persona's timezone (reads as human)."""
     tz = timezone(timedelta(hours=params.tz_offset_hours))
     stamp = datetime.fromtimestamp(ts, tz=tz)
     return stamp.strftime('%Y-%m-%d %H:%M:%S (%a) %z')
 
 
 def _load_params() -> cats.CatParams:
-    """The REAL cat params + premium cat pool from the constants JSON."""
+    """Return the REAL cat params + premium pool from the constants JSON."""
     path = Path(__file__).with_name('aggregator_constants.json')
     data = json.loads(path.read_text(encoding='utf-8'))
     return cats.load_cat_params(data)
 
 
 def _payload(specs: list[cats.CatEmoji], cat: cats.Cat) -> str:
-    """The exact request main would send, rendered for the proof.
+    """Return the exact request main would send, rendered for the proof.
 
     'react': a ``ReactionCustomEmoji`` placed ON the comment message in one
     ``SendReaction`` call (a reaction pill under the comment). 'reply': the

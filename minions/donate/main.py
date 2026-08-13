@@ -152,7 +152,7 @@ def _is_command(low: str) -> bool:
 
 
 def _amount(amount: str, currency: str) -> str:
-    """The amount with the currency symbol appended (no double symbol)."""
+    """Return the amount with the currency symbol (no double)."""
     if currency and not amount.endswith(currency):
         return amount + currency
     return amount
@@ -231,7 +231,7 @@ def load_env() -> None:
 
 
 def _drive_dir() -> Path | None:
-    """The donate data dir <DRIVE>/bots/donate, or None if no DRIVE set."""
+    """Return the donate data dir <DRIVE>/bots/donate, or None."""
     drive = os.environ.get('DRIVE')
     if not drive:
         return None
@@ -239,7 +239,7 @@ def _drive_dir() -> Path | None:
 
 
 def _resolve_session_path() -> Path:
-    """The session base path (override, else <DRIVE>, else the package)."""
+    """Return the session base path (override, <DRIVE>, or package)."""
     override = os.environ.get('DONATE_SESSION_FILE')
     if override:
         path = Path(override).expanduser()
@@ -249,7 +249,7 @@ def _resolve_session_path() -> Path:
 
 
 def _chat() -> int | None:
-    """The fixed target from DONATE_CHAT_ID, or None to reply in place."""
+    """Return the fixed target from DONATE_CHAT_ID, or None for in-place."""
     raw = os.environ.get('DONATE_CHAT_ID')
     return int(raw) if raw else None
 

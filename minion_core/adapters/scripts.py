@@ -51,7 +51,7 @@ retarget the request)."""
 
 
 def script_hint(cfg: Settings) -> str:
-    """This week's script text as a read-only classify hint, or ''.
+    """Return this week's script text as a read-only classify hint, or ''.
 
     Any ``.gdoc`` hint in the inbox is read (never modified) and its
     text cached under ``Scripts/``; with no shortcut present, the newest
@@ -100,7 +100,7 @@ def _hint_text(shortcut: Path, archive: Path) -> str:
 
 
 def _read_cache(cache: Path) -> str:
-    """The cached script text for a document, or '' when absent."""
+    """Return the cached script text for a document, or '' when absent."""
     try:
         text = cache.read_text(encoding='utf-8', errors='replace')
     except OSError:
@@ -146,7 +146,7 @@ def _fetch_text(url: str) -> str:
 
 
 def _id_from_gdoc(path: Path) -> str:
-    """The document id inside a Drive ``.gdoc`` shortcut (JSON)."""
+    """Return the document id inside a Drive ``.gdoc`` shortcut (JSON)."""
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
@@ -162,7 +162,7 @@ def _id_from_gdoc(path: Path) -> str:
 
 
 def _newest_archived(archive: Path) -> str:
-    """The most recently modified archived script, or ''."""
+    """Return the most recently modified archived script, or ''."""
     if not archive.is_dir():
         return ''
     candidates = sorted(

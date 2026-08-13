@@ -207,7 +207,7 @@ class Greeter:
                 )
 
     async def _fetch_events(self) -> list[tuple[int, int, bool, bool]] | None:
-        """New join/leave events (id > cursor) from the admin log, or None."""
+        """Return new admin-log join/leave events (id > cursor), or None."""
         try:
             return [
                 _norm_event(event)
@@ -261,7 +261,7 @@ class Greeter:
         return await self._dm(uid, self.params.farewell)
 
     def _welcome_text(self, uid: int) -> str:
-        """A returning subscriber gets welcome_back (falls back to welcome)."""
+        """Return welcome_back for a returning subscriber, else welcome."""
         if uid in self.state.left:
             return self.params.welcome_back or self.params.welcome
         return self.params.welcome
@@ -325,7 +325,7 @@ class Greeter:
         return self._channel_at, self._channel_url
 
     async def _first_name(self, uid: int) -> str:
-        """The user's first name (HTML-escaped), or the fallback name."""
+        """Return the user's first name (HTML-escaped), or the fallback."""
         try:
             entity = await self.client.get_entity(uid)
         except Exception:  # noqa: BLE001 -- unresolvable name: use the fallback

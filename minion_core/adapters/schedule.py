@@ -60,7 +60,7 @@ def _split_step(part: str) -> tuple[str, int]:
 
 
 def _bounds(base: str) -> tuple[int, int]:
-    """The inclusive range a base spans; (1, 0) never matches anything."""
+    """Return the inclusive range a base spans; (1, 0) matches nothing."""
     lo, sep, hi = base.partition('-')
     if sep and lo.isdigit() and hi.isdigit():
         return int(lo), int(hi)

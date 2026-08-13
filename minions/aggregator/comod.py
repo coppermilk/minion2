@@ -199,13 +199,13 @@ def load_comod_params(data: dict[str, object]) -> ComodParams:
 
 
 def _amount_label(amount: str) -> str:
-    """A donated amount as ``$N`` (strips a leading currency the op typed)."""
+    """Return a donated amount as ``$N`` (strips a leading currency)."""
     clean = amount.lstrip('$ ').strip()
     return f'${clean}' if clean else ''
 
 
 def _amount_value(amount: str) -> float:
-    """The numeric part of an amount, for ranking (0.0 when there is none)."""
+    """Return the numeric part of an amount, for ranking (0.0 if none)."""
     digits = ''.join(c for c in amount if c.isdigit() or c == '.')
     try:
         return float(digits)
@@ -262,7 +262,7 @@ def _pick(value: object) -> str:
 
 
 def move_in_text(templates: dict[str, object], nick: str, link: str) -> str:
-    """The "you moved into the cabinet" announcement, {nick}/{link} filled."""
+    """Return the "you moved in" announcement, {nick}/{link} filled."""
     body = _pick(templates.get('move_in'))
     return body.replace('{nick}', nick.lstrip('@').strip()).replace(
         '{link}', link

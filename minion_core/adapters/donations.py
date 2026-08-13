@@ -98,12 +98,12 @@ def _int(value: object) -> int | None:
 
 
 def _text(value: object) -> str:
-    """A trimmed string field, or '' when absent or blank."""
+    """Return a trimmed string field, or '' when absent or blank."""
     return value.strip() if isinstance(value, str) else ''
 
 
 def _money(value: object) -> str:
-    """The donated amount as a bare number string (may be numeric)."""
+    """Return the donated amount as a bare number string (may be numeric)."""
     if isinstance(value, bool):
         return ''
     if isinstance(value, str) and value.strip():
@@ -184,7 +184,7 @@ class StreamlabsFeed:
 
 
 def _epoch_ms(value: object) -> int | None:
-    """An ISO-8601 timestamp as a millisecond cursor, or None.
+    """Return an ISO-8601 timestamp as a millisecond cursor, or None.
 
     Revolut transactions carry no integer id, so the completion time --
     to the millisecond -- is the monotonic high-water key the belt uses.
@@ -199,19 +199,19 @@ def _epoch_ms(value: object) -> int | None:
 
 
 def _num(value: object) -> float:
-    """A numeric amount, or 0.0 when absent or non-numeric."""
+    """Return a numeric amount, or 0.0 when absent or non-numeric."""
     if isinstance(value, bool):
         return 0.0
     return float(value) if isinstance(value, int | float) else 0.0
 
 
 def _money_str(amount: float) -> str:
-    """A tidy amount string: no trailing ``.0`` on whole numbers."""
+    """Return a tidy amount string: no trailing ``.0`` on whole numbers."""
     return str(int(amount)) if amount == int(amount) else str(amount)
 
 
 def _incoming_leg(legs: object) -> dict[str, object] | None:
-    """The first credit leg (money in), or None -- an outgoing/zero tx."""
+    """Return the first credit leg (money in), or None if outgoing/zero."""
     rows = legs if isinstance(legs, list) else []
     for leg in rows:
         if isinstance(leg, dict) and _num(leg.get('amount')) > 0:
@@ -220,7 +220,7 @@ def _incoming_leg(legs: object) -> dict[str, object] | None:
 
 
 def _counterparty(leg: dict[str, object]) -> str:
-    """The donor's name from a transaction leg, or ''."""
+    """Return the donor's name from a transaction leg, or ''."""
     party = leg.get('counterparty')
     name = party.get('name') if isinstance(party, dict) else None
     return name.strip() if isinstance(name, str) else ''
@@ -433,7 +433,7 @@ class BedRoster:
 
 
 def bed_roster(state: Path) -> BedRoster:
-    """The bed roster stored under a STATE directory."""
+    """Return the bed roster stored under a STATE directory."""
     return BedRoster(state / BED_FILE)
 
 
@@ -490,7 +490,7 @@ class DonationAlerts(Source):
             offsets.write(cursor)
 
     def _offset(self, name: str) -> Path:
-        """The per-feed high-water file, keyed by platform name."""
+        """Return the per-feed high-water file, keyed by platform name."""
         return self._spec.state / f'donations-{name.lower()}.offset'
 
     def produce(self, _emit: Emit) -> None:

@@ -121,7 +121,7 @@ def _post_error(exc: Exception) -> LlmError:
 
 
 def _content(body: dict[str, object]) -> str:
-    """The assistant message text, or LlmError when absent."""
+    """Return the assistant message text, or LlmError when absent."""
     message = body.get('message')
     text = message.get('content') if isinstance(message, dict) else None
     if not isinstance(text, str) or not text.strip():

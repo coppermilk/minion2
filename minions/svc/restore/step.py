@@ -74,7 +74,7 @@ def _to_boxes(found: dict[str, Any]) -> tuple[Box, ...]:
 
 
 def _s1(job: Job) -> Path:
-    """The intermediate the mark step writes (OPERATIONS 6)."""
+    """Return the intermediate the mark step writes (OPERATIONS 6)."""
     return job.dest / f'{job.src.stem}_s1{job.src.suffix}'
 
 

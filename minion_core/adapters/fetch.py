@@ -119,7 +119,7 @@ def download(url: str, into: Path, cfg: Settings) -> Path:
 
 
 def _int(field: str) -> int:
-    """A yt-dlp numeric template field, or 0 when it prints ``NA``."""
+    """Return a yt-dlp numeric template field, or 0 when it prints ``NA``."""
     text = field.strip()
     return int(text) if text.isdigit() else 0
 
@@ -204,11 +204,11 @@ def _run_ytdlp(argv: list[str], timeout: float) -> Path:
 
 
 def _ignore(_report: progress.Report) -> None:
-    """The sink when nobody is listening (a bare download)."""
+    """Return the sink when nobody is listening (a bare download)."""
 
 
 def _output_path(lines: deque[str]) -> Path:
-    """The last stdout line (the --print filepath)."""
+    """Return the last stdout line (the --print filepath)."""
     got = Path(lines[-1]) if lines else Path()
     if not got.is_file():
         msg = 'stale_extractor: no output file'
@@ -217,7 +217,7 @@ def _output_path(lines: deque[str]) -> Path:
 
 
 def _argv(url: str, into: Path, cfg: Settings) -> list[str]:
-    """The yt-dlp invocation; volatile knobs are Settings."""
+    """Return the yt-dlp invocation; volatile knobs are Settings."""
     argv = [
         YTDLP,
         '--no-playlist',
@@ -369,7 +369,7 @@ class FetchLink(Step):
 
 
 def _failure(exc: BaseException) -> Verdict:
-    """The stable reason code for a bounded fetch failure."""
+    """Return the stable reason code for a bounded fetch failure."""
     for kind, disposition, reason in _FAILURES:
         if isinstance(exc, kind):
             return Verdict(disposition, reason=reason)

@@ -49,7 +49,7 @@ def _job(cfg: Settings, bot: str, src: Path) -> Job:
 
 
 def _full_mask(width: int, height: int) -> Mask:
-    """A person mask covering the whole frame (all pixels hidden)."""
+    """Return a person mask covering the whole frame (all pixels hidden)."""
     return Mask(width, height, bytes([255]) * (width * height))
 
 

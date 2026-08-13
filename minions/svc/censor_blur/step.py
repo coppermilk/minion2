@@ -53,7 +53,7 @@ def _load() -> None:
 
 
 def person_masks(path: Path) -> Mask | None:
-    """A union L-mask of every confident person, or None (lazy load)."""
+    """Return a union L-mask of every confident person, or None (lazy load)."""
     import torch
     from torchvision.transforms import functional as tvf
 
@@ -82,7 +82,7 @@ def _union_mask(found: dict[str, Any]) -> Mask | None:
 
 
 def _s1(job: Job) -> Path:
-    """The intermediate the censor step writes (OPERATIONS 6)."""
+    """Return the intermediate the censor step writes (OPERATIONS 6)."""
     return job.dest / f'{job.src.stem}_s1{job.src.suffix}'
 
 

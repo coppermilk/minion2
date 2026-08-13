@@ -81,7 +81,7 @@ class Style:
         return f'{head}\n{sub}' if sub else head
 
     def _bar(self, pct: int) -> str:
-        """The fixed-width filled/empty bar for ``pct``."""
+        """Return the fixed-width filled/empty bar for ``pct``."""
         filled = round(self.width * max(0, min(100, pct)) / 100)
         return self.fill * filled + self.empty * (self.width - filled)
 
@@ -100,7 +100,7 @@ _DEFAULT = 'blocks'
 
 
 def style_for(env: Mapping[str, str] | None = None) -> Style:
-    """The style named by RELAY_PROGRESS_STYLE, or the default block bar."""
+    """Return the style named by RELAY_PROGRESS_STYLE, or the default."""
     src = os.environ if env is None else env
     name = src.get('RELAY_PROGRESS_STYLE', _DEFAULT)
     return STYLES.get(name, STYLES[_DEFAULT])

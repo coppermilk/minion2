@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 def make_env(drive: Path, **extra: str) -> dict[str, str]:
-    """A minimal env mapping rooted at a temp drive."""
+    """Return a minimal env mapping rooted at a temp drive."""
     return {'DRIVE': str(drive), **extra}
 
 

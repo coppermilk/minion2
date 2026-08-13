@@ -67,7 +67,7 @@ def _imports(path: Path) -> list[str]:
 
 
 def _identity(parts: tuple[str, ...]) -> tuple[str, ...] | None:
-    """The minion a path or import belongs to, or None if it is not one.
+    """Return the minion a path or import belongs to, or None if it is not one.
 
     minions/ groups by container logic: svc/<name> and bots/<name> are
     each a distinct minion (both segments identify it, so svc-a importing

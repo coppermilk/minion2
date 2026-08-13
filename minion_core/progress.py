@@ -44,7 +44,7 @@ _SINK: ContextVar[Callable[[Report], None] | None] = ContextVar(
 
 
 def current() -> Callable[[Report], None] | None:
-    """The sink installed for this run, or None when nobody is listening."""
+    """Return the sink installed for this run, or None if none set."""
     return _SINK.get()
 
 
@@ -67,7 +67,7 @@ def mb(num_bytes: int) -> str:
 
 
 def downloading_detail(report: Report) -> str:
-    """The ``24.8 / 47.6 MB . 12s left`` line, or '' when nothing is known."""
+    """Return the ``24.8 / 47.6 MB . 12s left`` line, or '' if unknown."""
     if report.total_bytes > 0:
         base = f'{mb(report.done_bytes)} / {mb(report.total_bytes)} MB'
     elif report.done_bytes > 0:
@@ -80,5 +80,5 @@ def downloading_detail(report: Report) -> str:
 
 
 def done_detail(size_bytes: int, elapsed_sec: int) -> str:
-    """The ``47.6 MB . 47s`` line for a finished download."""
+    """Return the ``47.6 MB . 47s`` line for a finished download."""
     return f'{mb(size_bytes)} MB {_DOT} {elapsed_sec}s'

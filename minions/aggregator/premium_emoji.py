@@ -144,7 +144,7 @@ def build_post_with_bar(
     *,
     separator: str = '\n\n',
 ) -> PremiumMessage:
-    """A post plus a social bar as a signature line beneath it.
+    """Return a post plus a social bar as a signature line beneath it.
 
     ``markup`` is the post body (it may itself contain ``<tg-emoji>`` tags);
     ``entries`` become the footer row. The bar's entity offsets are shifted
@@ -206,7 +206,7 @@ class RichText:
         return self.text(label)
 
     def build(self) -> PremiumMessage:
-        """The assembled text and its entities."""
+        """Return the assembled text and its entities."""
         return PremiumMessage(
             text=''.join(self._parts), entities=self._entities
         )

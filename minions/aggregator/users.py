@@ -220,7 +220,7 @@ class UserStore:
         }
 
     def top_commenters(self, limit: int = 5) -> list[dict[str, object]]:
-        """The most active commenters (by stored message count)."""
+        """Return the most active commenters (by stored message count)."""
         rows = self._conn.execute(
             'SELECT user_id, username, first_name, msg_count FROM users '
             'WHERE msg_count > 0 ORDER BY msg_count DESC, user_id LIMIT ?',
@@ -229,7 +229,7 @@ class UserStore:
         return [dict(r) for r in rows]
 
     def recent_events(self, limit: int = 5) -> list[dict[str, object]]:
-        """The latest join/leave events, newest first, with the user's name."""
+        """Return the latest join/leave events, newest first, with name."""
         rows = self._conn.execute(
             'SELECT e.user_id, e.event, e.ts, u.username, u.first_name '
             'FROM membership_events e '

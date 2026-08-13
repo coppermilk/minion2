@@ -265,7 +265,7 @@ def _in_window(hour: float, params: CatParams) -> bool:
 
 
 def _density_weight(ts: float, params: CatParams) -> float:
-    """The day's activity density at ``ts`` (principle 1), 0 in quiet hours.
+    """Return the day's activity density at ``ts`` (principle 1), 0 if quiet.
 
     This is the *shape* of a waking day; whether the host is actually up at
     that hour is a separate factor (the observed-uptime multiplier), so the
@@ -280,7 +280,7 @@ def _density_weight(ts: float, params: CatParams) -> float:
 
 
 def _lognormal(rng: random.Random, mu: float, sigma: float) -> float:
-    """A heavy-tailed positive draw (principle 2): exp of a normal."""
+    """Return a heavy-tailed positive draw (principle 2): exp of a normal."""
     return math.exp(rng.gauss(mu, sigma))
 
 
@@ -306,7 +306,7 @@ def _is_silent_day(ts: float, params: CatParams) -> bool:
 
 
 def _context_tags(ts: float, params: CatParams) -> frozenset[str]:
-    """The current context tags (principle 5): daypart, season, holiday."""
+    """Return context tags (principle 5): daypart, season, holiday."""
     when = _local(ts, params)
     tags = {'sleepy'} if when.hour < _NOON else {'bodry'}
     tags.add(('winter', 'spring', 'summer', 'autumn')[(when.month % 12) // 3])
@@ -455,7 +455,7 @@ class CatBrain:
         self._save()
 
     def rearm(self, *, renew_all: bool = False) -> list[Cat]:
-        """The pending cats to re-arm, renewing missed ones (or all).
+        """Return the pending cats to re-arm, renewing missed ones (or all).
 
         A cat whose time passed while the host was down is given a fresh
         near-future slot (snapped into the uptime window and spread by the
@@ -623,7 +623,7 @@ class CatBrain:
         return _density_weight(ts, self.params) * self._alive_fraction(ts)
 
     def _place(self, ts: float) -> float | None:
-        """A plausibly-awake, host-up send moment at or after ``ts``.
+        """Return a plausibly-awake, host-up send moment at or after ``ts``.
 
         If ``ts`` already sits at a live moment it is usually kept (a daytime
         comment is answered promptly). Otherwise we SAMPLE a moment across the
@@ -756,7 +756,7 @@ class CatBrain:
         return _weighted_choice(pool, weights, self.rng)
 
     def _weight(self, cat: CatEmoji, now: float) -> float:
-        """Selection weight: base * recency * mood * context (3,4,5)."""
+        """Return the selection weight: base*recency*mood*context (3,4,5)."""
         dt = now - self.state.cat_last.get(cat.emoji_id, 0.0)
         weight = cat.base * _recency_penalty(
             dt, self.params.recency_half_life_sec
@@ -862,7 +862,7 @@ def _peaks(
 
 
 def _entries_of_type(data: dict[str, object], etype: str) -> list[dict]:
-    """The emoji dicts of one ``type`` from the unified top-level array."""
+    """Return the emoji dicts of one ``type`` from the top-level array."""
     top = data.get('emoji')
     if not isinstance(top, list):
         return []
