@@ -411,6 +411,10 @@ _CABINET_NICK_H = 0.5
 _CABINET_AMOUNT_H = 0.32
 """When a shelf shows nick+amount, the height budget for each line."""
 
+_CYRILLIC_LO = 0x0400
+_CYRILLIC_HI = 0x04FF
+"""The Unicode Cyrillic block: a line here needs the Cyrillic fallback font."""
+
 
 def _first_font_path(preferred: str) -> str:
     """The first existing font file: the caller's choice, then known serifs."""
@@ -418,6 +422,11 @@ def _first_font_path(preferred: str) -> str:
         if candidate and Path(candidate).exists():
             return candidate
     return ''
+
+
+def _has_cyrillic(text: str) -> bool:
+    """Whether ``text`` holds any Cyrillic letter (needs the fallback font)."""
+    return any(_CYRILLIC_LO <= ord(ch) <= _CYRILLIC_HI for ch in text)
 
 
 def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
@@ -476,6 +485,7 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     out: Path,
     *,
     font_path: str = '',
+    cyrillic_font_path: str = '',
     base_size: int = 40,
     amount_scale: float = 0.75,
     text_color: tuple[int, int, int] = (255, 255, 255),
@@ -487,9 +497,11 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     (extra labels or slots are ignored, so a half-full cabinet just leaves the
     spare shelves blank). A label is ``"nick"`` or ``"nick\n$amount"``: the
     NICK is sized to fill its shelf, and the amount is drawn under it one step
-    smaller (``amount_scale``), the pair block-centered. A soft shadow keeps
-    the white text legible on any wood tone. Pillow stays behind this file
-    (REQ-ARC-002); callers pass paths only.
+    smaller (``amount_scale``), the pair block-centered. Each LINE picks its
+    font: ``font_path`` normally, ``cyrillic_font_path`` for a line with
+    Cyrillic (the primary font may be Latin-only, e.g. Aleo). A soft shadow
+    keeps the white text legible on any wood tone. Pillow stays behind this
+    file (REQ-ARC-002); callers pass paths only.
     """
     from PIL import Image
     from PIL import ImageDraw
@@ -497,7 +509,12 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     with Image.open(template) as opened:
         img = opened.convert('RGB')
     draw = ImageDraw.Draw(img)
-    resolved = _first_font_path(font_path)
+    latin = _first_font_path(font_path)
+    cyrillic = _first_font_path(cyrillic_font_path) or latin
+
+    def font_for(text: str) -> str:
+        return cyrillic if _has_cyrillic(text) else latin
+
     for label, (x, y, width, height) in zip(labels, slots, strict=False):
         if not label:
             continue
@@ -506,7 +523,8 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
         center_x = x + width / 2
         if not amount:  # nick only: size it to the whole cell (the prototype)
             font, tw, th, _size = _fit_line(
-                draw, nick, max_w, height * _CABINET_FIT_H, resolved, base_size
+                draw, nick, max_w, height * _CABINET_FIT_H,
+                font_for(nick), base_size,
             )
             _blit(
                 draw, nick, font,
@@ -516,11 +534,13 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
             continue
         # Nick sized to the shelf; amount a step smaller, stacked under it.
         n_font, nw, nh, n_size = _fit_line(
-            draw, nick, max_w, height * _CABINET_NICK_H, resolved, base_size
+            draw, nick, max_w, height * _CABINET_NICK_H,
+            font_for(nick), base_size,
         )
         a_size = max(_CABINET_MIN_FONT, round(n_size * amount_scale))
         a_font, aw, ah, _a = _fit_line(
-            draw, amount, max_w, height * _CABINET_AMOUNT_H, resolved, a_size
+            draw, amount, max_w, height * _CABINET_AMOUNT_H,
+            font_for(amount), a_size,
         )
         gap = max(2, nh // 6)
         top = y + (height - (nh + gap + ah)) / 2

@@ -1698,25 +1698,21 @@ class Aggregator:
         None whenever no template photo is configured (or is missing) or the
         draw fails -- the caller then posts a plain-text roster instead.
         """
-        template = self._comod.template_path
-        if not template:
-            return None
-        # A relative template is resolved against the aggregator package, so it
-        # is found no matter the working directory (e.g. 'assets/cabinet.jpg').
-        path = Path(template)
-        if not path.is_absolute():
-            path = Path(__file__).parent / template
-        if not path.is_file():
+        template = self._comod_asset(self._comod.template_path)
+        if template is None or not template.is_file():
             return None
         out = self.state_path.parent / 'comod_render.jpg'
         try:
             return files.render_cabinet(
-                path,
+                template,
                 # Biggest amount on the biggest shelf (area-ranked).
                 comod.assign_labels(residents, self._comod.slots),
                 list(self._comod.slots),
                 out,
-                font_path=self._comod.font_path,
+                font_path=self._comod_font(self._comod.font_path),
+                cyrillic_font_path=self._comod_font(
+                    self._comod.font_cyrillic_path
+                ),
                 base_size=self._comod.base_size,
                 amount_scale=self._comod.amount_scale,
                 text_color=self._comod.text_color,
@@ -1725,6 +1721,25 @@ class Aggregator:
         except Exception:  # noqa: BLE001 -- any Pillow failure -> text roster
             log.warning('comod: render failed for %s', template)
             return None
+
+    def _comod_asset(self, rel: str) -> Path | None:
+        """Resolve a comod asset path; a relative one sits in this package.
+
+        So 'assets/cabinet.jpg' and 'assets/fonts/Aleo.ttf' are found no matter
+        the working directory. Returns None for a blank path.
+        """
+        if not rel:
+            return None
+        path = Path(rel)
+        return path if path.is_absolute() else Path(__file__).parent / rel
+
+    def _comod_font(self, rel: str) -> str:
+        """A bundled font path as a string, or '' when unset/missing.
+
+        Empty lets ``render_cabinet`` fall back to its system-font search.
+        """
+        path = self._comod_asset(rel)
+        return str(path) if path is not None and path.is_file() else ''
 
     def _cabinet_caption(
         self, moved_in: str, residents: list[tuple[str, str]]

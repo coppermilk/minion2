@@ -32,7 +32,7 @@ COMOD_TTL_SEC = 7 * 24 * 3600
 # full-width slot, three rows of paired cubbies, then three wide lower shelves.
 # Each is (x, y, w, h). A different template photo needs different boxes.
 _DEFAULT_SLOTS: tuple[tuple[int, int, int, int], ...] = (
-    (347, 73, 412, 203),
+    (412, 78, 248, 156),
     (340, 303, 199, 150),
     (560, 296, 198, 159),
     (341, 476, 198, 147),
@@ -52,7 +52,8 @@ class ComodParams:
     templates: dict[str, object]
     donate_link: str
     template_path: str  # the base cabinet photo to draw onto
-    font_path: str  # a Cyrillic-capable TTF (empty: fall back to system fonts)
+    font_path: str  # the primary TTF (empty: fall back to system fonts)
+    font_cyrillic_path: str  # fallback TTF for lines with Cyrillic (may be '')
     base_size: int
     amount_scale: float  # the amount font relative to the fitted nick font
     slots: tuple[tuple[int, int, int, int], ...]
@@ -176,6 +177,7 @@ def load_comod_params(data: dict[str, object]) -> ComodParams:
         donate_link=str(cfg.get('donate_link', '')),
         template_path=str(render.get('template', '')),
         font_path=str(render.get('font', '')),
+        font_cyrillic_path=str(render.get('font_cyrillic', '')),
         base_size=int(render.get('base_size') or 40),
         amount_scale=float(render.get('amount_scale') or 0.75),
         slots=slots,
@@ -224,23 +226,29 @@ def assign_labels(
     residents: list[tuple[str, str]],
     slots: tuple[tuple[int, int, int, int], ...],
 ) -> list[str]:
-    """Shelf labels aligned to ``slots``, biggest amount on the biggest shelf.
+    """Shelf labels aligned to ``slots``: top donor on shelf 0, rest by area.
 
-    Residents are ranked by donated amount and slots by area, then paired
-    rank-for-rank, so the largest square holds the largest sum. The result is
-    in SLOT order (``label[i]`` belongs to ``slots[i]``); slots past the
-    resident count stay blank. Equal-area slots keep their listed order.
+    The biggest donor always takes the FIRST slot (the top compartment), even
+    when it is not the largest by area; the remaining donors fill the other
+    slots by area, biggest amount on the biggest square. The result is in SLOT
+    order (``label[i]`` belongs to ``slots[i]``); slots past the resident count
+    stay blank, and equal-area slots keep their listed order.
     """
     labels = [''] * len(slots)
-    ranked = sorted(
-        range(len(slots)),
+    if not slots:
+        return labels
+    ranked = by_amount(residents)
+    if ranked:
+        labels[0] = _label(*ranked[0])  # the exception: top donor on shelf 0
+    rest_slots = sorted(
+        range(1, len(slots)),
         key=lambda i: (slots[i][2] * slots[i][3], -i),
         reverse=True,
     )
-    for rank, (nick, amount) in enumerate(by_amount(residents)):
-        if rank >= len(slots):
+    for rank, (nick, amount) in enumerate(ranked[1:]):
+        if rank >= len(rest_slots):
             break
-        labels[ranked[rank]] = _label(nick, amount)
+        labels[rest_slots[rank]] = _label(nick, amount)
     return labels
 
 

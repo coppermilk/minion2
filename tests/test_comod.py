@@ -103,7 +103,7 @@ def test_load_comod_params_defaults() -> None:
     params = comod.load_comod_params({})
     assert params.max_shelves == len(params.slots) == 10
     assert params.text_color == (255, 255, 255)
-    assert params.slots[0] == (347, 73, 412, 203)
+    assert params.slots[0] == (412, 78, 248, 156)
 
 
 def test_load_comod_params_reads_section() -> None:
@@ -144,24 +144,25 @@ def test_by_amount_orders_biggest_first() -> None:
     ]
 
 
-def test_assign_labels_puts_biggest_on_the_largest_slot() -> None:
-    """The largest square gets the largest sum; result is in slot order."""
+def test_assign_labels_reserves_first_slot_for_top_donor() -> None:
+    """Slot 0 always holds the biggest donor; the rest fill by area."""
     slots = (
-        (0, 0, 10, 10),  # area 100 (smallest)
-        (0, 0, 40, 40),  # area 1600 (largest)
-        (0, 0, 20, 20),  # area 400 (middle)
+        (0, 0, 10, 10),  # slot 0: reserved for the top donor (small area)
+        (0, 0, 40, 40),  # area 1600 (largest of the rest)
+        (0, 0, 20, 20),  # area 400
     )
     residents = [('A', '5'), ('B', '100'), ('C', '40')]  # by recency
     labels = comod.assign_labels(residents, slots)
-    # slot 1 (largest) -> B ($100); slot 2 -> C ($40); slot 0 -> A ($5)
-    assert labels == ['A\n$5', 'B\n$100', 'C\n$40']
+    # B ($100) -> slot 0 (the exception); C ($40) -> largest remaining (slot
+    # 1); A ($5) -> slot 2.
+    assert labels == ['B\n$100', 'C\n$40', 'A\n$5']
 
 
 def test_assign_labels_leaves_spare_slots_blank() -> None:
     """Fewer residents than slots leaves the smaller shelves empty."""
     slots = ((0, 0, 40, 40), (0, 0, 10, 10))
     labels = comod.assign_labels([('Big', '90')], slots)
-    assert labels == ['Big\n$90', '']  # biggest slot filled, spare blank
+    assert labels == ['Big\n$90', '']  # top donor on slot 0, spare blank
 
 
 def test_move_in_text_fills_placeholders() -> None:
