@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Shared fixtures: hermetic Settings over tmp_path (BLUEPRINT 13)."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """fetch adapter tests: REQ-SEC-001, REQ-RES-001, REQ-RES-002."""
 
 from __future__ import annotations

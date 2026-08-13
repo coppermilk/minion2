@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Local object store for the service data plane.
 
 A service is stateless: it fetches its input by reference, processes into a

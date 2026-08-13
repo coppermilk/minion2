@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Structural analysis: REQ-ARC-001/002 and the import direction.
 
 DO-178C menu: these requirements are discharged by analysis, not by

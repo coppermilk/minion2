@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Phase 0 dispatcher: a Step invoked as a service equals the belt.
 
 The service seam must not change what a Step decides: for one input the

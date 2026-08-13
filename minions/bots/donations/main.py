@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """donations bot: post each new donor alert, and serve the bed roster.
 
 Platform-agnostic (BLUEPRINT 9 recipe): ``Feed``s supply the alerts,

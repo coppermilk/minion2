@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Settings tests: REQ-CFG-001 and the precedence contract."""
 
 from __future__ import annotations

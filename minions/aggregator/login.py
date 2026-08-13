@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Log in once and create the aggregator's session FILE, then exit.
 
 Run this ONCE interactively (it asks for your phone, the login code Telegram

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """moderator bot: control the system from chat.
 
 A control bot, not a belt. It answers text commands:

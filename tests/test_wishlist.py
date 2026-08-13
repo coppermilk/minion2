@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """wishlist bot: HTML parsing, lek pagination, the gift diff, one run.
 
 Hermetic: no network. The wishlist page is a fixed fixture; the run

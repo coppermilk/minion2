@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Port requirement tests (v1 gaps folded into BLUEPRINT 3).
 
 Covers REQ-KRN-005 (write stability), REQ-PRT-001 (spooler axis),

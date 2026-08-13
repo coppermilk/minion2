@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The aggregator's users database (minions/aggregator/users.py).
 
 Pure-logic tests against a temp SQLite file: no Telethon, no network. Every

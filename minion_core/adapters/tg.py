@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Telegram boundary: Bot API, long-poll, media receive (requests).
 
 Sole importer of ``requests`` (REQ-ARC-002). Ref format (owned by

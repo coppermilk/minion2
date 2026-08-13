@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The subscriber greeter (minions/aggregator/greeter.py).
 
 Telethon-free: the client is duck-typed, so a fake async client drives the

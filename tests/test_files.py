@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """files adapter tests: REQ-DATA-001/002, REQ-RES-002/003, naming."""
 
 from __future__ import annotations

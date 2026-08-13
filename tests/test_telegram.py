@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The telegram container's per-belt supervisor: restart with backoff."""
 
 from __future__ import annotations

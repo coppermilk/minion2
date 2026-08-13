@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Donation feeds: platform-agnostic donor alerts (requests).
 
 One value type (``Donation``) and one ``Feed`` protocol; each platform

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """CallService: a Step that delegates one file to a web service.
 
 The Telegram <-> service split rides on this Step: it POSTs the job's file

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Vision boundary: CLIP embeddings and nearest-fandom retrieval.
 
 The detection models (person masks/boxes, faces) and the censor Steps that use

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """print bot: a PDF dropped into ``print/`` reaches the printer.
 
 Graph: Folder(print/) -> PrintPdf -> ArchiveTo(print/_done/).

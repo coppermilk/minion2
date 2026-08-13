@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Censor family tests: the three service Steps and the tg contract.
 
 Covers HideFaces / BlurContour / HidePersonBoxes (each now its own service

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """censor-blur: blur each person's silhouette. This minion knows only this.
 
 Owns its model (Mask R-CNN instance segmentation) and its blur Step. Imports

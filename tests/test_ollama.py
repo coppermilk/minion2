@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """ollama adapter tests: payload shape, JSON parse, error mapping."""
 
 from __future__ import annotations

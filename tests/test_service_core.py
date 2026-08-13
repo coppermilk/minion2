@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Phase 2 core: the data plane meets the Phase 0 dispatcher.
 
 Hermetic (LocalStore, no web stack): a stored input is fetched, the Step

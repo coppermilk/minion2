@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Filesystem boundary: naming, EXIF week tag, lock, quota, delivery.
 
 Vendor SDKs owned here: Pillow, piexif -- this file is their sole

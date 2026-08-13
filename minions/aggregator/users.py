@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Persistent users database for the aggregator (opt-in, SQLite).
 
 Records the channel audience over time: the subscribe/unsubscribe timeline per

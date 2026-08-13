@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """frames web service: a video (or link) -> a zip of frames, bytes in/out.
 
     python -m minions.svc.frames.service   (SKIN=http | mcp)

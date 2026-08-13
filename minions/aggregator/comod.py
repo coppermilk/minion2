@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The cabinet ("komod"/"shkaf"): a shelf roster for supporters.
 
 A supporter "moves into the cabinet" and gets a named shelf for a while; when

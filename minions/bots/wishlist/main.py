@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """wishlist bot: a daily snapshot of a public wishlist spots changes.
 
 Cadence belongs to cron (BLUEPRINT 11): this bot does one scan-act-exit

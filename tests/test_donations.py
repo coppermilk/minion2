@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """donations bot: feed parsing, Russian render, and clean idle.
 
 Hermetic: no network, no tokens. Streamlabs parsing is exercised on a

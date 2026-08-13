@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Runtime admin config: operator-tunable knobs in one STATE JSON.
 
 The moderator bot writes these from chat; every bot reads them at its

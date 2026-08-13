@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The three named passes of sort (BLUEPRINT 9).
 
 Classify -> Demote -> Re-place. The Gemini JSON verdict decides

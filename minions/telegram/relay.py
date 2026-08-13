@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """relay bot: a thin Telegram transport in front of an atomic service.
 
 Graph: (TgMedia | Folder) -> CallService -> RouteOrigin(TgStatus / nothing)

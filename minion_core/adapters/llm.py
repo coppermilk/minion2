@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """LLM boundary: image classification + background restore (google-genai).
 
 Sole importer of the google SDK (REQ-ARC-002); loaded lazily so the

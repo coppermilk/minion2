@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """One frozen Settings, built once in main() (BLUEPRINT 7).
 
 No module-level environment reads; precedence is the mapping you

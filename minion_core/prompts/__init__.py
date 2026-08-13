@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """LLM prompt texts as package-data (BLUEPRINT 6, 12).
 
 One place per fact: every prompt the system sends lives here as a

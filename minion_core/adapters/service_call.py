@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Web-service boundary: POST a job's file to an atomic service (requests).
 
 A sanctioned ``requests`` import site (REQ-ARC-002), alongside tg/scripts/

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Wishlist boundary: read a public Amazon list, spot what left it.
 
 A daily snapshot of the wishlist is the database (STATE); an item that

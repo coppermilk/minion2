@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The web-facing /run-file: bytes in, bytes out.
 
 Services tier. A caller (an HTTP client, a thin relay, ...) has the

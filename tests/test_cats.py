@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The aggregator's human-like cat-reply engine (minions/aggregator/cats.py).
 
 Pure-logic tests: no Telethon, no network -- the engine is stdlib-only by

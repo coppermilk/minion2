@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """HTTP/OpenAPI skin over the service core.
 
 One generic app, parameterized by the STEP env var, so N services are N

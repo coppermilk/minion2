@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """sort bot tests: the three passes and REQ-SORT-001 ordering."""
 
 from __future__ import annotations

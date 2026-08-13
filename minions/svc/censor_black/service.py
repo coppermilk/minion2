@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """censor-black web service: black out faces, bytes in / bytes out.
 
     python -m minions.svc.censor_black.service   (SKIN=http | mcp)

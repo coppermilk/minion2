@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Print the document_id of every premium (custom) emoji you send.
 
 Run this with your Telegram USER account (the Premium one). Then send or

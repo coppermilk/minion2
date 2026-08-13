@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """MCP skin over the service core.
 
 The same Step exposed as an MCP tool, so agents (Claude, ...) call it just

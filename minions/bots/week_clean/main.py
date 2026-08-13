@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """week-clean bot: shelve the classified week -- mechanically.
 
 Every decision was already made during the week (sort classified in

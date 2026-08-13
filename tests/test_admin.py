@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Runtime admin config: defaults, overrides and unknown-key safety."""
 
 from __future__ import annotations

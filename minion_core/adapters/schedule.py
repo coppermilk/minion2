@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Cron-expression matching: is a moment due for a 5-field schedule.
 
 Schedules are moderator settings (admin.json), so a bot fires on a cron

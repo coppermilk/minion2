@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """inbox bot: every Telegram file lands in ``_inbox/``.
 
 Graph: TgMedia -> Deliver -> Reply -> DisposeSource. Tokenless, the

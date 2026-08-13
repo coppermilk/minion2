@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Parse Bot-API ``<tg-emoji>`` markup into Telethon custom-emoji entities.
 
 Telegram premium (custom) emoji travel over MTProto as

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """tg adapter tests: REQ-DATA-003, REQ-DEG-001, allow-list."""
 
 from __future__ import annotations

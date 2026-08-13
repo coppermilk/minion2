@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Telethon userbot: render a donation shout-out on the /donate command.
 
 A user-session app (not a bot token -- only a user account may send premium

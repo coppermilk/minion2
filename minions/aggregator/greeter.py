@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Welcome / farewell DMs for channel subscribers (opt-in, rate-limited).
 
 RISKS -- read before enabling. DMing subscribers from a USER account is the top

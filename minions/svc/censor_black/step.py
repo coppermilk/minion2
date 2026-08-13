@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """censor-black: black out each detected face. This minion knows only this.
 
 Owns its model (facenet MTCNN face detection) and its black-box Step. Imports

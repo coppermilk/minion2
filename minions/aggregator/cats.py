@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Human-like cat-emoji reactions to people who comment on the last posts.
 
 The aggregator posts announces; this module lets its user account react to a

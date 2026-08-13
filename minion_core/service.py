@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Run one Step as a service: an input file -> a Verdict (Phase 0).
 
 The dispatcher is catalog-neutral: it wraps an input file as a synthetic

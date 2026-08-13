@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The ASCII law, self-applied repo-wide (BLUEPRINT 4)."""
 
 from __future__ import annotations

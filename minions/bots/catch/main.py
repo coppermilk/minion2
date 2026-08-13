@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """catch bot: immediate Downloads filing (streaming).
 
 Graph: Folder(catch_dir) -> ClassifyCopy. There is deliberately no

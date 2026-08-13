@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Kernel requirement tests: REQ-KRN-001..004, REQ-OBS-001."""
 
 from __future__ import annotations

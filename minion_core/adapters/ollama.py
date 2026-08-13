@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Local model boundary: Ollama HTTP (Qwen2.5-VL on the NAS).
 
 Third sanctioned ``requests`` import site (REQ-ARC-002): the local

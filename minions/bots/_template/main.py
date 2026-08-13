@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Copy me: rename the package, replace the Step, wire one graph.
 
 The recipe (BLUEPRINT 9): pick a Source (Folder / TgMedia / TgLinks),

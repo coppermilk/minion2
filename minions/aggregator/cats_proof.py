@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Proof of work: the aggregator reacts to comments under its posts with cats.
 
 Run it -- no network, no Telegram, no session -- and watch the REAL engine

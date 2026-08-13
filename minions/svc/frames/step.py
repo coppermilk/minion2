@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """frames: a video -> a per-clip folder of frames. Knows only this.
 
 Owns the extraction Step; imports the ffmpeg boundary (``video``) and the

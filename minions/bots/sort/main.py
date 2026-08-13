@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """sort bot: the three passes, one-shot or watch-triggered.
 
 Config axes (BLUEPRINT 9): ``SOURCE_DIRS`` -- ``_inbox/`` by

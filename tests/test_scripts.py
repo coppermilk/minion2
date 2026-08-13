@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """scripts adapter tests: .gdoc read-only hint, caching, degradation."""
 
 from __future__ import annotations

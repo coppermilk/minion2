@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Bot graph tests: REQ-DEG-001 and per-bot behaviour with doubles."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """week-clean bot: Monday reset (batch).
 
 Naming waiver (BLUEPRINT 12): the tree spells it ``week-clean``; a

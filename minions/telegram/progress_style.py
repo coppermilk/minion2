@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Progress rendering for the relay's one self-editing status message.
 
 The relay edits ONE message through a task's life; each state is a compact

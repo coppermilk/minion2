@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """restore step 1: blur whole-person boxes for the LLM to erase.
 
 Owns its model (Faster R-CNN person detection) and its mark Step. Imports only

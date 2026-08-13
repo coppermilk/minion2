@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Video boundary: probe + frame extraction (ffmpeg/ffprobe).
 
 Owns the ffmpeg binaries (subprocess, no SDK). Every invocation is

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """progress_style: label + fixed bar + detail, themeable, ASCII source."""
 
 from __future__ import annotations

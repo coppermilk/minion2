@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Serve one Step as a web service (http | mcp), picked by SKIN.
 
 A minion's ``service.py`` calls ``run_service_app(step, make)``; ``make``

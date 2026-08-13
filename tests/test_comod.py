@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Cabinet roster tests: the 7-day shelf TTL, labels, and announcements."""
 
 from __future__ import annotations

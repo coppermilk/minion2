@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """relay: per-bot ack text, and the one self-editing status message."""
 
 from __future__ import annotations

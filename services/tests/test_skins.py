@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Skin tests: HTTP (TestClient) and MCP (tool registration).
 
 These need the web stack, so they live off the kernel gate; run with

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """censor-blur web service: blur people, bytes in / bytes out.
 
     python -m minions.svc.censor_blur.service   (SKIN=http | mcp)

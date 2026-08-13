@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Log in once and create the donate userbot's session FILE, then exit.
 
 Run this ONCE interactively (it asks for the phone, the login code Telegram

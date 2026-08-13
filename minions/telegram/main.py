@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """One Telegram container: all bot docks, each calling a web service.
 
     python -m minions.telegram.main

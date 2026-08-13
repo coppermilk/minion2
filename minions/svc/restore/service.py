@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """restore web service: blur people + LLM-repaint the scene, bytes in/out.
 
     python -m minions.svc.restore.service   (SKIN=http | mcp)

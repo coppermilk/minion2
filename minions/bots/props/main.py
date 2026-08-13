@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """props bot: read a scenario, recommend props, check what you have.
 
 A query bot (replies in chat, no belt jobs). It answers a Telegram

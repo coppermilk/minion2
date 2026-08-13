@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """fetch web service: a link -> a video, bytes in / bytes out.
 
     python -m minions.svc.fetch.service   (SKIN=http | mcp)

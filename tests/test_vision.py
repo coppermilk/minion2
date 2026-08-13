@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """vision cache tests: REQ-SORT-001 and the incremental contract."""
 
 from __future__ import annotations

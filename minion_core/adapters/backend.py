@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Model backend selection: local Qwen (Ollama) or Gemini.
 
 The switch bot flips a one-word toggle in STATE; every model-backed

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Library shelving: move the classified week into ``pictures/<Fandom>/``.
 
 The mechanical end-of-week operation, factored out of the week-clean bot

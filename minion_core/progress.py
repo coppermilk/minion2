@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """A thread-local progress sink: an adapter reports, a caller collects.
 
 The download adapter (fetch) knows a percent but not who wants it; a service

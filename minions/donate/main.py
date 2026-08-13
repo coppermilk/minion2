@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """donate userbot: render a donation shout-out on /donate, on its OWN account.
 
 A Telethon USER account (only a user account may send premium emoji), separate

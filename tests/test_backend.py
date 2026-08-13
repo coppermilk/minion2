@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """backend selection tests: toggle round-trip + which impl is live."""
 
 from __future__ import annotations

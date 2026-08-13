@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Protocol-neutral service core: run one Step over a stored input.
 
 Both the HTTP and MCP skins call ``run_service`` with a ``make`` factory that

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """The belt (BLUEPRINT 5): one data type, one operator, three kinds.
 
 Fault containment: every Step is crash-guarded (REQ-KRN-001), every

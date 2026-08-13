@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Link download boundary: yt-dlp + timeout + quota + SSRF guard.
 
 Owns the pinned ``yt-dlp`` binary (OPERATIONS 3); every download is

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Aggregate the same video across platforms, then post the collected links.
 
 A userbot listens to a source chat where bots (or people) drop one JSON object

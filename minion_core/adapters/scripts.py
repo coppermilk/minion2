@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
 """Weekly script boundary: Google Docs text for the classify hint.
 
 Second sanctioned ``requests`` import site next to tg.py
