@@ -21,6 +21,8 @@ from services.store import LocalStore
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
     from minion_core.kernel import Stage
     from minion_core.settings import Settings
 
@@ -62,7 +64,9 @@ def test_run_service_delivers_and_stores_output(tmp_path: Path) -> None:
     assert out.read_bytes() == b'hello'  # bytes preserved end to end
 
 
-def test_directory_result_stores_each_file(tmp_path, monkeypatch) -> None:
+def test_directory_result_stores_each_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A folder result (frames) is stored file by file into outputs."""
     from minion_core.adapters import video
 

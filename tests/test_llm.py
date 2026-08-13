@@ -45,6 +45,7 @@ def test_log_prompt_records_the_prompt_text(
 
 
 def test_parse_happy_path() -> None:
+    """Check parse happy path."""
     got = _parse_classification(json.dumps(VERDICT))
     assert got.fandom == 'HarryPotter'
     assert got.filename == 'FgSnapeOfficeAngry'
@@ -53,11 +54,13 @@ def test_parse_happy_path() -> None:
 
 
 def test_parse_strips_markdown_fence() -> None:
+    """Check parse strips markdown fence."""
     text = '```json\n' + json.dumps(VERDICT) + '\n```'
     assert _parse_classification(text).filename == 'FgSnapeOfficeAngry'
 
 
 def test_parse_garbage_raises_llm_error() -> None:
+    """Check parse garbage raises llm error."""
     with pytest.raises(LlmError):
         _parse_classification('the model rambled instead')
     with pytest.raises(LlmError):
@@ -67,6 +70,7 @@ def test_parse_garbage_raises_llm_error() -> None:
 
 
 def test_parse_sanitizes_names_to_prims() -> None:
+    """Check parse sanitizes names to prims."""
     dirty = dict(VERDICT, filename='Fg Snape_Office-1!', fandom='Harry P.')
     got = _parse_classification(json.dumps(dirty))
     assert got.filename == 'FgSnapeOffice1'
@@ -74,22 +78,26 @@ def test_parse_sanitizes_names_to_prims() -> None:
 
 
 def test_parse_digit_leading_prim_is_prefixed() -> None:
+    """Check parse digit leading prim is prefixed."""
     dirty = dict(VERDICT, filename='42Wallpaper')
     assert _parse_classification(json.dumps(dirty)).filename == 'X42Wallpaper'
 
 
 def test_parse_missing_fandom_falls_back_to_unknown() -> None:
+    """Check parse missing fandom falls back to unknown."""
     for absent in (dict(VERDICT, fandom=None), {'filename': 'PrWand'}):
         got = _parse_classification(json.dumps(absent))
         assert got.fandom == 'Unknown'
 
 
 def test_parse_missing_filename_falls_back_to_item() -> None:
+    """Check parse missing filename falls back to item."""
     got = _parse_classification(json.dumps(dict(VERDICT, filename=None)))
     assert got.filename == 'Item'
 
 
 def test_spec_reads_the_gemini_env_names() -> None:
+    """Check spec reads the gemini env names."""
     spec = spec_from(
         {
             'GEMINI_API_KEY': 'k',
@@ -105,6 +113,7 @@ def test_spec_reads_the_gemini_env_names() -> None:
 
 
 def test_spec_defaults() -> None:
+    """Check spec defaults."""
     spec = spec_from({})
     assert spec.model == 'gemini-2.5-flash-lite'
     assert spec.restore_model == 'gemini-3-pro-image'
@@ -133,6 +142,7 @@ class _Reply:
 
 
 def test_text_of_extracts_and_strips() -> None:
+    """Check text of extracts and strips."""
     assert _text_of(_Reply('  hello  ')) == 'hello'
     assert _text_of(_Reply(None)) == ''
 
@@ -185,6 +195,7 @@ def test_classify_image_folds_in_the_hint(tmp_path: Path) -> None:
 
 
 def test_list_props_parses_object_and_list() -> None:
+    """Check list props parses object and list."""
     from minion_core.adapters.llm import list_props
 
     obj = _FakeBackend('{"props": ["Wand", "Bag"]}')
@@ -194,6 +205,7 @@ def test_list_props_parses_object_and_list() -> None:
 
 
 def test_list_props_garbage_raises() -> None:
+    """Check list props garbage raises."""
     from minion_core.adapters.llm import list_props
 
     with pytest.raises(LlmError):

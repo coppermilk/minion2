@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from minion_core.adapters.admin import admin_config
 from minion_core.adapters.backend import BackendToggle
@@ -17,6 +18,9 @@ from minions.bots.moderator.main import _MENU
 from minions.bots.moderator.main import _Moderator
 from minions.bots.moderator.main import reply_for
 from tests.conftest import make_cfg
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _handler(cfg):
@@ -38,7 +42,7 @@ def _classified_jpeg(cfg, name):
     return img
 
 
-def test_switch_flips_and_reports(tmp_path):
+def test_switch_flips_and_reports(tmp_path: Path) -> None:
     """local/gemini set the toggle; status reads it back."""
     cfg = make_cfg(tmp_path / 'drive')
     toggle = BackendToggle(cfg)
@@ -49,7 +53,7 @@ def test_switch_flips_and_reports(tmp_path):
     assert toggle.read() == 'gemini'
 
 
-def test_switch_unknown_gives_help(tmp_path):
+def test_switch_unknown_gives_help(tmp_path: Path) -> None:
     """A stray word lists the accepted commands, changes nothing."""
     cfg = make_cfg(tmp_path / 'drive')
     reply = reply_for(BackendToggle(cfg), 'wut')
@@ -60,7 +64,7 @@ def test_switch_unknown_gives_help(tmp_path):
     assert BackendToggle(cfg).read() == 'gemini'  # unchanged (default)
 
 
-def test_panel_shows_menu_and_reads_bot_status(tmp_path):
+def test_panel_shows_menu_and_reads_bot_status(tmp_path: Path) -> None:
     """The admin panel prints the menu and reads donations/wishlist state."""
     cfg = make_cfg(tmp_path / 'drive')
     mod = _handler(cfg)
@@ -74,7 +78,7 @@ def test_panel_shows_menu_and_reads_bot_status(tmp_path):
     assert '1 items' in mod('wishlist')
 
 
-def test_panel_gets_sets_and_resets_settings(tmp_path):
+def test_panel_gets_sets_and_resets_settings(tmp_path: Path) -> None:
     """set/get/reset persist to admin.json; unknown keys are refused."""
     cfg = make_cfg(tmp_path / 'drive')
     mod = _handler(cfg)
@@ -87,7 +91,7 @@ def test_panel_gets_sets_and_resets_settings(tmp_path):
     assert admin_config(cfg.state).get('donation_poll_sec') == '10'
 
 
-def test_config_renders_as_a_pre_table(tmp_path):
+def test_config_renders_as_a_pre_table(tmp_path: Path) -> None:
     """`config` is a monospace <pre> table: a header and a row per key."""
     cfg = make_cfg(tmp_path / 'drive')
     mod = _handler(cfg)
@@ -100,7 +104,7 @@ def test_config_renders_as_a_pre_table(tmp_path):
     assert '10' in out  # its current value
 
 
-def test_config_escapes_a_set_value(tmp_path):
+def test_config_escapes_a_set_value(tmp_path: Path) -> None:
     """A value with HTML metacharacters is escaped, never a live tag."""
     cfg = make_cfg(tmp_path / 'drive')
     mod = _handler(cfg)
@@ -110,7 +114,7 @@ def test_config_escapes_a_set_value(tmp_path):
     assert '<b>x</b>' not in out
 
 
-def test_clean_command_shelves_the_week(tmp_path):
+def test_clean_command_shelves_the_week(tmp_path: Path) -> None:
     """`clean` runs the week-clean shelving on demand, right now."""
     cfg = make_cfg(tmp_path / 'drive')
     img = _classified_jpeg(cfg, 'FgSnapeOfficeAngry.jpg')
@@ -121,7 +125,7 @@ def test_clean_command_shelves_the_week(tmp_path):
     assert not img.exists()
 
 
-def test_clean_command_reports_when_a_clean_is_running(tmp_path):
+def test_clean_command_reports_when_a_clean_is_running(tmp_path: Path) -> None:
     """A held batch lock means the command says so, shelves nothing."""
     from minion_core.adapters.files import BatchLock
     from minion_core.adapters.library import LOCK_NAME

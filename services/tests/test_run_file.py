@@ -23,6 +23,8 @@ from services.http import create_app
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 
 def _deliver_app() -> TestClient:
     return TestClient(create_app('deliver', lambda _c: Deliver()))
@@ -44,6 +46,7 @@ def _sharp_jpeg(path: Path) -> Path:
 
 
 def test_run_file_round_trips_a_file(tmp_path: Path) -> None:
+    """Check run file round trips a file."""
     reply = _deliver_app().post(
         '/run-file',
         files={'file': ('a.bin', b'hello', 'application/octet-stream')},
@@ -55,8 +58,9 @@ def test_run_file_round_trips_a_file(tmp_path: Path) -> None:
 
 
 def test_run_file_blurs_via_the_censor_blur_service(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Check run file blurs via the censor blur service."""
     from PIL import Image
 
     from minion_core.adapters.files import Mask
@@ -86,7 +90,10 @@ def test_run_file_blurs_via_the_censor_blur_service(
     assert center not in {(0, 0, 0), (255, 255, 255)}  # the edge got blurred
 
 
-def test_run_file_zips_a_directory_result(tmp_path: Path, monkeypatch) -> None:
+def test_run_file_zips_a_directory_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check run file zips a directory result."""
     import io
     import zipfile
 
@@ -115,7 +122,10 @@ def test_run_file_zips_a_directory_result(tmp_path: Path, monkeypatch) -> None:
     assert set(names) == {'a.jpg', 'b.jpg'}  # a folder result -> one zip
 
 
-def test_run_file_422_when_the_step_skips(tmp_path: Path, monkeypatch) -> None:
+def test_run_file_422_when_the_step_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check run file 422 when the step skips."""
     monkeypatch.setattr(blur, 'person_masks', lambda _p: None)
     src = _sharp_jpeg(tmp_path / 'p.jpg')
     reply = _blur_app().post(

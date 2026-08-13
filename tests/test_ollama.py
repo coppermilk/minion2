@@ -5,21 +5,26 @@
 from __future__ import annotations
 
 import base64
+from typing import TYPE_CHECKING
+from typing import Never
 
 import pytest
 
 from minion_core.adapters.llm import LlmError
 from minion_core.adapters.ollama import OllamaBackend
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 class _Resp:
     """A minimal requests.Response double."""
 
-    def __init__(self, body, status=200):
+    def __init__(self, body, status=200) -> None:
         self._body = body
         self.status_code = status
 
-    def raise_for_status(self):
+    def raise_for_status(self) -> None:
         if self.status_code >= 400:
             import requests
 
@@ -29,7 +34,7 @@ class _Resp:
         return self._body
 
 
-def test_text_payload_and_parse(monkeypatch):
+def test_text_payload_and_parse(monkeypatch: pytest.MonkeyPatch) -> None:
     """A text call posts JSON-forced chat with no image, returns content."""
     import requests
 
@@ -50,7 +55,9 @@ def test_text_payload_and_parse(monkeypatch):
     assert 'images' not in seen['json']['messages'][0]
 
 
-def test_vision_includes_base64_image(monkeypatch, tmp_path):
+def test_vision_includes_base64_image(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """A vision call carries the image, base64-encoded."""
     import requests
 
@@ -69,11 +76,11 @@ def test_vision_includes_base64_image(monkeypatch, tmp_path):
     assert base64.b64decode(msg['images'][0]) == b'\x89PNG\r\n'
 
 
-def test_network_error_is_llm_error(monkeypatch):
+def test_network_error_is_llm_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unreachable model FAILS clean (the belt then punts)."""
     import requests
 
-    def boom(url, json, timeout):
+    def boom(url, json, timeout) -> Never:
         msg = 'connection refused'
         raise requests.ConnectionError(msg)
 
@@ -82,7 +89,9 @@ def test_network_error_is_llm_error(monkeypatch):
         OllamaBackend('http://x', 'm').text('hi')
 
 
-def test_missing_model_is_model_not_pulled(monkeypatch):
+def test_missing_model_is_model_not_pulled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A 404 (server up, model absent) names the exact pull command."""
     import requests
 
@@ -96,11 +105,13 @@ def test_missing_model_is_model_not_pulled(monkeypatch):
     assert 'qwen2.5vl:7b' in str(caught.value)
 
 
-def test_timeout_is_distinct_from_unreachable(monkeypatch):
+def test_timeout_is_distinct_from_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A read timeout says 'too slow' + names the fix, not 'unreachable'."""
     import requests
 
-    def slow(url, json, timeout):
+    def slow(url, json, timeout) -> Never:
         msg = 'read timed out'
         raise requests.ReadTimeout(msg)
 
@@ -110,7 +121,9 @@ def test_timeout_is_distinct_from_unreachable(monkeypatch):
     assert 'Gemini' in str(caught.value)
 
 
-def test_other_http_error_is_ollama_error(monkeypatch):
+def test_other_http_error_is_ollama_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A 5xx is distinct from both unreachable and model-not-pulled."""
     import requests
 
@@ -123,7 +136,7 @@ def test_other_http_error_is_ollama_error(monkeypatch):
         OllamaBackend('http://x', 'm').text('hi')
 
 
-def test_empty_content_is_llm_error(monkeypatch):
+def test_empty_content_is_llm_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """A blank reply is a failure, not an empty classification."""
     import requests
 

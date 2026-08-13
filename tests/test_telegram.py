@@ -5,8 +5,12 @@
 from __future__ import annotations
 
 import threading
+from typing import TYPE_CHECKING
 
 from minions.telegram import main as telegram
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_next_delay_resets_after_a_healthy_run() -> None:
@@ -22,7 +26,9 @@ def test_next_delay_grows_and_caps() -> None:
     assert telegram._next_delay(999.0, ran_sec=0.0) == cap
 
 
-def test_supervisor_restarts_the_belt_until_stopped(monkeypatch) -> None:
+def test_supervisor_restarts_the_belt_until_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A belt that keeps exiting is re-run, then the stop event ends it."""
     monkeypatch.setattr(telegram, '_BACKOFF_START_SEC', 0.0)  # no real waits
     stop = threading.Event()

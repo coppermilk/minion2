@@ -13,6 +13,7 @@ import asyncio
 import json
 import types
 from typing import TYPE_CHECKING
+from typing import Never
 
 from minions.aggregator import greeter
 
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _params(**over):
+def _params(**over: object):
     base = {
         'enabled': True,
         'channel': -100,
@@ -60,7 +61,7 @@ async def _aiter(items):
 
 
 class _FakeClient:
-    def __init__(self, log=()):
+    def __init__(self, log=()) -> None:
         self.log = list(log)  # admin-log events (SimpleNamespace)
         self.dms = []
         self.fail = {}
@@ -77,14 +78,14 @@ class _FakeClient:
             username=self.usernames.get(uid, ''),
         )
 
-    async def send_message(self, uid, text, **_kw):
+    async def send_message(self, uid, text, **_kw: object) -> None:
         exc = self.fail.get(uid)
         if exc is not None:
             raise exc
         self.dms.append((uid, text))
 
 
-def _greeter(tmp_path, client, **over):
+def _greeter(tmp_path: Path, client, **over: object):
     return greeter.Greeter(client, _params(**over), tmp_path / 'g.json')
 
 
@@ -94,6 +95,7 @@ def test_on_event_sink_fires_for_every_event_incl_baseline(
     # The users DB taps this sink: it must see every fetched event as a
     # (admin_log_id, user_id, joined, left) tuple -- even on the silent
     # baseline run where nobody is greeted.
+    """Check on event sink fires for every event incl baseline."""
     seen: list[tuple[int, int, bool, bool]] = []
     client = _FakeClient([_join(1, 100), _leave(2, 100)])
     g = greeter.Greeter(client, _params(), tmp_path / 'g.json', seen.append)
@@ -103,6 +105,7 @@ def test_on_event_sink_fires_for_every_event_incl_baseline(
 
 
 def test_first_run_is_a_silent_baseline(tmp_path: Path) -> None:
+    """Check first run is a silent baseline."""
     client = _FakeClient([_join(1, 100), _join(2, 101)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())
@@ -112,6 +115,7 @@ def test_first_run_is_a_silent_baseline(tmp_path: Path) -> None:
 
 
 def test_join_gets_welcome_and_leave_gets_farewell(tmp_path: Path) -> None:
+    """Check join gets welcome and leave gets farewell."""
     client = _FakeClient([_join(1, 100)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())  # baseline at event 1
@@ -123,6 +127,7 @@ def test_join_gets_welcome_and_leave_gets_farewell(tmp_path: Path) -> None:
 
 
 def test_returning_subscriber_gets_welcome_back(tmp_path: Path) -> None:
+    """Check returning subscriber gets welcome back."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())  # baseline
@@ -138,6 +143,7 @@ def test_returning_subscriber_gets_welcome_back(tmp_path: Path) -> None:
 
 
 def test_name_placeholder_is_filled(tmp_path: Path) -> None:
+    """Check name placeholder is filled."""
     client = _FakeClient([_join(1, 1)])
     client.names = {7: 'Alice'}
     g = _greeter(tmp_path, client, welcome='hi {name}')
@@ -148,6 +154,7 @@ def test_name_placeholder_is_filled(tmp_path: Path) -> None:
 
 
 def test_name_placeholder_falls_back_when_unknown(tmp_path: Path) -> None:
+    """Check name placeholder falls back when unknown."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client, welcome='hi {name}')
     asyncio.run(g.sync())
@@ -157,6 +164,7 @@ def test_name_placeholder_falls_back_when_unknown(tmp_path: Path) -> None:
 
 
 def test_channel_placeholders_are_filled(tmp_path: Path) -> None:
+    """Check channel placeholders are filled."""
     client = _FakeClient([_join(1, 1)])
     client.usernames = {-100: 'mychan'}  # channel id from _params
     g = _greeter(tmp_path, client, welcome='join {channel} at {channel_url}')
@@ -167,6 +175,7 @@ def test_channel_placeholders_are_filled(tmp_path: Path) -> None:
 
 
 def test_over_cap_events_wait_for_the_next_day(tmp_path: Path) -> None:
+    """Check over cap events wait for the next day."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client, max_dm_per_day=1, max_dm_per_run=10)
     asyncio.run(g.sync())  # baseline at event 1
@@ -181,6 +190,7 @@ def test_over_cap_events_wait_for_the_next_day(tmp_path: Path) -> None:
 
 
 def test_per_run_cap_limits_one_cycle(tmp_path: Path) -> None:
+    """Check per run cap limits one cycle."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client, max_dm_per_run=2, max_dm_per_day=100)
     asyncio.run(g.sync())  # baseline
@@ -192,6 +202,7 @@ def test_per_run_cap_limits_one_cycle(tmp_path: Path) -> None:
 
 
 def test_privacy_failure_is_skipped_but_committed(tmp_path: Path) -> None:
+    """Check privacy failure is skipped but committed."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())
@@ -204,6 +215,7 @@ def test_privacy_failure_is_skipped_but_committed(tmp_path: Path) -> None:
 
 
 def test_flood_defers_the_rest(tmp_path: Path) -> None:
+    """Check flood defers the rest."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client)
     asyncio.run(g.sync())
@@ -216,6 +228,7 @@ def test_flood_defers_the_rest(tmp_path: Path) -> None:
 
 
 def test_empty_farewell_sends_nothing_on_leave(tmp_path: Path) -> None:
+    """Check empty farewell sends nothing on leave."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client, farewell='')
     asyncio.run(g.sync())
@@ -227,8 +240,10 @@ def test_empty_farewell_sends_nothing_on_leave(tmp_path: Path) -> None:
 
 
 def test_cannot_read_admin_log_is_reported(tmp_path: Path) -> None:
+    """Check cannot read admin log is reported."""
+
     class _NoAdmin(_FakeClient):
-        def iter_admin_log(self, _channel, **_kw):
+        def iter_admin_log(self, _channel, **_kw: object) -> Never:
             msg = 'ChatAdminRequiredError'
             raise RuntimeError(msg)
 
@@ -238,6 +253,7 @@ def test_cannot_read_admin_log_is_reported(tmp_path: Path) -> None:
 
 
 def test_sync_now_reports_baseline_then_dms(tmp_path: Path) -> None:
+    """Check sync now reports baseline then dms."""
     client = _FakeClient([_join(1, 1)])
     g = _greeter(tmp_path, client)
     first = asyncio.run(g.sync_now())
@@ -249,6 +265,7 @@ def test_sync_now_reports_baseline_then_dms(tmp_path: Path) -> None:
 
 
 def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
+    """Check state persists cursor and counter."""
     path = tmp_path / 'g.json'
     client = _FakeClient([_join(1, 1)])
     g = greeter.Greeter(client, _params(), path)
@@ -262,6 +279,7 @@ def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
 
 
 def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
+    """Check channel switch resets the baseline."""
     path = tmp_path / 'g.json'
     client = _FakeClient([_join(9, 1)])
     g = greeter.Greeter(client, _params(channel=-100), path)
@@ -273,6 +291,7 @@ def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
 
 
 def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
+    """Check old member state migrates and rebaselines."""
     path = tmp_path / 'g.json'
     # An old member-diff state file (has 'members', no 'last_event_id').
     path.write_text(
@@ -293,6 +312,7 @@ def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
 
 
 def test_load_greeter_params_defaults_off_with_target_channel() -> None:
+    """Check load greeter params defaults off with target channel."""
     params = greeter.load_greeter_params({}, -999)
     assert params.enabled is False
     assert params.channel == -999

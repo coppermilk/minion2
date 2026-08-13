@@ -76,6 +76,7 @@ def _job(tmp_path: Path) -> Job:
 
 
 def test_delivers_and_writes_the_result(tmp_path: Path) -> None:
+    """Check delivers and writes the result."""
     _REPLY.update(
         status=200,
         body=b'PROCESSED',
@@ -93,6 +94,7 @@ def test_result_is_named_by_content_disposition(tmp_path: Path) -> None:
     # The relay uploads `in.url`, but the service returns a real video name.
     # The bytes must be written under that name, not the `.url` request name,
     # or the sender gets an unplayable file.
+    """Check result is named by content disposition."""
     _REPLY.update(
         status=200,
         body=b'VIDEO',
@@ -106,6 +108,7 @@ def test_result_is_named_by_content_disposition(tmp_path: Path) -> None:
 
 
 def test_422_surfaces_as_skipped(tmp_path: Path) -> None:
+    """Check 422 surfaces as skipped."""
     _REPLY.update(
         status=422,
         body=json.dumps({'detail': 'skipped: no_person'}).encode('ascii'),
@@ -121,6 +124,7 @@ def test_422_surfaces_as_skipped(tmp_path: Path) -> None:
 
 def test_unreachable_service_is_failed(tmp_path: Path) -> None:
     # Port 1 is never listening -> requests raises -> FAILED.
+    """Check unreachable service is failed."""
     verdict = CallService(ServiceCall('http://127.0.0.1:1')).process(
         _job(tmp_path)
     )

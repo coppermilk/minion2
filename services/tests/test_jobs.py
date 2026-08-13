@@ -12,11 +12,15 @@ differs for a real minute-long Step.
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from fastapi.testclient import TestClient
 
 from minion_core.adapters.files import Deliver
 from services.http import create_app
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _client() -> TestClient:
@@ -34,6 +38,7 @@ def _wait_done(client: TestClient, job_id: str) -> dict:
 
 
 def test_async_file_job() -> None:
+    """Check async file job."""
     client = _client()
     submit = client.post(
         '/jobs/file',
@@ -72,12 +77,14 @@ def test_job_reports_live_progress() -> None:
 
 
 def test_unknown_job_is_404() -> None:
+    """Check unknown job is 404."""
     client = _client()
     assert client.get('/jobs/nope').status_code == 404
     assert client.get('/jobs/nope/result').status_code == 409
 
 
-def test_job_fires_webhook_callback(monkeypatch) -> None:
+def test_job_fires_webhook_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check job fires webhook callback."""
     import httpx
 
     calls: list[tuple[str, dict]] = []

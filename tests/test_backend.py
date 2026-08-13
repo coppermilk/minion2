@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from minion_core.adapters.backend import GEMINI
@@ -13,14 +15,17 @@ from minion_core.adapters.backend import select_backend
 from tests.conftest import make_cfg
 from tests.conftest import make_env
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_toggle_defaults_to_gemini(tmp_path):
+
+def test_toggle_defaults_to_gemini(tmp_path: Path) -> None:
     """Default backend is Gemini (fast; local 7B is too slow on the NAS)."""
     cfg = make_cfg(tmp_path / 'drive')
     assert BackendToggle(cfg).read() == GEMINI
 
 
-def test_toggle_round_trip(tmp_path):
+def test_toggle_round_trip(tmp_path: Path) -> None:
     """A written choice survives a fresh instance (STATE on disk)."""
     cfg = make_cfg(tmp_path / 'drive')
     BackendToggle(cfg).write(GEMINI)
@@ -29,21 +34,21 @@ def test_toggle_round_trip(tmp_path):
     assert BackendToggle(cfg).read() == LOCAL
 
 
-def test_toggle_rejects_unknown(tmp_path):
+def test_toggle_rejects_unknown(tmp_path: Path) -> None:
     """Only the two known values may be stored."""
     cfg = make_cfg(tmp_path / 'drive')
     with pytest.raises(ValueError, match='bogus'):
         BackendToggle(cfg).write('bogus')
 
 
-def test_corrupt_toggle_reads_default(tmp_path):
+def test_corrupt_toggle_reads_default(tmp_path: Path) -> None:
     """A garbled toggle reads as the default, never crashes a pass."""
     cfg = make_cfg(tmp_path / 'drive')
     (cfg.state / 'model.backend').write_text('garbage', encoding='ascii')
     assert BackendToggle(cfg).read() == GEMINI
 
 
-def test_select_backend_follows_toggle(tmp_path):
+def test_select_backend_follows_toggle(tmp_path: Path) -> None:
     """The live backend swaps with the toggle, no restart."""
     cfg = make_cfg(tmp_path / 'drive')
     env = make_env(tmp_path / 'drive')
@@ -54,7 +59,7 @@ def test_select_backend_follows_toggle(tmp_path):
     assert select_backend(cfg, env).name == 'gemini'
 
 
-def test_env_default_backend_honoured(tmp_path):
+def test_env_default_backend_honoured(tmp_path: Path) -> None:
     """MODEL_BACKEND overrides the default before any switch is written."""
     cfg = make_cfg(tmp_path / 'drive', MODEL_BACKEND='local')
     assert BackendToggle(cfg).read() == LOCAL
