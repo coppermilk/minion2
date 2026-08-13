@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -65,6 +66,40 @@ CREATE INDEX IF NOT EXISTS ix_messages_user ON messages (user_id);
 """
 
 
+@dataclass(frozen=True)
+class MembershipEvent:
+    """One join/leave event: who, which way, and the admin-log cursor."""
+
+    user_id: int
+    joined: bool
+    left: bool
+    admin_log_id: int | None = None
+    ts: float | None = None
+
+
+@dataclass(frozen=True)
+class SeenMessage:
+    """One observed message: author, where it landed, and its body."""
+
+    user_id: int
+    chat_id: int
+    msg_id: int
+    root: int = 0
+    text: str = ''
+    ts: float | None = None
+
+
+@dataclass(frozen=True)
+class Identity:
+    """A user's identity fields; a ``None`` field keeps the stored value."""
+
+    user_id: int
+    username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+
+
 class UserStore:
     """A per-profile SQLite store of the channel audience and its activity.
 
@@ -96,93 +131,68 @@ class UserStore:
             (user_id, now, now),
         )
 
-    def record_membership(  # noqa: PLR0913 -- one row's worth of named fields
-        self,
-        user_id: int,
-        *,
-        joined: bool,
-        left: bool,
-        admin_log_id: int | None = None,
-        ts: float | None = None,
-    ) -> bool:
+    def record_membership(self, event: MembershipEvent) -> bool:
         """Append one join/leave event and update the user's current state.
 
         Idempotent on ``admin_log_id`` (the greeter re-reads events it deferred
         past a DM cap), so a repeat is a no-op. Returns whether a NEW event was
         recorded.
         """
-        if user_id <= 0 or not (joined or left):
+        if event.user_id <= 0 or not (event.joined or event.left):
             return False
-        now = self.clock() if ts is None else ts
-        event = 'join' if joined else 'leave'
+        now = self.clock() if event.ts is None else event.ts
+        kind = 'join' if event.joined else 'leave'
         cur = self._conn.execute(
             'INSERT OR IGNORE INTO membership_events '
             '(user_id, event, ts, admin_log_id) VALUES (?, ?, ?, ?)',
-            (user_id, event, now, admin_log_id),
+            (event.user_id, kind, now, event.admin_log_id),
         )
         if cur.rowcount == 0:
             return False  # already recorded under this admin_log_id
-        self._ensure_user(user_id, now)
+        self._ensure_user(event.user_id, now)
         self._conn.execute(
             'UPDATE users SET subscribed=?, last_seen=?, updated_at=?, '
             'first_seen=COALESCE(first_seen, ?) WHERE user_id=?',
-            (1 if joined else 0, now, now, now, user_id),
+            (1 if event.joined else 0, now, now, now, event.user_id),
         )
         self._conn.commit()
         return True
 
-    def record_message(  # noqa: PLR0913 -- one row's worth of named fields
-        self,
-        user_id: int,
-        chat_id: int,
-        msg_id: int,
-        *,
-        root: int = 0,
-        text: str = '',
-        ts: float | None = None,
-    ) -> bool:
+    def record_message(self, msg: SeenMessage) -> bool:
         """Store one seen message and bump the user's count/last_seen.
 
         Idempotent on ``(chat_id, msg_id)`` so a rescan of existing comments
         never double-counts. Returns whether a NEW message was stored.
         """
-        if user_id <= 0 or msg_id <= 0:
+        if msg.user_id <= 0 or msg.msg_id <= 0:
             return False
-        now = self.clock() if ts is None else ts
+        now = self.clock() if msg.ts is None else msg.ts
         cur = self._conn.execute(
             'INSERT OR IGNORE INTO messages '
             '(user_id, chat_id, msg_id, root, text, ts) VALUES (?,?,?,?,?,?)',
-            (user_id, chat_id, msg_id, root, text, now),
+            (msg.user_id, msg.chat_id, msg.msg_id, msg.root, msg.text, now),
         )
         if cur.rowcount == 0:
             return False  # already stored this message
-        self._ensure_user(user_id, now)
+        self._ensure_user(msg.user_id, now)
         self._conn.execute(
             'UPDATE users SET msg_count=msg_count+1, last_seen=?, '
             'updated_at=?, first_seen=COALESCE(first_seen, ?) WHERE user_id=?',
-            (now, now, now, user_id),
+            (now, now, now, msg.user_id),
         )
         self._conn.commit()
         return True
 
-    def apply_identity(  # noqa: PLR0913 -- one row's worth of named fields
-        self,
-        user_id: int,
-        *,
-        username: str | None = None,
-        first_name: str | None = None,
-        last_name: str | None = None,
-        phone: str | None = None,
-    ) -> None:
+    def apply_identity(self, identity: Identity) -> None:
         """Fill/refresh a user's identity; a ``None`` field keeps the old one.
 
         Called lazily from ``get_entity`` enrichment -- phone is almost always
         ``None`` (Telegram only exposes it to mutual contacts).
         """
-        if user_id <= 0:
+        if identity.user_id <= 0:
             return
         now = self.clock()
-        self._ensure_user(user_id, now)
+        self._ensure_user(identity.user_id, now)
         self._conn.execute(
             'UPDATE users SET '
             'username=COALESCE(?, username), '
@@ -190,7 +200,14 @@ class UserStore:
             'last_name=COALESCE(?, last_name), '
             'phone=COALESCE(?, phone), '
             'updated_at=? WHERE user_id=?',
-            (username, first_name, last_name, phone, now, user_id),
+            (
+                identity.username,
+                identity.first_name,
+                identity.last_name,
+                identity.phone,
+                now,
+                identity.user_id,
+            ),
         )
         self._conn.commit()
 

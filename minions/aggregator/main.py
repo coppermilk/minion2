@@ -1301,11 +1301,13 @@ class Aggregator:
         root = _thread_top(getattr(message, 'reply_to', None)) or 0
         body = str(getattr(message, 'message', '') or '')
         self.users.record_message(
-            uid,
-            chat,
-            int(getattr(message, 'id', 0) or 0),
-            root=int(root),
-            text=body if self._users_store_text else '',
+            users.SeenMessage(
+                uid,
+                chat,
+                int(getattr(message, 'id', 0) or 0),
+                root=int(root),
+                text=body if self._users_store_text else '',
+            )
         )
         self._maybe_enrich(uid)
 
@@ -1315,7 +1317,9 @@ class Aggregator:
         if not self._users_enabled or user_id <= 0:
             return
         self.users.record_membership(
-            user_id, joined=joined, left=left, admin_log_id=admin_log_id
+            users.MembershipEvent(
+                user_id, joined=joined, left=left, admin_log_id=admin_log_id
+            )
         )
         self._maybe_enrich(user_id)
 
@@ -1338,11 +1342,13 @@ class Aggregator:
         except Exception:  # noqa: BLE001 -- unresolvable id: leave it bare
             return
         self.users.apply_identity(
-            user_id,
-            username=getattr(entity, 'username', None),
-            first_name=getattr(entity, 'first_name', None),
-            last_name=getattr(entity, 'last_name', None),
-            phone=getattr(entity, 'phone', None),
+            users.Identity(
+                user_id,
+                username=getattr(entity, 'username', None),
+                first_name=getattr(entity, 'first_name', None),
+                last_name=getattr(entity, 'last_name', None),
+                phone=getattr(entity, 'phone', None),
+            )
         )
 
     async def _unknown_command(
