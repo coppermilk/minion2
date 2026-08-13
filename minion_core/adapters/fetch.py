@@ -286,7 +286,7 @@ def _pull(resp: _Readable, writer: BudgetWriter, deadline: float) -> None:
 class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
     """Re-guard every redirect hop (SSRF defence in depth)."""
 
-    def redirect_request(  # noqa: PLR0913 -- stdlib hook signature
+    def redirect_request(  # noqa: PLR0913, PLR0917 -- stdlib hook signature
         self,
         req: urllib.request.Request,
         fp: IO[bytes],

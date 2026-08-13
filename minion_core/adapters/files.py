@@ -533,31 +533,58 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
         center_x = x + width / 2
         if not amount:  # nick only: size it to the whole cell (the prototype)
             font, tw, th, _size = _fit_line(
-                draw, nick, max_w, height * _CABINET_FIT_H,
-                font_for(nick), base_size,
+                draw,
+                nick,
+                max_w,
+                height * _CABINET_FIT_H,
+                font_for(nick),
+                base_size,
             )
             _blit(
-                draw, nick, font,
+                draw,
+                nick,
+                font,
                 (center_x - tw / 2, y + (height - th) / 2),
-                text_color, shadow_color,
+                text_color,
+                shadow_color,
             )
             continue
         # Nick sized to the shelf; amount a step smaller, stacked under it.
         n_font, nw, nh, n_size = _fit_line(
-            draw, nick, max_w, height * _CABINET_NICK_H,
-            font_for(nick), base_size,
+            draw,
+            nick,
+            max_w,
+            height * _CABINET_NICK_H,
+            font_for(nick),
+            base_size,
         )
         a_size = max(_CABINET_MIN_FONT, round(n_size * amount_scale))
         a_font, aw, ah, _a = _fit_line(
-            draw, amount, max_w, height * _CABINET_AMOUNT_H,
-            font_for(amount), a_size,
+            draw,
+            amount,
+            max_w,
+            height * _CABINET_AMOUNT_H,
+            font_for(amount),
+            a_size,
         )
         gap = max(2, nh // 6)
         top = y + (height - (nh + gap + ah)) / 2
-        _blit(draw, nick, n_font, (center_x - nw / 2, top),
-              text_color, shadow_color)
-        _blit(draw, amount, a_font, (center_x - aw / 2, top + nh + gap),
-              text_color, shadow_color)
+        _blit(
+            draw,
+            nick,
+            n_font,
+            (center_x - nw / 2, top),
+            text_color,
+            shadow_color,
+        )
+        _blit(
+            draw,
+            amount,
+            a_font,
+            (center_x - aw / 2, top + nh + gap),
+            text_color,
+            shadow_color,
+        )
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
     return out

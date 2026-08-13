@@ -1302,9 +1302,7 @@ class Aggregator:
         )
         self._maybe_enrich(uid)
 
-    def _on_membership_event(
-        self, event: tuple[int, int, bool, bool]
-    ) -> None:
+    def _on_membership_event(self, event: tuple[int, int, bool, bool]) -> None:
         """Greeter sink: persist a join/leave to the users DB (idempotent)."""
         admin_log_id, user_id, joined, left = event
         if not self._users_enabled or user_id <= 0:
@@ -1928,8 +1926,12 @@ class Aggregator:
         placed = await self._react(cat.chat, cat.reply_to, cat.emojis)
         if placed:
             glyphs = ''.join(fb for _, fb in cat.emojis)
-            log.info('cat: reacted %s on comment %s in %s',
-                     glyphs, cat.reply_to, cat.chat)
+            log.info(
+                'cat: reacted %s on comment %s in %s',
+                glyphs,
+                cat.reply_to,
+                cat.chat,
+            )
 
     async def _send_sticker(self, cat: cats.Cat) -> None:
         """Reply IN THE THREAD with the chosen premium cat emoji (a sticker).
@@ -1950,11 +1952,16 @@ class Aggregator:
             try:
                 await self._reply_in_thread(cat, message)
             except Exception:  # noqa: BLE001 -- fall back to a flat reply
-                log.warning('cat: threaded sticker failed in %s; flat',
-                            cat.chat)
+                log.warning(
+                    'cat: threaded sticker failed in %s; flat', cat.chat
+                )
             else:
-                log.info('cat: sticker %s in thread %s of %s',
-                         fallback, cat.root, cat.chat)
+                log.info(
+                    'cat: sticker %s in thread %s of %s',
+                    fallback,
+                    cat.root,
+                    cat.chat,
+                )
                 return
         await self.client.send_message(
             cat.chat,
@@ -1963,8 +1970,12 @@ class Aggregator:
             reply_to=cat.reply_to,
             link_preview=False,
         )
-        log.info('cat: sticker %s on comment %s in %s',
-                 fallback, cat.reply_to, cat.chat)
+        log.info(
+            'cat: sticker %s on comment %s in %s',
+            fallback,
+            cat.reply_to,
+            cat.chat,
+        )
 
     async def _reply_in_thread(
         self, cat: cats.Cat, message: PremiumMessage
@@ -2009,8 +2020,10 @@ class Aggregator:
             # propagates to the caller's guard (logged, never fatal).
             standard = [ReactionEmoji(emoticon=fb) for _, fb in emojis]
             await self._send_reaction(peer, msg_id, standard)
-            log.info('cat: custom reaction rejected in %s; used standard '
-                     'emoji', peer)
+            log.info(
+                'cat: custom reaction rejected in %s; used standard emoji',
+                peer,
+            )
         return True
 
     async def _send_reaction(
@@ -2409,13 +2422,15 @@ class Aggregator:
         try:
             placed = await self._react(target, post_id, emojis)
         except Exception:  # noqa: BLE001 -- reacting must never break posting
-            log.warning('cat: could not react to new post %s in %s',
-                        post_id, target)
+            log.warning(
+                'cat: could not react to new post %s in %s', post_id, target
+            )
             return
         if placed:
             glyphs = ''.join(fb for _, fb in emojis)
-            log.info('cat: reacted %s to new post %s in %s',
-                     glyphs, post_id, target)
+            log.info(
+                'cat: reacted %s to new post %s in %s', glyphs, post_id, target
+            )
 
     async def _watch_post(self, target: int, post_id: int) -> None:
         """Register where comments on this post will appear (the cat target).

@@ -122,16 +122,27 @@ def _post_reaction(brain: cats.CatBrain, channel: int, post_id: int) -> None:
         f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
     )
     glyphs = ' '.join(s.fallback for s in specs)
-    print(f'  new post {post_id} in channel {channel}: LIKE REACTION now '
-          f'(immediate, no wait)')
-    print(f'      request  : SendReaction(peer={channel}, msg_id={post_id}, '
-          f'add_to_recent=True)')
+    print(
+        f'  new post {post_id} in channel {channel}: LIKE REACTION now '
+        f'(immediate, no wait)'
+    )
+    print(
+        f'      request  : SendReaction(peer={channel}, msg_id={post_id}, '
+        f'add_to_recent=True)'
+    )
     print(f'      reaction : [{reactions}]')
     print(f'      shows as : {glyphs}   (a reaction pill ON the post itself)')
 
 
-def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # noqa: PLR0913 -- a proof reads clearest with every field named at the call site
-             text: str, engaged: bool) -> cats.Cat | None:
+def _comment(  # noqa: PLR0913 -- a proof reads clearest with every field named at the call site
+    brain: cats.CatBrain,
+    *,
+    root: int,
+    msg_id: int,
+    person: str,
+    text: str,
+    engaged: bool,
+) -> cats.Cat | None:
     """Run one comment through the real engine, exactly as main.py does.
 
     Mirrors main._maybe_cat/_schedule_comment: recognise the comment, key it
@@ -139,14 +150,18 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
     which premium cat-emoji to react with. Returns the scheduled Cat, or None.
     """
     if not brain.is_comment(_CHAT, root):
-        print(f'  comment {msg_id} by {person}: NOT under a watched post '
-              f'-> ignored')
+        print(
+            f'  comment {msg_id} by {person}: NOT under a watched post '
+            f'-> ignored'
+        )
         return None
     key = f'{_CHAT}:{root}:{person}'
     when = brain.schedule(key, engaged=engaged)
     if when is None:
-        print(f'  comment {msg_id} by {person} under post {root}: '
-              f'no cat (dedup / skip / silent day)')
+        print(
+            f'  comment {msg_id} by {person} under post {root}: '
+            f'no cat (dedup / skip / silent day)'
+        )
         return None
     # Default is a like REACTION; the deterministic gate turns some into a
     # thread STICKER. The emoji is pseudo-random but deterministic in the
@@ -157,14 +172,22 @@ def _comment(brain: cats.CatBrain, *, root: int, msg_id: int, person: str,  # no
     else:
         specs, kind, label = brain.pick_like(seed), 'react', 'LIKE reaction'
     cat = cats.Cat(
-        chat=_CHAT, reply_to=msg_id, root=root, when=when, text=text,
-        emojis=tuple((s.emoji_id, s.fallback) for s in specs), kind=kind,
+        chat=_CHAT,
+        reply_to=msg_id,
+        root=root,
+        when=when,
+        text=text,
+        emojis=tuple((s.emoji_id, s.fallback) for s in specs),
+        kind=kind,
     )
     brain.add_pending(cat)
-    print(f'  comment {msg_id} by {person} under post {root}: {label} '
-          f'scheduled')
-    print(f'      when     : {_local(when, brain.params)}   '
-          f'(+{when - _NOW:.0f}s, jittered off :00)')
+    print(
+        f'  comment {msg_id} by {person} under post {root}: {label} scheduled'
+    )
+    print(
+        f'      when     : {_local(when, brain.params)}   '
+        f'(+{when - _NOW:.0f}s, jittered off :00)'
+    )
     print(_payload(specs, cat))
     return cat
 
@@ -176,23 +199,33 @@ def _banner(params: cats.CatParams) -> None:
     print('PROOF OF WORK -- LIKE REACTIONS on comments (deterministic)')
     print('=' * 72)
     print(f'engine enabled          : {params.enabled}')
-    print(f'comments_in_discussion  : {params.comments_in_discussion} '
-          f'(channel + linked discussion group)')
-    print(f'react_to_posts          : {params.react_to_posts} '
-          f'(like our own posts -- optional, off by default)')
-    print(f'watch_posts             : {params.watch_posts} '
-          f'(only the last N posts are answered)')
+    print(
+        f'comments_in_discussion  : {params.comments_in_discussion} '
+        f'(channel + linked discussion group)'
+    )
+    print(
+        f'react_to_posts          : {params.react_to_posts} '
+        f'(like our own posts -- optional, off by default)'
+    )
+    print(
+        f'watch_posts             : {params.watch_posts} '
+        f'(only the last N posts are answered)'
+    )
     print(f'like pool ({len(params.like_pool):>2})           : {likes}')
-    print('  (pseudo-random, seeded by the target id -- same target, same '
-          'like; recomputable after a restart)')
+    print(
+        '  (pseudo-random, seeded by the target id -- same target, same '
+        'like; recomputable after a restart)'
+    )
     print(f'now                     : {_local(_NOW, params)}')
     print()
 
 
 def _closing(count: int) -> None:
     """Print the result line and the how-to-see-it-live note."""
-    print(f'RESULT: {count} like reaction(s) are queued ON comments -- once '
-          f'per (post, person), human-timed, deterministic emoji.')
+    print(
+        f'RESULT: {count} like reaction(s) are queued ON comments -- once '
+        f'per (post, person), human-timed, deterministic emoji.'
+    )
     print()
     print('NOTE: this was a DRY RUN -- no Telegram, no real reactions. Live:')
     print('  1) run the bot:  python -m minions.aggregator.main')
@@ -215,55 +248,95 @@ def main() -> None:
     brain.clock = lambda: _NOW
     _banner(params)
 
-    print(f'STEP 1  optional post reaction (react_to_posts='
-          f'{params.react_to_posts}, off by default)')
+    print(
+        f'STEP 1  optional post reaction (react_to_posts='
+        f'{params.react_to_posts}, off by default)'
+    )
     if params.react_to_posts:
         _post_reaction(brain, _CHANNEL, 500)
     else:
-        print('  react_to_posts is off -> our own posts are NOT reacted to; '
-              'only comments are')
+        print(
+            '  react_to_posts is off -> our own posts are NOT reacted to; '
+            'only comments are'
+        )
     print()
 
     print('STEP 2  watch the last posts (main.backfill_cat_posts)')
     brain.note_post(_CHAT, _POST_OLD)
     brain.note_post(_CHAT, _POST_NEW)
     print(f'  watch-list: {brain.posts}')
-    print(f'  is a reply to post {_POST_NEW} a comment? '
-          f'{brain.is_comment(_CHAT, _POST_NEW)}')
-    print(f'  is a reply to post 9999 a comment?      '
-          f'{brain.is_comment(_CHAT, 9999)}')
+    print(
+        f'  is a reply to post {_POST_NEW} a comment? '
+        f'{brain.is_comment(_CHAT, _POST_NEW)}'
+    )
+    print(
+        f'  is a reply to post 9999 a comment?      '
+        f'{brain.is_comment(_CHAT, 9999)}'
+    )
     print()
 
     print('STEP 3  a person comments under the freshest post -> react on it')
-    _comment(brain, root=_POST_NEW, msg_id=5001, person='alice', engaged=True,
-             text='love this one!')
+    _comment(
+        brain,
+        root=_POST_NEW,
+        msg_id=5001,
+        person='alice',
+        engaged=True,
+        text='love this one!',
+    )
     print()
 
     print('STEP 4  once per (post, person): the same person, same post again')
-    _comment(brain, root=_POST_NEW, msg_id=5002, person='alice', engaged=True,
-             text='and again')
+    _comment(
+        brain,
+        root=_POST_NEW,
+        msg_id=5002,
+        person='alice',
+        engaged=True,
+        text='and again',
+    )
     print()
 
     print('STEP 5  a DIFFERENT person, same post -> eligible again')
-    _comment(brain, root=_POST_NEW, msg_id=5003, person='bob', engaged=True,
-             text='haha nice')
+    _comment(
+        brain,
+        root=_POST_NEW,
+        msg_id=5003,
+        person='bob',
+        engaged=True,
+        text='haha nice',
+    )
     print()
 
     print('STEP 6  the SAME person under a DIFFERENT post -> eligible again')
-    _comment(brain, root=_POST_OLD, msg_id=5004, person='alice', engaged=False,
-             text='saw this yesterday')
+    _comment(
+        brain,
+        root=_POST_OLD,
+        msg_id=5004,
+        person='alice',
+        engaged=False,
+        text='saw this yesterday',
+    )
     print()
 
     print('STEP 7  a message that is not a comment on a watched post')
-    _comment(brain, root=7777, msg_id=5005, person='carol', engaged=False,
-             text='off-topic chatter')
+    _comment(
+        brain,
+        root=7777,
+        msg_id=5005,
+        person='carol',
+        engaged=False,
+        text='off-topic chatter',
+    )
     print()
 
     print('STEP 8  the queue that survives a restart (persisted pending cats)')
     for entry in brain.state.pending:
-        print(f'  pending: {entry.get("kind", "react")} on comment '
-              f'{entry["reply_to"]} (post {entry["root"]}) in {entry["chat"]}'
-              f'  "{entry["text"]}"')
+        print(
+            f'  pending: {entry.get("kind", "react")} on comment '
+            f'{entry["reply_to"]} (post {entry["root"]}) in {entry["chat"]}'
+            f'  "{entry["text"]}"'
+        )
     print()
 
     _sticker_gate_demo(brain.params)
@@ -279,10 +352,14 @@ def _sticker_gate_demo(params: cats.CatParams) -> None:
     pattern visible: likes until BOTH conditions hold, then a sticker, then the
     silence resets. Same code path as production (``should_sticker``).
     """
-    print(f'STEP 9  the sticker gate (deterministic). Live default: >= '
-          f'{params.sticker_gap} since last')
-    print(f'        sticker AND >= {params.burst_count} engagements within '
-          f'{params.burst_window_sec:.0f}s. Demo with a 2/2 gate:')
+    print(
+        f'STEP 9  the sticker gate (deterministic). Live default: >= '
+        f'{params.sticker_gap} since last'
+    )
+    print(
+        f'        sticker AND >= {params.burst_count} engagements within '
+        f'{params.burst_window_sec:.0f}s. Demo with a 2/2 gate:'
+    )
     tuned = dataclasses.replace(params, sticker_gap=2, burst_count=2)
     path = Path(tempfile.gettempdir()) / 'cats_proof_gate.json'
     path.unlink(missing_ok=True)

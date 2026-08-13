@@ -153,37 +153,50 @@ defines the fault-containment regions and the single unbounded loop.
 ```python
 Stream = Iterator['Envelope']
 
+
 class Disposition(Enum):
-    DELIVERED = 'delivered'   # result produced and handed to sinks
-    SKIPPED   = 'skipped'     # nothing to act on; not an error
-    REJECTED  = 'rejected'    # invalid/disallowed input; never retry
-    FAILED    = 'failed'      # internal or transient; retry may help
+    DELIVERED = 'delivered'  # result produced and handed to sinks
+    SKIPPED = 'skipped'  # nothing to act on; not an error
+    REJECTED = 'rejected'  # invalid/disallowed input; never retry
+    FAILED = 'failed'  # internal or transient; retry may help
+
 
 @dataclass(frozen=True)
 class Origin:
-    source: str               # transport-neutral tag: 'tg' | 'loc'
-    ref: str                  # opaque, source-defined; kernel never parses it
+    source: str  # transport-neutral tag: 'tg' | 'loc'
+    ref: str  # opaque, source-defined; kernel never parses it
+
 
 @dataclass(frozen=True)
 class Job:
-    src: Path; dest: Path; stem: str; origin: Origin
+    src: Path
+    dest: Path
+    stem: str
+    origin: Origin
+
 
 @dataclass(frozen=True)
 class Verdict:
     disposition: Disposition
-    reason: str = ''          # stable code, 1:1 with the OPERATIONS failure table
+    reason: str = ''  # stable code, 1:1 with the OPERATIONS failure table
     result: Path | None = None
     reply: str = ''
     dest: Path | None = None  # set when a step relocates the job
 
+
 @dataclass(frozen=True)
 class Envelope:
-    job: Job; verdict: Verdict | None = None
+    job: Job
+    verdict: Verdict | None = None
+
 
 class Stage(ABC):
     def __call__(self, up: Stream) -> Stream: ...
-    def __rshift__(self, nxt): return _Chain(self, nxt)   # a >> b : then
-    def __or__(self, other):   return _Merge(self, other) # a | b  : two docks, one belt
+    def __rshift__(self, nxt):
+        return _Chain(self, nxt)  # a >> b : then
+
+    def __or__(self, other):
+        return _Merge(self, other)  # a | b  : two docks, one belt
 ```
 
 - **Source** (abstract `produce(emit)`): one daemon thread each; a blocking
@@ -270,19 +283,27 @@ class Settings:
     print_spooler: tuple[str, ...]  # argv prefix; the PDF is appended
     print_timeout_sec: int
     censor_blur_watch: Path | None  # second dock; None disables
-    censor_black_watch: Path | None # second dock; None disables
-    restore_watch: Path | None      # second dock; None disables
-    frames_watch: Path | None       # second dock; None disables
-    catch_dir: Path | None          # catch bot source; None disables
+    censor_black_watch: Path | None  # second dock; None disables
+    restore_watch: Path | None  # second dock; None disables
+    frames_watch: Path | None  # second dock; None disables
+    catch_dir: Path | None  # catch bot source; None disables
+
     # derived, never overridable separately:
     @property
-    def inbox(self):    return self.drive / '_inbox'
+    def inbox(self):
+        return self.drive / '_inbox'
+
     @property
-    def pictures(self): return self.drive / 'pictures'
+    def pictures(self):
+        return self.drive / 'pictures'
+
     @property
-    def state(self):    return self.drive / 'bots' / '_data' / 'state'
+    def state(self):
+        return self.drive / 'bots' / '_data' / 'state'
+
     @property
-    def regen(self):    return self.drive / 'bots' / '_data' / 'regen'
+    def regen(self):
+        return self.drive / 'bots' / '_data' / 'regen'
 ```
 
 `load` coerces one line per field and **raises on any relative path override**

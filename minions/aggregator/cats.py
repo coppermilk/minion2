@@ -673,9 +673,7 @@ class CatBrain:
         """
         return self._choose(self.params.pool, key)
 
-    def _choose(
-        self, pool: tuple[CatEmoji, ...], key: str
-    ) -> list[CatEmoji]:
+    def _choose(self, pool: tuple[CatEmoji, ...], key: str) -> list[CatEmoji]:
         """Weighted, reproducible-in-key draw of one emoji; records recency.
 
         Shared by ``pick_like`` and ``pick_cat``. Weights come from ``_weight``
