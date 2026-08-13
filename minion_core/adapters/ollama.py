@@ -38,6 +38,7 @@ class OllamaBackend:
     name = 'local'
 
     def __init__(self, url: str, model: str) -> None:
+        """Keep the trimmed server URL and the model name."""
         self._url = url.rstrip('/')
         self._model = model
 

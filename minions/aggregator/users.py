@@ -74,6 +74,7 @@ class UserStore:
     clock: Callable[[], float]
 
     def __init__(self, path: Path | str) -> None:
+        """Open the users DB and apply the schema and pragmas."""
         self._conn = sqlite3.connect(str(path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)

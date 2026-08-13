@@ -464,6 +464,7 @@ class DonationAlerts(Source):
     def __init__(
         self, feeds: list[Feed], sender: Sender, spec: AlertSpec
     ) -> None:
+        """Keep the feeds, sender and alert spec for the loop."""
         super().__init__()
         self._feeds = feeds
         self._sender = sender
@@ -537,6 +538,7 @@ class BedBroadcast(Source):
     def __init__(
         self, roster: BedRoster, sender: Sender, spec: BroadcastSpec
     ) -> None:
+        """Keep the roster, sender and broadcast spec."""
         super().__init__()
         self._roster = roster
         self._sender = sender

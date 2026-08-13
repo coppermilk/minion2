@@ -35,6 +35,7 @@ class LocalStore:
     """A Store over a local directory (``file://`` refs)."""
 
     def __init__(self, root: Path) -> None:
+        """Coerce and store the local root directory."""
         self._root = Path(root)  # coerce, so a str root never breaks `/`
 
     def fetch(self, ref: str, into: Path) -> Path:

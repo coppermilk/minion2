@@ -81,6 +81,7 @@ class ClassifyCopy(Step):
     """
 
     def __init__(self, cfg: Settings, deps: CatchDeps) -> None:
+        """Keep the settings and injected dependencies."""
         self._cfg = cfg
         self._deps = deps
 

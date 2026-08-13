@@ -66,6 +66,7 @@ class CallService(Step):
     """
 
     def __init__(self, spec: ServiceCall) -> None:
+        """Keep the service-call spec."""
         self._spec = spec
 
     def process(self, job: Job) -> Verdict:
@@ -153,6 +154,7 @@ class JobClient:
     """
 
     def __init__(self, spec: ServiceCall) -> None:
+        """Keep the service-call spec for the polling variant."""
         self._spec = spec
 
     def run(

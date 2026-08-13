@@ -61,6 +61,7 @@ class EmbeddingCache:
     """
 
     def __init__(self, cfg: Settings) -> None:
+        """Resolve the embedding cache path and the scan cap."""
         self._file = cfg.regen / '_embeddings.npz'
         self._cap = cfg.max_embedding_scan
 

@@ -69,6 +69,7 @@ class JobStore:
     """Thread-safe registry of a service's async jobs."""
 
     def __init__(self) -> None:
+        """Start an empty, lock-guarded job registry."""
         self._jobs: dict[str, _Job] = {}
         self._lock = threading.Lock()
 

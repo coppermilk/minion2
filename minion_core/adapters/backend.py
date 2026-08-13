@@ -44,6 +44,7 @@ class BackendToggle:
     """
 
     def __init__(self, cfg: Settings) -> None:
+        """Resolve the backend state file and the default choice."""
         self._path = cfg.state / 'model.backend'
         self._default = (
             cfg.model_backend if cfg.model_backend in CHOICES else LOCAL

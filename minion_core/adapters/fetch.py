@@ -338,6 +338,7 @@ class FetchLink(Step):
     """
 
     def __init__(self, cfg: Settings) -> None:
+        """Keep the settings for the fetch step."""
         self._cfg = cfg
 
     def process(self, job: Job) -> Verdict:

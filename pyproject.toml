@@ -86,9 +86,6 @@ ignore = [
     'EM101',
     'EM102',
     'TRY003',
-    # Constructors are field assignments; the class docstring is the
-    # documentation point (one concept, one name).
-    'D107',
     # Noun-phrase summaries ("The chat allow-list ...") are the house
     # docstring style; imperative mood is not a safety property.
     'D401',

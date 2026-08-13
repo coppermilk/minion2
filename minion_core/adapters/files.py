@@ -194,6 +194,7 @@ class BudgetWriter:
     """
 
     def __init__(self, target: Path, budget: int) -> None:
+        """Open a budgeted write toward ``target``'s part file."""
         self._target = target
         self._budget = budget
         self._tmp = target.with_name(target.name + '.part')
@@ -234,6 +235,7 @@ class BatchLock:
     """
 
     def __init__(self, path: Path) -> None:
+        """Bind the lock file path; nothing is held yet."""
         self._path = path
         self._held = False
 
@@ -694,6 +696,7 @@ class Shelve(Sink):
         *,
         by_result: bool = False,
     ) -> None:
+        """Keep the archive dir and the source-ref resolver."""
         self._into = into
         self._locate = locate
         self._by_result = by_result

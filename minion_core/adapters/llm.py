@@ -210,6 +210,7 @@ class GeminiBackend:
     name = 'gemini'
 
     def __init__(self, spec: LlmSpec) -> None:
+        """Keep the LLM spec for the Gemini backend."""
         self._spec = spec
 
     def vision_json(self, prompt: str, image: Path) -> str:
@@ -325,6 +326,7 @@ class RestoreBackground(Step):
     """
 
     def __init__(self, spec: LlmSpec) -> None:
+        """Keep the LLM spec for the repaint step."""
         self._spec = spec
 
     def process(self, job: Job) -> Verdict:

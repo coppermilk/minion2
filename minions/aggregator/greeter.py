@@ -128,6 +128,7 @@ class Greeter:
         path: Path,
         on_event: Callable[[tuple[int, int, bool, bool]], None] | None = None,
     ) -> None:
+        """Bind the client, params, state path and event sink."""
         self.client = client
         self.params = params
         self.path = path

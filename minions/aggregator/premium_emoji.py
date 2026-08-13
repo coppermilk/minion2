@@ -169,6 +169,7 @@ class RichText:
     """
 
     def __init__(self) -> None:
+        """Start an empty premium-emoji message builder."""
         self._parts: list[str] = []
         self._entities: list[TypeMessageEntity] = []
         self._offset = 0

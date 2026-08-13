@@ -148,6 +148,7 @@ class OffsetStore:
     """Telegram high-water mark on disk (STATE; REQ-DATA-003)."""
 
     def __init__(self, path: Path) -> None:
+        """Bind the offset file path."""
         self._path = path
 
     def read(self) -> int:
@@ -173,6 +174,7 @@ class TgChannel:
     """
 
     def __init__(self, api: TgApi) -> None:
+        """Keep the Telegram API handle for this channel."""
         self._api = api
 
     def send_text(self, origin: Origin, text: str) -> None:
@@ -549,6 +551,7 @@ class TgCommands(_TgSource):
     def __init__(
         self, api: TgApi, spec: TgSpec, handle: Callable[[str], str]
     ) -> None:
+        """Keep the API, spec and the text->reply handler."""
         super().__init__(api, spec)
         self._handle = handle
 

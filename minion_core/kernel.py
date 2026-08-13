@@ -189,6 +189,7 @@ class Source(Stage):
     """
 
     def __init__(self, depth: int = QUEUE_DEPTH) -> None:
+        """Set the belt depth and arm the stop flag."""
         self._depth = depth
         self._stop = threading.Event()
 
@@ -316,6 +317,7 @@ class Reply(Sink):
     """Send ``verdict.reply`` back through the bot's channel."""
 
     def __init__(self, channel: Channel) -> None:
+        """Keep the channel used to send the reply."""
         self._channel = channel
 
     def handle(self, env: Envelope) -> None:
@@ -328,6 +330,7 @@ class SendResult(Sink):
     """Send the delivered result file(s) through the channel."""
 
     def __init__(self, channel: Channel) -> None:
+        """Keep the channel used to send result files."""
         self._channel = channel
 
     def handle(self, env: Envelope) -> None:
@@ -352,6 +355,7 @@ class ArchiveTo(Sink):
     """Move a delivered result into an archive directory."""
 
     def __init__(self, into: Path) -> None:
+        """Record the archive directory to move results into."""
         self._into = into
 
     def handle(self, env: Envelope) -> None:
@@ -382,6 +386,7 @@ class DisposeSource(Sink):
         self,
         locate: Callable[[Origin], Path | None] = _ref_path,
     ) -> None:
+        """Keep the ref->path resolver for the consumed source."""
         self._locate = locate
 
     def handle(self, env: Envelope) -> None:
@@ -402,6 +407,7 @@ class RouteOrigin(Sink):
     """
 
     def __init__(self, tg: Sink, loc: Sink) -> None:
+        """Keep the per-origin sinks (tg and loc)."""
         self._tg = tg
         self._loc = loc
 
@@ -415,6 +421,7 @@ class SeenPaths:
     """Thread-safe LRU set of already-emitted paths (bounded)."""
 
     def __init__(self, cap: int) -> None:
+        """Start an empty LRU set bounded to ``cap`` paths."""
         self._cap = cap
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._lock = threading.Lock()
@@ -465,6 +472,7 @@ class Folder(Source):
     """
 
     def __init__(self, spec: FolderSpec, seen: SeenPaths) -> None:
+        """Bind the folder spec and the shared seen-set."""
         super().__init__()
         self._spec = spec
         self._seen = seen

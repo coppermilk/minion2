@@ -951,6 +951,7 @@ class Aggregator:
     """Groups platform messages by title and posts the collected links."""
 
     def __init__(self, client: TelegramClient, config: Config) -> None:
+        """Load the constants and wire the aggregator's state."""
         here = Path(__file__)
         self.client = client
         self.config = config

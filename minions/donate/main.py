@@ -185,6 +185,7 @@ class DonateBot:
     """Listen for /donate and render the shout-out to the configured chat."""
 
     def __init__(self, client: TelegramClient, chat: int | None) -> None:
+        """Keep the client and target chat; load the texts."""
         self.client = client
         self.chat = chat  # fixed target, or None to reply where invoked
         self.consts = _load_constants(Path(__file__).with_name(CONSTANTS_FILE))

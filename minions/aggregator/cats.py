@@ -378,6 +378,7 @@ class CatBrain:
         path: Path,
         rng: random.Random | None = None,
     ) -> None:
+        """Bind the params and state path; seed the RNG."""
         self.params = params
         self.path = path
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto

@@ -68,6 +68,7 @@ class SortTrigger(Step):
     """
 
     def __init__(self, cfg: Settings, deps: SortDeps) -> None:
+        """Keep the settings and injected dependencies."""
         self._cfg = cfg
         self._deps = deps
 

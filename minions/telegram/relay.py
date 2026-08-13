@@ -118,6 +118,7 @@ class TgStatus(Sink):
     """
 
     def __init__(self, channel: TgChannel, style: Style) -> None:
+        """Keep the channel and the reply style."""
         self._channel = channel
         self._style = style
 
@@ -199,6 +200,7 @@ class CallServiceLive(Step):
     def __init__(
         self, spec: ServiceCall, channel: TgChannel, style: Style
     ) -> None:
+        """Wire the job client, channel and reply style."""
         self._client = JobClient(spec)
         self._channel = channel
         self._style = style
@@ -305,6 +307,7 @@ class Dispatch(Sink):
     """
 
     def __init__(self, pool: ThreadPoolExecutor, tail: _Tail) -> None:
+        """Keep the worker pool and the shared tail."""
         self._pool = pool
         self._tail = tail
 
