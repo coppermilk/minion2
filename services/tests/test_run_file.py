@@ -108,7 +108,7 @@ def test_run_file_zips_a_directory_result(
         path.write_bytes(name.encode())
         refs.append(f'file://{path}')
 
-    def fake_run(_req, _store, _make) -> ServiceResult:
+    def fake_run(_req: object, _store: object, _make: object) -> ServiceResult:
         return ServiceResult(None, 'delivered', '', 1.0, refs)
 
     monkeypatch.setattr(svc_http, 'run_service', fake_run)

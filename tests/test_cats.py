@@ -19,13 +19,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _ts(**over: object):
+def _ts(**over: object) -> object:
     base = {'year': 2026, 'month': 7, 'day': 15, 'hour': 12, 'minute': 0}
     base.update(over)
     return datetime(**base, tzinfo=UTC).timestamp()
 
 
-def _params(**over: object):
+def _params(**over: object) -> object:
     base = {
         'enabled': True,
         'comments_in_discussion': False,
@@ -76,7 +76,7 @@ def _params(**over: object):
     return cats.CatParams(**base)
 
 
-def _brain(tmp_path: Path, seed=0, **over: object):
+def _brain(tmp_path: Path, seed: int = 0, **over: object) -> object:
     brain = cats.CatBrain(
         _params(**over), tmp_path / 'cats_state.json', random.Random(seed)
     )

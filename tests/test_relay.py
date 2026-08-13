@@ -212,7 +212,9 @@ def test_call_service_live_edits_the_bar_on_progress(tmp_path: Path) -> None:
     live = CallServiceLive(ServiceCall('http://x'), channel, STYLES['blocks'])  # type: ignore[arg-type]
 
     class _FakeClient:
-        def run(self, src, _dest, on_progress):
+        def run(
+            self, src: object, _dest: object, on_progress: object
+        ) -> object:
             from minion_core.progress import Report
 
             on_progress(Report(50))

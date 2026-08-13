@@ -84,7 +84,7 @@ class _ScriptedApi(TgApi):
         self.offsets_asked: list[int] = []
         self.owner: TgLinks | None = None
 
-    def call(self, method: str, params: dict[str, Any]) -> Any:
+    def call(self, method: str, params: dict[str, object]) -> object:
         assert method == 'getUpdates'
         self.offsets_asked.append(params['offset'])
         if self.owner is not None:
@@ -134,7 +134,7 @@ class _RecordApi(TgApi):
         self.name_seen: str | None = None
         self.messages: list[str] = []
 
-    def call(self, method: str, params: dict[str, Any]) -> Any:
+    def call(self, method: str, params: dict[str, object]) -> object:
         assert method == 'sendMessage'
         self.messages.append(params['text'])
         return {}
@@ -291,7 +291,7 @@ def test_commands_replies_and_emits_nothing(tmp_path: Path) -> None:
     api = _RecordApi()
     source = TgCommands(api, _spec(cfg, ('1',)), lambda text: f'got {text}')
 
-    def no_emit(_env: Any) -> None:
+    def no_emit(_env: object) -> None:
         msg = 'a command bot must not emit jobs'
         raise AssertionError(msg)
 
@@ -400,7 +400,7 @@ class _CallApi(TgApi):
         super().__init__(token='t')  # noqa: S106 -- double, not a secret
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    def call(self, method: str, params: dict[str, Any]) -> Any:
+    def call(self, method: str, params: dict[str, object]) -> object:
         self.calls.append((method, params))
         return {'message_id': 4242}
 

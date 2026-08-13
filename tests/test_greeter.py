@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _params(**over: object):
+def _params(**over: object) -> object:
     base = {
         'enabled': True,
         'channel': -100,
@@ -39,13 +39,13 @@ def _params(**over: object):
     return greeter.GreeterParams(**base)
 
 
-def _join(eid, uid):
+def _join(eid: int, uid: int) -> object:
     return types.SimpleNamespace(
         id=eid, user_id=uid, joined=True, joined_invite=False, left=False
     )
 
 
-def _leave(eid, uid):
+def _leave(eid: int, uid: int) -> object:
     return types.SimpleNamespace(
         id=eid, user_id=uid, joined=False, joined_invite=False, left=True
     )
@@ -55,37 +55,44 @@ class _PeerFloodError(Exception):
     """Its type name contains 'Flood', which greeter._dm treats as a flood."""
 
 
-async def _aiter(items):
+async def _aiter(items: list[object]) -> object:
     for item in items:
         yield item
 
 
 class _FakeClient:
-    def __init__(self, log=()) -> None:
+    def __init__(self, log: object = ()) -> None:
         self.log = list(log)  # admin-log events (SimpleNamespace)
         self.dms = []
         self.fail = {}
         self.names = {}
         self.usernames = {}
 
-    def iter_admin_log(self, _channel, *, min_id=0, join=False, leave=False):
+    def iter_admin_log(
+        self,
+        _channel: object,
+        *,
+        min_id: int = 0,
+        join: object = False,
+        leave: object = False,
+    ) -> object:
         events = [e for e in self.log if e.id > min_id]
         return _aiter(events)
 
-    async def get_entity(self, uid):
+    async def get_entity(self, uid: int) -> object:
         return types.SimpleNamespace(
             first_name=self.names.get(uid, ''),
             username=self.usernames.get(uid, ''),
         )
 
-    async def send_message(self, uid, text, **_kw: object) -> None:
+    async def send_message(self, uid: int, text: str, **_kw: object) -> None:
         exc = self.fail.get(uid)
         if exc is not None:
             raise exc
         self.dms.append((uid, text))
 
 
-def _greeter(tmp_path: Path, client, **over: object):
+def _greeter(tmp_path: Path, client: object, **over: object) -> object:
     return greeter.Greeter(client, _params(**over), tmp_path / 'g.json')
 
 
@@ -243,7 +250,7 @@ def test_cannot_read_admin_log_is_reported(tmp_path: Path) -> None:
     """Check cannot read admin log is reported."""
 
     class _NoAdmin(_FakeClient):
-        def iter_admin_log(self, _channel, **_kw: object) -> Never:
+        def iter_admin_log(self, _channel: object, **_kw: object) -> Never:
             msg = 'ChatAdminRequiredError'
             raise RuntimeError(msg)
 

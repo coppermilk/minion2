@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 def make_env_for(path: Path) -> Envelope:
+    """Build a loc-origin Envelope for the given path."""
     origin = Origin(source='loc', ref=str(path))
     return Envelope(
         Job(src=path, dest=path.parent, stem=path.stem, origin=origin)
@@ -44,11 +45,13 @@ class Fixed(Source):
     """Test dock: emits a fixed list, then ends (batch)."""
 
     def __init__(self, envs: list[Envelope], depth: int = 64) -> None:
+        """Store the envelopes to emit and the belt depth."""
         super().__init__(depth)
         self._envs = envs
         self.emitted = 0
 
     def produce(self, emit: Emit) -> None:
+        """Emit each fixed envelope, counting them."""
         for env in self._envs:
             emit(env)
             self.emitted += 1
@@ -58,6 +61,7 @@ class Boom(Step):
     """Test step: always raises."""
 
     def process(self, job: Job) -> Verdict:
+        """Raise on every job to exercise crash containment."""
         msg = 'injected fault'
         raise RuntimeError(msg)
 
@@ -66,14 +70,17 @@ class Spy(Step):
     """Test step: records what reached it, delivers unchanged."""
 
     def __init__(self) -> None:
+        """Start with an empty record of seen paths."""
         self.seen: list[Path] = []
 
     def process(self, job: Job) -> Verdict:
+        """Record the source path and deliver it unchanged."""
         self.seen.append(job.src)
         return Verdict(Disposition.DELIVERED, result=job.src)
 
 
 def drain(graph: Stage) -> list[Envelope]:
+    """Run the graph to exhaustion and return the envelopes."""
     return list(graph(iter(())))
 
 

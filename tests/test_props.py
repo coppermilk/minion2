@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import pytest
 
 
-def _boom(_query) -> Never:
+def _boom(_query: object) -> Never:
     msg = 'embed_text should not be called on a name match'
     raise AssertionError(msg)
 

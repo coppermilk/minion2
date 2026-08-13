@@ -60,7 +60,7 @@ def test_job_reports_live_progress() -> None:
     from minion_core.kernel import Verdict
 
     class _Prog(Step):
-        def process(self, job):
+        def process(self, job: object) -> object:
             sink = progress.current()
             if sink is not None:
                 sink(progress.Report(42))

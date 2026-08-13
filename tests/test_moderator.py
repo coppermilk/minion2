@@ -23,12 +23,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _handler(cfg):
+def _handler(cfg: object) -> object:
     log = bot_logger('moderator', cfg.logs)
     return _Moderator(cfg, BackendToggle(cfg), TgApi(''), log)
 
 
-def _classified_jpeg(cfg, name):
+def _classified_jpeg(cfg: object, name: str) -> object:
     from PIL import Image
 
     from minion_core.adapters.files import tag_fandom

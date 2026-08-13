@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 class _Resp:
     """A minimal requests.Response double."""
 
-    def __init__(self, body, status=200) -> None:
+    def __init__(self, body: object, status: int = 200) -> None:
         self._body = body
         self.status_code = status
 
@@ -30,7 +30,7 @@ class _Resp:
 
             raise requests.HTTPError(str(self.status_code))
 
-    def json(self):
+    def json(self) -> object:
         return self._body
 
 
@@ -40,7 +40,7 @@ def test_text_payload_and_parse(monkeypatch: pytest.MonkeyPatch) -> None:
 
     seen = {}
 
-    def fake_post(url, json, timeout):
+    def fake_post(url: str, json: dict[str, object], timeout: float) -> object:
         seen['url'] = url
         seen['json'] = json
         return _Resp({'message': {'content': '{"props": ["Wand"]}'}})
@@ -65,7 +65,7 @@ def test_vision_includes_base64_image(
     img.write_bytes(b'\x89PNG\r\n')
     seen = {}
 
-    def fake_post(url, json, timeout):
+    def fake_post(url: str, json: dict[str, object], timeout: float) -> object:
         seen['json'] = json
         return _Resp({'message': {'content': '{}'}})
 
@@ -80,7 +80,7 @@ def test_network_error_is_llm_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unreachable model FAILS clean (the belt then punts)."""
     import requests
 
-    def boom(url, json, timeout) -> Never:
+    def boom(url: str, json: dict[str, object], timeout: float) -> Never:
         msg = 'connection refused'
         raise requests.ConnectionError(msg)
 
@@ -111,7 +111,7 @@ def test_timeout_is_distinct_from_unreachable(
     """A read timeout says 'too slow' + names the fix, not 'unreachable'."""
     import requests
 
-    def slow(url, json, timeout) -> Never:
+    def slow(url: str, json: dict[str, object], timeout: float) -> Never:
         msg = 'read timed out'
         raise requests.ReadTimeout(msg)
 

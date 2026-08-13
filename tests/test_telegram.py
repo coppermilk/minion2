@@ -34,7 +34,7 @@ def test_supervisor_restarts_the_belt_until_stopped(
     stop = threading.Event()
     runs: list[int] = []
 
-    def fake_run_once(_bot, _log) -> None:
+    def fake_run_once(_bot: object, _log: object) -> None:
         runs.append(1)
         if len(runs) >= 3:
             stop.set()

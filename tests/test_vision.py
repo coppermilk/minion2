@@ -59,9 +59,11 @@ class CountingEmbedder:
     """Embedder double: deterministic vectors, counted calls."""
 
     def __init__(self) -> None:
+        """Start with an empty call log."""
         self.calls: list[str] = []
 
     def __call__(self, path: Path) -> Vector:
+        """Return a deterministic vector and log the call."""
         self.calls.append(path.name)
         return _vec(abs(hash(path.name)) % 1000)
 
