@@ -18,7 +18,9 @@ import os
 import re
 import socket
 from dataclasses import dataclass
+from datetime import UTC
 from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
@@ -114,7 +116,7 @@ def sanitize(name: str) -> str:
 
 def _today() -> date:
     """Local calendar date -- the naming intent (not a UTC instant)."""
-    return date.today()
+    return datetime.now(UTC).astimezone().date()
 
 
 def stem(name: str, source: str, when: date | None = None) -> str:

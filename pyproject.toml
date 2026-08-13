@@ -119,9 +119,6 @@ convention = 'pep257'
 'minion_core/adapters/*' = ['PLC0415']
 'minions/svc/*/step.py' = ['PLC0415']
 'services/*' = ['PLC0415']
-# week_clean lazy-imports the vision stack (torch) only on a run that fires,
-# not every polled minute -- the same optional-vendor pattern as above.
-'minions/bots/week_clean/main.py' = ['PLC0415']
 # create_app registers its route handlers inline; McCabe counts each as a
 # branch, so its score is route count, not real nesting -- a metric misfit.
 'services/http.py' = ['PLC0415', 'C901']
@@ -131,12 +128,6 @@ convention = 'pep257'
 'minion_core/adapters/fetch.py' = ['S603']
 'minion_core/adapters/video.py' = ['S603']
 'minions/bots/print/main.py' = ['S603']
-# files.py names outputs by the LOCAL calendar day; DTZ011 wants a tz-aware
-# instant, but the naming intent is the machine's day, not a UTC point.
-'minion_core/adapters/files.py' = ['DTZ011']
-# serve.py binds all interfaces INSIDE the container (S104); the host maps the
-# port per compose. Binding 127.0.0.1 would make the service unreachable.
-'services/serve.py' = ['S104']
 # Tests are pytest tooling, so these rules target what IS the medium here:
 # S101 (assert is how pytest checks), S311 (a seeded PRNG is the
 # deterministic-fixture medium, never crypto), SLF001 (white-box tests read

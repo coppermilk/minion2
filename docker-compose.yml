@@ -52,6 +52,9 @@ x-service: &svc
   pull_policy: missing
   environment: &svc-env
     SKIN: http
+    # Bind all interfaces inside the container so the host can map the port;
+    # serve.py defaults to 127.0.0.1 when this is unset (local dev).
+    SERVICE_HOST: 0.0.0.0
   # A small logs-only volume (NOT /data): each service writes
   # /logs/<step>.log, so svc logs are readable as files, not just via
   # docker logs. Independent of DRIVE_NAS, so a missing media mount never

@@ -52,7 +52,9 @@ def run_service_app(step: str, make: Make) -> int:
     sys.stdout.flush()
     uvicorn.run(
         create_app(step, make),
-        host='0.0.0.0',
+        # Localhost by default; the container opens all interfaces via
+        # SERVICE_HOST=0.0.0.0 (compose), the host maps the port.
+        host=os.environ.get('SERVICE_HOST', '127.0.0.1'),
         port=port,
         log_config=None,
     )

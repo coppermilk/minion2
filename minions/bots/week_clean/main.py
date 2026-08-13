@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from minion_core.adapters.admin import admin_config
+from minion_core.adapters.library import clean_week
 from minion_core.adapters.schedule import cron_due
 from minion_core.kernel import bot_logger
 from minion_core.settings import load
@@ -45,10 +46,6 @@ def main(env: Mapping[str, str] | None = None) -> int:
     if not cron_due(admin.get('week_clean_cron'), datetime.now(tz=UTC)):
         log.info('skipped reason=not_scheduled')
         return 0
-    # Lazy: importing clean_week pulls the vision stack (torch); do it
-    # only on a run that actually fires, not on every polled minute.
-    from minion_core.adapters.library import clean_week
-
     clean_week(cfg, log)
     return 0
 
