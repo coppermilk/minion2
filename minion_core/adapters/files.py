@@ -486,6 +486,7 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     *,
     font_path: str = '',
     cyrillic_font_path: str = '',
+    ref_size: tuple[int, int] = (1080, 1350),
     base_size: int = 40,
     amount_scale: float = 0.75,
     text_color: tuple[int, int, int] = (255, 255, 255),
@@ -493,15 +494,17 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
 ) -> Path:
     r"""Draw each label centered in its shelf slot over the cabinet photo.
 
-    ``slots`` are (x, y, w, h) boxes; ``labels[i]`` is placed in ``slots[i]``
-    (extra labels or slots are ignored, so a half-full cabinet just leaves the
-    spare shelves blank). A label is ``"nick"`` or ``"nick\n$amount"``: the
-    NICK is sized to fill its shelf, and the amount is drawn under it one step
-    smaller (``amount_scale``), the pair block-centered. Each LINE picks its
-    font: ``font_path`` normally, ``cyrillic_font_path`` for a line with
-    Cyrillic (the primary font may be Latin-only, e.g. Aleo). A soft shadow
-    keeps the white text legible on any wood tone. Pillow stays behind this
-    file (REQ-ARC-002); callers pass paths only.
+    ``slots`` are (x, y, w, h) boxes measured against ``ref_size`` (the
+    reference photo the coordinates were laid out on); they are scaled to the
+    actual template's pixel size, so re-uploading the same cabinet photo at a
+    different resolution keeps every label aligned. ``labels[i]`` is placed in
+    ``slots[i]`` (extra labels or slots are ignored). A label is ``"nick"`` or
+    ``"nick\n$amount"``: the NICK is sized to fill its shelf and the amount is
+    drawn under it one step smaller (``amount_scale``), the pair centered.
+    Each LINE picks its font: ``font_path`` normally, ``cyrillic_font_path``
+    for a line with Cyrillic (when the primary font is Latin-only). A soft
+    shadow keeps the white text legible on any wood tone. Pillow stays behind
+    this file (REQ-ARC-002); callers pass paths only.
     """
     from PIL import Image
     from PIL import ImageDraw
@@ -511,13 +514,20 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     draw = ImageDraw.Draw(img)
     latin = _first_font_path(font_path)
     cyrillic = _first_font_path(cyrillic_font_path) or latin
+    ref_w, ref_h = ref_size
+    scale_x = img.width / ref_w if ref_w else 1.0
+    scale_y = img.height / ref_h if ref_h else 1.0
 
     def font_for(text: str) -> str:
         return cyrillic if _has_cyrillic(text) else latin
 
-    for label, (x, y, width, height) in zip(labels, slots, strict=False):
+    for label, box in zip(labels, slots, strict=False):
         if not label:
             continue
+        x = box[0] * scale_x
+        y = box[1] * scale_y
+        width = box[2] * scale_x
+        height = box[3] * scale_y
         nick, _, amount = label.partition('\n')
         max_w = width * _CABINET_FIT_W
         center_x = x + width / 2

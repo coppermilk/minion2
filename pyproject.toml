@@ -51,8 +51,8 @@ minion_core = ['py.typed', 'prompts/*.md']
 # The wishlist bot's Russian thank-you template: same rationale.
 'minions.bots.wishlist' = ['messages.json']
 # The aggregator's editable post constants (UTF-8 texts + premium emoji ids),
-# the cabinet ("/comod") template photo (assets/), and the shelf-label fonts
-# (assets/fonts/): Aleo for Latin, Roboto Slab for Cyrillic.
+# the cabinet ("/comod") template photo (assets/), and the shelf-label font
+# (assets/fonts/): Liberation Serif Bold Italic (Latin + Cyrillic).
 'minions.aggregator' = [
     'aggregator_constants.json',
     'assets/*',

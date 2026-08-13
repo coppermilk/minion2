@@ -56,6 +56,7 @@ class ComodParams:
     font_cyrillic_path: str  # fallback TTF for lines with Cyrillic (may be '')
     base_size: int
     amount_scale: float  # the amount font relative to the fitted nick font
+    ref_size: tuple[int, int]  # (w, h) the slot coords were measured against
     slots: tuple[tuple[int, int, int, int], ...]
     max_shelves: int
     text_color: tuple[int, int, int]
@@ -180,6 +181,10 @@ def load_comod_params(data: dict[str, object]) -> ComodParams:
         font_cyrillic_path=str(render.get('font_cyrillic', '')),
         base_size=int(render.get('base_size') or 40),
         amount_scale=float(render.get('amount_scale') or 0.75),
+        ref_size=(
+            int(render.get('ref_width') or 1080),
+            int(render.get('ref_height') or 1350),
+        ),
         slots=slots,
         max_shelves=int(render.get('max_shelves') or len(slots)),
         text_color=_color(render.get('text_color'), (255, 255, 255)),

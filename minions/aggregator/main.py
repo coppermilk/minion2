@@ -1713,6 +1713,7 @@ class Aggregator:
                 cyrillic_font_path=self._comod_font(
                     self._comod.font_cyrillic_path
                 ),
+                ref_size=self._comod.ref_size,
                 base_size=self._comod.base_size,
                 amount_scale=self._comod.amount_scale,
                 text_color=self._comod.text_color,
