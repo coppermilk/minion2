@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING
 
 from minions.telegram import main as telegram
 
+_BACKOFF_2X = 4.0
+_MAX_RUNS = 3
+
 if TYPE_CHECKING:
     import pytest
 
@@ -22,7 +25,7 @@ def test_next_delay_resets_after_a_healthy_run() -> None:
 def test_next_delay_grows_and_caps() -> None:
     """A fast exit doubles the delay, up to the cap."""
     cap = telegram._BACKOFF_MAX_SEC
-    assert telegram._next_delay(2.0, ran_sec=0.0) == 4.0
+    assert telegram._next_delay(2.0, ran_sec=0.0) == _BACKOFF_2X
     assert telegram._next_delay(999.0, ran_sec=0.0) == cap
 
 
@@ -36,10 +39,10 @@ def test_supervisor_restarts_the_belt_until_stopped(
 
     def fake_run_once(_bot: object, _log: object) -> None:
         runs.append(1)
-        if len(runs) >= 3:
+        if len(runs) >= _MAX_RUNS:
             stop.set()
 
     monkeypatch.setattr(telegram, '_run_once', fake_run_once)
     bot = telegram._Bot(cfg=None, name='x', env={})  # type: ignore[arg-type]
     telegram._supervise(bot, stop)
-    assert len(runs) == 3  # ran, restarted, restarted -> stop
+    assert len(runs) == _MAX_RUNS  # ran, restarted, restarted -> stop

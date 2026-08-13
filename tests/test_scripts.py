@@ -11,6 +11,8 @@ from typing import ClassVar
 from minion_core.adapters import scripts
 from tests.conftest import make_cfg
 
+_TWO_DOCS = 2
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -83,7 +85,7 @@ def test_gdoc_shortcuts_read_and_combined(
     assert text == 'SCENE CAKE\n\nSCENE OFFICE'
     assert calls == ['one', 'two']
     # Read-only: the sender's shortcuts are never deleted.
-    assert len(list(cfg.inbox.glob('*.gdoc'))) == 2
+    assert len(list(cfg.inbox.glob('*.gdoc'))) == _TWO_DOCS
 
 
 def test_a_cached_doc_is_not_refetched(

@@ -13,6 +13,11 @@ from minion_core.adapters.vision import nearest_fandom
 from minion_core.adapters.vision import nearest_named
 from tests.conftest import make_cfg
 
+_HIGH_SIM = 0.9
+_SENTINEL = -2.0
+_THREE = 3
+_TWO_CALLS = 2
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -35,7 +40,7 @@ def test_nearest_named_returns_key_and_score() -> None:
     }
     key, sim = nearest_named(np.array([0.9, 0.1], dtype=np.float32), library)
     assert key == 'F|PrWand'
-    assert sim > 0.9
+    assert sim > _HIGH_SIM
 
 
 def test_pool1d_flattens_multidim_keeps_1d() -> None:
@@ -52,7 +57,7 @@ def test_nearest_named_empty_library() -> None:
     """An empty library yields no key and a sentinel score."""
     key, sim = nearest_named(np.array([1.0, 0.0], dtype=np.float32), {})
     assert key == ''
-    assert sim == -2.0
+    assert sim == _SENTINEL
 
 
 class CountingEmbedder:
@@ -83,7 +88,7 @@ def test_refresh_is_incremental(tmp_path: Path) -> None:
     embed = CountingEmbedder()
     first = cache.refresh(cfg.pictures, embed)
     assert sorted(first) == ['A|1.jpg', 'A|2.jpg']
-    assert len(embed.calls) == 2
+    assert len(embed.calls) == _TWO_CALLS
 
     (cfg.pictures / 'A' / '2.jpg').unlink()
     (cfg.pictures / 'A' / '3.jpg').write_bytes(b'3.jpg')
@@ -98,7 +103,7 @@ def test_scan_is_capped(tmp_path: Path) -> None:
     cfg = make_cfg(tmp_path / 'drive', MAX_EMBEDDING_SCAN='3')
     _library(cfg, {'A': [f'{i}.jpg' for i in range(10)]})
     got = EmbeddingCache(cfg).refresh(cfg.pictures, CountingEmbedder())
-    assert len(got) == 3
+    assert len(got) == _THREE
 
 
 def test_move_between_fandoms_never_recomputes(tmp_path: Path) -> None:
@@ -128,7 +133,7 @@ def test_invalidate_forces_full_rebuild(tmp_path: Path) -> None:
     cache.refresh(cfg.pictures, embed)
     cache.invalidate()
     assert list(cache.refresh(cfg.pictures, embed)) == ['A|1.jpg']
-    assert embed.calls.count('1.jpg') == 2  # recomputed after wipe
+    assert embed.calls.count('1.jpg') == _TWO_CALLS  # recomputed after wipe
 
 
 def test_unknown_is_not_a_reference_fandom(tmp_path: Path) -> None:
@@ -248,7 +253,7 @@ def test_hash_collision_is_detected_and_split(
     with caplog.at_level('CRITICAL', logger='vision'):
         got = EmbeddingCache(cfg).refresh(cfg.pictures, embed)
     assert 'hash_collision' in caplog.text
-    assert len(embed.calls) == 2  # split: each content embedded alone
+    assert len(embed.calls) == _TWO_CALLS  # split: each content embedded alone
     assert not np.array_equal(got['A|one.jpg'], got['B|two.jpg'])
 
 

@@ -13,6 +13,8 @@ import pytest
 from minion_core.adapters.llm import LlmError
 from minion_core.adapters.ollama import OllamaBackend
 
+_HTTP_ERROR = 400
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -25,7 +27,7 @@ class _Resp:
         self.status_code = status
 
     def raise_for_status(self) -> None:
-        if self.status_code >= 400:
+        if self.status_code >= _HTTP_ERROR:
             import requests
 
             raise requests.HTTPError(str(self.status_code))

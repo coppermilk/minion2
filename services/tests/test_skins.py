@@ -20,6 +20,8 @@ from minion_core.adapters.files import Deliver
 from services.http import create_app
 from services.mcp_server import create_server
 
+_OK = 200
+
 if TYPE_CHECKING:
     from minion_core.kernel import Stage
     from minion_core.settings import Settings
@@ -33,7 +35,7 @@ def test_healthz() -> None:
     """Check healthz."""
     client = TestClient(create_app('deliver', _deliver))
     reply = client.get('/healthz')
-    assert reply.status_code == 200
+    assert reply.status_code == _OK
     assert reply.json() == {'status': 'ok', 'step': 'deliver'}
 
 
@@ -44,7 +46,7 @@ def test_run_file_delivers_the_bytes() -> None:
         '/run-file',
         files={'file': ('a.bin', b'hello', 'application/octet-stream')},
     )
-    assert reply.status_code == 200
+    assert reply.status_code == _OK
     assert reply.content == b'hello'  # deliver just relocates the bytes
 
 

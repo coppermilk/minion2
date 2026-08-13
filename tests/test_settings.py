@@ -11,6 +11,8 @@ import pytest
 from minion_core.settings import BadConfigError
 from minion_core.settings import load
 
+_TIMEOUT_SEC = 5
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -42,7 +44,7 @@ def test_defaults_and_coercion(tmp_path: Path) -> None:
             'YTDLP_PLAYER_CLIENTS': 'web,android',
         }
     )
-    assert cfg.download_timeout_sec == 5
+    assert cfg.download_timeout_sec == _TIMEOUT_SEC
     assert cfg.ytdlp_player_clients == ('web', 'android')
     assert cfg.quota_bytes > 0
     assert cfg.source_dirs == ()

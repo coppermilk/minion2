@@ -17,6 +17,15 @@ from typing import Never
 
 from minions.aggregator import greeter
 
+_CAP_PER_CYCLE = 2
+_CHANNEL_ID = -999
+_DM_TODAY = 3
+_EVENT_2 = 2
+_EVENT_3 = 3
+_THREE_DMS = 3
+_TWO_DMS = 2
+_UID_5 = 5
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -118,7 +127,7 @@ def test_first_run_is_a_silent_baseline(tmp_path: Path) -> None:
     asyncio.run(g.sync())
     assert client.dms == []  # the backlog is NEVER greeted
     assert g.state.started
-    assert g.state.last_event_id == 2  # cursor at the newest event
+    assert g.state.last_event_id == _EVENT_2  # cursor at the newest event
 
 
 def test_join_gets_welcome_and_leave_gets_farewell(tmp_path: Path) -> None:
@@ -130,7 +139,7 @@ def test_join_gets_welcome_and_leave_gets_farewell(tmp_path: Path) -> None:
     asyncio.run(g.sync())
     assert (3, 'hi') in client.dms
     assert (100, 'bye') in client.dms
-    assert g.state.last_event_id == 3
+    assert g.state.last_event_id == _EVENT_3
 
 
 def test_returning_subscriber_gets_welcome_back(tmp_path: Path) -> None:
@@ -141,12 +150,12 @@ def test_returning_subscriber_gets_welcome_back(tmp_path: Path) -> None:
     client.log += [_leave(2, 5)]
     asyncio.run(g.sync())
     assert (5, 'bye') in client.dms
-    assert 5 in g.state.left
+    assert _UID_5 in g.state.left
     client.log += [_join(3, 5)]  # 5 comes back
     asyncio.run(g.sync())
     assert (5, 'whale') in client.dms  # welcome_back, not the plain welcome
     assert (5, 'hi') not in client.dms
-    assert 5 not in g.state.left
+    assert _UID_5 not in g.state.left
 
 
 def test_name_placeholder_is_filled(tmp_path: Path) -> None:
@@ -189,11 +198,13 @@ def test_over_cap_events_wait_for_the_next_day(tmp_path: Path) -> None:
     client.log += [_join(2, 10), _join(3, 11)]  # 2 joins, cap is 1
     asyncio.run(g.sync())
     assert len(client.dms) == 1  # one greeted today
-    assert g.state.last_event_id == 2  # cursor advanced only past the greeted
+    assert (
+        g.state.last_event_id == _EVENT_2
+    )  # cursor advanced only past the greeted
     g.state.dm_today = 0  # a new day resets the counter
     asyncio.run(g.sync())
-    assert len(client.dms) == 2  # the deferred event is greeted now
-    assert g.state.last_event_id == 3
+    assert len(client.dms) == _TWO_DMS  # the deferred event is greeted now
+    assert g.state.last_event_id == _EVENT_3
 
 
 def test_per_run_cap_limits_one_cycle(tmp_path: Path) -> None:
@@ -203,9 +214,9 @@ def test_per_run_cap_limits_one_cycle(tmp_path: Path) -> None:
     asyncio.run(g.sync())  # baseline
     client.log += [_join(2, 10), _join(3, 11), _join(4, 12)]
     asyncio.run(g.sync())
-    assert len(client.dms) == 2  # capped per cycle
+    assert len(client.dms) == _CAP_PER_CYCLE  # capped per cycle
     asyncio.run(g.sync())  # the rest on the next poll
-    assert len(client.dms) == 3
+    assert len(client.dms) == _THREE_DMS
 
 
 def test_privacy_failure_is_skipped_but_committed(tmp_path: Path) -> None:
@@ -218,7 +229,9 @@ def test_privacy_failure_is_skipped_but_committed(tmp_path: Path) -> None:
     asyncio.run(g.sync())
     assert (10, 'hi') not in client.dms
     assert (11, 'hi') in client.dms
-    assert g.state.last_event_id == 3  # privacy is committed, not retried
+    assert (
+        g.state.last_event_id == _EVENT_3
+    )  # privacy is committed, not retried
 
 
 def test_flood_defers_the_rest(tmp_path: Path) -> None:
@@ -241,9 +254,9 @@ def test_empty_farewell_sends_nothing_on_leave(tmp_path: Path) -> None:
     asyncio.run(g.sync())
     client.log += [_leave(2, 5)]
     asyncio.run(g.sync())
-    assert not any(uid == 5 for uid, _ in client.dms)
-    assert 5 in g.state.left  # still remembered for a welcome_back
-    assert g.state.last_event_id == 2  # committed
+    assert not any(uid == _UID_5 for uid, _ in client.dms)
+    assert _UID_5 in g.state.left  # still remembered for a welcome_back
+    assert g.state.last_event_id == _EVENT_2  # committed
 
 
 def test_cannot_read_admin_log_is_reported(tmp_path: Path) -> None:
@@ -282,7 +295,7 @@ def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
     fresh = greeter.Greeter(client, _params(), path)
     assert fresh.state.started
     assert fresh.state.last_event_id == 1
-    assert fresh.state.dm_today == 3
+    assert fresh.state.dm_today == _DM_TODAY
 
 
 def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
@@ -322,4 +335,4 @@ def test_load_greeter_params_defaults_off_with_target_channel() -> None:
     """Check load greeter params defaults off with target channel."""
     params = greeter.load_greeter_params({}, -999)
     assert params.enabled is False
-    assert params.channel == -999
+    assert params.channel == _CHANNEL_ID

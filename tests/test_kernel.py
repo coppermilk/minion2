@@ -23,6 +23,9 @@ from minion_core.kernel import Verdict
 from minion_core.kernel import bot_logger
 from minion_core.kernel import run
 
+_HUNDRED = 100
+_TWO = 2
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
@@ -88,7 +91,7 @@ def test_step_crash_yields_failed_never_kills(tmp_path: Path) -> None:
     """REQ-KRN-001: a raising Step becomes FAILED, daemon survives."""
     envs = [make_env_for(tmp_path / 'a.txt'), make_env_for(tmp_path / 'b.txt')]
     out = drain(Fixed(envs) >> Boom())
-    assert len(out) == 2
+    assert len(out) == _TWO
     for env in out:
         assert env.verdict is not None
         assert env.verdict.disposition is Disposition.FAILED
@@ -157,7 +160,7 @@ def test_merge_two_docks_one_belt(tmp_path: Path) -> None:
     right = Fixed([make_env_for(tmp_path / 'r.txt')])
     spy = Spy()
     out = drain((left | right) >> spy)
-    assert len(out) == 2
+    assert len(out) == _TWO
     assert {p.name for p in spy.seen} == {'l.txt', 'r.txt'}
 
 
@@ -200,7 +203,7 @@ def test_seen_paths_is_thread_safe(tmp_path: Path) -> None:
     seen = SeenPaths(cap=1000)
     wins: list[Path] = []
     _race(_adder(seen, tmp_path, wins))
-    assert len(wins) == 100
+    assert len(wins) == _HUNDRED
 
 
 def _non_file_streams(logger: logging.Logger) -> list[logging.Handler]:

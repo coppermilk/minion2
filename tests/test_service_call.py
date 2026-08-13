@@ -26,6 +26,9 @@ from minion_core.kernel import Disposition
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
 
+_MID_PCT = 50
+_SECOND_POLL = 2
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
@@ -152,7 +155,7 @@ class _JobHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'VIDEO')
             return
         type(self).polls += 1
-        if type(self).polls < 2:  # first poll: still downloading
+        if type(self).polls < _SECOND_POLL:  # first poll: still downloading
             self._json(200, {'status': 'running', 'progress': 50})
         else:  # second poll: delivered
             self._json(
@@ -203,7 +206,7 @@ def test_job_client_streams_progress_then_delivers(
     assert verdict.result is not None
     assert verdict.result.name == 'Clip.mp4'  # named by Content-Disposition
     assert verdict.result.read_bytes() == b'VIDEO'
-    assert 50 in [r.pct for r in seen]  # the live percent was observed
+    assert _MID_PCT in [r.pct for r in seen]  # the live percent was observed
 
 
 def test_job_client_unreachable_is_failed(tmp_path: Path) -> None:

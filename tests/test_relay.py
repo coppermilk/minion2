@@ -15,6 +15,9 @@ from minions.telegram.progress_style import STYLES
 from minions.telegram.relay import _ACKS
 from minions.telegram.relay import TgStatus
 
+_FIVE_ITEMS = 5
+_TWO_EDITS = 2
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -68,7 +71,7 @@ def test_status_delivers_then_marks_done(tmp_path: Path) -> None:
     )
     TgStatus(channel, STYLES['blocks']).handle(env)  # type: ignore[arg-type]
     assert channel.files == [result]  # the video was sent
-    assert len(channel.edits) == 2  # sending, then done
+    assert len(channel.edits) == _TWO_EDITS  # sending, then done
     assert channel.edits[-1]  # a non-empty terminal 'done'
 
 
@@ -200,7 +203,7 @@ def test_dispatch_runs_many_jobs_concurrently(tmp_path: Path) -> None:
     for _ in range(5):
         dispatch.handle(Envelope(_job(tmp_path)))
     pool.shutdown(wait=True)  # let every worker finish
-    assert len(shelve.seen) == 5  # all five processed off the belt
+    assert len(shelve.seen) == _FIVE_ITEMS  # all five processed off the belt
 
 
 def test_call_service_live_edits_the_bar_on_progress(tmp_path: Path) -> None:

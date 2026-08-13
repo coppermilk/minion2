@@ -15,6 +15,8 @@ from minions.svc.frames.step import ExtractFrames
 from minions.svc.frames.step import _timecode
 from tests.conftest import make_cfg
 
+_STRIDE = 5
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -23,7 +25,7 @@ if TYPE_CHECKING:
 
 def test_stride_is_hardcoded_to_five() -> None:
     """Every 5th frame -- an invariant, deliberately not a knob."""
-    assert STRIDE == 5
+    assert STRIDE == _STRIDE
 
 
 def test_timecode_omits_empty_leading_fields() -> None:

@@ -24,6 +24,8 @@ from minions.bots.print.main import build as build_print
 from tests.conftest import make_cfg
 from tests.conftest import make_env
 
+_BRIGHT = 200
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -126,7 +128,7 @@ def test_hide_boxes_black_mode_blacks_out(tmp_path: Path) -> None:
     with Image.open(out) as img:
         assert img.getpixel((16, 16)) == (0, 0, 0)
         corner = img.getpixel((2, 2))
-    assert all(c > 200 for c in corner)  # outside stays bright
+    assert all(c > _BRIGHT for c in corner)  # outside stays bright
 
 
 def test_hide_boxes_blur_mode_smears(tmp_path: Path) -> None:

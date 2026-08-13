@@ -35,6 +35,9 @@ from minions.bots.donations.main import render_bed
 from tests.conftest import make_cfg
 from tests.conftest import make_env
 
+_TWICE = 2
+_TWO_POSTS = 2
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -82,7 +85,7 @@ def test_render_carries_who_how_much_and_the_question() -> None:
     alert = Donation(1, 'Streamlabs', 'Bob', '500', 'RUB', 'why sky blue?')
     text = render(templates, alert)
     assert 'Bob' in text  # the donor, also drawn in the bed
-    assert text.count('Bob') == 2  # the line AND the bed
+    assert text.count('Bob') == _TWICE  # the line AND the bed
     assert '500' in text
     assert templates['cur_RUB'] in text  # RUB -> the ruble sign
     assert '500' + templates['cur_RUB'] in text  # amount+symbol, no gap
@@ -233,7 +236,7 @@ def test_alerts_posts_new_advances_and_never_duplicates(
     src.drain_once()
     assert sender.sent == [('@chan', 'A:1'), ('@chan', 'B:2')]
     src.drain_once()  # the per-feed high-water persisted
-    assert len(sender.sent) == 2  # no duplicate posts
+    assert len(sender.sent) == _TWO_POSTS  # no duplicate posts
 
 
 def test_alerts_drains_each_feed_on_its_own_cursor(tmp_path: Path) -> None:
@@ -259,7 +262,7 @@ def test_alerts_drains_each_feed_on_its_own_cursor(tmp_path: Path) -> None:
     assert (cfg.state / 'donations-streamlabs.offset').exists()
     assert (cfg.state / 'donations-revolut.offset').exists()
     src.drain_once()  # both cursors persisted independently
-    assert len(sender.sent) == 2  # no re-posts
+    assert len(sender.sent) == _TWO_POSTS  # no re-posts
 
 
 def test_build_and_main_idle_without_config(tmp_path: Path) -> None:

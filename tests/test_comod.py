@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING
 
 from minions.aggregator import comod
 
+_MAX_SHELVES = 10
+_THREE_SHELVES = 3
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -103,7 +106,7 @@ def test_labels_for_dedups_a_typed_dollar() -> None:
 def test_load_comod_params_defaults() -> None:
     """An absent 'comod' section yields the prototype's 10-shelf layout."""
     params = comod.load_comod_params({})
-    assert params.max_shelves == len(params.slots) == 10
+    assert params.max_shelves == len(params.slots) == _MAX_SHELVES
     assert params.text_color == (255, 255, 255)
     assert params.slots[0] == (440, 73, 325, 206)
 
@@ -126,7 +129,7 @@ def test_load_comod_params_reads_section() -> None:
     assert params.donate_link == 'http://d'
     assert params.template_path == 't.jpg'
     assert params.slots == ((1, 2, 3, 4),)
-    assert params.max_shelves == 3
+    assert params.max_shelves == _THREE_SHELVES
     assert params.text_color == (1, 2, 3)
 
 

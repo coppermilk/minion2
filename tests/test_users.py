@@ -13,6 +13,12 @@ from typing import TYPE_CHECKING
 
 from minions.aggregator.users import UserStore
 
+_FIRST_SEEN = 100.0
+_LAST_SEEN = 200.0
+_TOP_COUNT = 3
+_TWO_MSGS = 2
+_USER_ID = 7
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -81,8 +87,8 @@ def test_message_counts_and_dedups(tmp_path: Path) -> None:
     assert store.record_message(7, -100, 5002, text='again')
     # a rescan re-sees msg 5001 -> same (chat, msg_id), no double count
     assert not store.record_message(7, -100, 5001, text='hi')
-    assert store.summary()['messages'] == 2
-    assert store.history(7)['user']['msg_count'] == 2
+    assert store.summary()['messages'] == _TWO_MSGS
+    assert store.history(7)['user']['msg_count'] == _TWO_MSGS
 
 
 def test_message_stores_the_text(tmp_path: Path) -> None:
@@ -90,7 +96,7 @@ def test_message_stores_the_text(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.record_message(7, -100, 5001, root=1002, text='love this one')
     rows = store.top_commenters()
-    assert rows[0]['user_id'] == 7
+    assert rows[0]['user_id'] == _USER_ID
     assert rows[0]['msg_count'] == 1
 
 
@@ -100,8 +106,8 @@ def test_first_seen_is_kept_across_updates(tmp_path: Path) -> None:
     store.record_message(7, -100, 5001, text='a', ts=100.0)
     store.record_message(7, -100, 5002, text='b', ts=200.0)
     user = store.history(7)['user']
-    assert user['first_seen'] == 100.0
-    assert user['last_seen'] == 200.0
+    assert user['first_seen'] == _FIRST_SEEN
+    assert user['last_seen'] == _LAST_SEEN
 
 
 # --- identity enrichment
@@ -139,7 +145,7 @@ def test_top_commenters_orders_by_count(tmp_path: Path) -> None:
     store.record_message(9, -100, 7000, text='y')  # 1 msg
     top = store.top_commenters(limit=5)
     assert [r['user_id'] for r in top] == [7, 9]
-    assert top[0]['msg_count'] == 3
+    assert top[0]['msg_count'] == _TOP_COUNT
 
 
 def test_recent_events_newest_first(tmp_path: Path) -> None:

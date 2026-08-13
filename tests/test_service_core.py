@@ -18,6 +18,8 @@ from services.core import ServiceRequest
 from services.core import run_service
 from services.store import LocalStore
 
+_THREE_FRAMES = 3
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -88,7 +90,7 @@ def test_directory_result_stores_each_file(
     result = run_service(ServiceRequest('frames', ref), store, _frames)
 
     assert result.disposition == 'delivered'
-    assert len(result.outputs) == 3  # one ref per frame
+    assert len(result.outputs) == _THREE_FRAMES  # one ref per frame
     assert result.output_ref is None  # many outputs, no single object
     got = store.fetch(result.outputs[0], tmp_path / 'out')
     assert got.read_bytes() == b'jpg'

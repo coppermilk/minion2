@@ -12,6 +12,8 @@ import ast
 import sys
 from pathlib import Path
 
+_PAIR = 2
+
 REPO = Path(__file__).resolve().parent.parent
 
 VENDORS = {
@@ -79,7 +81,7 @@ def _identity(parts: tuple[str, ...]) -> tuple[str, ...] | None:
         return None
     rest = parts[1:]
     if rest[:1] == ('svc',) or rest[:1] == ('bots',):
-        return tuple(rest[:2]) if len(rest) >= 2 else None
+        return tuple(rest[:_PAIR]) if len(rest) >= _PAIR else None
     if rest[:1] == ('telegram',):
         return ('telegram',)
     return None

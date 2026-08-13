@@ -27,6 +27,11 @@ from minion_core.adapters.tg import spool_of
 from minion_core.kernel import Origin
 from tests.conftest import make_cfg
 
+_OFFSET = 4242
+_OFFSET_8 = 8
+_OFFSET_9 = 9
+_TWO_UPDATES = 2
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -39,7 +44,7 @@ def test_offset_round_trip(tmp_path: Path) -> None:
     assert store.read() == 0
     store.write(4242)
     reborn = OffsetStore(tmp_path / 'state' / 'bot.offset')
-    assert reborn.read() == 4242
+    assert reborn.read() == _OFFSET
 
 
 def test_corrupt_offset_is_loud_then_replays(tmp_path: Path) -> None:
@@ -113,7 +118,7 @@ def test_links_source_spools_and_advances_offset(
     job = out[0].job
     assert job.src.suffix == '.url'
     assert job.src.read_text(encoding='ascii').startswith('https://')
-    assert OffsetStore(cfg.state / 't.offset').read() == 8
+    assert OffsetStore(cfg.state / 't.offset').read() == _OFFSET_8
     assert spool_of(job.origin) == job.src
 
 
@@ -246,7 +251,9 @@ def test_malformed_update_never_wedges_the_dock(
     out = list(source(iter(())))
     assert len(out) == 1  # the good update was served
     assert out[0].job.origin.ref.startswith('1:9:')
-    assert OffsetStore(cfg.state / 't.offset').read() == 9  # past poison
+    assert (
+        OffsetStore(cfg.state / 't.offset').read() == _OFFSET_9
+    )  # past poison
 
 
 def test_scrub_redacts_the_token() -> None:
@@ -366,7 +373,7 @@ def test_two_whitelisted_users_served_without_crosstalk(
     source = TgLinks(api, _spec(cfg, ('1', '22')))
     api.owner = source
     out = list(source(iter(())))
-    assert len(out) == 2
+    assert len(out) == _TWO_UPDATES
     chats = [env.job.origin.ref.split(':', 1)[0] for env in out]
     assert chats == ['1', '22']  # each reply routes to its own chat
 
@@ -420,7 +427,7 @@ def test_announce_start_returns_the_ack_message_id(tmp_path: Path) -> None:
     api = _CallApi()
     source = TgMedia(api, spec)
     got = source.announce_start({'chat': {'id': 1}, 'message_id': 9})
-    assert got == 4242
+    assert got == _OFFSET
     assert api.calls[0][0] == 'sendMessage'
 
 

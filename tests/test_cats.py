@@ -15,6 +15,15 @@ from typing import TYPE_CHECKING
 
 from minions.aggregator import cats
 
+_BURST_SIZE = 6
+_HALF = 0.5
+_MIGRATED_AT = 555.0
+_NEAR_ONE = 0.99
+_SESSION_AT = 999.0
+_THREAD_ROOT = 800
+_TWO_CATS = 2
+_WATCH_POSTS = 4
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -136,7 +145,7 @@ def test_recency_penalty_suppresses_then_recovers() -> None:
     assert cats._recency_penalty(500.0, 1000.0) < cats._recency_penalty(
         5000.0, 1000.0
     )
-    assert cats._recency_penalty(1e9, 1000.0) > 0.99
+    assert cats._recency_penalty(1e9, 1000.0) > _NEAR_ONE
 
 
 def test_just_used_cat_is_avoided(tmp_path: Path) -> None:
@@ -228,7 +237,7 @@ def test_engaged_commenter_gets_a_faster_reaction(tmp_path: Path) -> None:
 def test_double_sends_a_second_cat(tmp_path: Path) -> None:
     """Check double sends a second cat."""
     brain = _brain(tmp_path, double_prob=1.0)
-    assert len(brain.emit()) == 2
+    assert len(brain.emit()) == _TWO_CATS
 
 
 def test_skip_probability_drops_a_comment(tmp_path: Path) -> None:
@@ -350,9 +359,9 @@ def test_learned_uptime_adapts_beyond_the_declared_window(
     brain.mark_alive(_ts(hour=20))
     brain.mark_alive(_ts(hour=20))
     brain.mark_alive(_ts(hour=20))
-    assert brain._alive_fraction(_ts(hour=20)) > 0.5  # learned it is up then
+    assert brain._alive_fraction(_ts(hour=20)) > _HALF  # learned it is up then
     # And an hour it was never seen up decays toward zero.
-    assert brain._alive_fraction(_ts(hour=12)) < 0.5
+    assert brain._alive_fraction(_ts(hour=12)) < _HALF
 
 
 def test_effective_weight_gates_when_host_is_down(tmp_path: Path) -> None:
@@ -422,7 +431,7 @@ def test_due_now_sets_all_pending_to_now(tmp_path: Path) -> None:
     due = brain.due_now()
     assert len(due) == 1
     assert due[0].when == _ts()  # pulled back to now
-    assert due[0].root == 800  # thread root preserved
+    assert due[0].root == _THREAD_ROOT  # thread root preserved
 
 
 # --- emit records the send
@@ -475,7 +484,7 @@ def test_pick_avoids_repeats_within_a_burst(tmp_path: Path) -> None:
     )
     brain = _brain(tmp_path, like_pool=pool)
     picks = [brain.pick_like(f'k{i}')[0].emoji_id for i in range(6)]
-    assert len(set(picks)) == 6  # no repeats across the burst
+    assert len(set(picks)) == _BURST_SIZE  # no repeats across the burst
 
 
 def test_pick_records_recency_and_persists(tmp_path: Path) -> None:
@@ -595,10 +604,10 @@ def test_state_round_trips_through_disk(tmp_path: Path) -> None:
     brain.state.next_session_at = 999.0
     brain._save()
     fresh = cats.CatBrain(_params(), path, random.Random(0))
-    assert fresh.state.mood == 0.5
+    assert fresh.state.mood == _HALF
     assert fresh.state.catted == {'x', 'y'}
     assert fresh.state.cat_last == {'1': 123.0}
-    assert fresh.state.next_session_at == 999.0
+    assert fresh.state.next_session_at == _SESSION_AT
 
 
 def test_corrupt_state_starts_fresh(tmp_path: Path) -> None:
@@ -615,7 +624,9 @@ def test_old_state_migrates_next_earliest_to_session(tmp_path: Path) -> None:
     path = tmp_path / 'cats_state.json'
     path.write_text('{"next_earliest": 555.0}', encoding='utf-8')
     brain = cats.CatBrain(_params(), path, random.Random(0))
-    assert brain.state.next_session_at == 555.0  # migrated from the old key
+    assert (
+        brain.state.next_session_at == _MIGRATED_AT
+    )  # migrated from the old key
 
 
 # --- loader
@@ -625,7 +636,7 @@ def test_load_cat_params_defaults_to_disabled() -> None:
     """Check load cat params defaults to disabled."""
     params = cats.load_cat_params({})
     assert params.enabled is False
-    assert params.watch_posts == 4
+    assert params.watch_posts == _WATCH_POSTS
 
 
 def test_load_cat_params_reads_the_pool() -> None:

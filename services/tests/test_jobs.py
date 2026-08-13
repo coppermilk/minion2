@@ -19,6 +19,11 @@ from fastapi.testclient import TestClient
 from minion_core.adapters.files import Deliver
 from services.http import create_app
 
+_ACCEPTED = 202
+_CONFLICT = 409
+_NOT_FOUND = 404
+_PROGRESS_PCT = 42
+
 if TYPE_CHECKING:
     import pytest
 
@@ -44,7 +49,7 @@ def test_async_file_job() -> None:
         '/jobs/file',
         files={'file': ('a.bin', b'bytes', 'application/octet-stream')},
     )
-    assert submit.status_code == 202
+    assert submit.status_code == _ACCEPTED
     job_id = submit.json()['job_id']
 
     done = _wait_done(client, job_id)
@@ -73,14 +78,14 @@ def test_job_reports_live_progress() -> None:
     )
     done = _wait_done(client, submit.json()['job_id'])
     assert done['status'] == 'done'
-    assert done['progress'] == 42  # the reported percent survived
+    assert done['progress'] == _PROGRESS_PCT  # the reported percent survived
 
 
 def test_unknown_job_is_404() -> None:
     """Check unknown job is 404."""
     client = _client()
-    assert client.get('/jobs/nope').status_code == 404
-    assert client.get('/jobs/nope/result').status_code == 409
+    assert client.get('/jobs/nope').status_code == _NOT_FOUND
+    assert client.get('/jobs/nope/result').status_code == _CONFLICT
 
 
 def test_job_fires_webhook_callback(monkeypatch: pytest.MonkeyPatch) -> None:

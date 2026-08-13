@@ -32,6 +32,9 @@ from minion_core.kernel import Origin
 from minion_core.kernel import Verdict
 from tests.conftest import make_cfg
 
+_NAME_CAP = 80
+_QUOTA_LEFT = 40
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -63,7 +66,7 @@ def test_usd_prim_sanitizes_untrusted_names() -> None:
     assert usd_prim('42Wallpaper') == 'X42Wallpaper'
     assert usd_prim('') == 'Item'
     assert usd_prim('***') == 'Item'
-    assert len(usd_prim('A' * 500)) <= 80
+    assert len(usd_prim('A' * 500)) <= _NAME_CAP
 
 
 def test_shelve_folders_result_and_keeps_original(tmp_path: Path) -> None:
@@ -170,7 +173,7 @@ def test_free_quota_counts_the_tree(tmp_path: Path) -> None:
     """REQ-RES-002 pre-check side: quota tracks tree bytes."""
     cfg = make_cfg(tmp_path / 'drive', QUOTA_BYTES='100')
     (cfg.inbox / 'a.bin').write_bytes(b'x' * 60)
-    assert free_quota(cfg) == 40
+    assert free_quota(cfg) == _QUOTA_LEFT
 
 
 def test_second_batch_invocation_is_locked_out(
@@ -252,7 +255,7 @@ def test_sanitize_strips_only_dangerous_chars() -> None:
     assert sanitize('a/b\\c:d?e') == 'a_b_c_d_e'
     assert sanitize('') == 'item'
     assert sanitize('///') == 'item'
-    assert len(sanitize('x' * 500)) <= 80
+    assert len(sanitize('x' * 500)) <= _NAME_CAP
 
 
 def test_deliver_moves_collision_free(tmp_path: Path) -> None:

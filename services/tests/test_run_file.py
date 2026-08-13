@@ -20,6 +20,11 @@ from minion_core.adapters.files import Deliver
 from minions.svc.censor_blur import step as blur
 from services.http import create_app
 
+_BOX_HI = 48
+_BOX_LO = 16
+_OK = 200
+_UNPROCESSABLE = 422
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -51,7 +56,7 @@ def test_run_file_round_trips_a_file(tmp_path: Path) -> None:
         '/run-file',
         files={'file': ('a.bin', b'hello', 'application/octet-stream')},
     )
-    assert reply.status_code == 200
+    assert reply.status_code == _OK
     assert reply.content == b'hello'  # deliver just relocates the bytes
     assert reply.headers['x-disposition'] == 'delivered'
     assert float(reply.headers['x-run-ms']) >= 0.0
@@ -69,7 +74,10 @@ def test_run_file_blurs_via_the_censor_blur_service(
         with Image.open(path) as image:
             width, height = image.size
         data = bytes(
-            255 if 16 <= k % width < 48 and 16 <= k // width < 48 else 0
+            255
+            if _BOX_LO <= k % width < _BOX_HI
+            and _BOX_LO <= k // width < _BOX_HI
+            else 0
             for k in range(width * height)
         )
         return Mask(width=width, height=height, data=data)
@@ -80,7 +88,7 @@ def test_run_file_blurs_via_the_censor_blur_service(
     reply = _blur_app().post(
         '/run-file', files={'file': ('p.jpg', src.read_bytes(), 'image/jpeg')}
     )
-    assert reply.status_code == 200
+    assert reply.status_code == _OK
     assert reply.headers['x-disposition'] == 'delivered'
     out = tmp_path / 'out.jpg'
     out.write_bytes(reply.content)
@@ -116,7 +124,7 @@ def test_run_file_zips_a_directory_result(
     reply = client.post(
         '/run-file', files={'file': ('v.mp4', b'video', 'video/mp4')}
     )
-    assert reply.status_code == 200
+    assert reply.status_code == _OK
     assert reply.headers['content-type'] == 'application/zip'
     names = zipfile.ZipFile(io.BytesIO(reply.content)).namelist()
     assert set(names) == {'a.jpg', 'b.jpg'}  # a folder result -> one zip
@@ -131,5 +139,5 @@ def test_run_file_422_when_the_step_skips(
     reply = _blur_app().post(
         '/run-file', files={'file': ('p.jpg', src.read_bytes(), 'image/jpeg')}
     )
-    assert reply.status_code == 422
+    assert reply.status_code == _UNPROCESSABLE
     assert 'no_person' in reply.json()['detail']  # skipped: no_person

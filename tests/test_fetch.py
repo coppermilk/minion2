@@ -17,6 +17,10 @@ from minion_core.kernel import Job
 from minion_core.kernel import Origin
 from tests.conftest import make_cfg
 
+_DONE_BYTES = 100
+_ETA_SEC = 9
+_TOTAL_BYTES = 1000
+
 if TYPE_CHECKING:
     from pathlib import Path
     from typing import Self
@@ -232,9 +236,9 @@ def test_download_streams_progress_to_the_sink(
         )
     assert got.name == 'video.mp4'
     assert [r.pct for r in seen] == [10, 55, 100]  # parsed, in order
-    assert seen[0].done_bytes == 100
-    assert seen[0].total_bytes == 1000
-    assert seen[0].eta_sec == 9
+    assert seen[0].done_bytes == _DONE_BYTES
+    assert seen[0].total_bytes == _TOTAL_BYTES
+    assert seen[0].eta_sec == _ETA_SEC
 
 
 def test_argv_forces_progress_output(tmp_path: Path) -> None:

@@ -15,6 +15,8 @@ from minion_core.adapters.llm import _parse_classification
 from minion_core.adapters.llm import _text_of
 from minion_core.adapters.llm import spec_from
 
+_THINK_BUDGET = 512
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -122,7 +124,10 @@ def test_spec_defaults() -> None:
 def test_spec_thinking_budget() -> None:
     """Reasoning is on (dynamic) by default; the budget is a knob."""
     assert spec_from({}).thinking_budget == -1
-    assert spec_from({'GEMINI_THINKING_BUDGET': '512'}).thinking_budget == 512
+    assert (
+        spec_from({'GEMINI_THINKING_BUDGET': '512'}).thinking_budget
+        == _THINK_BUDGET
+    )
     assert spec_from({'GEMINI_THINKING_BUDGET': '0'}).thinking_budget == 0
 
 

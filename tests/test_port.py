@@ -30,6 +30,8 @@ from minions.bots.print.main import PrintPdf
 from minions.telegram.relay import build as build_relay
 from tests.conftest import make_cfg
 
+_PRINT_TIMEOUT = 120
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -111,7 +113,7 @@ def test_spooler_default_stays_lp(tmp_path: Path) -> None:
     """The NAS deployment is byte-identical: default ('lp',)."""
     cfg = make_cfg(tmp_path / 'drive')
     assert cfg.print_spooler == ('lp',)
-    assert cfg.print_timeout_sec == 120
+    assert cfg.print_timeout_sec == _PRINT_TIMEOUT
 
 
 # --------------------------------------------------- REQ-DOCK-001
