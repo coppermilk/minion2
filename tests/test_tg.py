@@ -84,7 +84,7 @@ class _ScriptedApi(TgApi):
     """API double: one batch of updates, then stop the source."""
 
     def __init__(self, updates: list[dict[str, Any]]) -> None:
-        super().__init__(token='test-token')  # noqa: S106 -- double, not a secret
+        super().__init__(token='test-token')
         self._updates = updates
         self.offsets_asked: list[int] = []
         self.owner: TgLinks | None = None
@@ -135,7 +135,7 @@ class _RecordApi(TgApi):
     """API double that records downloads and sendMessage help replies."""
 
     def __init__(self) -> None:
-        super().__init__(token='t')  # noqa: S106 -- double, not a secret
+        super().__init__(token='t')
         self.name_seen: str | None = None
         self.messages: list[str] = []
 
@@ -404,7 +404,7 @@ class _CallApi(TgApi):
     """API double recording every (method, params); returns a message id."""
 
     def __init__(self) -> None:
-        super().__init__(token='t')  # noqa: S106 -- double, not a secret
+        super().__init__(token='t')
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def call(self, method: str, params: dict[str, object]) -> object:

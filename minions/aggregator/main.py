@@ -413,21 +413,20 @@ def _read_json(path: Path) -> dict[str, object]:
     fall back to built-in defaults so the aggregator still starts (posts are
     bland until it is fixed).
     """
+    # A clean one-liner (the exc text is in the message) beats a traceback for
+    # a config typo, so this logs at error level without the stack; both bad
+    # cases (parse failure, not-an-object) share the one error+defaults path,
+    # logged AFTER the except so no exception context is attached.
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, json.JSONDecodeError) as exc:
-        # A clean one-liner (exc text is in the message) beats a traceback for
-        # a config typo, so log.error, not log.exception.
-        log.error(  # noqa: TRY400
-            '%s is invalid (%s); using defaults -- fix it and restart.',
-            path.name,
-            exc,
-        )
-        return {}
-    if not isinstance(data, dict):
-        log.error('%s must be a JSON object; using defaults.', path.name)
-        return {}
-    return data
+        reason = f'{path.name} is invalid ({exc})'
+    else:
+        if isinstance(data, dict):
+            return data
+        reason = f'{path.name} must be a JSON object'
+    log.error('%s; using defaults -- fix it and restart.', reason)
+    return {}
 
 
 # Every premium emoji lives in ONE top-level "emoji" array in the JSON, each

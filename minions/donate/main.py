@@ -94,19 +94,19 @@ def _read_json(path: Path) -> dict[str, object]:
     one-line error naming the file, then fall back to built-in defaults so the
     bot still starts (shout-outs are bland until it is fixed).
     """
+    # A config typo wants a line, not a trace: log at error level without the
+    # stack, AFTER the except (so no exception context attaches). Both bad
+    # cases -- parse failure and not-an-object -- share one error path.
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, json.JSONDecodeError) as exc:
-        log.error(  # noqa: TRY400 -- a config typo wants a line, not a trace
-            '%s is invalid (%s); using defaults -- fix it and restart.',
-            path.name,
-            exc,
-        )
-        return {}
-    if not isinstance(data, dict):
-        log.error('%s must be a JSON object; using defaults.', path.name)
-        return {}
-    return data
+        reason = f'{path.name} is invalid ({exc})'
+    else:
+        if isinstance(data, dict):
+            return data
+        reason = f'{path.name} must be a JSON object'
+    log.error('%s; using defaults -- fix it and restart.', reason)
+    return {}
 
 
 def _load_constants(path: Path) -> Consts:

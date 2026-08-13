@@ -10,6 +10,7 @@ never a catalog of every other service.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,7 +35,8 @@ def run_service_app(step: str, make: Make) -> int:
     if skin == 'mcp':
         from services.mcp_server import create_server
 
-        print(f'service {step} starting (mcp)', flush=True)  # noqa: T201
+        sys.stdout.write(f'service {step} starting (mcp)\n')
+        sys.stdout.flush()
         create_server(step, make).run()
         return 0
     import uvicorn
@@ -46,7 +48,8 @@ def run_service_app(step: str, make: Make) -> int:
     # even if a logging handler is misconfigured. log_config=None hands
     # uvicorn's own access/error logs to our root stdout handler (from
     # bot_logger) instead of uvicorn's, so everything lands in one place.
-    print(f'service {step} starting on :{port}', flush=True)  # noqa: T201
+    sys.stdout.write(f'service {step} starting on :{port}\n')
+    sys.stdout.flush()
     uvicorn.run(
         create_app(step, make),
         host='0.0.0.0',  # noqa: S104 -- bound inside the container; expose per compose

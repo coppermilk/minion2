@@ -128,7 +128,7 @@ convention = 'pep257'
 # internals on purpose), ARG (a test double must match a signature it does
 # not use), PLC0415 (the same lazy-vendor loads). Everything else --
 # docstrings, annotations, named constants -- is satisfied in the tests.
-'tests/*' = ['S101', 'S311', 'SLF001', 'ARG', 'PLC0415']
+'tests/*' = ['S101', 'S311', 'SLF001', 'ARG', 'PLC0415', 'S106']
 'services/tests/*' = ['S101', 'ARG', 'PLC0415']
 # Operator CLIs whose stdout IS the product: login.py prints where it wrote
 # the session file; dump_emoji_ids.py prints each premium emoji id;
