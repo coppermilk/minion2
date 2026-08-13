@@ -32,7 +32,7 @@ COMOD_TTL_SEC = 7 * 24 * 3600
 # full-width slot, three rows of paired cubbies, then three wide lower shelves.
 # Each is (x, y, w, h). A different template photo needs different boxes.
 _DEFAULT_SLOTS: tuple[tuple[int, int, int, int], ...] = (
-    (490, 73, 275, 206),
+    (460, 73, 305, 206),
     (340, 303, 199, 150),
     (560, 296, 198, 159),
     (341, 476, 198, 147),
