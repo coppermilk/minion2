@@ -58,7 +58,8 @@ class Boom(Step):
     """Test step: always raises."""
 
     def process(self, job: Job) -> Verdict:
-        raise RuntimeError('injected fault')
+        msg = 'injected fault'
+        raise RuntimeError(msg)
 
 
 class Spy(Step):

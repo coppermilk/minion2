@@ -104,7 +104,8 @@ def test_status_reports_a_failed_upload_instead_of_hanging(
 
     class _FailSend(_FakeChannel):
         def send_file(self, _origin: Origin, _path: Path) -> None:
-            raise TgError('file is too big')
+            msg = 'file is too big'
+            raise TgError(msg)
 
     channel = _FailSend()
     result = tmp_path / 'big.mp4'
@@ -179,7 +180,8 @@ def test_tail_worker_crash_is_contained(tmp_path: Path) -> None:
 
     class _Boom:
         def process(self, _job: Job) -> Verdict:
-            raise RuntimeError('boom')
+            msg = 'boom'
+            raise RuntimeError(msg)
 
     tail = _Tail(_Boom(), _RecSink(), _RecSink())  # type: ignore[arg-type]
     tail.run(Envelope(_job(tmp_path)))  # must not raise

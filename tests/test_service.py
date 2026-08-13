@@ -42,7 +42,8 @@ class _Boom(Step):
     """A test Step that raises: the guard must catch it."""
 
     def process(self, job: Job) -> Verdict:
-        raise RuntimeError('boom')
+        msg = 'boom'
+        raise RuntimeError(msg)
 
 
 def test_job_carries_a_service_origin(tmp_path: Path) -> None:

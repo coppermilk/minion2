@@ -90,7 +90,8 @@ def test_print_bot_missing_printer_is_failed(
     cfg = make_cfg(tmp_path / 'drive')
 
     def no_lp(*a: object, **kw: object) -> object:
-        raise FileNotFoundError('lp')
+        msg = 'lp'
+        raise FileNotFoundError(msg)
 
     monkeypatch.setattr(subprocess, 'run', no_lp)
     pdf = cfg.print_queue / 'doc.pdf'

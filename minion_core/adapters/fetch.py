@@ -80,13 +80,16 @@ def guard(url: str) -> None:
     """
     parts = urlsplit(url)
     if parts.scheme not in ('http', 'https'):
-        raise BlockedError(f'ssrf_blocked: scheme {parts.scheme!r}')
+        msg = f'ssrf_blocked: scheme {parts.scheme!r}'
+        raise BlockedError(msg)
     host = parts.hostname
     if not host:
-        raise BlockedError('ssrf_blocked: no host')
+        msg = 'ssrf_blocked: no host'
+        raise BlockedError(msg)
     for addr in _addresses(host):
         if not addr.is_global:
-            raise BlockedError(f'ssrf_blocked: {host} -> {addr}')
+            msg = f'ssrf_blocked: {host} -> {addr}'
+            raise BlockedError(msg)
 
 
 def _addresses(host: str) -> list[IPv4Address | IPv6Address]:
@@ -94,7 +97,8 @@ def _addresses(host: str) -> list[IPv4Address | IPv6Address]:
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError as exc:
-        raise BlockedError(f'ssrf_blocked: unresolvable {host}') from exc
+        msg = f'ssrf_blocked: unresolvable {host}'
+        raise BlockedError(msg) from exc
     return [ip_address(str(info[4][0])) for info in infos]
 
 
@@ -108,7 +112,8 @@ def download(url: str, into: Path, cfg: Settings) -> Path:
     """
     guard(url)
     if free_quota(cfg) <= 0:
-        raise QuotaExceededError('quota_exceeded: pre-transfer')
+        msg = 'quota_exceeded: pre-transfer'
+        raise QuotaExceededError(msg)
     into.mkdir(parents=True, exist_ok=True)
     return _run_ytdlp(_argv(url, into, cfg), cfg.download_timeout_sec)
 
@@ -193,7 +198,8 @@ def _run_ytdlp(argv: list[str], timeout: float) -> Path:
             reader.join(timeout=1.0)
     if proc.returncode != 0:
         tail = ' | '.join(err_pump.tail) or ' | '.join(out_pump.tail)
-        raise FetchFailedError(f'stale_extractor: {tail[-500:]}')
+        msg = f'stale_extractor: {tail[-500:]}'
+        raise FetchFailedError(msg)
     return _output_path(out_pump.tail)
 
 
@@ -205,7 +211,8 @@ def _output_path(lines: deque[str]) -> Path:
     """The last stdout line (the --print filepath)."""
     got = Path(lines[-1]) if lines else Path()
     if not got.is_file():
-        raise FetchFailedError('stale_extractor: no output file')
+        msg = 'stale_extractor: no output file'
+        raise FetchFailedError(msg)
     return got
 
 
@@ -259,7 +266,8 @@ def download_direct(url: str, target: Path, cfg: Settings) -> Path:
     guard(url)
     budget = free_quota(cfg)
     if budget <= 0:
-        raise QuotaExceededError('quota_exceeded: pre-transfer')
+        msg = 'quota_exceeded: pre-transfer'
+        raise QuotaExceededError(msg)
     deadline = monotonic() + cfg.download_timeout_sec
     opener = urllib.request.build_opener(_GuardedRedirect())
     writer = BudgetWriter(target, budget)
@@ -283,7 +291,8 @@ def _pull(resp: _Readable, writer: BudgetWriter, deadline: float) -> None:
     """Copy chunks under the wall-time bound (REQ-RES-001)."""
     while True:
         if monotonic() > deadline:
-            raise TimeoutError('download_timeout: direct transfer')
+            msg = 'download_timeout: direct transfer'
+            raise TimeoutError(msg)
         chunk = resp.read(CHUNK)
         if not chunk:
             return

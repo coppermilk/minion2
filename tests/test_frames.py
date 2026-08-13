@@ -86,7 +86,8 @@ def test_missing_fps_is_probe_failed(
     clip.write_bytes(b'video')
 
     def refuse(path: Path, timeout: int) -> float:
-        raise video.ProbeError('probe_failed: clip.mp4')
+        msg = 'probe_failed: clip.mp4'
+        raise video.ProbeError(msg)
 
     monkeypatch.setattr(video, 'probe_fps', refuse)
     job = Job(

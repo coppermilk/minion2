@@ -74,7 +74,8 @@ def test_network_error_is_llm_error(monkeypatch):
     import requests
 
     def boom(url, json, timeout):
-        raise requests.ConnectionError('connection refused')
+        msg = 'connection refused'
+        raise requests.ConnectionError(msg)
 
     monkeypatch.setattr(requests, 'post', boom)
     with pytest.raises(LlmError, match='ollama_unreachable'):
@@ -100,7 +101,8 @@ def test_timeout_is_distinct_from_unreachable(monkeypatch):
     import requests
 
     def slow(url, json, timeout):
-        raise requests.ReadTimeout('read timed out')
+        msg = 'read timed out'
+        raise requests.ReadTimeout(msg)
 
     monkeypatch.setattr(requests, 'post', slow)
     with pytest.raises(LlmError, match='ollama_timeout') as caught:

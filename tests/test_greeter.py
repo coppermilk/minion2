@@ -229,7 +229,8 @@ def test_empty_farewell_sends_nothing_on_leave(tmp_path: Path) -> None:
 def test_cannot_read_admin_log_is_reported(tmp_path: Path) -> None:
     class _NoAdmin(_FakeClient):
         def iter_admin_log(self, _channel, **_kw):
-            raise RuntimeError('ChatAdminRequiredError')
+            msg = 'ChatAdminRequiredError'
+            raise RuntimeError(msg)
 
     g = _greeter(tmp_path, _NoAdmin())
     summary = asyncio.run(g.sync_now())

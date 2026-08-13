@@ -131,7 +131,8 @@ def test_interrupted_write_leaves_no_torn_file(
     target.write_bytes(b'original')
 
     def explode(self: object, _dst: object) -> None:
-        raise OSError('injected crash')
+        msg = 'injected crash'
+        raise OSError(msg)
 
     monkeypatch.setattr('pathlib.Path.replace', explode)
     with pytest.raises(OSError, match='injected'):

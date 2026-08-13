@@ -541,7 +541,8 @@ def next_free_path(path: Path) -> Path:
         cand = path.with_stem(f'{path.stem}_{n}')
         if not cand.exists():
             return cand
-    raise FileExistsError(f'name_collision unresolved: {path}')
+    msg = f'name_collision unresolved: {path}'
+    raise FileExistsError(msg)
 
 
 def atomic_write(path: Path, data: bytes) -> None:

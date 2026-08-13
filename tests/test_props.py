@@ -11,7 +11,8 @@ from tests.conftest import make_cfg
 
 
 def _boom(_query):
-    raise AssertionError('embed_text should not be called on a name match')
+    msg = 'embed_text should not be called on a name match'
+    raise AssertionError(msg)
 
 
 def test_report_have_and_need():

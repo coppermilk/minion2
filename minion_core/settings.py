@@ -161,7 +161,8 @@ def load(env: Mapping[str, str]) -> Settings:
 
     drive = get('DRIVE')
     if not drive:
-        raise BadConfigError('bad_config: DRIVE is required')
+        msg = 'bad_config: DRIVE is required'
+        raise BadConfigError(msg)
     return Settings(
         drive=_abs('DRIVE', drive),
         download_timeout_sec=int(get('DOWNLOAD_TIMEOUT_SEC')),
@@ -209,7 +210,8 @@ def _abs(name: str, raw: str) -> Path:
         PureWindowsPath(raw).is_absolute()
     )
     if not absolute:
-        raise BadConfigError(f'bad_config: {name} must be absolute: {raw}')
+        msg = f'bad_config: {name} must be absolute: {raw}'
+        raise BadConfigError(msg)
     return Path(raw)
 
 

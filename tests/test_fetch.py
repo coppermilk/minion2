@@ -79,7 +79,8 @@ def test_quota_pre_check_rejects_before_transfer(
     (cfg.inbox / 'fat.bin').write_bytes(b'x' * 20)
 
     def no_subprocess(*args: object, **kw: object) -> None:
-        raise AssertionError('transfer must not start')
+        msg = 'transfer must not start'
+        raise AssertionError(msg)
 
     monkeypatch.setattr(subprocess, 'run', no_subprocess)
     with pytest.raises(QuotaExceededError, match='pre-transfer'):

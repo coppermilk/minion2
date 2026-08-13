@@ -88,9 +88,11 @@ class TgApi:
             # whose message embeds the token-bearing URL -- cannot reach
             # the log via the source thread's exception handler.
             clean = _scrub(str(exc), self.token)
-            raise TgError(f'{method}: {clean}') from None
+            msg = f'{method}: {clean}'
+            raise TgError(msg) from None
         if not body.get('ok'):
-            raise TgError(f'{method}: {body.get("description")}')
+            msg = f'{method}: {body.get("description")}'
+            raise TgError(msg)
         return body['result']
 
     def download(
@@ -119,7 +121,8 @@ class TgApi:
                 chunks = resp.iter_content(CHUNK)
                 return _spool(chunks, target, spool.budget())
         except requests.RequestException as exc:
-            raise TgError(f'getFile: {_scrub(str(exc), self.token)}') from None
+            msg = f'getFile: {_scrub(str(exc), self.token)}'
+            raise TgError(msg) from None
 
 
 @dataclass(frozen=True)
@@ -221,11 +224,11 @@ class TgChannel:
                 )
             ok = resp.json().get('ok')
         except requests.RequestException as exc:
-            raise TgError(
-                f'sendDocument: {_scrub(str(exc), self._api.token)}'
-            ) from None
+            msg = f'sendDocument: {_scrub(str(exc), self._api.token)}'
+            raise TgError(msg) from None
         if not ok:
-            raise TgError(f'sendDocument: {path.name}')
+            msg = f'sendDocument: {path.name}'
+            raise TgError(msg)
 
 
 def _chat(origin: Origin) -> str:

@@ -274,7 +274,8 @@ def test_network_error_never_leaks_the_token(
     api = TgApi(token=tk)
 
     def boom(*_a: object, **_k: object) -> object:
-        raise requests.ConnectionError(f'pool error /bot{tk}/getUpdates')
+        msg = f'pool error /bot{tk}/getUpdates'
+        raise requests.ConnectionError(msg)
 
     monkeypatch.setattr(requests, 'post', boom)
     with pytest.raises(TgError) as caught:
@@ -291,7 +292,8 @@ def test_commands_replies_and_emits_nothing(tmp_path: Path) -> None:
     source = TgCommands(api, _spec(cfg, ('1',)), lambda text: f'got {text}')
 
     def no_emit(_env: Any) -> None:
-        raise AssertionError('a command bot must not emit jobs')
+        msg = 'a command bot must not emit jobs'
+        raise AssertionError(msg)
 
     source.accept(
         {'chat': {'id': 1}, 'message_id': 9, 'text': 'hello'}, no_emit

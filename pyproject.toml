@@ -81,11 +81,6 @@ ignore = [
     # Docstring style pairs: pep257 convention picks D211/D212.
     'D203',
     'D213',
-    # Message-in-raise style: short literal messages in raises are the
-    # house style; a separate msg variable adds noise, not safety.
-    'EM101',
-    'EM102',
-    'TRY003',
     # Noun-phrase summaries ("The chat allow-list ...") are the house
     # docstring style; imperative mood is not a safety property.
     'D401',

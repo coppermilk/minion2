@@ -62,7 +62,8 @@ async def main() -> None:
     api_id = os.environ.get('TELEGRAM_API_ID')
     api_hash = os.environ.get('TELEGRAM_API_HASH')
     if not api_id or not api_hash:
-        raise SystemExit('Set TELEGRAM_API_ID and TELEGRAM_API_HASH.')
+        msg = 'Set TELEGRAM_API_ID and TELEGRAM_API_HASH.'
+        raise SystemExit(msg)
 
     session_path = _resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)

@@ -49,7 +49,8 @@ def probe(path: Path, timeout_sec: int) -> float:
     try:
         return float(json.loads(out)['format']['duration'])
     except (KeyError, ValueError) as exc:
-        raise ProbeError(f'probe_failed: {path.name}') from exc
+        msg = f'probe_failed: {path.name}'
+        raise ProbeError(msg) from exc
 
 
 def probe_fps(path: Path, timeout_sec: int) -> float:
@@ -72,9 +73,11 @@ def probe_fps(path: Path, timeout_sec: int) -> float:
         num, _, den = str(rate).partition('/')
         fps = float(num) / float(den or 1)
     except (KeyError, IndexError, ValueError, ZeroDivisionError) as exc:
-        raise ProbeError(f'probe_failed: {path.name}') from exc
+        msg = f'probe_failed: {path.name}'
+        raise ProbeError(msg) from exc
     if fps <= 0:
-        raise ProbeError(f'probe_failed: {path.name}')
+        msg = f'probe_failed: {path.name}'
+        raise ProbeError(msg)
     return fps
 
 
@@ -108,7 +111,9 @@ def _run(argv: list[str], timeout_sec: int) -> str:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise ProbeError(f'probe_failed: {argv[0]} missing') from exc
+        msg = f'probe_failed: {argv[0]} missing'
+        raise ProbeError(msg) from exc
     if proc.returncode != 0:
-        raise ProbeError(f'probe_failed: {proc.stderr[-300:]}')
+        msg = f'probe_failed: {proc.stderr[-300:]}'
+        raise ProbeError(msg)
     return proc.stdout

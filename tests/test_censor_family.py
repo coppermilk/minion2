@@ -150,7 +150,8 @@ def test_restore_refusal_is_stable_code(
     s1 = _jpeg(cfg.bot_dir('restore') / 'pic_s1.jpg')
 
     def refuse(path: Path, spec: llm.LlmSpec) -> Path:
-        raise llm.LlmError('no image in restore response')
+        msg = 'no image in restore response'
+        raise llm.LlmError(msg)
 
     monkeypatch.setattr(llm, 'restore_background', refuse)
     verdict = llm.RestoreBackground(llm.spec_from({})).process(

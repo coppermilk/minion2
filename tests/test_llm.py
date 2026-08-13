@@ -127,7 +127,8 @@ class _Reply:
     @property
     def text(self) -> str | None:
         if self._blocked:
-            raise ValueError('response has no candidates (safety)')
+            msg = 'response has no candidates (safety)'
+            raise ValueError(msg)
         return self._text
 
 

@@ -126,7 +126,8 @@ class ClassifyCopy(Step):
 def build(cfg: Settings, deps: CatchDeps) -> Stage:
     """Assemble the belt: watch Downloads, classify, copy."""
     if cfg.catch_dir is None:
-        raise ValueError('bad_config: CATCH_DIR is required for catch')
+        msg = 'bad_config: CATCH_DIR is required for catch'
+        raise ValueError(msg)
     spec = FolderSpec(
         root=cfg.catch_dir,
         dest=cfg.pictures,

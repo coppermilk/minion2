@@ -200,7 +200,8 @@ def _deps(*, classify_fails: bool = False) -> CatchDeps:
 
     def classify(path: Path, hint: str) -> Classification:
         if classify_fails:
-            raise RuntimeError('llm down')
+            msg = 'llm down'
+            raise RuntimeError(msg)
         return Classification(
             fandom='Cats',
             filename='FgCatSofaCalm',

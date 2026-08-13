@@ -173,7 +173,8 @@ def next_free_prim(path: Path) -> Path:
         cand = path.with_stem(f'{path.stem}{n}')
         if not cand.exists():
             return cand
-    raise FileExistsError(f'name_collision unresolved: {path}')
+    msg = f'name_collision unresolved: {path}'
+    raise FileExistsError(msg)
 
 
 def used_bytes(root: Path) -> int:
@@ -209,7 +210,8 @@ class BudgetWriter:
         self._written += len(chunk)
         if self._written > self._budget:
             self.abort()
-            raise QuotaExceededError(f'quota_exceeded: {self._target.name}')
+            msg = f'quota_exceeded: {self._target.name}'
+            raise QuotaExceededError(msg)
         self._fh.write(chunk)
 
     def commit(self) -> Path:

@@ -155,7 +155,8 @@ def test_classified_files_do_not_retrigger_the_model(
     _jpeg(cfg.inbox / 'FgCatsCalm.jpg')
 
     def explode(path: Path, hint: str) -> Classification:
-        raise AssertionError('classified file must not re-classify')
+        msg = 'classified file must not re-classify'
+        raise AssertionError(msg)
 
     run_passes(cfg, SortDeps(classify=explode, embed=_embed))
     assert (cfg.inbox / 'FgCatsCalm.jpg').exists()
@@ -176,7 +177,8 @@ def test_classify_failure_leaves_source_for_retry(tmp_path: Path) -> None:
     pic = _jpeg(cfg.inbox / 'flaky_cat.jpg')
 
     def refuse(path: Path, hint: str) -> Classification:
-        raise LlmError('over quota')
+        msg = 'over quota'
+        raise LlmError(msg)
 
     classify_pass(cfg, SortDeps(classify=refuse, embed=_embed), '')
     assert pic.exists()
@@ -287,10 +289,12 @@ def test_idle_run_exits_fast_and_writes_nothing(tmp_path: Path) -> None:
     _seed_library(cfg)
 
     def explode(path: Path, hint: str) -> Classification:
-        raise AssertionError('idle run must not call adapters')
+        msg = 'idle run must not call adapters'
+        raise AssertionError(msg)
 
     def explode_embed(path: Path) -> Vector:
-        raise AssertionError('idle run must not call adapters')
+        msg = 'idle run must not call adapters'
+        raise AssertionError(msg)
 
     run_passes(cfg, SortDeps(classify=explode, embed=explode_embed))
     assert not (cfg.regen / '_embeddings.npz').exists()
@@ -312,7 +316,8 @@ def test_run_passes_contains_a_pass_crash(
     from minions.bots.sort import passes
 
     def boom(*_a: object) -> None:
-        raise RuntimeError('replace exploded')
+        msg = 'replace exploded'
+        raise RuntimeError(msg)
 
     monkeypatch.setattr(passes, 'replace_pass', boom)
     run_passes(cfg, DEPS)  # must not raise despite the crash

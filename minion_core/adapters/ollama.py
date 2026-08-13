@@ -89,14 +89,17 @@ class OllamaBackend:
         _LOG.info('ollama replied in %.0fs', time.monotonic() - started)
         if resp.status_code == HTTP_NOT_FOUND:
             # Server up, model absent -- the actionable one-time case.
-            raise LlmError(f'model_not_pulled: run: ollama pull {self._model}')
+            msg = f'model_not_pulled: run: ollama pull {self._model}'
+            raise LlmError(msg)
         try:
             resp.raise_for_status()
             body = resp.json()
         except requests.RequestException as exc:
-            raise LlmError(f'ollama_error: {exc}') from exc
+            msg = f'ollama_error: {exc}'
+            raise LlmError(msg) from exc
         if not isinstance(body, dict):
-            raise LlmError('ollama returned no object')
+            msg = 'ollama returned no object'
+            raise LlmError(msg)
         return body
 
 
@@ -122,5 +125,6 @@ def _content(body: dict[str, object]) -> str:
     message = body.get('message')
     text = message.get('content') if isinstance(message, dict) else None
     if not isinstance(text, str) or not text.strip():
-        raise LlmError('ollama returned no content')
+        msg = 'ollama returned no content'
+        raise LlmError(msg)
     return text

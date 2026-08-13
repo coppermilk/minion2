@@ -145,7 +145,8 @@ def _generate_text(model: str, contents: list[Any], spec: LlmSpec) -> str:
             model=model, contents=contents, config=config
         )
     except errors.APIError as exc:
-        raise LlmError(f'api_error: {exc}') from exc
+        msg = f'api_error: {exc}'
+        raise LlmError(msg) from exc
     text = _text_of(response)
     logging.getLogger('llm').info('gemini response model=%s\n%s', model, text)
     return text
@@ -181,7 +182,8 @@ def _text_of(response: _TextResponse) -> str:
     try:
         return (response.text or '').strip()
     except (ValueError, AttributeError) as exc:
-        raise LlmError(f'no_text: {exc}') from exc
+        msg = f'no_text: {exc}'
+        raise LlmError(msg) from exc
 
 
 def _generate_image(model: str, contents: list[Any], spec: LlmSpec) -> bytes:
@@ -194,7 +196,8 @@ def _generate_image(model: str, contents: list[Any], spec: LlmSpec) -> bytes:
             model=model, contents=contents
         )
     except errors.APIError as exc:
-        raise LlmError(f'api_error: {exc}') from exc
+        msg = f'api_error: {exc}'
+        raise LlmError(msg) from exc
     image = _first_image(response)
     logging.getLogger('llm').info(
         'gemini response model=%s image_bytes=%d', model, len(image)
@@ -250,9 +253,11 @@ def _parse_classification(text: str) -> Classification:
     try:
         data = json.loads(_unfence(text))
     except ValueError as exc:
-        raise LlmError(f'unparseable classify response: {exc}') from exc
+        msg = f'unparseable classify response: {exc}'
+        raise LlmError(msg) from exc
     if not isinstance(data, dict):
-        raise LlmError('classify response is not a JSON object')
+        msg = 'classify response is not a JSON object'
+        raise LlmError(msg)
     raw_fandom = _text_field(data, 'fandom')
     return Classification(
         fandom=usd_prim(raw_fandom) if raw_fandom else UNKNOWN,
@@ -279,10 +284,12 @@ def _parse_props(text: str) -> list[str]:
     try:
         data = json.loads(_unfence(text))
     except ValueError as exc:
-        raise LlmError(f'unparseable props response: {exc}') from exc
+        msg = f'unparseable props response: {exc}'
+        raise LlmError(msg) from exc
     items = data.get('props') if isinstance(data, dict) else data
     if not isinstance(items, list):
-        raise LlmError('props response has no list')
+        msg = 'props response has no list'
+        raise LlmError(msg)
     return [s.strip() for s in items if isinstance(s, str) and s.strip()]
 
 
@@ -316,7 +323,8 @@ def _first_image(response: Any) -> bytes:  # noqa: ANN401 -- vendor response
             blob = getattr(part, 'inline_data', None)
             if blob is not None and blob.data:
                 return bytes(blob.data)
-    raise LlmError('no image in restore response')
+    msg = 'no image in restore response'
+    raise LlmError(msg)
 
 
 class RestoreBackground(Step):
