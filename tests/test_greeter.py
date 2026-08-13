@@ -102,7 +102,9 @@ class _FakeClient:
 
 
 def _greeter(tmp_path: Path, client: object, **over: object) -> object:
-    return greeter.Greeter(client, _params(**over), tmp_path / 'g.json')
+    return greeter.Greeter(
+        client, _params(**over), greeter.GreeterIO(tmp_path / 'g.json')
+    )
 
 
 def test_on_event_sink_fires_for_every_event_incl_baseline(
@@ -114,7 +116,9 @@ def test_on_event_sink_fires_for_every_event_incl_baseline(
     """Check on event sink fires for every event incl baseline."""
     seen: list[tuple[int, int, bool, bool]] = []
     client = _FakeClient([_join(1, 100), _leave(2, 100)])
-    g = greeter.Greeter(client, _params(), tmp_path / 'g.json', seen.append)
+    g = greeter.Greeter(
+        client, _params(), greeter.GreeterIO(tmp_path / 'g.json', seen.append)
+    )
     asyncio.run(g.sync())  # baseline: no DMs, but the sink still fires
     assert client.dms == []
     assert seen == [(1, 100, True, False), (2, 100, False, True)]
@@ -288,11 +292,11 @@ def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
     """Check state persists cursor and counter."""
     path = tmp_path / 'g.json'
     client = _FakeClient([_join(1, 1)])
-    g = greeter.Greeter(client, _params(), path)
+    g = greeter.Greeter(client, _params(), greeter.GreeterIO(path))
     asyncio.run(g.sync())
     g.state.dm_today = 3
     g._save()
-    fresh = greeter.Greeter(client, _params(), path)
+    fresh = greeter.Greeter(client, _params(), greeter.GreeterIO(path))
     assert fresh.state.started
     assert fresh.state.last_event_id == 1
     assert fresh.state.dm_today == _DM_TODAY
@@ -302,10 +306,12 @@ def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
     """Check channel switch resets the baseline."""
     path = tmp_path / 'g.json'
     client = _FakeClient([_join(9, 1)])
-    g = greeter.Greeter(client, _params(channel=-100), path)
+    g = greeter.Greeter(client, _params(channel=-100), greeter.GreeterIO(path))
     asyncio.run(g.sync())  # baseline on channel -100 (cursor 9)
     assert g.state.started
-    g2 = greeter.Greeter(client, _params(channel=-200), path)
+    g2 = greeter.Greeter(
+        client, _params(channel=-200), greeter.GreeterIO(path)
+    )
     assert g2.state.started is False  # different channel -> re-baseline
     assert g2.state.last_event_id == 0
 
@@ -325,7 +331,9 @@ def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
         ),
         encoding='utf-8',
     )
-    g = greeter.Greeter(_FakeClient(), _params(channel=-100), path)
+    g = greeter.Greeter(
+        _FakeClient(), _params(channel=-100), greeter.GreeterIO(path)
+    )
     assert g.state.started is False  # re-baseline (no mass DM)
     assert g.state.last_event_id == 0
     assert g.state.left == {9}  # welcome_back memory carried over

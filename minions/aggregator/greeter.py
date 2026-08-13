@@ -117,23 +117,32 @@ def load_greeter_params(
     )
 
 
+@dataclass(frozen=True)
+class GreeterIO:
+    """The greeter's wiring: its state file and an optional event sink.
+
+    ``on_event`` receives EVERY fetched admin-log event (admin_log_id,
+    user_id, joined, left) -- the users DB taps it; ``None`` disables the tap.
+    """
+
+    path: Path
+    on_event: Callable[[tuple[int, int, bool, bool]], None] | None = None
+
+
 class Greeter:
     """Watch a channel's members and DM joiners/leavers (safely, opt-in).
 
-    ``client`` is a Telethon client (duck-typed); ``path`` is the state file.
+    ``client`` is a Telethon client (duck-typed); ``io`` carries the state
+    file and the optional users-DB event sink.
     """
 
-    def __init__(  # noqa: PLR0913, PLR0917 -- client + params + path + sink
-        self,
-        client: object,
-        params: GreeterParams,
-        path: Path,
-        on_event: Callable[[tuple[int, int, bool, bool]], None] | None = None,
+    def __init__(
+        self, client: object, params: GreeterParams, io: GreeterIO
     ) -> None:
-        """Bind the client, params, state path and event sink."""
+        """Bind the client, the tuning params, and the I/O wiring."""
         self.client = client
         self.params = params
-        self.path = path
+        self.path = io.path
         self.state = self._load()
         self._last_dm = 0.0
         self._channel_at = ''  # '@username' cache for {channel}
@@ -142,7 +151,7 @@ class Greeter:
         # Optional sink for EVERY fetched admin-log event (admin_log_id,
         # user_id, joined, left) -- the users DB taps this. Fired even during
         # the silent baseline and on re-reads; the DB dedups on admin_log_id.
-        self._on_event = on_event
+        self._on_event = io.on_event
 
     async def sync(self) -> None:
         """Poll the admin log; baseline on first run, else greet new events."""

@@ -1014,8 +1014,10 @@ class Aggregator:
         self.greeter = greeter.Greeter(
             self.client,
             greeter.load_greeter_params(self._raw, gchannel),
-            pdir / 'greeter_state.json',
-            self._on_membership_event,
+            greeter.GreeterIO(
+                pdir / 'greeter_state.json',
+                self._on_membership_event,
+            ),
         )
         # The cabinet ("shkaf"): a per-profile shelf roster with a 7-day timer,
         # plus its render/announcement config. Its rendered image is written
