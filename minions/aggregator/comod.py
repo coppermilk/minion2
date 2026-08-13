@@ -54,6 +54,7 @@ class ComodParams:
     template_path: str  # the base cabinet photo to draw onto
     font_path: str  # a Cyrillic-capable TTF (empty: fall back to system fonts)
     base_size: int
+    amount_scale: float  # the amount font relative to the fitted nick font
     slots: tuple[tuple[int, int, int, int], ...]
     max_shelves: int
     text_color: tuple[int, int, int]
@@ -176,6 +177,7 @@ def load_comod_params(data: dict[str, object]) -> ComodParams:
         template_path=str(render.get('template', '')),
         font_path=str(render.get('font', '')),
         base_size=int(render.get('base_size') or 40),
+        amount_scale=float(render.get('amount_scale') or 0.75),
         slots=slots,
         max_shelves=int(render.get('max_shelves') or len(slots)),
         text_color=_color(render.get('text_color'), (255, 255, 255)),

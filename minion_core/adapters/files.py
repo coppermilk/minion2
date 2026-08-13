@@ -407,6 +407,10 @@ _CABINET_FIT_W = 0.8
 _CABINET_FIT_H = 0.7
 """A label must fit within this fraction of its slot's width/height."""
 
+_CABINET_NICK_H = 0.5
+_CABINET_AMOUNT_H = 0.32
+"""When a shelf shows nick+amount, the height budget for each line."""
+
 
 def _first_font_path(preferred: str) -> str:
     """The first existing font file: the caller's choice, then known serifs."""
@@ -416,22 +420,23 @@ def _first_font_path(preferred: str) -> str:
     return ''
 
 
-def _fit_label(  # noqa: PLR0913, PLR0917 -- draw + text + box + font + size
+def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
     draw: Any,  # noqa: ANN401 -- opaque Pillow ImageDraw handle
     text: str,
-    box: tuple[int, int],
+    max_w: float,
+    max_h: float,
     font_path: str,
     base_size: int,
-) -> tuple[Any, float, float]:
-    """A font sized so ``text`` fits ``box`` (w, h), plus its measured w/h.
+) -> tuple[Any, float, float, int]:
+    """A font sizing single-line ``text`` into ``max_w`` x ``max_h``.
 
-    A TrueType font is shrunk two points at a time until it fits or hits the
-    floor; with no usable font file the bitmap default is used as-is (it
-    cannot be resized, so a long label may overflow rather than crash).
+    Returns the font, the measured width/height, and the point size chosen. A
+    TrueType font is shrunk two points at a time until it fits or hits the
+    floor; with no usable font file the bitmap default is used as-is (it cannot
+    be resized, so a long label may overflow rather than crash).
     """
     from PIL import ImageFont
 
-    width, height = box
     size = max(base_size, _CABINET_MIN_FONT)
     font: Any  # a Pillow font handle (FreeType or the bitmap default)
     while True:
@@ -442,14 +447,26 @@ def _fit_label(  # noqa: PLR0913, PLR0917 -- draw + text + box + font + size
                 font, font_path = ImageFont.load_default(), ''
         else:
             font = ImageFont.load_default()
-        left, top, right, bottom = draw.textbbox(
-            (0, 0), text, font=font, align='center'
-        )
+        left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
         tw, th = right - left, bottom - top
-        fits = tw <= width * _CABINET_FIT_W and th <= height * _CABINET_FIT_H
-        if fits or not font_path or size <= _CABINET_MIN_FONT:
-            return font, tw, th
+        done = (tw <= max_w and th <= max_h) or not font_path
+        if done or size <= _CABINET_MIN_FONT:
+            return font, tw, th, size
         size -= 2
+
+
+def _blit(  # noqa: PLR0913, PLR0917 -- draw + text + font + x + top + colors
+    draw: Any,  # noqa: ANN401 -- opaque Pillow ImageDraw handle
+    text: str,
+    font: Any,  # noqa: ANN401 -- opaque Pillow font handle
+    xy: tuple[float, float],
+    fill: tuple[int, int, int],
+    shadow: tuple[int, int, int],
+) -> None:
+    """Draw ``text`` at ``xy`` with a soft one-pixel-offset shadow under it."""
+    x, top = xy
+    draw.text((x + 2, top + 2), text, font=font, fill=shadow)
+    draw.text((x, top), text, font=font, fill=fill)
 
 
 def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
@@ -460,18 +477,19 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     *,
     font_path: str = '',
     base_size: int = 40,
+    amount_scale: float = 0.75,
     text_color: tuple[int, int, int] = (255, 255, 255),
     shadow_color: tuple[int, int, int] = (0, 0, 0),
 ) -> Path:
-    """Draw each label centered in its shelf slot over the cabinet photo.
+    r"""Draw each label centered in its shelf slot over the cabinet photo.
 
     ``slots`` are (x, y, w, h) boxes; ``labels[i]`` is placed in ``slots[i]``
     (extra labels or slots are ignored, so a half-full cabinet just leaves the
-    spare shelves blank). A label may hold newlines (the nick over its amount);
-    lines are centered on each other and the block is centered in the slot.
-    Each label's font shrinks until it fits its slot; a soft shadow is drawn
-    under the white text for legibility on any wood tone. Pillow stays behind
-    this file (REQ-ARC-002); callers pass paths only.
+    spare shelves blank). A label is ``"nick"`` or ``"nick\n$amount"``: the
+    NICK is sized to fill its shelf, and the amount is drawn under it one step
+    smaller (``amount_scale``), the pair block-centered. A soft shadow keeps
+    the white text legible on any wood tone. Pillow stays behind this file
+    (REQ-ARC-002); callers pass paths only.
     """
     from PIL import Image
     from PIL import ImageDraw
@@ -483,18 +501,33 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     for label, (x, y, width, height) in zip(labels, slots, strict=False):
         if not label:
             continue
-        font, tw, th = _fit_label(
-            draw, label, (width, height), resolved, base_size
+        nick, _, amount = label.partition('\n')
+        max_w = width * _CABINET_FIT_W
+        center_x = x + width / 2
+        if not amount:  # nick only: size it to the whole cell (the prototype)
+            font, tw, th, _size = _fit_line(
+                draw, nick, max_w, height * _CABINET_FIT_H, resolved, base_size
+            )
+            _blit(
+                draw, nick, font,
+                (center_x - tw / 2, y + (height - th) / 2),
+                text_color, shadow_color,
+            )
+            continue
+        # Nick sized to the shelf; amount a step smaller, stacked under it.
+        n_font, nw, nh, n_size = _fit_line(
+            draw, nick, max_w, height * _CABINET_NICK_H, resolved, base_size
         )
-        tx = x + (width - tw) / 2
-        ty = y + (height - th) / 2
-        draw.multiline_text(
-            (tx + 2, ty + 2), label, font=font, fill=shadow_color,
-            align='center',
+        a_size = max(_CABINET_MIN_FONT, round(n_size * amount_scale))
+        a_font, aw, ah, _a = _fit_line(
+            draw, amount, max_w, height * _CABINET_AMOUNT_H, resolved, a_size
         )
-        draw.multiline_text(
-            (tx, ty), label, font=font, fill=text_color, align='center',
-        )
+        gap = max(2, nh // 6)
+        top = y + (height - (nh + gap + ah)) / 2
+        _blit(draw, nick, n_font, (center_x - nw / 2, top),
+              text_color, shadow_color)
+        _blit(draw, amount, a_font, (center_x - aw / 2, top + nh + gap),
+              text_color, shadow_color)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
     return out

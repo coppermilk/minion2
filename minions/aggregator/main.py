@@ -1718,6 +1718,7 @@ class Aggregator:
                 out,
                 font_path=self._comod.font_path,
                 base_size=self._comod.base_size,
+                amount_scale=self._comod.amount_scale,
                 text_color=self._comod.text_color,
                 shadow_color=self._comod.shadow_color,
             )
