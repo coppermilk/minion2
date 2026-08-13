@@ -747,6 +747,10 @@ def _trim(title: str, width: int = 40) -> str:
     return flat if len(flat) <= width else flat[: width - 1] + '~'
 
 
+_EMOJI_ROW_LEN = 2
+"""A persisted emoji row is an [id, fallback] pair."""
+
+
 def _pending_glyphs(entry: dict[str, object]) -> str:
     """The chosen cat glyph(s) for a pending entry (the fallbacks), or '?'.
 
@@ -756,7 +760,7 @@ def _pending_glyphs(entry: dict[str, object]) -> str:
     """
     raw = entry.get('emojis')
     rows = raw if isinstance(raw, list) else []
-    glyphs = ''.join(str(row[1]) for row in rows if len(row) == 2)  # noqa: PLR2004
+    glyphs = ''.join(str(row[1]) for row in rows if len(row) == _EMOJI_ROW_LEN)
     return glyphs or '?'
 
 
@@ -1110,12 +1114,12 @@ class Aggregator:
             self._save_mode()
             await self.start_profile(source_backfill=False)
         labels = await self._chat_labels()
-        dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
+        dest = ', '.join(labels.get(t, str(t)) for t in self.live_targets())
         await self.client.send_message(
             self.config.source,
             f'Mode: {self.mode.upper()}. ALL posts now go to: {dest}',
         )
-        log.info('mode -> %s, posting to %s', self.mode, self._live_targets())
+        log.info('mode -> %s, posting to %s', self.mode, self.live_targets())
 
     async def on_message(self, message: object) -> None:
         """Route one incoming message into its video group."""
@@ -1479,7 +1483,7 @@ class Aggregator:
         """
         if not self.cats.params.enabled:
             return
-        for target in self._live_targets():  # test mode -> the test channel
+        for target in self.live_targets():  # test mode -> the test channel
             await self._seed_target_posts(target)
         log.info('cats: watch-list has %d post(s)', len(self.cats.posts))
 
@@ -2165,7 +2169,7 @@ class Aggregator:
         """Source, the live targets, and where posts go NOW (test vs live)."""
         source = labels.get(self.config.source, str(self.config.source))
         targets = ', '.join(labels.get(t, str(t)) for t in self.config.targets)
-        dest = ', '.join(labels.get(t, str(t)) for t in self._live_targets())
+        dest = ', '.join(labels.get(t, str(t)) for t in self.live_targets())
         b = self._bul()
         return [
             self._head('routing', 'Routing'),
@@ -2384,7 +2388,7 @@ class Aggregator:
             await self.on_message(message)
         log.info('backfill: done (%d messages scanned)', len(history))
 
-    def _live_targets(self) -> tuple[int, ...]:
+    def live_targets(self) -> tuple[int, ...]:
         """Post destination for the active profile.
 
         Test: TEST_CHAT_ID, or the source control chat if it is unset. Live:
@@ -2397,7 +2401,7 @@ class Aggregator:
 
     async def _post(self, message: PremiumMessage, thumb: str) -> None:
         """Send to every target; react to the post, then watch its comments."""
-        for target in self._live_targets():
+        for target in self.live_targets():
             sent = await self._send_post(target, message, thumb)
             post_id = int(getattr(sent, 'id', 0) or 0)
             await self._react_to_post(target, post_id)
@@ -2619,7 +2623,7 @@ async def main() -> None:
         'Listening on %s; mode=%s posting to %s; platforms=%s',
         config.source,
         agg.mode,
-        ','.join(str(t) for t in agg._live_targets()),  # noqa: SLF001
+        ','.join(str(t) for t in agg.live_targets()),
         ','.join(config.platforms),
     )
     status_task = asyncio.create_task(agg.status_loop())

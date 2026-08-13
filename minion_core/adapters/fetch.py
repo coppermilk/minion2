@@ -25,6 +25,11 @@ from typing import TYPE_CHECKING
 from typing import Protocol
 from urllib.parse import urlsplit
 
+try:  # override joined the stdlib in 3.12; the 3.11 floor takes the backport
+    from typing import override
+except ImportError:
+    from typing_extensions import override
+
 from minion_core import progress
 from minion_core.adapters.files import BudgetWriter
 from minion_core.adapters.files import QuotaExceeded
@@ -286,7 +291,8 @@ def _pull(resp: _Readable, writer: BudgetWriter, deadline: float) -> None:
 class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
     """Re-guard every redirect hop (SSRF defence in depth)."""
 
-    def redirect_request(  # noqa: PLR0913, PLR0917 -- stdlib hook signature
+    @override
+    def redirect_request(
         self,
         req: urllib.request.Request,
         fp: IO[bytes],

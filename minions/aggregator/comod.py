@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 COMOD_TTL_SEC = 7 * 24 * 3600
 """How long a nick keeps its shelf before it frees up: seven days."""
 
+# A parsed colour row is [r, g, b]; a slot box is [x, y, w, h].
+_RGB_LEN = 3
+_SLOT_LEN = 4
+
 # The prototype's shelf boxes for the 1080-wide portrait cabinet photo: the top
 # full-width slot, three rows of paired cubbies, then three wide lower shelves.
 # Each is (x, y, w, h). A different template photo needs different boxes.
@@ -141,7 +145,7 @@ def _color(
     value: object, default: tuple[int, int, int]
 ) -> tuple[int, int, int]:
     """Parse an [r, g, b] JSON list into an RGB tuple (default on garbage)."""
-    if isinstance(value, (list, tuple)) and len(value) == 3:  # noqa: PLR2004
+    if isinstance(value, (list, tuple)) and len(value) == _RGB_LEN:
         try:
             r, g, b = (int(c) for c in value)
         except (TypeError, ValueError):
@@ -155,7 +159,7 @@ def _slots(value: object) -> tuple[tuple[int, int, int, int], ...]:
     rows = value if isinstance(value, list) else []
     out: list[tuple[int, int, int, int]] = []
     for row in rows:
-        if isinstance(row, (list, tuple)) and len(row) == 4:  # noqa: PLR2004
+        if isinstance(row, (list, tuple)) and len(row) == _SLOT_LEN:
             try:
                 x, y, w, h = (int(v) for v in row)
             except (TypeError, ValueError):

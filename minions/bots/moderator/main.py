@@ -135,7 +135,10 @@ class _Moderator:
 
     def _actions(self) -> dict[str, Callable[[], str]]:
         """Every single-word command mapped to its handler."""
-        panel = lambda: _MENU  # noqa: E731 -- terse alias for the menu
+
+        def panel() -> str:
+            return _MENU
+
         return {
             'menu': panel,
             'help': panel,

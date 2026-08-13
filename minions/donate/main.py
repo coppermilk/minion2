@@ -128,6 +128,10 @@ def _load_constants(path: Path) -> Consts:
     )
 
 
+_DONATE_FIELDS = 4
+"""/donate splits into cmd, name, amount, message."""
+
+
 def _parse(text: str) -> Donation | None:
     """Split '/donate <name> <amount> <message>' into its three parts.
 
@@ -135,7 +139,7 @@ def _parse(text: str) -> Donation | None:
     the (possibly multi-word) message. Returns None if any part is missing.
     """
     parts = text.split(maxsplit=3)
-    if len(parts) < 4:  # noqa: PLR2004 -- cmd, name, amount, message
+    if len(parts) < _DONATE_FIELDS:
         return None
     return Donation(name=parts[1], amount=parts[2], message=parts[3])
 

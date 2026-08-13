@@ -21,6 +21,9 @@ dependencies = [
     'Pillow>=10.0',
     'piexif>=1.1',
     'numpy>=1.26',
+    # typing.override landed in 3.12; on the 3.11 floor it comes from
+    # the backport, so an override stays a declared override, not a noqa.
+    'typing_extensions>=4.4; python_version < "3.12"',
 ]
 
 [project.optional-dependencies]

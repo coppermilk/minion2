@@ -60,6 +60,14 @@ if TYPE_CHECKING:
 _PLACE_STEP_SEC = 300.0
 # One observation added to the current hour bucket per heartbeat (mark_alive).
 _ALIVE_STEP = 1.0
+# A persisted emoji row is an [id, fallback] pair.
+_EMOJI_ROW_LEN = 2
+# datetime.weekday(): Monday is 0, so Saturday (5) and up is the weekend.
+_SATURDAY = 5
+# Local hours: midnight..noon reads sleepy, noon..midnight bodry.
+_NOON = 12
+# Calendar month numbers used as context switches.
+_DECEMBER = 12
 
 
 @dataclass(frozen=True)
@@ -105,7 +113,7 @@ def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
     return tuple(
         (str(row[0]), str(row[1]))
         for row in rows
-        if isinstance(row, (list, tuple)) and len(row) == 2  # noqa: PLR2004
+        if isinstance(row, (list, tuple)) and len(row) == _EMOJI_ROW_LEN
     )
 
 
@@ -264,7 +272,7 @@ def _density_weight(ts: float, params: CatParams) -> float:
     when = _local(ts, params)
     if when.hour in params.quiet_hours:
         return 0.0
-    weekend = when.weekday() >= 5  # noqa: PLR2004 -- Sat/Sun
+    weekend = when.weekday() >= _SATURDAY
     peaks = params.hours_weekday if not weekend else params.hours_weekend
     return _mixture(when.hour + when.minute / 60.0, peaks)
 
@@ -298,9 +306,9 @@ def _is_silent_day(ts: float, params: CatParams) -> bool:
 def _context_tags(ts: float, params: CatParams) -> frozenset[str]:
     """The current context tags (principle 5): daypart, season, holiday."""
     when = _local(ts, params)
-    tags = {'sleepy'} if when.hour < 12 else {'bodry'}  # noqa: PLR2004
+    tags = {'sleepy'} if when.hour < _NOON else {'bodry'}
     tags.add(('winter', 'spring', 'summer', 'autumn')[(when.month % 12) // 3])
-    if when.month == 12:  # noqa: PLR2004 -- December reads as the holiday run
+    if when.month == _DECEMBER:  # December reads as the holiday run
         tags.add('newyear')
     return frozenset(tags)
 

@@ -36,10 +36,17 @@ from minion_core.kernel import next_free_path
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from PIL import ImageDraw
+    from PIL import ImageFont
+
     from minion_core.kernel import Envelope
     from minion_core.kernel import Job
     from minion_core.kernel import Origin
     from minion_core.settings import Settings
+
+    # A shelf-label font is either a scalable TrueType face or the bitmap
+    # default; both are Pillow handles, kept inside this adapter (REQ-ARC-002).
+    _Font = ImageFont.FreeTypeFont | ImageFont.ImageFont
 
 __all__ = [
     'BLACK',
@@ -430,13 +437,13 @@ def _has_cyrillic(text: str) -> bool:
 
 
 def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
-    draw: Any,  # noqa: ANN401 -- opaque Pillow ImageDraw handle
+    draw: ImageDraw.ImageDraw,
     text: str,
     max_w: float,
     max_h: float,
     font_path: str,
     base_size: int,
-) -> tuple[Any, float, float, int]:
+) -> tuple[_Font, float, float, int]:
     """A font sizing single-line ``text`` into ``max_w`` x ``max_h``.
 
     Returns the font, the measured width/height, and the point size chosen. A
@@ -447,7 +454,7 @@ def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
     from PIL import ImageFont
 
     size = max(base_size, _CABINET_MIN_FONT)
-    font: Any  # a Pillow font handle (FreeType or the bitmap default)
+    font: _Font
     while True:
         if font_path:
             try:
@@ -465,9 +472,9 @@ def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
 
 
 def _blit(  # noqa: PLR0913, PLR0917 -- draw + text + font + x + top + colors
-    draw: Any,  # noqa: ANN401 -- opaque Pillow ImageDraw handle
+    draw: ImageDraw.ImageDraw,
     text: str,
-    font: Any,  # noqa: ANN401 -- opaque Pillow font handle
+    font: _Font,
     xy: tuple[float, float],
     fill: tuple[int, int, int],
     shadow: tuple[int, int, int],
