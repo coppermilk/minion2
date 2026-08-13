@@ -136,55 +136,59 @@ def _post_reaction(brain: cats.CatBrain, channel: int, post_id: int) -> None:
     print(f'      shows as : {glyphs}   (a reaction pill ON the post itself)')
 
 
-def _comment(  # noqa: PLR0913 -- a proof reads clearest with every field named at the call site
-    brain: cats.CatBrain,
-    *,
-    root: int,
-    msg_id: int,
-    person: str,
-    text: str,
-    engaged: bool,
-) -> cats.Cat | None:
+@dataclasses.dataclass(frozen=True)
+class _Comment:
+    """One comment fed to the engine: where, from whom, and the text."""
+
+    root: int
+    msg_id: int
+    person: str
+    text: str
+    engaged: bool
+
+
+def _comment(brain: cats.CatBrain, c: _Comment) -> cats.Cat | None:
     """Run one comment through the real engine, exactly as main.py does.
 
     Mirrors main._maybe_cat/_schedule_comment: recognise the comment, key it
     once-per-(post, person), let the engine decide when, then (on a cat) emit
     which premium cat-emoji to react with. Returns the scheduled Cat, or None.
     """
-    if not brain.is_comment(_CHAT, root):
+    if not brain.is_comment(_CHAT, c.root):
         print(
-            f'  comment {msg_id} by {person}: NOT under a watched post '
+            f'  comment {c.msg_id} by {c.person}: NOT under a watched post '
             f'-> ignored'
         )
         return None
-    key = f'{_CHAT}:{root}:{person}'
-    when = brain.schedule(key, engaged=engaged)
+    key = f'{_CHAT}:{c.root}:{c.person}'
+    when = brain.schedule(key, engaged=c.engaged)
     if when is None:
         print(
-            f'  comment {msg_id} by {person} under post {root}: '
+            f'  comment {c.msg_id} by {c.person} under post {c.root}: '
             f'no cat (dedup / skip / silent day)'
         )
         return None
     # Default is a like REACTION; the deterministic gate turns some into a
     # thread STICKER. The emoji is pseudo-random but deterministic in the
     # comment id (recomputable after a restart).
-    seed = f'{_CHAT}:{msg_id}'
-    if brain.should_sticker(f'{_CHAT}:{root}'):
+    seed = f'{_CHAT}:{c.msg_id}'
+    if brain.should_sticker(f'{_CHAT}:{c.root}'):
         specs, kind, label = brain.pick_cat(seed), 'reply', 'STICKER in thread'
     else:
         specs, kind, label = brain.pick_like(seed), 'react', 'LIKE reaction'
     cat = cats.Cat(
         chat=_CHAT,
-        reply_to=msg_id,
-        root=root,
+        reply_to=c.msg_id,
+        root=c.root,
         when=when,
-        text=text,
+        text=c.text,
         emojis=tuple((s.emoji_id, s.fallback) for s in specs),
         kind=kind,
     )
     brain.add_pending(cat)
     print(
-        f'  comment {msg_id} by {person} under post {root}: {label} scheduled'
+        f'  comment {c.msg_id} by {c.person} under post {c.root}: '
+        f'{label} scheduled'
     )
     print(
         f'      when     : {_local(when, brain.params)}   '
@@ -280,55 +284,65 @@ def main() -> None:
     print('STEP 3  a person comments under the freshest post -> react on it')
     _comment(
         brain,
-        root=_POST_NEW,
-        msg_id=5001,
-        person='alice',
-        engaged=True,
-        text='love this one!',
+        _Comment(
+            root=_POST_NEW,
+            msg_id=5001,
+            person='alice',
+            engaged=True,
+            text='love this one!',
+        ),
     )
     print()
 
     print('STEP 4  once per (post, person): the same person, same post again')
     _comment(
         brain,
-        root=_POST_NEW,
-        msg_id=5002,
-        person='alice',
-        engaged=True,
-        text='and again',
+        _Comment(
+            root=_POST_NEW,
+            msg_id=5002,
+            person='alice',
+            engaged=True,
+            text='and again',
+        ),
     )
     print()
 
     print('STEP 5  a DIFFERENT person, same post -> eligible again')
     _comment(
         brain,
-        root=_POST_NEW,
-        msg_id=5003,
-        person='bob',
-        engaged=True,
-        text='haha nice',
+        _Comment(
+            root=_POST_NEW,
+            msg_id=5003,
+            person='bob',
+            engaged=True,
+            text='haha nice',
+        ),
     )
     print()
 
     print('STEP 6  the SAME person under a DIFFERENT post -> eligible again')
     _comment(
         brain,
-        root=_POST_OLD,
-        msg_id=5004,
-        person='alice',
-        engaged=False,
-        text='saw this yesterday',
+        _Comment(
+            root=_POST_OLD,
+            msg_id=5004,
+            person='alice',
+            engaged=False,
+            text='saw this yesterday',
+        ),
     )
     print()
 
     print('STEP 7  a message that is not a comment on a watched post')
     _comment(
         brain,
-        root=7777,
-        msg_id=5005,
-        person='carol',
-        engaged=False,
-        text='off-topic chatter',
+        _Comment(
+            root=7777,
+            msg_id=5005,
+            person='carol',
+            engaged=False,
+            text='off-topic chatter',
+        ),
     )
     print()
 
