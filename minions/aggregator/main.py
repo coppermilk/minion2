@@ -1718,19 +1718,21 @@ class Aggregator:
         try:
             return files.render_cabinet(
                 template,
-                # Biggest amount on the biggest shelf (area-ranked).
-                comod.assign_labels(residents, self._comod.slots),
-                list(self._comod.slots),
                 out,
-                font_path=self._comod_font(self._comod.font_path),
-                cyrillic_font_path=self._comod_font(
-                    self._comod.font_cyrillic_path
+                files.CabinetSpec(
+                    # Biggest amount on the biggest shelf (area-ranked).
+                    comod.assign_labels(residents, self._comod.slots),
+                    list(self._comod.slots),
+                    font_path=self._comod_font(self._comod.font_path),
+                    cyrillic_font_path=self._comod_font(
+                        self._comod.font_cyrillic_path
+                    ),
+                    ref_size=self._comod.ref_size,
+                    base_size=self._comod.base_size,
+                    amount_scale=self._comod.amount_scale,
+                    text_color=self._comod.text_color,
+                    shadow_color=self._comod.shadow_color,
                 ),
-                ref_size=self._comod.ref_size,
-                base_size=self._comod.base_size,
-                amount_scale=self._comod.amount_scale,
-                text_color=self._comod.text_color,
-                shadow_color=self._comod.shadow_color,
             )
         except Exception:  # noqa: BLE001 -- any Pillow failure -> text roster
             log.warning('comod: render failed for %s', template)

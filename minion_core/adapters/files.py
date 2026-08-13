@@ -442,15 +442,20 @@ def _has_cyrillic(text: str) -> bool:
     return any(_CYRILLIC_LO <= ord(ch) <= _CYRILLIC_HI for ch in text)
 
 
-def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    max_w: float,
-    max_h: float,
-    font_path: str,
-    base_size: int,
+@dataclass(frozen=True)
+class _Fit:
+    """The box a label line must fit, and the font to size into it."""
+
+    max_w: float
+    max_h: float
+    font_path: str
+    base_size: int
+
+
+def _fit_line(
+    draw: ImageDraw.ImageDraw, text: str, fit: _Fit
 ) -> tuple[_Font, float, float, int]:
-    """Return a font sizing single-line ``text`` into ``max_w`` x ``max_h``.
+    """Return a font sizing single-line ``text`` into ``fit``'s box.
 
     Returns the font, the measured width/height, and the point size chosen. A
     TrueType font is shrunk two points at a time until it fits or hits the
@@ -459,65 +464,72 @@ def _fit_line(  # noqa: PLR0913, PLR0917 -- draw + text + w + h + font + size
     """
     from PIL import ImageFont
 
-    size = max(base_size, _CABINET_MIN_FONT)
+    size = max(fit.base_size, _CABINET_MIN_FONT)
+    path = fit.font_path
     font: _Font
     while True:
-        if font_path:
+        if path:
             try:
-                font = ImageFont.truetype(font_path, size)
+                font = ImageFont.truetype(path, size)
             except OSError:
-                font, font_path = ImageFont.load_default(), ''
+                font, path = ImageFont.load_default(), ''
         else:
             font = ImageFont.load_default()
         left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
         tw, th = right - left, bottom - top
-        done = (tw <= max_w and th <= max_h) or not font_path
+        done = (tw <= fit.max_w and th <= fit.max_h) or not path
         if done or size <= _CABINET_MIN_FONT:
             return font, tw, th, size
         size -= 2
 
 
-def _blit(  # noqa: PLR0913, PLR0917 -- draw + text + font + x + top + colors
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font: _Font,
-    xy: tuple[float, float],
-    fill: tuple[int, int, int],
-    shadow: tuple[int, int, int],
-) -> None:
-    """Draw ``text`` at ``xy`` with a soft one-pixel-offset shadow under it."""
-    x, top = xy
-    draw.text((x + 2, top + 2), text, font=font, fill=shadow)
-    draw.text((x, top), text, font=font, fill=fill)
+@dataclass(frozen=True)
+class _Placed:
+    """A fitted line ready to draw: its font, position, and the two inks."""
+
+    font: _Font
+    xy: tuple[float, float]
+    fill: tuple[int, int, int]
+    shadow: tuple[int, int, int]
 
 
-def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
-    template: Path,
-    labels: list[str],
-    slots: list[tuple[int, int, int, int]],
-    out: Path,
-    *,
-    font_path: str = '',
-    cyrillic_font_path: str = '',
-    ref_size: tuple[int, int] = (1080, 1350),
-    base_size: int = 40,
-    amount_scale: float = 0.75,
-    text_color: tuple[int, int, int] = (255, 255, 255),
-    shadow_color: tuple[int, int, int] = (0, 0, 0),
-) -> Path:
-    r"""Draw each label centered in its shelf slot over the cabinet photo.
+def _blit(draw: ImageDraw.ImageDraw, text: str, placed: _Placed) -> None:
+    """Draw ``text`` at ``placed.xy`` with a soft one-pixel-offset shadow."""
+    x, top = placed.xy
+    draw.text((x + 2, top + 2), text, font=placed.font, fill=placed.shadow)
+    draw.text((x, top), text, font=placed.font, fill=placed.fill)
 
-    ``slots`` are (x, y, w, h) boxes measured against ``ref_size`` (the
-    reference photo the coordinates were laid out on); they are scaled to the
-    actual template's pixel size, so re-uploading the same cabinet photo at a
-    different resolution keeps every label aligned. ``labels[i]`` is placed in
-    ``slots[i]`` (extra labels or slots are ignored). A label is ``"nick"`` or
-    ``"nick\n$amount"``: the NICK is sized to fill its shelf and the amount is
-    drawn under it one step smaller (``amount_scale``), the pair centered.
-    Each LINE picks its font: ``font_path`` normally, ``cyrillic_font_path``
-    for a line with Cyrillic (when the primary font is Latin-only). A soft
-    shadow keeps the white text legible on any wood tone. Pillow stays behind
-    this file (REQ-ARC-002); callers pass paths only.
+
+@dataclass(frozen=True)
+class CabinetSpec:
+    r"""What to draw on the cabinet photo, and how.
+
+    ``labels[i]`` is placed in ``slots[i]``; the two lists may differ in
+    length (extra labels or slots are ignored). ``slots`` are (x, y, w, h)
+    boxes against ``ref_size``, scaled to the template's real pixel size so a
+    re-upload at a different resolution stays aligned. A label is ``"nick"``
+    or ``"nick\n$amount"``: the nick fills its shelf, the amount sits under it
+    one step smaller (``amount_scale``). Each line picks ``font_path``, or
+    ``cyrillic_font_path`` when it holds Cyrillic and the primary is Latin.
+    """
+
+    labels: list[str]
+    slots: list[tuple[int, int, int, int]]
+    font_path: str = ''
+    cyrillic_font_path: str = ''
+    ref_size: tuple[int, int] = (1080, 1350)
+    base_size: int = 40
+    amount_scale: float = 0.75
+    text_color: tuple[int, int, int] = (255, 255, 255)
+    shadow_color: tuple[int, int, int] = (0, 0, 0)
+
+
+def render_cabinet(template: Path, out: Path, spec: CabinetSpec) -> Path:
+    """Draw each label centered in its shelf slot over the cabinet photo.
+
+    A soft shadow keeps the white text legible on any wood tone. Pillow stays
+    behind this file (REQ-ARC-002); callers pass paths only.
+    See ``CabinetSpec`` for how labels, slots and styling knobs are read.
     """
     from PIL import Image
     from PIL import ImageDraw
@@ -525,16 +537,17 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
     with Image.open(template) as opened:
         img = opened.convert('RGB')
     draw = ImageDraw.Draw(img)
-    latin = _first_font_path(font_path)
-    cyrillic = _first_font_path(cyrillic_font_path) or latin
-    ref_w, ref_h = ref_size
+    latin = _first_font_path(spec.font_path)
+    cyrillic = _first_font_path(spec.cyrillic_font_path) or latin
+    ref_w, ref_h = spec.ref_size
     scale_x = img.width / ref_w if ref_w else 1.0
     scale_y = img.height / ref_h if ref_h else 1.0
+    ink = (spec.text_color, spec.shadow_color)
 
     def font_for(text: str) -> str:
         return cyrillic if _has_cyrillic(text) else latin
 
-    for label, box in zip(labels, slots, strict=False):
+    for label, box in zip(spec.labels, spec.slots, strict=False):
         if not label:
             continue
         x = box[0] * scale_x
@@ -548,55 +561,42 @@ def render_cabinet(  # noqa: PLR0913, PLR0917 -- template/labels/slots/out/knobs
             font, tw, th, _size = _fit_line(
                 draw,
                 nick,
-                max_w,
-                height * _CABINET_FIT_H,
-                font_for(nick),
-                base_size,
+                _Fit(
+                    max_w,
+                    height * _CABINET_FIT_H,
+                    font_for(nick),
+                    spec.base_size,
+                ),
             )
             _blit(
                 draw,
                 nick,
-                font,
-                (center_x - tw / 2, y + (height - th) / 2),
-                text_color,
-                shadow_color,
+                _Placed(
+                    font, (center_x - tw / 2, y + (height - th) / 2), *ink
+                ),
             )
             continue
         # Nick sized to the shelf; amount a step smaller, stacked under it.
         n_font, nw, nh, n_size = _fit_line(
             draw,
             nick,
-            max_w,
-            height * _CABINET_NICK_H,
-            font_for(nick),
-            base_size,
+            _Fit(
+                max_w, height * _CABINET_NICK_H, font_for(nick), spec.base_size
+            ),
         )
-        a_size = max(_CABINET_MIN_FONT, round(n_size * amount_scale))
+        a_size = max(_CABINET_MIN_FONT, round(n_size * spec.amount_scale))
         a_font, aw, ah, _a = _fit_line(
             draw,
             amount,
-            max_w,
-            height * _CABINET_AMOUNT_H,
-            font_for(amount),
-            a_size,
+            _Fit(max_w, height * _CABINET_AMOUNT_H, font_for(amount), a_size),
         )
         gap = max(2, nh // 6)
         top = y + (height - (nh + gap + ah)) / 2
-        _blit(
-            draw,
-            nick,
-            n_font,
-            (center_x - nw / 2, top),
-            text_color,
-            shadow_color,
-        )
+        _blit(draw, nick, _Placed(n_font, (center_x - nw / 2, top), *ink))
         _blit(
             draw,
             amount,
-            a_font,
-            (center_x - aw / 2, top + nh + gap),
-            text_color,
-            shadow_color,
+            _Placed(a_font, (center_x - aw / 2, top + nh + gap), *ink),
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)

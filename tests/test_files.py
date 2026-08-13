@@ -11,6 +11,7 @@ import pytest
 
 from minion_core.adapters.files import BatchLock
 from minion_core.adapters.files import BudgetWriter
+from minion_core.adapters.files import CabinetSpec
 from minion_core.adapters.files import Deliver
 from minion_core.adapters.files import QuotaExceededError
 from minion_core.adapters.files import Shelve
@@ -324,9 +325,11 @@ def test_render_cabinet_draws_labels(tmp_path: Path) -> None:
     # test source here stays pure ASCII per the repo-wide law.)
     out = render_cabinet(
         tpl,
-        ['Nick_01 $50', 'EpicGamer $5'],
-        [(20, 20, 260, 160), (320, 20, 260, 160)],
         tmp_path / 'sub' / 'out.jpg',
+        CabinetSpec(
+            ['Nick_01 $50', 'EpicGamer $5'],
+            [(20, 20, 260, 160), (320, 20, 260, 160)],
+        ),
     )
     assert out.exists()
     with Image.open(out) as rendered:
@@ -340,8 +343,10 @@ def test_render_cabinet_tolerates_shape_mismatch(tmp_path: Path) -> None:
     tpl = _template(tmp_path / 'tpl.png', (200, 200))
     out = render_cabinet(
         tpl,
-        ['one', '', 'three'],  # a blank label is skipped
-        [(10, 10, 80, 40)],  # only one slot: extra labels are ignored
         tmp_path / 'out.jpg',
+        CabinetSpec(
+            ['one', '', 'three'],  # a blank label is skipped
+            [(10, 10, 80, 40)],  # only one slot: extra labels are ignored
+        ),
     )
     assert out.exists()
