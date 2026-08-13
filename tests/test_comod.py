@@ -103,7 +103,7 @@ def test_load_comod_params_defaults() -> None:
     params = comod.load_comod_params({})
     assert params.max_shelves == len(params.slots) == 10
     assert params.text_color == (255, 255, 255)
-    assert params.slots[0] == (460, 73, 305, 206)
+    assert params.slots[0] == (440, 73, 325, 206)
 
 
 def test_load_comod_params_reads_section() -> None:
@@ -144,17 +144,16 @@ def test_by_amount_orders_biggest_first() -> None:
     ]
 
 
-def test_assign_labels_reserves_first_slot_for_top_donor() -> None:
-    """Slot 0 always holds the biggest donor; the rest fill by area."""
+def test_assign_labels_fills_top_to_bottom_by_amount() -> None:
+    """Donors fill slots in listed (top-to-bottom) order, biggest first."""
     slots = (
-        (0, 0, 10, 10),  # slot 0: reserved for the top donor (small area)
-        (0, 0, 40, 40),  # area 1600 (largest of the rest)
-        (0, 0, 20, 20),  # area 400
+        (0, 0, 10, 10),  # slot 0 (top)
+        (0, 0, 20, 20),  # slot 1
+        (0, 0, 40, 40),  # slot 2 (largest area, but LAST in the list)
     )
     residents = [('A', '5'), ('B', '100'), ('C', '40')]  # by recency
     labels = comod.assign_labels(residents, slots)
-    # B ($100) -> slot 0 (the exception); C ($40) -> largest remaining (slot
-    # 1); A ($5) -> slot 2.
+    # Ranked by amount B>C>A, placed straight down the list (area ignored).
     assert labels == ['B\n$100', 'C\n$40', 'A\n$5']
 
 

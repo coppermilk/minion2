@@ -32,7 +32,7 @@ COMOD_TTL_SEC = 7 * 24 * 3600
 # full-width slot, three rows of paired cubbies, then three wide lower shelves.
 # Each is (x, y, w, h). A different template photo needs different boxes.
 _DEFAULT_SLOTS: tuple[tuple[int, int, int, int], ...] = (
-    (460, 73, 305, 206),
+    (440, 73, 325, 206),
     (340, 303, 199, 150),
     (560, 296, 198, 159),
     (341, 476, 198, 147),
@@ -231,29 +231,19 @@ def assign_labels(
     residents: list[tuple[str, str]],
     slots: tuple[tuple[int, int, int, int], ...],
 ) -> list[str]:
-    """Shelf labels aligned to ``slots``: top donor on shelf 0, rest by area.
+    """Shelf labels aligned to ``slots``, biggest donor first, top to bottom.
 
-    The biggest donor always takes the FIRST slot (the top compartment), even
-    when it is not the largest by area; the remaining donors fill the other
-    slots by area, biggest amount on the biggest square. The result is in SLOT
+    Residents are ranked by donated amount and dropped onto the slots in their
+    listed order (which runs top shelf downward), so the biggest donor takes
+    the top shelf and the rest follow down the cabinet. The result is in SLOT
     order (``label[i]`` belongs to ``slots[i]``); slots past the resident count
-    stay blank, and equal-area slots keep their listed order.
+    stay blank.
     """
     labels = [''] * len(slots)
-    if not slots:
-        return labels
-    ranked = by_amount(residents)
-    if ranked:
-        labels[0] = _label(*ranked[0])  # the exception: top donor on shelf 0
-    rest_slots = sorted(
-        range(1, len(slots)),
-        key=lambda i: (slots[i][2] * slots[i][3], -i),
-        reverse=True,
-    )
-    for rank, (nick, amount) in enumerate(ranked[1:]):
-        if rank >= len(rest_slots):
+    for i, (nick, amount) in enumerate(by_amount(residents)):
+        if i >= len(slots):
             break
-        labels[rest_slots[rank]] = _label(nick, amount)
+        labels[i] = _label(nick, amount)
     return labels
 
 
