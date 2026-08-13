@@ -18,8 +18,6 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from typing import TYPE_CHECKING
 
-import pytest
-
 from minion_core.adapters import service_call
 from minion_core.adapters.service_call import CallService
 from minion_core.adapters.service_call import JobClient
@@ -31,6 +29,8 @@ from minion_core.kernel import Origin
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+    import pytest
 
 _REPLY: dict[str, object] = {
     'status': 200,

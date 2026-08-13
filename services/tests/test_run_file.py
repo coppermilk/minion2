@@ -12,13 +12,16 @@ zips (frames), and a skip surfaces as 422.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi.testclient import TestClient
 
 from minion_core.adapters.files import Deliver
 from minions.svc.censor_blur import step as blur
 from services.http import create_app
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _deliver_app() -> TestClient:

@@ -107,36 +107,36 @@ inline-quotes = 'single'
 convention = 'pep257'
 
 [tool.ruff.lint.per-file-ignores]
-# Sanctioned lazy vendor loads (BLUEPRINT 4, Power-of-10 rule 8). The
-# processing minions (svc-* Steps) own their model and load torch lazily,
-# exactly like an adapter.
+# Each entry waives a rule that does not apply to a whole class of file --
+# the rule targets something that IS the medium here, or measures the
+# wrong thing -- not a rule someone declined to satisfy.
+#
+# Lazy vendor loads (Power-of-10 rule 8): adapters and svc-* Steps own a
+# heavy, OPTIONAL model (torch, facenet) and import it inside the function
+# that uses it, so the module still imports -- and the bot still degrades
+# cleanly (REQ-DEG-001) -- when the vendor is absent. A top-level import
+# cannot do that, so PLC0415 is un-satisfiable here by design.
 'minion_core/adapters/*' = ['PLC0415']
 'minions/svc/*/step.py' = ['PLC0415']
-# Tests: assert is the medium; magic values are fixtures; doubles
-# carry unused hook arguments; docstring ceremony, import-placement
-# and packaging rules do not apply to CT-E tooling.
-# S311: a seeded PRNG is the medium for deterministic behavioural fixtures
-# (test_cats), never cryptographic.
-'tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
-             'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003', 'S311']
-# Services tier: lighter conventions than the kernel. Lazy imports keep
-# the entrypoint's skin optional (the adapters' Power-of-10 rule 8 pattern).
 'services/*' = ['PLC0415']
-# A FastAPI app factory aggregates its route handlers, so its McCabe
-# score is route count, not branching complexity.
+# create_app registers its route handlers inline; McCabe counts each as a
+# branch, so its score is route count, not real nesting -- a metric misfit.
 'services/http.py' = ['PLC0415', 'C901']
-'services/tests/*' = ['S101', 'PLR2004', 'D1', 'SLF001', 'ANN', 'INP001',
-                      'PLC0415', 'ARG', 'TC001', 'TC002', 'TC003']
-# minions/aggregator: the userbot's operator tools print to the console for the
-# person running them -- login.py reports where it wrote the session file, and
-# dump_emoji_ids.py prints each premium emoji's id: that IS their output, so the
-# no-print rule is waived there (T201). cats_proof.py is a runnable proof whose
-# printed narration IS the deliverable, so it is waived the same way.
+# Tests are pytest tooling, so these rules target what IS the medium here:
+# S101 (assert is how pytest checks), S311 (a seeded PRNG is the
+# deterministic-fixture medium, never crypto), SLF001 (white-box tests read
+# internals on purpose), ARG (a test double must match a signature it does
+# not use), PLC0415 (the same lazy-vendor loads). D1/ANN/PLR2004 relax
+# docstring/annotation/magic-value ceremony the test's own name carries.
+'tests/*' = ['S101', 'S311', 'SLF001', 'ARG', 'PLC0415', 'D1', 'ANN', 'PLR2004']
+'services/tests/*' = ['S101', 'ARG', 'PLC0415', 'D1', 'ANN', 'PLR2004']
+# Operator CLIs whose stdout IS the product: login.py prints where it wrote
+# the session file; dump_emoji_ids.py prints each premium emoji id;
+# cats_proof.py's printed narration is the deliverable. T201 (no print)
+# targets stray debug prints in library code, not a tool's own output.
 'minions/aggregator/login.py' = ['T201']
 'minions/aggregator/dump_emoji_ids.py' = ['T201']
 'minions/aggregator/cats_proof.py' = ['T201']
-# The donate userbot's login helper prints where it wrote the session file --
-# that IS its output, so the no-print rule is waived there (like login.py).
 'minions/donate/login.py' = ['T201']
 
 # ---------------------------------------------------------------- mypy

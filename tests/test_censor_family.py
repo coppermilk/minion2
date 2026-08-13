@@ -12,8 +12,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from typing import Any
 
-import pytest
-
 from minion_core.adapters import llm
 from minion_core.adapters import tg
 from minion_core.adapters.files import Mask
@@ -27,6 +25,8 @@ from tests.conftest import make_cfg
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
     from minion_core.settings import Settings
 

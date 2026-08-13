@@ -9,7 +9,6 @@ import re
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from minion_core.kernel import DisposeSource
@@ -26,6 +25,7 @@ from minion_core.kernel import run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     import pytest
 
