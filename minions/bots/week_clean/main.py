@@ -47,7 +47,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         return 0
     # Lazy: importing clean_week pulls the vision stack (torch); do it
     # only on a run that actually fires, not on every polled minute.
-    from minion_core.adapters.library import clean_week  # noqa: PLC0415
+    from minion_core.adapters.library import clean_week
 
     clean_week(cfg, log)
     return 0

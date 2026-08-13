@@ -52,7 +52,7 @@ def run_service_app(step: str, make: Make) -> int:
     sys.stdout.flush()
     uvicorn.run(
         create_app(step, make),
-        host='0.0.0.0',  # noqa: S104 -- bound inside the container; expose per compose
+        host='0.0.0.0',
         port=port,
         log_config=None,
     )

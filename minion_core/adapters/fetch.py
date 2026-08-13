@@ -174,7 +174,7 @@ def _run_ytdlp(argv: list[str], timeout: float) -> Path:
     """
     report = progress.current() or _ignore
     out_pump, err_pump = _Pump(report), _Pump(report)
-    proc = subprocess.Popen(  # noqa: S603 -- fixed binary, no shell
+    proc = subprocess.Popen(
         argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     readers = [

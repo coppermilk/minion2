@@ -49,7 +49,7 @@ class PrintPdf(Step):
     def process(self, job: Job) -> Verdict:
         """Print; the file itself is the delivered result."""
         try:
-            proc = subprocess.run(  # noqa: S603 -- configured argv, no shell
+            proc = subprocess.run(
                 [*self._cfg.print_spooler, str(job.src)],
                 capture_output=True,
                 timeout=self._cfg.print_timeout_sec,

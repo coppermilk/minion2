@@ -114,7 +114,7 @@ def sanitize(name: str) -> str:
 
 def _today() -> date:
     """Local calendar date -- the naming intent (not a UTC instant)."""
-    return date.today()  # noqa: DTZ011 -- local date is the naming intent
+    return date.today()
 
 
 def stem(name: str, source: str, when: date | None = None) -> str:

@@ -103,7 +103,7 @@ def frames(src: Path, out: Path, spec: FrameSpec) -> list[Path]:
 def _run(argv: list[str], timeout_sec: int) -> str:
     """Run one bounded ffmpeg-family call; loud on any refusal."""
     try:
-        proc = subprocess.run(  # noqa: S603 -- fixed binary, no shell
+        proc = subprocess.run(
             argv,
             capture_output=True,
             text=True,
