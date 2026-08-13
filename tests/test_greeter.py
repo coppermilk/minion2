@@ -48,7 +48,7 @@ def _leave(eid, uid):
     )
 
 
-class _PeerFlood(Exception):
+class _PeerFloodError(Exception):
     """Its type name contains 'Flood', which greeter._dm treats as a flood."""
 
 
@@ -207,7 +207,7 @@ def test_flood_defers_the_rest(tmp_path: Path) -> None:
     asyncio.run(g.sync())
     client.log += [_join(2, 10), _join(3, 11)]
     for uid in (10, 11):
-        client.fail[uid] = _PeerFlood()
+        client.fail[uid] = _PeerFloodError()
     asyncio.run(g.sync())
     assert client.dms == []  # aborted on the first flood
     assert g.state.last_event_id == 1  # cursor NOT advanced -> retried later

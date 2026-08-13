@@ -76,7 +76,7 @@ class GreeterState:
     dm_today: int = 0  # DMs already sent today (against max_dm_per_day)
 
 
-class _FloodStop(Exception):
+class _FloodStopError(Exception):
     """Raised to abort a DM cycle when Telegram flags us for flooding."""
 
 
@@ -235,7 +235,7 @@ class Greeter:
         for eid, uid, joined, left in sorted(events):
             try:
                 did = await self._handle(uid, joined=joined, left=left)
-            except _FloodStop:
+            except _FloodStopError:
                 log.warning('greeter: cap hit; the rest wait for a later poll')
                 break
             self.state.last_event_id = max(self.state.last_event_id, eid)
@@ -264,14 +264,14 @@ class Greeter:
         return self.params.welcome
 
     async def _dm(self, uid: int, text: str) -> bool:
-        """One rate-limited DM; False on a skip, raise _FloodStop to stop.
+        """One rate-limited DM; False on a skip, raise _FloodStopError to stop.
 
-        Stops (raises _FloodStop) when the daily ceiling is reached or Telegram
-        flags a flood -- the strongest guard against a spam-ban.
+        Stops (raises _FloodStopError) when the daily ceiling is reached or
+        Telegram flags a flood -- the strongest guard against a spam-ban.
         """
         if not self._daily_budget_left():
             log.info('greeter: daily DM cap reached, stopping for today')
-            raise _FloodStop
+            raise _FloodStopError
         await self._rate_limit()
         body = await self._personalize(uid, text)
         try:
@@ -284,7 +284,7 @@ class Greeter:
             name = type(exc).__name__
             log.warning('greeter: DM to %s failed (%s)', uid, name)
             if 'Flood' in name:
-                raise _FloodStop from exc
+                raise _FloodStopError from exc
             return False
         self.state.dm_today += 1
         self._save()

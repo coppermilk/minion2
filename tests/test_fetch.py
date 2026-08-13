@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from minion_core.adapters import fetch
-from minion_core.adapters.files import QuotaExceeded
+from minion_core.adapters.files import QuotaExceededError
 from minion_core.kernel import Disposition
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
@@ -40,7 +40,7 @@ REJECTED_URLS = (
 @pytest.mark.parametrize('url', REJECTED_URLS)
 def test_ssrf_rejection_table(url: str) -> None:
     """REQ-SEC-001: private/reserved destinations rejected."""
-    with pytest.raises(fetch.Blocked, match='ssrf_blocked'):
+    with pytest.raises(fetch.BlockedError, match='ssrf_blocked'):
         fetch.guard(url)
 
 
@@ -80,7 +80,7 @@ def test_quota_pre_check_rejects_before_transfer(
         raise AssertionError('transfer must not start')
 
     monkeypatch.setattr(subprocess, 'run', no_subprocess)
-    with pytest.raises(QuotaExceeded, match='pre-transfer'):
+    with pytest.raises(QuotaExceededError, match='pre-transfer'):
         fetch.download('http://93.184.216.34/v', cfg.inbox, cfg)
 
 
@@ -117,7 +117,7 @@ def test_direct_transfer_aborts_mid_stream(
         fetch.urllib.request, 'build_opener', lambda *h: _Opener()
     )
     target = cfg.bot_dir('fetch') / 'direct.bin'
-    with pytest.raises(QuotaExceeded):
+    with pytest.raises(QuotaExceededError):
         fetch.download_direct('http://93.184.216.34/f', target, cfg)
     assert not target.exists()
     assert list(target.parent.glob('*.part')) == []
@@ -136,7 +136,7 @@ def _url_job(cfg: Settings, url: str) -> Job:
 
 
 def test_fetch_link_maps_ssrf_to_rejected(tmp_path: Path) -> None:
-    """The step converts Blocked into the stable reason code."""
+    """The step converts BlockedError into the stable reason code."""
     cfg = make_cfg(tmp_path / 'drive')
     verdict = fetch.FetchLink(cfg).process(
         _url_job(cfg, 'http://127.0.0.1/x'),

@@ -32,7 +32,7 @@ except ImportError:
 
 from minion_core import progress
 from minion_core.adapters.files import BudgetWriter
-from minion_core.adapters.files import QuotaExceeded
+from minion_core.adapters.files import QuotaExceededError
 from minion_core.adapters.files import free_quota
 from minion_core.adapters.files import sanitize
 from minion_core.kernel import Disposition
@@ -62,11 +62,11 @@ _YOUTUBE_HOSTS = (
 )
 
 
-class Blocked(Exception):
+class BlockedError(Exception):
     """SSRF guard rejection; reason code ``ssrf_blocked``."""
 
 
-class FetchFailed(Exception):
+class FetchFailedError(Exception):
     """The extractor gave up; reason code ``stale_extractor``."""
 
 
@@ -78,21 +78,21 @@ def guard(url: str) -> None:
     """
     parts = urlsplit(url)
     if parts.scheme not in ('http', 'https'):
-        raise Blocked(f'ssrf_blocked: scheme {parts.scheme!r}')
+        raise BlockedError(f'ssrf_blocked: scheme {parts.scheme!r}')
     host = parts.hostname
     if not host:
-        raise Blocked('ssrf_blocked: no host')
+        raise BlockedError('ssrf_blocked: no host')
     for addr in _addresses(host):
         if not addr.is_global:
-            raise Blocked(f'ssrf_blocked: {host} -> {addr}')
+            raise BlockedError(f'ssrf_blocked: {host} -> {addr}')
 
 
 def _addresses(host: str) -> list[IPv4Address | IPv6Address]:
-    """Every address the host resolves to; unresolvable -> Blocked."""
+    """Every address the host resolves to; unresolvable -> BlockedError."""
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError as exc:
-        raise Blocked(f'ssrf_blocked: unresolvable {host}') from exc
+        raise BlockedError(f'ssrf_blocked: unresolvable {host}') from exc
     return [ip_address(str(info[4][0])) for info in infos]
 
 
@@ -101,12 +101,12 @@ def download(url: str, into: Path, cfg: Settings) -> Path:
 
     Streams yt-dlp's percent to the progress sink (minion_core.progress)
     while it runs, so a caller (svc-fetch's job) can show a live bar.
-    Raises Blocked / QuotaExceeded / subprocess.TimeoutExpired /
-    FetchFailed; the FetchLink step maps each to its reason code.
+    Raises BlockedError / QuotaExceededError / subprocess.TimeoutExpired /
+    FetchFailedError; the FetchLink step maps each to its reason code.
     """
     guard(url)
     if free_quota(cfg) <= 0:
-        raise QuotaExceeded('quota_exceeded: pre-transfer')
+        raise QuotaExceededError('quota_exceeded: pre-transfer')
     into.mkdir(parents=True, exist_ok=True)
     return _run_ytdlp(_argv(url, into, cfg), cfg.download_timeout_sec)
 
@@ -191,7 +191,7 @@ def _run_ytdlp(argv: list[str], timeout: float) -> Path:
             reader.join(timeout=1.0)
     if proc.returncode != 0:
         tail = ' | '.join(err_pump.tail) or ' | '.join(out_pump.tail)
-        raise FetchFailed(f'stale_extractor: {tail[-500:]}')
+        raise FetchFailedError(f'stale_extractor: {tail[-500:]}')
     return _output_path(out_pump.tail)
 
 
@@ -203,7 +203,7 @@ def _output_path(lines: deque[str]) -> Path:
     """The last stdout line (the --print filepath)."""
     got = Path(lines[-1]) if lines else Path()
     if not got.is_file():
-        raise FetchFailed('stale_extractor: no output file')
+        raise FetchFailedError('stale_extractor: no output file')
     return got
 
 
@@ -257,7 +257,7 @@ def download_direct(url: str, target: Path, cfg: Settings) -> Path:
     guard(url)
     budget = free_quota(cfg)
     if budget <= 0:
-        raise QuotaExceeded('quota_exceeded: pre-transfer')
+        raise QuotaExceededError('quota_exceeded: pre-transfer')
     deadline = monotonic() + cfg.download_timeout_sec
     opener = urllib.request.build_opener(_GuardedRedirect())
     writer = BudgetWriter(target, budget)
@@ -314,19 +314,19 @@ class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _FAILURES: tuple[tuple[type[BaseException], Disposition, str], ...] = (
-    (Blocked, Disposition.REJECTED, 'ssrf_blocked'),
-    (QuotaExceeded, Disposition.REJECTED, 'quota_exceeded'),
+    (BlockedError, Disposition.REJECTED, 'ssrf_blocked'),
+    (QuotaExceededError, Disposition.REJECTED, 'quota_exceeded'),
     (subprocess.TimeoutExpired, Disposition.FAILED, 'download_timeout'),
     (TimeoutError, Disposition.FAILED, 'download_timeout'),
-    (FetchFailed, Disposition.FAILED, 'stale_extractor'),
+    (FetchFailedError, Disposition.FAILED, 'stale_extractor'),
 )
 
 _CAUGHT = (
-    Blocked,
-    QuotaExceeded,
+    BlockedError,
+    QuotaExceededError,
     subprocess.TimeoutExpired,
     TimeoutError,
-    FetchFailed,
+    FetchFailedError,
 )
 
 

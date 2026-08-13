@@ -10,7 +10,7 @@ import pytest
 from minion_core.adapters.files import BatchLock
 from minion_core.adapters.files import BudgetWriter
 from minion_core.adapters.files import Deliver
-from minion_core.adapters.files import QuotaExceeded
+from minion_core.adapters.files import QuotaExceededError
 from minion_core.adapters.files import Shelve
 from minion_core.adapters.files import atomic_write
 from minion_core.adapters.files import free_quota
@@ -150,7 +150,7 @@ def test_budget_writer_aborts_mid_stream(tmp_path: Path) -> None:
     """REQ-RES-002: the mid-stream check kills an oversize stream."""
     writer = BudgetWriter(tmp_path / 'big.bin', budget=10)
     writer.write(b'12345678')
-    with pytest.raises(QuotaExceeded, match='quota_exceeded'):
+    with pytest.raises(QuotaExceededError, match='quota_exceeded'):
         writer.write(b'12345678')
     assert list(tmp_path.iterdir()) == []  # no partials, no target
 

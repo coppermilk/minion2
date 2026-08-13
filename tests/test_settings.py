@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from minion_core.settings import BadConfig
+from minion_core.settings import BadConfigError
 from minion_core.settings import load
 
 if TYPE_CHECKING:
@@ -15,19 +15,19 @@ if TYPE_CHECKING:
 
 def test_relative_drive_raises() -> None:
     """REQ-CFG-001: a relative path override is rejected at load."""
-    with pytest.raises(BadConfig, match='bad_config'):
+    with pytest.raises(BadConfigError, match='bad_config'):
         load({'DRIVE': 'relative/drive'})
 
 
 def test_relative_source_dir_raises(tmp_path: Path) -> None:
     """REQ-CFG-001 covers every path field, not just DRIVE."""
-    with pytest.raises(BadConfig, match='SOURCE_DIRS'):
+    with pytest.raises(BadConfigError, match='SOURCE_DIRS'):
         load({'DRIVE': str(tmp_path), 'SOURCE_DIRS': 'Downloads'})
 
 
 def test_missing_drive_raises() -> None:
     """No DRIVE, no start: the tree has exactly one root."""
-    with pytest.raises(BadConfig, match='DRIVE'):
+    with pytest.raises(BadConfigError, match='DRIVE'):
         load({})
 
 
@@ -95,9 +95,9 @@ def test_port_axes_coerce_one_line_each(tmp_path: Path) -> None:
 
 def test_relative_watch_dir_raises(tmp_path: Path) -> None:
     """REQ-CFG-001 covers the new path fields for free."""
-    with pytest.raises(BadConfig, match='CENSOR_BLUR_WATCH'):
+    with pytest.raises(BadConfigError, match='CENSOR_BLUR_WATCH'):
         load({'DRIVE': str(tmp_path), 'CENSOR_BLUR_WATCH': 'relative/dir'})
-    with pytest.raises(BadConfig, match='CATCH_DIR'):
+    with pytest.raises(BadConfigError, match='CATCH_DIR'):
         load({'DRIVE': str(tmp_path), 'CATCH_DIR': 'Downloads'})
 
 
@@ -115,5 +115,5 @@ def test_foreign_platform_path_is_absolute(tmp_path: Path) -> None:
     assert cfg.catch_dir is not None  # accepted, not rejected
     posix = load({'DRIVE': '/volume1/media', 'CATCH_DIR': '/mnt/dl'})
     assert posix.catch_dir is not None  # POSIX absolute still fine
-    with pytest.raises(BadConfig, match='CATCH_DIR'):
+    with pytest.raises(BadConfigError, match='CATCH_DIR'):
         load({'DRIVE': str(tmp_path), 'CATCH_DIR': 'a\\b'})  # relative

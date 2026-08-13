@@ -27,7 +27,7 @@ UNKNOWN = 'Unknown'
 """The fandom folder sparse fandoms demote into (BLUEPRINT 9)."""
 
 
-class BadConfig(ValueError):
+class BadConfigError(ValueError):
     """Invalid override; the loud start-refusal of REQ-CFG-001."""
 
 
@@ -159,7 +159,7 @@ def load(env: Mapping[str, str]) -> Settings:
 
     drive = get('DRIVE')
     if not drive:
-        raise BadConfig('bad_config: DRIVE is required')
+        raise BadConfigError('bad_config: DRIVE is required')
     return Settings(
         drive=_abs('DRIVE', drive),
         download_timeout_sec=int(get('DOWNLOAD_TIMEOUT_SEC')),
@@ -207,7 +207,7 @@ def _abs(name: str, raw: str) -> Path:
         PureWindowsPath(raw).is_absolute()
     )
     if not absolute:
-        raise BadConfig(f'bad_config: {name} must be absolute: {raw}')
+        raise BadConfigError(f'bad_config: {name} must be absolute: {raw}')
     return Path(raw)
 
 

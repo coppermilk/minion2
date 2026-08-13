@@ -57,7 +57,7 @@ __all__ = [
     'Deliver',
     'HideSpec',
     'Mask',
-    'QuotaExceeded',
+    'QuotaExceededError',
     'Shelve',
     'atomic_write',
     'blur_masked',
@@ -92,7 +92,7 @@ _SPACES = re.compile(r'\s+')
 _JPEG = ('.jpg', '.jpeg')
 
 
-class QuotaExceeded(Exception):
+class QuotaExceededError(Exception):
     """Disk budget exhausted; reason code ``quota_exceeded``."""
 
 
@@ -206,7 +206,7 @@ class BudgetWriter:
         self._written += len(chunk)
         if self._written > self._budget:
             self.abort()
-            raise QuotaExceeded(f'quota_exceeded: {self._target.name}')
+            raise QuotaExceededError(f'quota_exceeded: {self._target.name}')
         self._fh.write(chunk)
 
     def commit(self) -> Path:
