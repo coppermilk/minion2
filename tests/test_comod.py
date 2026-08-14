@@ -108,7 +108,7 @@ def test_load_comod_params_defaults() -> None:
     params = comod.load_comod_params({})
     assert params.max_shelves == len(params.slots) == _MAX_SHELVES
     assert params.text_color == (255, 255, 255)
-    assert params.slots[0] == (440, 73, 325, 206)
+    assert params.slots[0] == (347, 73, 412, 203)
 
 
 def test_load_comod_params_reads_section() -> None:
