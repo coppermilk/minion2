@@ -502,6 +502,21 @@ def _blit(draw: ImageDraw.ImageDraw, text: str, placed: _Placed) -> None:
     draw.text((x, top), text, font=placed.font, fill=placed.fill)
 
 
+def _line_height(font: _Font, fallback: float) -> float:
+    """Measure a font's full line height (ascent+descent); ``fallback`` if not.
+
+    Stack shelf lines by line height, not the measured ink height, so the
+    amount clears the nick's descenders -- an italic serif dips well below the
+    baseline, and ink height alone lets the next line ride up into it.
+    """
+    from PIL import ImageFont
+
+    if isinstance(font, ImageFont.FreeTypeFont):
+        ascent, descent = font.getmetrics()
+        return float(ascent + descent)
+    return fallback
+
+
 @dataclass(frozen=True)
 class CabinetSpec:
     r"""What to draw on the cabinet photo, and how.
@@ -592,13 +607,17 @@ def render_cabinet(template: Path, out: Path, spec: CabinetSpec) -> Path:
             amount,
             _Fit(max_w, height * _CABINET_AMOUNT_H, font_for(amount), a_size),
         )
-        gap = max(2, nh // 6)
-        top = y + (height - (nh + gap + ah)) / 2
+        # Stack by full line height so the amount clears the nick's descenders
+        # (an italic serif dips well below the baseline).
+        n_lh = _line_height(n_font, nh)
+        a_lh = _line_height(a_font, ah)
+        gap = max(1, round(n_lh * 0.04))
+        top = y + (height - (n_lh + gap + a_lh)) / 2
         _blit(draw, nick, _Placed(n_font, (center_x - nw / 2, top), *ink))
         _blit(
             draw,
             amount,
-            _Placed(a_font, (center_x - aw / 2, top + nh + gap), *ink),
+            _Placed(a_font, (center_x - aw / 2, top + n_lh + gap), *ink),
         )
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
