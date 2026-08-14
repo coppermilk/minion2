@@ -184,13 +184,15 @@ def test_assign_labels_leaves_spare_slots_blank() -> None:
 
 
 def test_move_in_text_fills_placeholders() -> None:
-    """{nick} (without '@') and {link} are substituted into the template."""
-    templates = {'move_in': '@{nick} welcome -> {link}'}
-    result = comod.move_in_text(templates, '@Bob', 'http://d')
-    assert result == '@Bob welcome -> http://d'
+    """{nick} (no '@') and the named link URLs fill into the template."""
+    templates = {'move_in': '@{nick}: {amazon} or {link}'}
+    result = comod.move_in_text(
+        templates, '@Bob', {'link': 'http://d', 'amazon': 'http://a'}
+    )
+    assert result == '@Bob: http://a or http://d'
 
 
 def test_move_in_text_picks_from_a_variant_list() -> None:
     """A list of variants is supported (a single entry is deterministic)."""
     templates = {'move_in': ['only {nick}']}
-    assert comod.move_in_text(templates, 'Bob', 'x') == 'only Bob'
+    assert comod.move_in_text(templates, 'Bob', {}) == 'only Bob'

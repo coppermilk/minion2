@@ -1775,7 +1775,14 @@ class Aggregator:
         tpl = self._comod.templates
         if not residents:
             return str(tpl.get('empty', ''))
-        return comod.move_in_text(tpl, '', self._comod.donate_link)
+        return comod.move_in_text(
+            tpl,
+            '',
+            {
+                'link': self._comod.donate_link,
+                'amazon': self._comod.amazon_link,
+            },
+        )
 
     async def propiska_report(self) -> None:
         """Post the month's cabinet registry as text (/propiska_shkaf_month).

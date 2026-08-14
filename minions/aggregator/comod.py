@@ -56,7 +56,8 @@ class ComodParams:
     """The cabinet's config, from the constants JSON 'comod' section."""
 
     templates: dict[str, object]
-    donate_link: str
+    donate_link: str  # the {link} in the announcement (the donation URL)
+    amazon_link: str  # the {amazon} in the announcement (the wishlist URL)
     template_path: str  # the base cabinet photo to draw onto
     font_path: str  # the primary TTF (empty: fall back to system fonts)
     font_cyrillic_path: str  # fallback TTF for lines with Cyrillic (may be '')
@@ -214,6 +215,7 @@ def load_comod_params(data: dict[str, object]) -> ComodParams:
     return ComodParams(
         templates=templates,
         donate_link=str(cfg.get('donate_link', '')),
+        amazon_link=str(cfg.get('amazon_link', '')),
         template_path=str(render.get('template', '')),
         font_path=str(render.get('font', '')),
         font_cyrillic_path=str(render.get('font_cyrillic', '')),
@@ -295,9 +297,17 @@ def _pick(value: object) -> str:
     return str(value or '')
 
 
-def move_in_text(templates: dict[str, object], nick: str, link: str) -> str:
-    """Return the "you moved in" announcement, {nick}/{link} filled."""
-    body = _pick(templates.get('move_in'))
-    return body.replace('{nick}', nick.lstrip('@').strip()).replace(
-        '{link}', link
+def move_in_text(
+    templates: dict[str, object], nick: str, links: dict[str, str]
+) -> str:
+    """Return the "you moved in" announcement, {nick} and link URLs filled.
+
+    ``links`` maps a placeholder name to a URL, so ``{'link': ..., 'amazon':
+    ...}`` fills ``{link}`` and ``{amazon}`` in the template.
+    """
+    body = _pick(templates.get('move_in')).replace(
+        '{nick}', nick.lstrip('@').strip()
     )
+    for name, url in links.items():
+        body = body.replace('{' + name + '}', url)
+    return body
