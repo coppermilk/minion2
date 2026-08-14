@@ -30,20 +30,23 @@ def test_add_then_active_returns_nick_and_amount(tmp_path: Path) -> None:
     assert roster.active(1001.0) == [('Nick_01', '50')]
 
 
-def test_expires_after_seven_days(tmp_path: Path) -> None:
-    """A shelf frees up ('moved out') once the 7-day timer passes."""
+def test_expires_after_the_ttl(tmp_path: Path) -> None:
+    """A shelf frees up ('moved out') once the month-long timer passes."""
     roster = _roster(tmp_path)
     roster.add('Nick_01', '50', 1000.0)
-    assert roster.active(1000.0 + 6 * DAY) == [('Nick_01', '50')]
-    assert roster.active(1000.0 + 8 * DAY) == []
+    assert roster.active(1000.0 + comod.COMOD_TTL_SEC - DAY) == [
+        ('Nick_01', '50'),
+    ]
+    assert roster.active(1000.0 + comod.COMOD_TTL_SEC + DAY) == []
 
 
 def test_readd_refreshes_timer_and_amount(tmp_path: Path) -> None:
-    """Re-seating a nick renews its week and updates the amount."""
+    """Re-seating a nick renews its timer and updates the amount."""
     roster = _roster(tmp_path)
     roster.add('Nick_01', '50', 1000.0)
-    roster.add('Nick_01', '90', 1000.0 + 6 * DAY)
-    assert roster.active(1000.0 + 8 * DAY) == [('Nick_01', '90')]
+    midlife = 1000.0 + comod.COMOD_TTL_SEC - DAY
+    roster.add('Nick_01', '90', midlife)
+    assert roster.active(midlife + 2 * DAY) == [('Nick_01', '90')]
 
 
 def test_most_recent_move_in_first(tmp_path: Path) -> None:

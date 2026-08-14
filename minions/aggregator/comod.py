@@ -3,12 +3,12 @@
 """The cabinet ("komod"/"shkaf"): a shelf roster for supporters.
 
 A supporter "moves into the cabinet" and gets a named shelf for a while; when
-more than ``COMOD_TTL_SEC`` (seven days) pass since their move-in, they are
+more than ``COMOD_TTL_SEC`` (a month) passes since their move-in, they are
 pruned -- the shelf frees up ("s'ekhal"). This is the same rolling-TTL shape as
 the donations bot's bed roster, rebuilt here so the aggregator owns it.
 
 The roster is a ``nick -> {at, amount}`` map on disk: ``at`` is the move-in
-epoch (the seven-day timer), ``amount`` is how much they donated (a free
+epoch (the month-long timer), ``amount`` is how much they donated (a free
 string, rendered as ``$N`` under the nick on the shelf). ``main.py`` drives it
 from the ``/comod`` command and renders the current residents onto the cabinet
 photo via ``minion_core.adapters.files.render_cabinet`` (the sole Pillow site).
@@ -27,8 +27,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-COMOD_TTL_SEC = 7 * 24 * 3600
-"""How long a nick keeps its shelf before it frees up: seven days."""
+COMOD_TTL_SEC = 30 * 24 * 3600
+"""How long a nick keeps its shelf before it frees up: a month (30 days)."""
 
 # A parsed colour row is [r, g, b]; a slot box is [x, y, w, h].
 _RGB_LEN = 3
@@ -74,7 +74,7 @@ class CabinetRoster:
     """Who is in the cabinet: a nick kept for ``COMOD_TTL_SEC``.
 
     A ``nick -> {"at": epoch, "amount": str}`` map on disk. A fresh move-in
-    refreshes the seven-day timer; expired nicks are pruned on every write, so
+    refreshes the month-long timer; expired nicks are pruned on every write, so
     the file never grows without bound. Methods take ``now`` so tests drive a
     clock (the same shape as the bed roster).
     """

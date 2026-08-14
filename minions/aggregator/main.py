@@ -51,6 +51,7 @@ back next to this package.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -1691,13 +1692,17 @@ class Aggregator:
         n = len(residents)
         if image is not None:
             try:
-                await self.client.send_file(chat, str(image), caption=caption)
+                await self.client.send_file(
+                    chat, str(image), caption=caption, parse_mode='html'
+                )
             except Exception:  # noqa: BLE001 -- bad render falls back to text
                 log.warning('comod: image send failed; posting as text')
             else:
                 log.info('comod: posted cabinet (%d in) to %s', n, chat)
                 return
-        await self.client.send_message(chat, caption, link_preview=False)
+        await self.client.send_message(
+            chat, caption, parse_mode='html', link_preview=False
+        )
         log.info('comod: posted cabinet text (%d in) to %s', n, chat)
 
     def _comod_chat(self) -> object:
@@ -1774,9 +1779,11 @@ class Aggregator:
         else:
             return str(tpl.get('empty', ''))
         line = str(tpl.get('roster_line', '- {label}'))
-        # Same ranking as the shelves: biggest donor first.
+        # The caption is sent as HTML (premium emoji + the link), so a nick
+        # from a command is escaped. Same ranking as shelves: biggest first.
         body = '\n'.join(
-            line.format(label=nick) for nick, _ in comod.by_amount(residents)
+            line.format(label=html.escape(nick))
+            for nick, _ in comod.by_amount(residents)
         )
         return f'{head}\n{body}' if head else body
 
