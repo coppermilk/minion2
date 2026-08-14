@@ -49,6 +49,17 @@ def test_readd_refreshes_timer_and_amount(tmp_path: Path) -> None:
     assert roster.active(midlife + 2 * DAY) == [('Nick_01', '90')]
 
 
+def test_entries_carry_the_move_in_date(tmp_path: Path) -> None:
+    """``entries`` returns (nick, amount, at), newest move-in first."""
+    roster = _roster(tmp_path)
+    roster.add('First', '1', 1000.0)
+    roster.add('Second', '2', 2000.0)
+    assert roster.entries(2001.0) == [
+        ('Second', '2', 2000.0),
+        ('First', '1', 1000.0),
+    ]
+
+
 def test_most_recent_move_in_first(tmp_path: Path) -> None:
     """``active`` is ordered newest move-in first."""
     roster = _roster(tmp_path)

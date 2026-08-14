@@ -244,11 +244,14 @@ COMMAND_GREETNOW = '/greetnow'
 # join/leave) when the users database is enabled.
 COMMAND_USERS = '/users'
 # /comod manages the cabinet ("shkaf"): '/comod <nick> <amount>' moves a
-# supporter onto a named shelf (a 7-day timer) and posts the rendered cabinet
-# photo plus a move-in announcement; '/comod' alone shows who is in now;
+# supporter onto a named shelf (a 30-day timer) and posts the rendered cabinet
+# photo plus the move-in announcement; '/comod' alone re-posts the cabinet;
 # '/comod kick <nick>' evicts by hand. Takes arguments, so it is matched by
 # prefix, not by exact text like the others.
 COMMAND_COMOD = '/comod'
+# /propiska_shkaf_month prints the month's cabinet registry as text: one line
+# per resident -- a random premium heart, the nick, and the move-in date.
+COMMAND_PROPISKA = '/propiska_shkaf_month'
 # /test and /live switch where posts go: /test routes ALL posts to TEST_CHAT_ID
 # (a test channel), /live routes them back to the live targets. Persisted, so
 # the mode survives a restart.
@@ -1383,6 +1386,7 @@ class Aggregator:
             COMMAND_CATNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
             COMMAND_USERS: self.users_report,
+            COMMAND_PROPISKA: self.propiska_report,
             COMMAND_TEST: self.enter_test,
             COMMAND_LIVE: self.enter_live,
         }
@@ -1650,18 +1654,18 @@ class Aggregator:
         log.info('greetnow: %s', summary)
 
     async def cabinet_command(self, text: str) -> None:
-        """Move a nick into the cabinet, evict one, or show who is in now.
+        """Move a nick into the cabinet, evict one, or re-post the cabinet.
 
-        ``/comod <nick> <amount>`` seats NICK on a shelf (refreshing the 7-day
-        timer) and posts the rendered cabinet photo with a move-in
-        announcement; ``/comod kick <nick>`` evicts by hand and re-posts the
-        cabinet; a bare ``/comod`` just shows the current cabinet. Expired
-        nicks are pruned by the roster on every write and read, so a shelf
-        frees up ("s'ekhal") seven days after its move-in with no extra step.
+        ``/comod <nick> <amount>`` seats NICK on a shelf (refreshing the 30-day
+        timer) and posts the rendered cabinet photo with the announcement;
+        ``/comod kick <nick>`` evicts by hand and re-posts; a bare ``/comod``
+        just re-posts the cabinet. Expired nicks are pruned by the roster on
+        every write and read, so a shelf frees up ("s'ekhal") a month after
+        its move-in with no extra step. The month's roster of who lives where
+        is a separate command (``/propiska_shkaf_month``).
         """
         args = text.split()[1:]
         now = time.time()
-        moved_in = ''
         if args and args[0].lower() == 'kick':
             target = args[1].lstrip('@') if len(args) > 1 else ''
             if not target:
@@ -1675,18 +1679,18 @@ class Aggregator:
             amount = args[1] if len(args) > 1 else ''
             self.comod.add(moved_in, amount, now)
             log.info('comod: moved in %s (%s)', moved_in, amount or '-')
-        await self._post_cabinet(moved_in, now)
+        await self._post_cabinet(now)
 
-    async def _post_cabinet(self, moved_in: str, now: float) -> None:
-        """Render and post the cabinet; text-roster fallback on failure.
+    async def _post_cabinet(self, now: float) -> None:
+        """Render and post the cabinet; text fallback on a render failure.
 
         Always posts to the source chat (where the command was issued). When
         there are more active residents than shelves, only the TOP donors by
-        amount are shown (the picture and the nick list both).
+        amount are drawn on the picture.
         """
         active = self.comod.active(now)
         residents = comod.by_amount(active)[: self._comod.max_shelves]
-        caption = self._cabinet_caption(moved_in, residents)
+        caption = self._cabinet_caption(residents)
         chat = self._comod_chat()
         image = self._render_cabinet(residents)
         n = len(residents)
@@ -1761,31 +1765,63 @@ class Aggregator:
         path = self._comod_asset(rel)
         return str(path) if path is not None and path.is_file() else ''
 
-    def _cabinet_caption(
-        self, moved_in: str, residents: list[tuple[str, str]]
-    ) -> str:
-        """Return the caption under the cabinet: a header, then a nick list.
+    def _cabinet_caption(self, residents: list[tuple[str, str]]) -> str:
+        """Return the photo caption: the announcement, or the empty note.
 
-        The donated amounts live ONLY on the rendered shelves; the text below
-        the photo is just the move-in announcement (or the roster header) plus
-        a bulleted list of nicks, no money.
+        Only the announcement (with its premium emoji and donation link); who
+        lives on which shelf is shown on the picture, and the month's roster is
+        the separate /propiska command.
         """
         tpl = self._comod.templates
-        if moved_in:
-            head = comod.move_in_text(tpl, moved_in, self._comod.donate_link)
-        elif residents:
-            raw = str(tpl.get('roster_head', ''))
-            head = raw.format(count=len(residents)) if raw else ''
-        else:
+        if not residents:
             return str(tpl.get('empty', ''))
-        line = str(tpl.get('roster_line', '- {label}'))
-        # The caption is sent as HTML (premium emoji + the link), so a nick
-        # from a command is escaped. Same ranking as shelves: biggest first.
-        body = '\n'.join(
-            line.format(label=html.escape(nick))
-            for nick, _ in comod.by_amount(residents)
+        return comod.move_in_text(tpl, '', self._comod.donate_link)
+
+    async def propiska_report(self) -> None:
+        """Post the month's cabinet registry as text (/propiska_shkaf_month).
+
+        One line per resident -- a random premium heart, the nick, and the
+        move-in date -- sent as HTML so the hearts render as premium emoji.
+        """
+        tpl = self._comod.templates
+        entries = self.comod.entries(time.time())
+        chat = self._comod_chat()
+        if not entries:
+            await self.client.send_message(
+                chat, str(tpl.get('propiska_empty', '')), parse_mode='html'
+            )
+            return
+        line = str(tpl.get('propiska_line', '{heart} {nick} {date}'))
+        rows = [
+            line.format(
+                heart=self._heart_html(),
+                nick=html.escape(nick),
+                date=self._move_in_date(at),
+            )
+            for nick, _amount, at in entries
+        ]
+        head = str(tpl.get('propiska_head', ''))
+        body = '\n'.join(rows)
+        text = f'{head}\n{body}' if head else body
+        await self.client.send_message(
+            chat, text, parse_mode='html', link_preview=False
         )
-        return f'{head}\n{body}' if head else body
+        log.info('comod: posted propiska (%d) to %s', len(entries), chat)
+
+    def _heart_html(self) -> str:
+        """Return a random heart: a premium <tg-emoji>, or its plain glyph."""
+        hearts = self._comod.hearts
+        if not hearts:
+            return ''
+        emoji_id, fallback = random.choice(hearts)  # noqa: S311 -- decoration
+        if emoji_id:
+            return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+        return fallback
+
+    def _move_in_date(self, at: float) -> str:
+        """Format a move-in epoch as a date in the persona's timezone."""
+        tz = timezone(timedelta(hours=self._comod.tz_offset))
+        return datetime.fromtimestamp(at, tz=tz).strftime('%d.%m.%Y')
 
     async def users_report(self) -> None:
         """Post the users-DB summary to the source chat (/users command)."""

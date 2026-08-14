@@ -67,6 +67,10 @@ class ComodParams:
     max_shelves: int
     text_color: tuple[int, int, int]
     shadow_color: tuple[int, int, int]
+    # Premium hearts for the /propiska list: (emoji_id, fallback) pairs, one
+    # picked at random per line. A blank id means a plain (non-premium) glyph.
+    hearts: tuple[tuple[str, str], ...]
+    tz_offset: float  # persona UTC offset, for the move-in date on /propiska
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,14 @@ class CabinetRoster:
 
     def active(self, now: float) -> list[tuple[str, str]]:
         """(nick, amount) still in the cabinet, most recent move-in first."""
+        return [(nick, amount) for nick, amount, _ in self.entries(now)]
+
+    def entries(self, now: float) -> list[tuple[str, str, float]]:
+        """(nick, amount, move-in epoch), most recent move-in first.
+
+        The dated view behind the month's registry (/propiska): the same fresh
+        residents as ``active`` but carrying their move-in time.
+        """
         roster = self._load()
         fresh = [
             (float(e['at']), n, str(e['amount']))
@@ -140,7 +152,7 @@ class CabinetRoster:
             if now - float(e['at']) < COMOD_TTL_SEC
         ]
         fresh.sort(key=lambda row: row[0], reverse=True)
-        return [(nick, amount) for _, nick, amount in fresh]
+        return [(nick, amount, at) for at, nick, amount in fresh]
 
 
 def _color(
@@ -170,6 +182,26 @@ def _slots(value: object) -> tuple[tuple[int, int, int, int], ...]:
     return tuple(out) or _DEFAULT_SLOTS
 
 
+def _hearts(value: object) -> tuple[tuple[str, str], ...]:
+    """Parse a JSON list of {id, fallback} hearts into (id, fb) pairs."""
+    rows = value if isinstance(value, list) else []
+    return tuple(
+        (str(row.get('id', '')), str(row.get('fallback', '')))
+        for row in rows
+        if isinstance(row, dict)
+    )
+
+
+def _tz_offset(data: dict[str, object]) -> float:
+    """Return the persona's UTC offset, from the shared 'cats' section."""
+    cats = data.get('cats') if isinstance(data.get('cats'), dict) else {}
+    cats = cats or {}
+    try:
+        return float(cats.get('tz_offset_hours', 3.0))
+    except (TypeError, ValueError):
+        return 3.0
+
+
 def load_comod_params(data: dict[str, object]) -> ComodParams:
     """Load the cabinet's params from the constants JSON 'comod' section."""
     cfg = data.get('comod') if isinstance(data.get('comod'), dict) else {}
@@ -195,6 +227,8 @@ def load_comod_params(data: dict[str, object]) -> ComodParams:
         max_shelves=int(render.get('max_shelves') or len(slots)),
         text_color=_color(render.get('text_color'), (255, 255, 255)),
         shadow_color=_color(render.get('shadow_color'), (0, 0, 0)),
+        hearts=_hearts(cfg.get('hearts')),
+        tz_offset=_tz_offset(data),
     )
 
 
