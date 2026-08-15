@@ -37,6 +37,7 @@ def _ts(**over: object) -> object:
 def _params(**over: object) -> object:
     base = {
         'enabled': True,
+        'like_all': False,
         'comments_in_discussion': False,
         'react_to_posts': False,
         'watch_posts': 4,
@@ -250,6 +251,17 @@ def test_skip_probability_drops_a_comment(tmp_path: Path) -> None:
 def test_silent_day_yields_no_cat(tmp_path: Path) -> None:
     """Check silent day yields no cat."""
     brain = _brain(tmp_path, silent_day_prob=1.0)
+    assert brain.schedule('u', engaged=False) is None
+
+
+def test_like_all_bypasses_skip_and_silent_day(tmp_path: Path) -> None:
+    """like_all likes every comment, even under a full skip / silent day."""
+    brain = _brain(
+        tmp_path, like_all=True, skip_prob=1.0, silent_day_prob=1.0
+    )
+    assert brain.schedule('u', engaged=False) is not None
+    assert 'u' in brain.state.catted
+    # Dedup still holds: the same key is not liked twice.
     assert brain.schedule('u', engaged=False) is None
 
 

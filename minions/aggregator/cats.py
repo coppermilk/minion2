@@ -138,6 +138,11 @@ class CatParams:
     """Every tunable, loaded from the constants JSON 'cats' section."""
 
     enabled: bool
+    # Like ABSOLUTELY every comment: bypass the human-like gates (skip_prob,
+    # silent days, the asleep/stale drop) so each comment always gets a like
+    # reaction. Dedup and the manual-reply check still apply -- a comment is
+    # liked once, not repeatedly. Off = the human-like behaviour.
+    like_all: bool
     # When the target is a CHANNEL, its comments live in the linked discussion
     # group. True: resolve each post's discussion thread and react only there
     # (so cats land in the channel post's comments). False: match replies to
@@ -501,15 +506,30 @@ class CatBrain:
         now = self.clock()
         if not self.params.enabled or key in self.state.catted:
             return None
-        if self.rng.random() < self.params.skip_prob:  # principle 7
-            return None
-        when = self._plan(now, engaged=engaged)
-        if when is None:  # asleep / too stale (principle 7)
-            return None
-        if _is_silent_day(when, self.params):  # principle 7
+        # like_all likes every comment: place it at the next awake moment
+        # (always lands). Otherwise the human-like gates may drop it.
+        when = (
+            self._fire_time(now, engaged=engaged)
+            if self.params.like_all
+            else self._planned_when(now, engaged=engaged)
+        )
+        if when is None:
             return None
         self.state.catted.add(key)
         self._save()
+        return when
+
+    def _planned_when(self, now: float, *, engaged: bool) -> float | None:
+        """Return the human-like send time, or None when a gate drops it.
+
+        The gates (principle 7): a random skip, an asleep/too-stale moment, or
+        a whole silent day. ``schedule`` bypasses all three when ``like_all``.
+        """
+        if self.rng.random() < self.params.skip_prob:
+            return None
+        when = self._plan(now, engaged=engaged)
+        if when is None or _is_silent_day(when, self.params):
+            return None
         return when
 
     def _plan(self, now: float, *, engaged: bool) -> float | None:
@@ -877,6 +897,7 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
     like_pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'like'))
     return CatParams(
         enabled=bool(cats.get('enabled', False)),
+        like_all=bool(cats.get('like_all', False)),
         comments_in_discussion=bool(cats.get('comments_in_discussion', False)),
         react_to_posts=bool(cats.get('react_to_posts', False)),
         watch_posts=int(cats.get('watch_posts') or 4),

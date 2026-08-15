@@ -1439,7 +1439,13 @@ class Aggregator:
         on which comment, and the send places that same cat rather than a fresh
         random one.
         """
+        # When liking everything, key per COMMENT (chat:root:person:msg) so a
+        # person's every comment is liked; otherwise once per (post, person).
+        # The key keeps the 'chat:root:' prefix so note_post's pruning holds.
+        like_all = self.cats.params.like_all
         key = f'{comment.chat}:{comment.root}:{person}'
+        if like_all:
+            key = f'{key}:{comment.msg_id}'
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
@@ -1454,9 +1460,14 @@ class Aggregator:
         # non-sequitur. Check content FIRST (so a suppressed sticker does not
         # consume the burst gate), and downgrade to a safe REACTION there.
         allow_sticker = not _needs_human(comment.text, self.consts.human_words)
-        if allow_sticker and self.cats.should_sticker(post_key):
+        sticker = (
+            not like_all
+            and allow_sticker
+            and self.cats.should_sticker(post_key)
+        )
+        if sticker:
             specs, kind = self.cats.pick_cat(seed), 'reply'
-        else:
+        else:  # like_all always places a like reaction (never a sticker)
             specs, kind = self.cats.pick_like(seed), 'react'
         if not specs:  # empty pool -> nothing to place
             return
