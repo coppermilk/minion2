@@ -753,17 +753,12 @@ def _trim(title: str, width: int = 40) -> str:
     return flat if len(flat) <= width else flat[: width - 1] + '~'
 
 
-<<<<<<< Updated upstream
 _EMOJI_ROW_LEN = 2
 """A persisted emoji row is an [id, fallback] pair."""
 
 
-def _pending_glyphs(entry: dict[str, object]) -> str:
-    """Return the cat glyph(s) for a pending entry (fallbacks), or '?'.
-=======
 def _emoji_markup(emoji_id: str, fallback: str) -> str:
     """One `<tg-emoji>` tag so /status renders the real premium emoji.
->>>>>>> Stashed changes
 
     ``build_premium_message`` turns this into the custom-emoji entity (the
     fallback glyph shows for non-premium viewers).
@@ -772,7 +767,7 @@ def _emoji_markup(emoji_id: str, fallback: str) -> str:
 
 
 def _pending_markup(entry: dict[str, object]) -> str:
-    """The chosen cat(s) for a pending entry, as premium-emoji markup, or '?'.
+    """Render a pending entry's chosen cat(s) as premium markup, or '?'.
 
     Reactions scheduled before the emoji were stored show '?' -- a /requeue
     does not re-pick them (the choice is made at schedule time), it only
@@ -780,22 +775,17 @@ def _pending_markup(entry: dict[str, object]) -> str:
     """
     raw = entry.get('emojis')
     rows = raw if isinstance(raw, list) else []
-<<<<<<< Updated upstream
-    glyphs = ''.join(str(row[1]) for row in rows if len(row) == _EMOJI_ROW_LEN)
-    return glyphs or '?'
-=======
     markup = ''.join(
         _emoji_markup(str(row[0]), str(row[1]))
         for row in rows
-        if len(row) == 2  # noqa: PLR2004
+        if len(row) == _EMOJI_ROW_LEN
     )
     return markup or '?'
 
 
 def _pool_markup(pool: tuple[cats.CatEmoji, ...]) -> str:
-    """A whole emoji pool rendered as premium markup (a preview strip)."""
+    """Render a whole emoji pool as premium markup (a preview strip)."""
     return ''.join(_emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
->>>>>>> Stashed changes
 
 
 # Link markers that mean a comment wants a real reply (ASCII, so inline);
