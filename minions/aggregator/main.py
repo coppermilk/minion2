@@ -86,6 +86,7 @@ from minions.aggregator import comod
 from minions.aggregator import greeter
 from minions.aggregator import users
 from minions.aggregator.premium_emoji import RichText
+from minions.aggregator.premium_emoji import build_premium_message
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -752,21 +753,49 @@ def _trim(title: str, width: int = 40) -> str:
     return flat if len(flat) <= width else flat[: width - 1] + '~'
 
 
+<<<<<<< Updated upstream
 _EMOJI_ROW_LEN = 2
 """A persisted emoji row is an [id, fallback] pair."""
 
 
 def _pending_glyphs(entry: dict[str, object]) -> str:
     """Return the cat glyph(s) for a pending entry (fallbacks), or '?'.
+=======
+def _emoji_markup(emoji_id: str, fallback: str) -> str:
+    """One `<tg-emoji>` tag so /status renders the real premium emoji.
+>>>>>>> Stashed changes
 
-    Reactions scheduled before this field existed have no stored emoji, so
-    they show '?' -- a /requeue does not re-pick them (the choice is made at
-    schedule time), it only re-times what is already there.
+    ``build_premium_message`` turns this into the custom-emoji entity (the
+    fallback glyph shows for non-premium viewers).
+    """
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+def _pending_markup(entry: dict[str, object]) -> str:
+    """The chosen cat(s) for a pending entry, as premium-emoji markup, or '?'.
+
+    Reactions scheduled before the emoji were stored show '?' -- a /requeue
+    does not re-pick them (the choice is made at schedule time), it only
+    re-times what is already there.
     """
     raw = entry.get('emojis')
     rows = raw if isinstance(raw, list) else []
+<<<<<<< Updated upstream
     glyphs = ''.join(str(row[1]) for row in rows if len(row) == _EMOJI_ROW_LEN)
     return glyphs or '?'
+=======
+    markup = ''.join(
+        _emoji_markup(str(row[0]), str(row[1]))
+        for row in rows
+        if len(row) == 2  # noqa: PLR2004
+    )
+    return markup or '?'
+
+
+def _pool_markup(pool: tuple[cats.CatEmoji, ...]) -> str:
+    """A whole emoji pool rendered as premium markup (a preview strip)."""
+    return ''.join(_emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
+>>>>>>> Stashed changes
 
 
 # Link markers that mean a comment wants a real reply (ASCII, so inline);
@@ -1615,9 +1644,7 @@ class Aggregator:
         await self.backfill_cat_posts()  # pick up posts made since startup
         await self.backfill_cat_comments()  # queue their new comments (armed)
         count = len(self.cats.state.pending)
-        await self.client.send_message(
-            self.config.source, await self._plan_text(f'Requeued {count}')
-        )
+        await self._send_status(await self._plan_text(f'Requeued {count}'))
         log.info('requeued %d pending cats', count)
 
     async def answer_all_now(self) -> None:
@@ -1632,9 +1659,7 @@ class Aggregator:
         due = self.cats.due_now()
         for cat in due:
             self._arm_cat(cat)
-        await self.client.send_message(
-            self.config.source, await self._plan_text(f'Answering {len(due)}')
-        )
+        await self._send_status(await self._plan_text(f'Answering {len(due)}'))
         log.info('answering %d pending cats now', len(due))
 
     async def _plan_text(self, head: str) -> str:
@@ -2134,10 +2159,24 @@ class Aggregator:
     async def status_report(self) -> None:
         """Post the pending/posted/cat diagnostics to the source chat."""
         labels = await self._chat_labels()
-        await self.client.send_message(
-            self.config.source, self._status_text(labels)
-        )
+        await self._send_status(self._status_text(labels))
         log.info('sent status report to %s', self.config.source)
+
+    async def _send_status(self, text: str) -> None:
+        """Send an operator report, rendering its premium-emoji markup.
+
+        /status, /requeue and /catnow embed `<tg-emoji>` tags for the chosen
+        cats/likes and the pool previews; build_premium_message turns them into
+        custom-emoji entities, so the REAL premium emoji show (a non-premium
+        viewer still sees the fallback glyph). Text without tags sends plain.
+        """
+        message = build_premium_message(text)
+        await self.client.send_message(
+            self.config.source,
+            message.text,
+            formatting_entities=message.entities,
+            link_preview=False,
+        )
 
     async def _chat_labels(self) -> dict[int, str]:
         """Resolve every chat shown in /status to a readable @name or title."""
@@ -2294,6 +2333,8 @@ class Aggregator:
         alive = brain.state.alive
         top = sorted(alive, key=lambda h: alive[h], reverse=True)[:6]
         learned = ', '.join(f'{h}h' for h in top) or '(learning)'
+        likes = _pool_markup(brain.params.like_pool)
+        pool = _pool_markup(brain.params.pool)
         return [
             self._head(
                 'cats',
@@ -2302,6 +2343,8 @@ class Aggregator:
                 f'{len(brain.params.pool)} cats / '
                 f'{len(brain.params.like_pool)} likes',
             ),
+            f'{b} likes {self._arr()} {likes}',
+            f'{b} cats {self._arr()} {pool}',
             (
                 f'{b} mood {brain.state.mood:.2f} {b} answered '
                 f'{len(brain.state.catted)} {b} pending '
@@ -2352,7 +2395,7 @@ class Aggregator:
         root = int(entry.get('root', msg))
         body = str(entry.get('text', ''))
         what = f'"{body}"' if body else f'comment {msg}'
-        glyphs = _pending_glyphs(entry)
+        glyphs = _pending_markup(entry)
         verb = 'sticker' if entry.get('kind') == 'reply' else 'like'
         eta = float(entry.get('when', now)) - now
         when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
