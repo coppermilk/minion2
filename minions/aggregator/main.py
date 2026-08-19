@@ -264,6 +264,10 @@ CAT_REPLY_SCAN = 200
 # How many existing comments per watched thread to consider at startup, so
 # comments made before the bot started can still get a (delayed) cat.
 COMMENT_SCAN = 50
+# Just before a cat fires we re-scan its post's thread so a fresh comment need
+# not wait for the next rescan loop. Throttled per thread to this many seconds
+# so a burst of firings costs at most one extra read per thread (flood-safe).
+PRE_FIRE_REFRESH_SEC = 45.0
 # How many pending cats to list individually in /status (the rest are summed).
 STATUS_PENDING_CATS = 12
 
@@ -997,6 +1001,8 @@ class Aggregator:
         self._cat_next_rescan: float = 0.0  # ts of the next auto-rescan
         self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
         self._enrich_tasks: set[asyncio.Task[None]] = set()
+        # pre-fire thread refresh debounce, keyed by thread root
+        self._thread_rescan_at: dict[int, float] = {}
         rt = self._raw.get('runtime')
         rt = rt if isinstance(rt, dict) else {}
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
@@ -1911,6 +1917,25 @@ class Aggregator:
             task.cancel()
         self._cat_tasks.clear()
 
+    async def _refresh_before_fire(self, cat: cats.Cat) -> None:
+        """Pull new comments in this post's thread just before we like it.
+
+        A comment made between rescan loops would otherwise wait for the next
+        session; re-reading the thread here queues it now. Debounced per thread
+        (``PRE_FIRE_REFRESH_SEC``) so a burst of due cats reads it once.
+        """
+        if not self.cats.params.enabled:
+            return
+        root = cat.root or cat.reply_to
+        now = time.time()
+        if now - self._thread_rescan_at.get(root, 0.0) < PRE_FIRE_REFRESH_SEC:
+            return
+        self._thread_rescan_at[root] = now
+        try:
+            await self._seed_thread_comments(cat.chat, root)
+        except Exception:  # noqa: BLE001 -- best effort; the cat still fires
+            log.warning('cat: pre-fire refresh failed for thread %s', root)
+
     async def _cat_later(self, cat: cats.Cat) -> None:
         """Sleep until the cat is due, then react unless answered by hand.
 
@@ -1921,6 +1946,7 @@ class Aggregator:
         delay = cat.when - time.time()
         if delay > 0:
             await asyncio.sleep(delay)
+        await self._refresh_before_fire(cat)
         try:
             if not await self._should_skip_cat(cat.chat, cat.reply_to):
                 await self._deliver(cat)
