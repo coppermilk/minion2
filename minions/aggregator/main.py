@@ -73,9 +73,13 @@ from typing import TYPE_CHECKING
 
 from telethon import TelegramClient
 from telethon import events
+from telethon import utils
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
 from telethon.tl.functions.messages import SendMessageRequest
 from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.functions.stories import GetAllStoriesRequest
+from telethon.tl.functions.stories import IncrementStoryViewsRequest
+from telethon.tl.functions.stories import ReadStoriesRequest
 from telethon.tl.types import InputReplyToMessage
 from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
@@ -84,6 +88,7 @@ from minion_core.adapters import files
 from minions.aggregator import cats
 from minions.aggregator import comod
 from minions.aggregator import greeter
+from minions.aggregator import stories
 from minions.aggregator import users
 from minions.aggregator.premium_emoji import RichText
 from minions.aggregator.premium_emoji import build_premium_message
@@ -244,6 +249,9 @@ COMMAND_GREETNOW = '/greetnow'
 # /users prints the users-DB summary (audience totals, top commenters, recent
 # join/leave) when the users database is enabled.
 COMMAND_USERS = '/users'
+# /stories prints the story-viewer log: how many stories were viewed and whose,
+# most recent first (when the story viewer is enabled).
+COMMAND_STORIES = '/stories'
 # /comod manages the cabinet ("shkaf"): '/comod <nick> <amount>' moves a
 # supporter onto a named shelf (a 30-day timer) and posts the rendered cabinet
 # photo plus the move-in announcement; '/comod' alone re-posts the cabinet;
@@ -288,6 +296,12 @@ def _fmt_eta(seconds: float) -> str:
     if mins < _MINS_PER_HOUR:
         return f'{mins}m {total % _SECS_PER_MIN}s'
     return f'{mins // _MINS_PER_HOUR}h {mins % _MINS_PER_HOUR}m'
+
+
+def _cancel(task: asyncio.Task[object] | None) -> None:
+    """Cancel a background task if it exists (a no-op when None)."""
+    if task is not None:
+        task.cancel()
 
 
 @dataclass(frozen=True)
@@ -1001,6 +1015,9 @@ class Aggregator:
         self._cat_next_rescan: float = 0.0  # ts of the next auto-rescan
         self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
         self._enrich_tasks: set[asyncio.Task[None]] = set()
+        self._story_tasks: set[asyncio.Task[None]] = set()
+        self._stories_task: asyncio.Task[None] | None = None
+        self._story_next_poll: float = 0.0  # ts of the next stories re-poll
         # pre-fire thread refresh debounce, keyed by thread root
         self._thread_rescan_at: dict[int, float] = {}
         rt = self._raw.get('runtime')
@@ -1030,6 +1047,14 @@ class Aggregator:
         self.cats = cats.CatBrain(
             cats.load_cat_params(self._raw), pdir / 'cats_state.json'
         )
+        # Story viewer (opt-in): watches friends'/contacts' stories the way a
+        # person does -- a glance now and then, no reactions -- with its own
+        # per-profile seen set and view log. Poll cadence follows the profile.
+        self.stories = stories.StoryBrain(
+            stories.load_story_params(self._raw, mode),
+            pdir / 'stories_state.json',
+        )
+        self._story_next_poll = 0.0
         # Users DB (opt-in): its own SQLite file per profile, so live and test
         # audiences never mix. Config lives in the 'users' JSON section.
         ucfg = self._raw.get('users')
@@ -1110,21 +1135,21 @@ class Aggregator:
             await self.backfill()
         self._greeter_task = asyncio.create_task(self.greeter.loop())
         self._cat_rescan_task = asyncio.create_task(self.cat_rescan_loop())
+        self._stories_task = asyncio.create_task(self.stories_loop())
 
     async def stop_profile(self) -> None:
         """Cancel the active profile's timers and loops (before a switch)."""
         self._cancel_cat_tasks()
-        for group in self.groups:
-            task = getattr(group, 'task', None)
-            if task is not None:
-                task.cancel()
-        if self._greeter_task is not None:
-            self._greeter_task.cancel()
-            self._greeter_task = None
-        if self._cat_rescan_task is not None:
-            self._cat_rescan_task.cancel()
-            self._cat_rescan_task = None
+        self._cancel_story_tasks()
         self._cancel_enrich_tasks()
+        for group in self.groups:
+            _cancel(getattr(group, 'task', None))
+        _cancel(self._greeter_task)
+        _cancel(self._cat_rescan_task)
+        _cancel(self._stories_task)
+        self._greeter_task = None
+        self._cat_rescan_task = None
+        self._stories_task = None
         self.users.close()  # release the SQLite handle before a rebind
 
     def _cancel_enrich_tasks(self) -> None:
@@ -1132,6 +1157,12 @@ class Aggregator:
         for task in list(self._enrich_tasks):
             task.cancel()
         self._enrich_tasks.clear()
+
+    def _cancel_story_tasks(self) -> None:
+        """Cancel every in-flight story-view timer (before a mode switch)."""
+        for task in list(self._story_tasks):
+            task.cancel()
+        self._story_tasks.clear()
 
     async def switch_mode(self, mode: str) -> None:
         """Switch the WHOLE bot to MODE (the /test and /live commands).
@@ -1411,6 +1442,7 @@ class Aggregator:
             COMMAND_CATNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
             COMMAND_USERS: self.users_report,
+            COMMAND_STORIES: self.stories_report,
             COMMAND_PROPISKA: self.propiska_report,
             COMMAND_TEST: self.enter_test,
             COMMAND_LIVE: self.enter_live,
@@ -1609,6 +1641,129 @@ class Aggregator:
             return
         for message in reversed(list(comments)):  # oldest first
             self._schedule_from_message(chat, root, message)
+
+    async def stories_loop(self) -> None:
+        """Periodically poll the stories feed and view a human-like handful.
+
+        Telegram's own stories feed already limits this to contacts / people
+        we follow, so a poll only ever sees friends' stories. Each pass fetches
+        the feed, keeps the peers with UNSEEN stories, and lets the brain plan
+        a small, human-paced session; each planned view runs on its own timer
+        (``_view_later``). No reactions are ever sent -- just a view and a log.
+        Off when disabled or the poll period is <= 0.
+        """
+        period = self.stories.params.poll_sec
+        if not self.stories.params.enabled or period <= 0:
+            return
+        while True:
+            self._story_next_poll = time.time() + period
+            try:
+                await self._poll_stories_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception('stories: poll failed; will retry')
+            await asyncio.sleep(period)
+
+    async def _poll_stories_once(self) -> None:
+        """Fetch the feed, plan a session, and arm a timer per planned view."""
+        candidates = await self._fetch_story_candidates()
+        if not candidates:
+            return
+        for view in self.stories.plan(candidates):
+            task = asyncio.create_task(self._view_later(view))
+            self._story_tasks.add(task)
+            task.add_done_callback(self._story_tasks.discard)
+
+    async def _fetch_story_candidates(self) -> list[stories.StoryCandidate]:
+        """Return the feed's peers that still have unseen stories.
+
+        Reads Telegram's active-stories feed (contacts / followed peers only),
+        turns each peer into a ``StoryCandidate`` and keeps just those with at
+        least one story id past our persisted seen set -- so we pick up what is
+        genuinely new instead of walking the whole contact list.
+        """
+        try:
+            res = await self.client(GetAllStoriesRequest())
+        except Exception:  # noqa: BLE001 -- feed unreachable: skip this pass
+            log.warning('stories: could not read the stories feed')
+            return []
+        out: list[stories.StoryCandidate] = []
+        for peer_stories in getattr(res, 'peer_stories', None) or []:
+            cand = self._story_candidate(peer_stories)
+            if cand is not None and self.stories.unseen(cand):
+                out.append(cand)
+        return out
+
+    def _story_candidate(
+        self, peer_stories: object
+    ) -> stories.StoryCandidate | None:
+        """Build a ``StoryCandidate`` from one feed entry, or None if empty."""
+        peer = getattr(peer_stories, 'peer', None)
+        if peer is None:
+            return None
+        items = getattr(peer_stories, 'stories', None) or []
+        ids = [int(getattr(s, 'id', 0) or 0) for s in items]
+        ids = [sid for sid in ids if sid > 0]
+        if not ids:
+            return None
+        dates = [float(getattr(s, 'date', 0) or 0) for s in items]
+        return stories.StoryCandidate(
+            peer_id=int(utils.get_peer_id(peer)),
+            story_ids=tuple(ids),
+            max_id=max(ids),
+            last_ts=max(dates, default=0.0),
+            label=str(utils.get_peer_id(peer)),
+        )
+
+    async def _view_later(self, view: stories.StoryView) -> None:
+        """Sleep until the view is due, then open the stories and mark them.
+
+        Failures are logged (not swallowed) and the peer is NOT marked seen, so
+        a failed read is retried on the next poll rather than silently skipped.
+        """
+        delay = view.when - time.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            await self._view_stories(view)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('stories: view failed for %s', view.peer_id)
+            return
+        self.stories.mark_viewed(
+            view.peer_id, view.story_ids, label=view.label
+        )
+        log.info(
+            'stories: viewed %d of %s',
+            len(view.story_ids),
+            view.label or view.peer_id,
+        )
+
+    async def _view_stories(self, view: stories.StoryView) -> None:
+        """Open each unseen story (human dwell), then mark the peer read.
+
+        Opens the stories one at a time with a short random dwell between them
+        (a person does not blink through a whole set instantly), incrementing
+        each story's view counter, then marks the peer read up to ``max_id`` --
+        the authoritative "seen" signal. Never sends a reaction.
+        """
+        peer = await self.client.get_input_entity(view.peer_id)
+        params = self.stories.params
+        for sid in view.story_ids:
+            await asyncio.sleep(
+                random.uniform(  # noqa: S311 -- human dwell, not crypto
+                    params.dwell_min_sec, params.dwell_max_sec
+                )
+            )
+            try:
+                await self.client(
+                    IncrementStoryViewsRequest(peer=peer, id=[sid])
+                )
+            except Exception:  # noqa: BLE001 -- best-effort; ReadStories marks
+                log.debug('stories: increment view failed for %s', sid)
+        await self.client(ReadStoriesRequest(peer=peer, max_id=view.max_id))
 
     def _schedule_from_message(
         self, chat: int, root: int, message: object
@@ -1894,6 +2049,47 @@ class Aggregator:
                 for r in recent
             ]
         return '\n'.join(lines)
+
+    async def stories_report(self) -> None:
+        """Post the story-viewer log to the source chat (/stories command)."""
+        await self.client.send_message(
+            self.config.source, self._stories_text()
+        )
+        log.info('sent stories report to %s', self.config.source)
+
+    def _stories_text(self) -> str:
+        """Return the /stories message: total viewed and the recent views."""
+        if not self.stories.params.enabled:
+            return 'Story viewer: disabled (set stories.enabled in the JSON).'
+        lines = [f'Story viewer: {self.stories.seen_count()} viewed all-time']
+        recent = self.stories.recent_log(10)
+        if recent:
+            lines.append('  recent views:')
+            lines += [
+                f'    - {e.get("label") or e.get("peer_id")}:'
+                f' {e.get("count")} story(s)'
+                f' {_iso(float(str(e.get("ts", 0))))}'
+                for e in recent
+            ]
+        else:
+            lines.append('  (nothing viewed yet)')
+        return '\n'.join(lines)
+
+    def _stories_line(self) -> str:
+        """Return a one-line story-viewer summary for /status."""
+        if not self.stories.params.enabled:
+            return self._head(
+                'stories', 'Stories', f'{self._dot(on=False)} off'
+            )
+        parts = [
+            f'{self._dot(on=True)} on',
+            f'{self.stories.seen_count()} viewed',
+        ]
+        nxt = self._story_next_poll
+        eta = nxt - time.time() if nxt > 0 else 0.0
+        if eta > 0:
+            parts.append(f'next poll {self._arr()} in {_fmt_eta(eta)}')
+        return self._head('stories', 'Stories', *parts)
 
     def _users_line(self) -> str:
         """Return a one-line users summary for /status ('off' if disabled)."""
@@ -2253,6 +2449,7 @@ class Aggregator:
             *self._greeter_lines(),
             '',
             self._users_line(),
+            self._stories_line(),
         ]
         if self.consts.status_help:
             legend = ' '.join(

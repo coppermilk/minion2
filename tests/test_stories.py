@@ -1,0 +1,251 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
+"""The aggregator's human-like story viewer (minions/aggregator/stories.py).
+
+Pure-logic tests: no Telethon, no network. The brain only ever plans views of
+UNSEEN stories, in human-like sessions, and never re-views one it has already
+watched -- the properties these tests pin down. ``main.py`` does the actual
+opening/marking against Telegram; none of that is exercised here.
+"""
+
+from __future__ import annotations
+
+import random
+from datetime import UTC
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from minions.aggregator import stories
+
+_MANY = 50
+_NOON = datetime(1970, 1, 1, 12, 0, tzinfo=UTC).timestamp()  # a waking hour
+_THREE = 3
+_LOG_CAP = 5
+_POLL_TEST = 300.0
+_POLL_LIVE = 3600.0
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _params(**over: object) -> stories.StoryParams:
+    base = {
+        'enabled': True,
+        'tz_offset_hours': 0.0,
+        'quiet_hours': frozenset({1, 2, 3, 4, 5, 6, 7}),
+        'poll_sec': 1800.0,
+        'per_session_min': 2,
+        'per_session_max': 6,
+        'skip_peer_prob': 0.0,
+        'silent_day_prob': 0.0,
+        'latency_log_mu': 1.0,
+        'latency_log_sigma': 0.1,
+        'gap_log_mu': 1.0,
+        'gap_log_sigma': 0.1,
+        'spacing_log_mu': 6.0,
+        'spacing_log_sigma': 0.1,
+        'dwell_min_sec': 2.0,
+        'dwell_max_sec': 9.0,
+        'max_peers_tracked': 500,
+        'seen_per_peer': 40,
+        'log_limit': 50,
+    }
+    base.update(over)
+    return stories.StoryParams(**base)
+
+
+def _brain(
+    tmp_path: Path, **over: object
+) -> stories.StoryBrain:
+    brain = stories.StoryBrain(
+        _params(**over),
+        tmp_path / 'stories.json',
+        rng=random.Random(0),
+    )
+    brain.clock = lambda: _NOON
+    return brain
+
+
+def _cand(
+    peer: int, ids: tuple[int, ...], *, last_ts: float = 0.0
+) -> stories.StoryCandidate:
+    return stories.StoryCandidate(
+        peer_id=peer,
+        story_ids=ids,
+        max_id=max(ids),
+        last_ts=last_ts,
+        label=f'@u{peer}',
+    )
+
+
+# --- unseen / never re-view
+
+
+def test_unseen_subtracts_the_seen_set(tmp_path: Path) -> None:
+    """Check unseen subtracts the seen set."""
+    brain = _brain(tmp_path)
+    cand = _cand(7, (1, 2, 3))
+    assert brain.unseen(cand) == (1, 2, 3)
+    brain.mark_viewed(7, (1, 2), ts=_NOON)
+    assert brain.unseen(cand) == (3,)
+
+
+def test_a_fully_seen_peer_is_not_eligible(tmp_path: Path) -> None:
+    """Check a fully seen peer is not eligible."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(7, (1, 2, 3), ts=_NOON)
+    assert brain.plan([_cand(7, (1, 2, 3))], now=_NOON) == []
+
+
+def test_plan_only_views_unseen_ids(tmp_path: Path) -> None:
+    """Check plan only views unseen ids."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(7, (1,), ts=_NOON)
+    views = brain.plan([_cand(7, (1, 2, 3))], now=_NOON)
+    assert len(views) == 1
+    assert views[0].story_ids == (2, 3)
+    assert views[0].max_id == _THREE
+
+
+# --- gates
+
+
+def test_disabled_plans_nothing(tmp_path: Path) -> None:
+    """Check disabled plans nothing."""
+    brain = _brain(tmp_path, enabled=False)
+    assert brain.plan([_cand(7, (1,))], now=_NOON) == []
+
+
+def test_quiet_hours_plan_nothing(tmp_path: Path) -> None:
+    """Check quiet hours plan nothing."""
+    brain = _brain(tmp_path, quiet_hours=frozenset({12}))
+    assert brain.plan([_cand(7, (1,))], now=_NOON) == []
+
+
+def test_silent_day_plans_nothing(tmp_path: Path) -> None:
+    """Check silent day plans nothing."""
+    # prob 1.0 makes every day silent, deterministically.
+    brain = _brain(tmp_path, silent_day_prob=1.0)
+    assert brain.plan([_cand(7, (1,))], now=_NOON) == []
+
+
+def test_between_session_cooldown_blocks(tmp_path: Path) -> None:
+    """Check between session cooldown blocks."""
+    brain = _brain(tmp_path)
+    brain.state.next_session_at = _NOON + 10_000.0
+    assert brain.plan([_cand(7, (1,))], now=_NOON) == []
+
+
+# --- session shape
+
+
+def test_session_is_capped_and_staggered(tmp_path: Path) -> None:
+    """Check session is capped and staggered."""
+    brain = _brain(tmp_path, per_session_min=3, per_session_max=3)
+    cands = [_cand(p, (1,), last_ts=float(p)) for p in range(10)]
+    views = brain.plan(cands, now=_NOON)
+    assert len(views) == _THREE  # capped, not all ten
+    whens = [v.when for v in views]
+    assert whens == sorted(whens)  # staggered forward in time
+    assert whens[0] > _NOON  # a beat after "opening the app"
+
+
+def test_freshest_first(tmp_path: Path) -> None:
+    """Check freshest first."""
+    brain = _brain(tmp_path, per_session_min=1, per_session_max=1)
+    older = _cand(1, (1,), last_ts=100.0)
+    newer = _cand(2, (1,), last_ts=999.0)
+    views = brain.plan([older, newer], now=_NOON)
+    assert [v.peer_id for v in views] == [2]  # the newer story leads
+
+
+def test_next_session_is_pushed_forward(tmp_path: Path) -> None:
+    """Check next session is pushed forward."""
+    brain = _brain(tmp_path)
+    brain.plan([_cand(7, (1,))], now=_NOON)
+    assert brain.state.next_session_at > _NOON
+
+
+def test_skipping_still_views_at_least_one(tmp_path: Path) -> None:
+    """Check skipping still views at least one."""
+    # Always-skip would empty the glance; the brain still opens the freshest.
+    brain = _brain(tmp_path, skip_peer_prob=1.0)
+    views = brain.plan([_cand(7, (1,), last_ts=5.0)], now=_NOON)
+    assert [v.peer_id for v in views] == [7]
+
+
+# --- marking / bookkeeping
+
+
+def test_mark_viewed_dedups_and_counts_fresh(tmp_path: Path) -> None:
+    """Check mark viewed dedups and counts fresh."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(7, (1, 2), ts=_NOON)
+    brain.mark_viewed(7, (2, 3), ts=_NOON)  # 2 already seen -> only 3 is fresh
+    assert brain.seen_count() == _THREE
+    assert set(brain.state.seen['7']) == {1, 2, 3}
+
+
+def test_mark_viewed_is_idempotent(tmp_path: Path) -> None:
+    """Check mark viewed is idempotent."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(7, (1, 2), ts=_NOON)
+    before = brain.seen_count()
+    brain.mark_viewed(7, (1, 2), ts=_NOON)  # nothing new
+    assert brain.seen_count() == before
+    assert len(brain.state.log) == 1  # no second log line
+
+
+def test_seen_list_is_bounded_per_peer(tmp_path: Path) -> None:
+    """Check seen list is bounded per peer."""
+    brain = _brain(tmp_path, seen_per_peer=3)
+    brain.mark_viewed(7, tuple(range(10)), ts=_NOON)
+    assert brain.state.seen['7'] == [7, 8, 9]  # newest kept
+
+
+def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
+    """Check tracked peers are lru bounded."""
+    brain = _brain(tmp_path, max_peers_tracked=2)
+    for peer in (1, 2, 3):
+        brain.mark_viewed(peer, (1,), ts=_NOON)
+    assert set(brain.state.seen) == {'2', '3'}  # peer 1 evicted
+
+
+def test_recent_log_is_newest_first(tmp_path: Path) -> None:
+    """Check recent log is newest first."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(1, (1,), label='@a', ts=_NOON)
+    brain.mark_viewed(2, (1,), label='@b', ts=_NOON)
+    recent = brain.recent_log(5)
+    assert [r['peer_id'] for r in recent] == [2, 1]
+
+
+def test_log_is_bounded(tmp_path: Path) -> None:
+    """Check log is bounded."""
+    brain = _brain(tmp_path, log_limit=_LOG_CAP)
+    for peer in range(_MANY):
+        brain.mark_viewed(peer, (1,), ts=_NOON)
+    assert len(brain.state.log) == _LOG_CAP
+
+
+def test_state_survives_reopening_the_file(tmp_path: Path) -> None:
+    """Check state survives reopening the file."""
+    path = tmp_path / 'stories.json'
+    first = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    first.mark_viewed(7, (1, 2, 3), ts=_NOON)
+    reopened = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    assert reopened.unseen(_cand(7, (1, 2, 3, 4))) == (4,)
+    assert reopened.seen_count() == _THREE
+
+
+def test_load_story_params_mode_selects_poll(tmp_path: Path) -> None:
+    """Check load story params mode selects poll."""
+    data = {
+        'stories': {
+            'enabled': True,
+            'poll_sec_test': 300,
+            'poll_sec_live': 3600,
+        }
+    }
+    assert stories.load_story_params(data, 'test').poll_sec == _POLL_TEST
+    assert stories.load_story_params(data, 'live').poll_sec == _POLL_LIVE

@@ -253,3 +253,36 @@ normal SQLite DB, so you can also query it directly:
 > is idempotent, so re-polls and comment rescans never double-count. This is
 > **PII**: it lives only on your own state disk, `test` and `live` keep separate
 > databases, and nothing is collected while `enabled` is `false`.
+
+## Human-like story viewing (`stories.py`, opt-in)
+
+The account also **watches stories** the way a person idly would -- and only
+that: it **never reacts, likes or replies**, it just *views* them and keeps a
+log of whose stories it watched. **Off by default.** Turn it on in the
+`stories` section of the constants JSON:
+
+```json
+"stories": { "enabled": true, "poll_sec_test": 300, "poll_sec_live": 1800 }
+```
+
+How it behaves like a person, not a scraper:
+
+- **Only what's new.** It reads Telegram's own active-stories feed -- which
+  already returns *contacts / people you follow*, never your whole address book
+  -- and views only the stories **past a persisted per-peer seen set**. A story
+  watched once is never re-opened, across restarts.
+- **A glance, not a sweep.** Each poll views a small **session** of peers
+  (`per_session_min..max`), **skips some** (`skip_peer_prob`), takes the
+  **freshest first**, and staggers the views over lognormal gaps -- then goes
+  quiet for a long, heavy-tailed `spacing_*` while before the next session.
+- **Quiet hours + the odd silent day**, read in the persona's timezone, so it
+  is asleep overnight and occasionally does not show up at all.
+- **A human dwell** (`dwell_min..max_sec`) between opening one story and the
+  next, so a peer's set is not blinked through instantly.
+
+It shares its human-timing kit (`humanize.py`) with the `cats` engine, so the
+"when does a person act" logic lives in one place. The re-poll cadence follows
+the profile like the cat rescan does: **test tight (5 min)**, **live relaxed
+(30 min)**. Read the log with **`/stories`** (how many, and whose, most recent
+first); `/status` gains a one-line stories summary. State is a per-profile
+`stories_state.json`; `test` and `live` keep separate seen sets and logs.
