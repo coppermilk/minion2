@@ -4,6 +4,7 @@
   "timeout_sec": 10800,
   "backfill": 100,
   "max_duration_sec": 180,
+  "repost_guard_sec": 604800,
   "fields": {
     "action": "action",
     "platform": "platform",

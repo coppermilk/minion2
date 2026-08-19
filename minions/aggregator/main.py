@@ -18,7 +18,10 @@ priority (tiktok, youtube, pinterest, instagram): the order sets the link order
 in the post and picks which platform's caption leads (the thumbnail is taken
 from YouTube only). After a video is posted, its source message ids are saved
 to disk; on restart, backfill skips any message whose id was already posted, so
-re-posting never happens.
+re-posting never happens. A second guard covers a video the source RE-DELIVERS
+under new ids (an upstream re-emit -- common once the chat's auto-delete has
+cleared the old messages): a title >= ``title_match`` similar to one posted
+within ``repost_guard_sec`` is not posted again (0 disables it).
 
 Notes:
     * The link is read from ``link`` (or ``url``); the thumbnail from
@@ -329,6 +332,12 @@ class Config:
     timeout: float
     backfill: int
     max_duration: int
+    # Do not re-post a video whose title is >= threshold similar to one already
+    # posted within this many seconds. Guards against the source re-delivering
+    # the same video (new message ids -- e.g. an upstream re-emit after the
+    # chat's auto-delete clears the old ones), which the per-message-id guard
+    # cannot catch. 0 disables the guard.
+    repost_guard: float
 
 
 @dataclass(frozen=True)
@@ -612,6 +621,31 @@ def _norm(title: str) -> str:
 def _similar(a: str, b: str) -> float:
     """Similarity ratio of two normalized titles, in [0, 1]."""
     return SequenceMatcher(None, a, b).ratio()
+
+
+def _is_recent_repost(  # noqa: PLR0913 -- a small pure predicate, flat reads best
+    posted: list[Posted],
+    title: str,
+    now: float,
+    *,
+    threshold: float,
+    window: float,
+) -> bool:
+    """Whether ``title`` matches a video posted within ``window`` seconds.
+
+    A pure helper (no self) so it is unit-testable: compares the normalized
+    title against each recent ``Posted`` record's title by the same fuzzy
+    ratio the in-flight dedup uses. ``window`` <= 0 disables the guard.
+    """
+    if window <= 0:
+        return False
+    norm = _norm(title)
+    for post in reversed(posted):  # newest first: usually the freshest matches
+        if now - _parse_iso(post.at) > window:
+            break  # older than the window; the rest are older still
+        if _similar(norm, _norm(post.title)) >= threshold:
+            return True
+    return False
 
 
 def _duration_seconds(text: str) -> int:
@@ -1251,7 +1285,9 @@ class Aggregator:
         item = self._accept(message)
         if item is None:
             return
-        group = self._match(item.title) or self._start(item)
+        group = self._group_for(item)
+        if group is None:
+            return
         group.items[item.key] = item
         group.msg_ids.add(item.msg_id)
         missing = [p for p in self.config.platforms if p not in group.items]
@@ -1325,6 +1361,42 @@ class Aggregator:
             if _similar(norm, _norm(group.title)) >= self.config.threshold:
                 return group
         return None
+
+    def _group_for(self, item: Item) -> Group | None:
+        """Return the group this item joins, or None to skip it (dup).
+
+        Joins an in-flight group whose title matches; otherwise starts a new
+        one -- unless this video was already posted inside the re-post window,
+        in which case it is skipped so the same video is not posted twice.
+        """
+        group = self._match(item.title)
+        if group is not None:
+            return group
+        if self._recently_posted(item.title):
+            log.info(
+                'msg %s: %r already posted recently, not re-posting',
+                item.msg_id,
+                item.title,
+            )
+            return None
+        return self._start(item)
+
+    def _recently_posted(self, title: str) -> bool:
+        """Whether this video was already posted inside the re-post window.
+
+        The per-message-id guard cannot catch a video the source re-delivers
+        under NEW ids (an upstream re-emit, common once the chat's auto-delete
+        clears the old messages); this title guard does. Only consulted when no
+        in-flight group matches, so platforms of a video still being collected
+        are never blocked.
+        """
+        return _is_recent_repost(
+            self.posted,
+            title,
+            time.time(),
+            threshold=self.config.threshold,
+            window=self.config.repost_guard,
+        )
 
     def _start(self, item: Item) -> Group:
         """Create a group for a new video and arm its flush timeout."""
@@ -3054,6 +3126,9 @@ def _load_config() -> Config:
         backfill=int(data.get('backfill') or 100),
         # A video whose known duration reaches this many seconds is dropped.
         max_duration=int(data.get('max_duration_sec') or MAX_SHORT_SEC),
+        # A week by default: a title posted in the last week is not posted
+        # again (matches a typical chat auto-delete window). 0 disables.
+        repost_guard=float(data.get('repost_guard_sec', 604800)),
     )
 
 

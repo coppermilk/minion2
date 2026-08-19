@@ -62,6 +62,7 @@ and the chats); **`aggregator_constants.json`** carries all behaviour.
 | `timeout_sec` | how long to wait for the rest before posting a partial |
 | `backfill` | recent source messages scanned at startup |
 | `max_duration_sec` | a video at/above this many seconds is dropped (not a Short) |
+| `repost_guard_sec` | do not re-post a video whose caption matches one already posted within this many seconds -- catches the source re-delivering the same video under new ids (an upstream re-emit, common with chat auto-delete); `0` disables it (default one week) |
 | `fields`, `action_value`, `author`, `announce`, `love`, `lead_emoji`, `arrow_down`, `view_label`, `rows`, `platform_emoji` | incoming field names + the post's texts and premium emoji (`lead_emoji` leads the caption line) |
 
 ## Run (without Docker)
