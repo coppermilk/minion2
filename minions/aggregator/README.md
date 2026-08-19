@@ -258,11 +258,11 @@ normal SQLite DB, so you can also query it directly:
 
 The account also **watches stories** the way a person idly would -- and only
 that: it **never reacts, likes or replies**, it just *views* them and keeps a
-log of whose stories it watched. **Off by default.** Turn it on in the
-`stories` section of the constants JSON:
+log of whose stories it watched. **On by default** -- turn it off any time with
+**`/stories_off`**, or in the `stories` section of the constants JSON:
 
 ```json
-"stories": { "enabled": true, "poll_sec_test": 300, "poll_sec_live": 1800 }
+"stories": { "enabled": true, "include_archived": true, "poll_sec_live": 1800 }
 ```
 
 How it behaves like a person, not a scraper:
@@ -290,3 +290,20 @@ the profile like the cat rescan does: **test tight (5 min)**, **live relaxed
 (30 min)**. Read the log with **`/stories`** (how many, and whose, most recent
 first); `/status` gains a one-line stories summary. State is a per-profile
 `stories_state.json`; `test` and `live` keep separate seen sets and logs.
+
+## Feature switches (`/features`, on/off at runtime)
+
+Every toggleable feature -- **`cats`**, **`stories`**, **`users`**,
+**`greeter`** -- can be turned on or off from chat, without editing the JSON or
+restarting the container:
+
+- **`/features`** lists each one and whether it is on.
+- **`/<name>_on`** / **`/<name>_off`** flips it, e.g. `/stories_off`,
+  `/cats_on`, `/users_off`.
+
+A switch **persists** to `feature_overrides.json` in the base state dir, so the
+choice **survives a restart** and overrides that feature's `enabled` default in
+the constants JSON. Flipping one restarts the active profile's loops so the
+change takes effect immediately; the override is shared by both profiles (like
+the single JSON `enabled`). To go back to the JSON default, flip it the other
+way (or delete the file).

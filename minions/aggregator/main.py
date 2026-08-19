@@ -62,6 +62,7 @@ import threading
 import time
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -266,6 +267,18 @@ COMMAND_PROPISKA = '/propiska_shkaf_month'
 # the mode survives a restart.
 COMMAND_TEST = '/test'
 COMMAND_LIVE = '/live'
+# /features lists the toggleable features and whether each is on. Every feature
+# also gets a runtime switch pair '/<name>_on' and '/<name>_off' (e.g.
+# /stories_off) that flips its enabled flag, persists the choice (it survives a
+# restart, overriding the JSON default), and restarts the profile's loops so
+# the change takes effect at once. The togglable feature sections, by name:
+COMMAND_FEATURES = '/features'
+FEATURE_NAMES = ('cats', 'stories', 'users', 'greeter')
+FEATURE_ON_SUFFIX = '_on'
+FEATURE_OFF_SUFFIX = '_off'
+# The persisted runtime overrides (a name -> bool map) live here, in the base
+# state dir so both profiles share one choice (like the JSON's single enabled).
+FEATURE_OVERRIDES_FILE = 'feature_overrides.json'
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
 CAT_REPLY_SCAN = 200
@@ -1009,6 +1022,8 @@ class Aggregator:
         base_state = _resolve_state_path(here.with_name(STATE_FILE))
         self._state_base = base_state.parent
         self._mode_path = self._state_base / MODE_FILE
+        self._overrides_path = self._state_base / FEATURE_OVERRIDES_FILE
+        self._overrides = self._load_overrides()
         self._cat_tasks: set[asyncio.Task[None]] = set()
         self._greeter_task: asyncio.Task[None] | None = None
         self._cat_rescan_task: asyncio.Task[None] | None = None
@@ -1044,29 +1059,41 @@ class Aggregator:
         self._cat_tasks = set()
         self._cat_next_rescan = 0.0
         self._rescan_sec = self._rescan_interval(mode)
-        self.cats = cats.CatBrain(
-            cats.load_cat_params(self._raw), pdir / 'cats_state.json'
+        # Each feature's on/off is the JSON default unless a /<name>_on|off
+        # runtime override is set (``_feature_enabled``), so a toggle survives
+        # a restart. The params are frozen, so the flag is swapped via replace.
+        cat_params = replace(
+            cats.load_cat_params(self._raw),
+            enabled=self._feature_enabled('cats'),
         )
-        # Story viewer (opt-in): watches friends'/contacts' stories the way a
-        # person does -- a glance now and then, no reactions -- with its own
+        self.cats = cats.CatBrain(cat_params, pdir / 'cats_state.json')
+        # Story viewer: watches friends'/contacts' stories the way a person
+        # does -- a glance now and then, no reactions -- with its own
         # per-profile seen set and view log. Poll cadence follows the profile.
-        self.stories = stories.StoryBrain(
+        story_params = replace(
             stories.load_story_params(self._raw, mode),
-            pdir / 'stories_state.json',
+            enabled=self._feature_enabled('stories'),
+        )
+        self.stories = stories.StoryBrain(
+            story_params, pdir / 'stories_state.json'
         )
         self._story_next_poll = 0.0
-        # Users DB (opt-in): its own SQLite file per profile, so live and test
-        # audiences never mix. Config lives in the 'users' JSON section.
+        # Users DB: its own SQLite file per profile, so live and test audiences
+        # never mix. Config lives in the 'users' JSON section.
         ucfg = self._raw.get('users')
         ucfg = ucfg if isinstance(ucfg, dict) else {}
-        self._users_enabled = bool(ucfg.get('enabled', False))
+        self._users_enabled = self._feature_enabled('users')
         self._users_store_text = bool(ucfg.get('store_message_text', True))
         self._users_enrich = bool(ucfg.get('enrich', True))
         self.users = users.UserStore(pdir / 'users.db')
         gchannel = self._profile_channel(mode)
+        greeter_params = replace(
+            greeter.load_greeter_params(self._raw, gchannel),
+            enabled=self._feature_enabled('greeter'),
+        )
         self.greeter = greeter.Greeter(
             self.client,
-            greeter.load_greeter_params(self._raw, gchannel),
+            greeter_params,
             greeter.GreeterIO(
                 pdir / 'greeter_state.json',
                 self._on_membership_event,
@@ -1114,6 +1141,34 @@ class Aggregator:
         self._mode_path.write_text(
             json.dumps({'mode': self.mode}), encoding='utf-8'
         )
+
+    def _load_overrides(self) -> dict[str, bool]:
+        """Load the persisted feature on/off overrides (empty if none)."""
+        try:
+            raw = json.loads(self._overrides_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {
+            str(k): bool(v)
+            for k, v in raw.items()
+            if str(k) in FEATURE_NAMES
+        }
+
+    def _save_overrides(self) -> None:
+        """Persist the feature overrides so a toggle survives a restart."""
+        self._overrides_path.write_text(
+            json.dumps(self._overrides, indent=2), encoding='utf-8'
+        )
+
+    def _feature_default(self, name: str) -> bool:
+        """Return a feature's JSON default ``enabled`` (its section flag)."""
+        section = self._raw.get(name)
+        section = section if isinstance(section, dict) else {}
+        return bool(section.get('enabled', False))
+
+    def _feature_enabled(self, name: str) -> bool:
+        """Return a feature's effective on/off: override else JSON default."""
+        return self._overrides.get(name, self._feature_default(name))
 
     async def start_profile(self, *, source_backfill: bool = True) -> None:
         """Hydrate the active profile and start its background loops.
@@ -1432,6 +1487,11 @@ class Aggregator:
         if text.split()[:1] == [COMMAND_COMOD]:
             await self.cabinet_command(text)
             return True
+        # Feature switches: /features and every '/<name>_on|off'. Matched here,
+        # before the exact table, because the name is dynamic (one pair per
+        # feature) rather than a fixed command string.
+        if await self._feature_command(text):
+            return True
         handlers = {
             COMMAND_HELP: self.help_report,
             COMMAND_START: self.help_report,
@@ -1452,6 +1512,65 @@ class Aggregator:
             return False
         await handler()
         return True
+
+    async def _feature_command(self, text: str) -> bool:
+        """Handle /features and any '/<name>_on|off', else return False.
+
+        A toggle flips the feature's persisted override and restarts the
+        profile so the change takes effect at once. An unknown feature name is
+        left unhandled (so it falls through to the /help nudge).
+        """
+        parts = text.split(maxsplit=1)
+        word = parts[0] if parts else ''
+        if word == COMMAND_FEATURES:
+            await self.features_report()
+            return True
+        for suffix, on in (
+            (FEATURE_ON_SUFFIX, True),
+            (FEATURE_OFF_SUFFIX, False),
+        ):
+            if word.endswith(suffix):
+                name = word[1:-len(suffix)]  # strip '/' and the suffix
+                if name in FEATURE_NAMES:
+                    await self.switch_feature(name, on=on)
+                    return True
+        return False
+
+    async def switch_feature(self, name: str, *, on: bool) -> None:
+        """Turn a feature on/off at runtime (persisted), restarting its loops.
+
+        No-op-reports when already in the wanted state; otherwise records the
+        override, then tears the profile down and rebuilds it in the same mode
+        so the feature's background loops actually start or stop.
+        """
+        if self._feature_enabled(name) == on:
+            state = 'on' if on else 'off'
+            await self.client.send_message(
+                self.config.source, f'{name}: already {state}'
+            )
+            return
+        self._overrides[name] = on
+        self._save_overrides()
+        await self.stop_profile()
+        self._build_profile(self.mode)
+        await self.start_profile(source_backfill=False)
+        state = 'on' if on else 'off'
+        log.info('feature %s switched %s', name, state)
+        await self.client.send_message(
+            self.config.source, f'{name}: switched {state}'
+        )
+
+    async def features_report(self) -> None:
+        """Post each feature's on/off state and its switch commands."""
+        lines = ['Features']
+        for name in FEATURE_NAMES:
+            dot = self._dot(on=self._feature_enabled(name))
+            cmds = f'/{name}_on  /{name}_off'
+            lines.append(f'{self._bul()} {dot} {name}  {cmds}')
+        await self.client.send_message(
+            self.config.source, '\n'.join(lines)
+        )
+        log.info('sent features report to %s', self.config.source)
 
     def _maybe_cat(self, event: events.NewMessage.Event) -> None:
         """If this message comments on one of our posts, schedule a cat react.
