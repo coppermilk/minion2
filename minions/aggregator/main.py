@@ -1681,19 +1681,40 @@ class Aggregator:
         Reads Telegram's active-stories feed (contacts / followed peers only),
         turns each peer into a ``StoryCandidate`` and keeps just those with at
         least one story id past our persisted seen set -- so we pick up what is
-        genuinely new instead of walking the whole contact list.
+        genuinely new instead of walking the whole contact list. When
+        ``include_archived`` is on, the hidden feed (people whose chats were
+        moved to the Archive) is polled too and merged in, deduped by peer.
+        """
+        out: dict[int, stories.StoryCandidate] = {}
+        await self._collect_story_feed(out, hidden=False)
+        if self.stories.params.include_archived:
+            await self._collect_story_feed(out, hidden=True)
+        return list(out.values())
+
+    async def _collect_story_feed(
+        self, out: dict[int, stories.StoryCandidate], *, hidden: bool
+    ) -> None:
+        """Read one stories feed (main or hidden) into ``out``, keyed by peer.
+
+        ``hidden`` selects the archived-contacts feed. Unseen-only; a peer
+        already collected from the other feed is not overwritten.
         """
         try:
-            res = await self.client(GetAllStoriesRequest())
+            res = await self.client(GetAllStoriesRequest(hidden=hidden))
         except Exception:  # noqa: BLE001 -- feed unreachable: skip this pass
-            log.warning('stories: could not read the stories feed')
-            return []
-        out: list[stories.StoryCandidate] = []
+            log.warning(
+                'stories: could not read the %s stories feed',
+                'hidden' if hidden else 'main',
+            )
+            return
         for peer_stories in getattr(res, 'peer_stories', None) or []:
             cand = self._story_candidate(peer_stories)
-            if cand is not None and self.stories.unseen(cand):
-                out.append(cand)
-        return out
+            if (
+                cand is not None
+                and cand.peer_id not in out
+                and self.stories.unseen(cand)
+            ):
+                out[cand.peer_id] = cand
 
     def _story_candidate(
         self, peer_stories: object

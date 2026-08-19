@@ -277,8 +277,9 @@
     "enrich": true
   },
   "stories": {
-    "_note": "Opt-in human-like story viewing (NO reactions -- just a view + a log of who was viewed). Telegram's feed only returns contacts/followed peers, and we only ever view UNSEEN stories, so it never walks the whole contact list. It watches a small handful per session, skips some, keeps quiet hours and the odd silent day. enabled=false does nothing. poll_sec_test/live set how often the feed is re-polled (test tight, live relaxed).",
+    "_note": "Opt-in human-like story viewing (NO reactions -- just a view + a log of who was viewed). Telegram's feed only returns contacts/followed peers, and we only ever view UNSEEN stories, so it never walks the whole contact list. It watches a small handful per session, skips some, keeps quiet hours and the odd silent day. enabled=false does nothing. include_archived=true also views the stories of people whose chats you moved to the Archive (the hidden feed). poll_sec_test/live set how often the feed is re-polled (test tight, live relaxed).",
     "enabled": false,
+    "include_archived": true,
     "tz_offset_hours": 3,
     "quiet_hours": [0, 1, 2, 3, 4, 5, 6, 7],
     "poll_sec": 1800,

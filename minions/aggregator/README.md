@@ -271,6 +271,10 @@ How it behaves like a person, not a scraper:
   already returns *contacts / people you follow*, never your whole address book
   -- and views only the stories **past a persisted per-peer seen set**. A story
   watched once is never re-opened, across restarts.
+- **Archived contacts** (people whose chats you moved to the Archive) live in a
+  separate *hidden* feed. By default they are left alone; set
+  `"include_archived": true` to view their stories too -- the hidden feed is
+  then polled and merged in, deduped by peer.
 - **A glance, not a sweep.** Each poll views a small **session** of peers
   (`per_session_min..max`), **skips some** (`skip_peer_prob`), takes the
   **freshest first**, and staggers the views over lognormal gaps -- then goes

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 def _params(**over: object) -> stories.StoryParams:
     base = {
         'enabled': True,
+        'include_archived': False,
         'tz_offset_hours': 0.0,
         'quiet_hours': frozenset({1, 2, 3, 4, 5, 6, 7}),
         'poll_sec': 1800.0,
@@ -249,3 +250,10 @@ def test_load_story_params_mode_selects_poll(tmp_path: Path) -> None:
     }
     assert stories.load_story_params(data, 'test').poll_sec == _POLL_TEST
     assert stories.load_story_params(data, 'live').poll_sec == _POLL_LIVE
+
+
+def test_include_archived_defaults_off(tmp_path: Path) -> None:
+    """Check include archived defaults off."""
+    assert not stories.load_story_params({'stories': {}}).include_archived
+    on = stories.load_story_params({'stories': {'include_archived': True}})
+    assert on.include_archived

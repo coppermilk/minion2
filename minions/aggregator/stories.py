@@ -56,6 +56,11 @@ class StoryParams:
     """Every tunable, loaded from the constants JSON 'stories' section."""
 
     enabled: bool
+    # Also view the stories of people whose CHATS were moved to the Archive
+    # (Telegram's "hidden" stories feed). Off keeps to the main feed only --
+    # archived contacts are left alone. ``main.py`` polls the hidden feed too
+    # when this is on; the brain treats both feeds' peers the same.
+    include_archived: bool
     # The persona's UTC offset: quiet hours / the silent-day date are read in
     # THIS timezone, so the cadence matches the human, not the server clock.
     tz_offset_hours: float
@@ -406,6 +411,7 @@ def load_story_params(
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
     return StoryParams(
         enabled=bool(cfg.get('enabled', False)),
+        include_archived=bool(cfg.get('include_archived', False)),
         tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
         quiet_hours=frozenset(
             int(h) for h in (cfg.get('quiet_hours') or [1, 2, 3, 4, 5, 6, 7])
