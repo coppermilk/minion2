@@ -398,6 +398,21 @@ def _parse_iso(text: str) -> float:
         return time.time()
 
 
+def _story_epoch(value: object) -> float:
+    """Return a story item's date as a unix timestamp, 0 if unknown.
+
+    Telethon gives ``StoryItem.date`` as a ``datetime`` (not an epoch int), so
+    freshest-first ordering must convert it; a raw number is accepted too, and
+    anything unparseable degrades to 0 (ordering falls back, never crashes).
+    """
+    if isinstance(value, datetime):
+        return value.timestamp()
+    try:
+        return float(value or 0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # The incoming-message JSON keys, so a typo in the API can be fixed in the
 # constants file (the "fields" object) without touching code.
 DEFAULT_FIELDS = {
@@ -1947,7 +1962,7 @@ class Aggregator:
         ids = [sid for sid in ids if sid > 0]
         if not ids:
             return None
-        dates = [float(getattr(s, 'date', 0) or 0) for s in items]
+        dates = [_story_epoch(getattr(s, 'date', None)) for s in items]
         return stories.StoryCandidate(
             peer_id=int(utils.get_peer_id(peer)),
             story_ids=tuple(ids),
