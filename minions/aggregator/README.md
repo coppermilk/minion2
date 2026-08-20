@@ -263,8 +263,16 @@ log of whose stories it watched. **On by default** -- turn it off any time with
 **`/stories_off`**, or in the `stories` section of the constants JSON:
 
 ```json
-"stories": { "enabled": true, "include_archived": true, "poll_sec_live": 1800 }
+"stories": { "enabled": true, "view_all": true, "include_archived": true }
 ```
+
+**Catch-up vs. trickle (`view_all`).** With `view_all: true` (the default) each
+poll sweeps **every** currently-unseen story at once -- no per-session cap, no
+skip, no long cooldown -- so you do not see one story watched and then an hour
+of silence. A per-story dwell and a small gap between peers still apply (viewing
+dozens instantly would trip Telegram's flood limits), and quiet hours / the odd
+silent day still hold. Set `view_all: false` for the human handful-then-rest
+behaviour below.
 
 How it behaves like a person, not a scraper:
 

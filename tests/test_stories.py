@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 def _params(**over: object) -> stories.StoryParams:
     base = {
         'enabled': True,
+        'view_all': False,
         'include_archived': False,
         'tz_offset_hours': 0.0,
         'quiet_hours': frozenset({1, 2, 3, 4, 5, 6, 7}),
@@ -186,6 +187,18 @@ def test_skipping_still_views_at_least_one(tmp_path: Path) -> None:
     brain = _brain(tmp_path, skip_peer_prob=1.0)
     views = brain.plan([_cand(7, (1,), last_ts=5.0)], now=_NOON)
     assert [v.peer_id for v in views] == [7]
+
+
+def test_view_all_sweeps_everyone_without_cooldown(tmp_path: Path) -> None:
+    """Check view all sweeps everyone without cooldown."""
+    # Catch-up: ignore the cap/skip and the between-session cooldown.
+    brain = _brain(
+        tmp_path, view_all=True, per_session_max=2, skip_peer_prob=1.0
+    )
+    cands = [_cand(p, (1,), last_ts=float(p)) for p in range(10)]
+    views = brain.plan(cands, now=_NOON)
+    assert len(views) == len(cands)  # all of them, no cap, no skip
+    assert brain.blocked_reason(_NOON + 1) is None  # no cooldown after a sweep
 
 
 # --- marking / bookkeeping

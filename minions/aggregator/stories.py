@@ -56,6 +56,13 @@ class StoryParams:
     """Every tunable, loaded from the constants JSON 'stories' section."""
 
     enabled: bool
+    # Catch-up mode: view EVERY unseen story each poll -- no per-session cap,
+    # no skip, no long cooldown between sessions -- so all currently-active
+    # stories are swept at once instead of a slow human trickle. Quiet hours
+    # and the odd silent day still apply, and the per-story dwell / small gap
+    # between peers stay (viewing dozens instantly would trip Telegram's flood
+    # limits). Off is the human-like handful-then-rest behaviour.
+    view_all: bool
     # Also view the stories of people whose CHATS were moved to the Archive
     # (Telegram's "hidden" stories feed). Off keeps to the main feed only --
     # archived contacts are left alone. ``main.py`` polls the hidden feed too
@@ -191,7 +198,11 @@ class StoryBrain:
         eligible = self._eligible(candidates)
         if not eligible:
             return []
-        chosen = self._pick_peers(eligible)
+        # Catch-up: view every unseen peer this poll. Otherwise a human glance:
+        # a capped, partly-skipped handful.
+        chosen = (
+            eligible if self.params.view_all else self._pick_peers(eligible)
+        )
         if not chosen:
             return []
         return self._lay_out(chosen, now)
@@ -216,8 +227,8 @@ class StoryBrain:
         if humanize.is_silent_day(now, tz, self.params.silent_day_prob):
             return 'silent-day'
         wait = self.state.next_session_at - now
-        if wait > 0:
-            return f'cooldown {int(wait)}s'
+        if wait > 0 and not self.params.view_all:
+            return f'cooldown {int(wait)}s'  # catch-up ignores the cooldown
         return None
 
     def _eligible(
@@ -298,10 +309,17 @@ class StoryBrain:
                 self.rng, self.params.gap_log_mu, self.params.gap_log_sigma
             )
         self.state.session_last_at = when
-        spacing = humanize.lognormal(
-            self.rng, self.params.spacing_log_mu, self.params.spacing_log_sigma
-        )
-        self.state.next_session_at = when + spacing
+        if self.params.view_all:
+            # Catch-up: no cooldown, so the next poll sweeps whatever became
+            # unseen since (seen peers stay filtered out by the seen set).
+            self.state.next_session_at = now
+        else:
+            spacing = humanize.lognormal(
+                self.rng,
+                self.params.spacing_log_mu,
+                self.params.spacing_log_sigma,
+            )
+            self.state.next_session_at = when + spacing
         self._save()
         return views
 
@@ -424,6 +442,7 @@ def load_story_params(
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
     return StoryParams(
         enabled=bool(cfg.get('enabled', False)),
+        view_all=bool(cfg.get('view_all', False)),
         include_archived=bool(cfg.get('include_archived', False)),
         tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
         quiet_hours=frozenset(
