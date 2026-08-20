@@ -19,6 +19,7 @@ from minions.aggregator import stories
 
 _MANY = 50
 _NOON = datetime(1970, 1, 1, 12, 0, tzinfo=UTC).timestamp()  # a waking hour
+_TWO = 2
 _THREE = 3
 _LOG_CAP = 5
 _POLL_TEST = 300.0
@@ -210,6 +211,19 @@ def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
     for peer in (1, 2, 3):
         brain.mark_viewed(peer, (1,), ts=_NOON)
     assert set(brain.state.seen) == {'2', '3'}  # peer 1 evicted
+
+
+def test_every_view_is_logged(tmp_path: Path) -> None:
+    """Check every view is logged."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(1, (1, 2), label='@a', ts=_NOON)
+    brain.mark_viewed(2, (9,), label='@b', ts=_NOON)
+    log = brain.recent_log(10)
+    assert len(log) == _TWO  # one entry per view
+    by_peer = {e['peer_id']: e for e in log}
+    assert by_peer[1]['count'] == _TWO
+    assert by_peer[1]['label'] == '@a'
+    assert by_peer[2]['count'] == 1
 
 
 def test_recent_log_is_newest_first(tmp_path: Path) -> None:

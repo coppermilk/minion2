@@ -54,6 +54,7 @@ back next to this package.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import json
 import logging
@@ -1067,6 +1068,8 @@ class Aggregator:
         self._story_tasks: set[asyncio.Task[None]] = set()
         self._stories_task: asyncio.Task[None] | None = None
         self._story_next_poll: float = 0.0  # ts of the next stories re-poll
+        # Planned-but-not-yet-fired story views, for the /status queue readout.
+        self._pending_views: list[stories.StoryView] = []
         # pre-fire thread refresh debounce, keyed by thread root
         self._thread_rescan_at: dict[int, float] = {}
         rt = self._raw.get('runtime')
@@ -1112,6 +1115,7 @@ class Aggregator:
             story_params, pdir / 'stories_state.json'
         )
         self._story_next_poll = 0.0
+        self._pending_views = []
         # Users DB: its own SQLite file per profile, so live and test audiences
         # never mix. Config lives in the 'users' JSON section.
         ucfg = self._raw.get('users')
@@ -1252,6 +1256,7 @@ class Aggregator:
         for task in list(self._story_tasks):
             task.cancel()
         self._story_tasks.clear()
+        self._pending_views.clear()
 
     async def switch_mode(self, mode: str) -> None:
         """Switch the WHOLE bot to MODE (the /test and /live commands).
@@ -1862,6 +1867,7 @@ class Aggregator:
         if not candidates:
             return
         for view in self.stories.plan(candidates):
+            self._pending_views.append(view)  # shown as the /status queue
             task = asyncio.create_task(self._view_later(view))
             self._story_tasks.add(task)
             task.add_done_callback(self._story_tasks.discard)
@@ -1933,10 +1939,13 @@ class Aggregator:
 
         Failures are logged (not swallowed) and the peer is NOT marked seen, so
         a failed read is retried on the next poll rather than silently skipped.
+        Every successful view is recorded to the persisted view log with a
+        readable @name resolved here (the plan only carries the peer id).
         """
         delay = view.when - time.time()
         if delay > 0:
             await asyncio.sleep(delay)
+        self._dequeue_view(view)  # it is firing now: drop it from the queue
         try:
             await self._view_stories(view)
         except asyncio.CancelledError:
@@ -1944,14 +1953,16 @@ class Aggregator:
         except Exception:
             log.exception('stories: view failed for %s', view.peer_id)
             return
-        self.stories.mark_viewed(
-            view.peer_id, view.story_ids, label=view.label
-        )
+        label = await self._chat_label(view.peer_id)
+        self.stories.mark_viewed(view.peer_id, view.story_ids, label=label)
         log.info(
-            'stories: viewed %d of %s',
-            len(view.story_ids),
-            view.label or view.peer_id,
+            'stories: viewed %d of %s', len(view.story_ids), label
         )
+
+    def _dequeue_view(self, view: stories.StoryView) -> None:
+        """Drop a fired view from the /status queue (no-op if already gone)."""
+        with contextlib.suppress(ValueError):
+            self._pending_views.remove(view)
 
     async def _view_stories(self, view: stories.StoryView) -> None:
         """Open each unseen story (human dwell), then mark the peer read.
@@ -2287,21 +2298,52 @@ class Aggregator:
             lines.append('  (nothing viewed yet)')
         return '\n'.join(lines)
 
-    def _stories_line(self) -> str:
-        """Return a one-line story-viewer summary for /status."""
+    def _stories_lines(self, labels: dict[int, str]) -> list[str]:
+        """Return the story-viewer section: header plus the view queue."""
         if not self.stories.params.enabled:
-            return self._head(
-                'stories', 'Stories', f'{self._dot(on=False)} off'
-            )
+            return [
+                self._head('stories', 'Stories', f'{self._dot(on=False)} off')
+            ]
+        return [self._stories_line(), *self._stories_queue_lines(labels)]
+
+    def _stories_line(self) -> str:
+        """Return the story-viewer header: on, count, next view, next poll."""
+        now = time.time()
         parts = [
             f'{self._dot(on=True)} on',
             f'{self.stories.seen_count()} viewed',
+            f'{len(self._pending_views)} queued',
         ]
+        whens = [v.when for v in self._pending_views]
+        if whens:
+            eta = min(whens) - now
+            when = 'now' if eta <= 0 else f'in {_fmt_eta(eta)}'
+            parts.append(f'next view {self._arr()} {when}')
         nxt = self._story_next_poll
-        eta = nxt - time.time() if nxt > 0 else 0.0
-        if eta > 0:
-            parts.append(f'next poll {self._arr()} in {_fmt_eta(eta)}')
+        poll_eta = nxt - now if nxt else 0.0
+        if poll_eta > 0:
+            parts.append(f'next poll {self._arr()} in {_fmt_eta(poll_eta)}')
         return self._head('stories', 'Stories', *parts)
+
+    def _stories_queue_lines(self, labels: dict[int, str]) -> list[str]:
+        """Return the queued story views: whose, how many, and the ETA."""
+        if not self._pending_views:
+            return []
+        now = time.time()
+        b = self._bul()
+        views = sorted(self._pending_views, key=lambda v: v.when)
+        lines = [f'{b} queued:']
+        for view in views[:STATUS_PENDING_CATS]:
+            who = labels.get(view.peer_id, str(view.peer_id))
+            eta = view.when - now
+            when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
+            lines.append(
+                f'    {who} {b} {len(view.story_ids)} story(s) {b} {when}'
+            )
+        extra = len(views) - STATUS_PENDING_CATS
+        if extra > 0:
+            lines.append(f'    ... (+{extra} more)')
+        return lines
 
     def _users_line(self) -> str:
         """Return a one-line users summary for /status ('off' if disabled)."""
@@ -2608,6 +2650,7 @@ class Aggregator:
         if self.config.test_target:
             ids.add(self.config.test_target)
         ids |= {chat for chat, _ in self.cats.posts}
+        ids |= {v.peer_id for v in self._pending_views}  # story-view queue
         return {cid: await self._chat_label(cid) for cid in ids}
 
     async def _chat_label(self, chat_id: int) -> str:
@@ -2661,7 +2704,7 @@ class Aggregator:
             *self._greeter_lines(),
             '',
             self._users_line(),
-            self._stories_line(),
+            *self._stories_lines(labels),
         ]
         if self.consts.status_help:
             legend = ' '.join(
