@@ -198,14 +198,27 @@ class StoryBrain:
 
     def _session_open(self, now: float) -> bool:
         """Return whether a viewing session may run right now."""
-        if not self.params.enabled:
-            return False
+        return self.blocked_reason(now) is None
+
+    def blocked_reason(self, now: float | None = None) -> str | None:
+        """Return why no session may open now, or None when one may.
+
+        A short, log-friendly diagnostic ('disabled', 'quiet-hours',
+        'silent-day', 'cooldown Ns') so an empty queue is explainable instead
+        of mysterious.
+        """
+        now = self.clock() if now is None else now
         tz = self.params.tz_offset_hours
+        if not self.params.enabled:
+            return 'disabled'
         if humanize.in_quiet_hours(now, tz, self.params.quiet_hours):
-            return False
+            return 'quiet-hours'
         if humanize.is_silent_day(now, tz, self.params.silent_day_prob):
-            return False
-        return now >= self.state.next_session_at
+            return 'silent-day'
+        wait = self.state.next_session_at - now
+        if wait > 0:
+            return f'cooldown {int(wait)}s'
+        return None
 
     def _eligible(
         self, candidates: list[StoryCandidate]

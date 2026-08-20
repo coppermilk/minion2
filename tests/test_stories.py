@@ -138,6 +138,18 @@ def test_between_session_cooldown_blocks(tmp_path: Path) -> None:
     assert brain.plan([_cand(7, (1,))], now=_NOON) == []
 
 
+def test_blocked_reason_explains_an_empty_plan(tmp_path: Path) -> None:
+    """Check blocked reason explains an empty plan."""
+    assert _brain(tmp_path).blocked_reason(_NOON) is None  # open
+    off = _brain(tmp_path, enabled=False)
+    assert off.blocked_reason(_NOON) == 'disabled'
+    quiet = _brain(tmp_path, quiet_hours=frozenset({12}))
+    assert quiet.blocked_reason(_NOON) == 'quiet-hours'
+    cool = _brain(tmp_path)
+    cool.state.next_session_at = _NOON + 100.0
+    assert cool.blocked_reason(_NOON) == 'cooldown 100s'
+
+
 # --- session shape
 
 

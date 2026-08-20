@@ -1865,12 +1865,27 @@ class Aggregator:
         """Fetch the feed, plan a session, and arm a timer per planned view."""
         candidates = await self._fetch_story_candidates()
         if not candidates:
+            log.info('stories: no peers with unseen stories this poll')
             return
-        for view in self.stories.plan(candidates):
+        views = self.stories.plan(candidates)
+        if not views:
+            reason = self.stories.blocked_reason() or 'all skipped this glance'
+            log.info(
+                'stories: %d peer(s) with unseen stories, queued 0 (%s)',
+                len(candidates),
+                reason,
+            )
+            return
+        for view in views:
             self._pending_views.append(view)  # shown as the /status queue
             task = asyncio.create_task(self._view_later(view))
             self._story_tasks.add(task)
             task.add_done_callback(self._story_tasks.discard)
+        log.info(
+            'stories: %d peer(s) with unseen stories, queued %d',
+            len(candidates),
+            len(views),
+        )
 
     async def _fetch_story_candidates(self) -> list[stories.StoryCandidate]:
         """Return the feed's peers that still have unseen stories.
@@ -1896,15 +1911,15 @@ class Aggregator:
         ``hidden`` selects the archived-contacts feed. Unseen-only; a peer
         already collected from the other feed is not overwritten.
         """
+        which = 'hidden' if hidden else 'main'
         try:
             res = await self.client(GetAllStoriesRequest(hidden=hidden))
         except Exception:  # noqa: BLE001 -- feed unreachable: skip this pass
-            log.warning(
-                'stories: could not read the %s stories feed',
-                'hidden' if hidden else 'main',
-            )
+            log.warning('stories: could not read the %s stories feed', which)
             return
-        for peer_stories in getattr(res, 'peer_stories', None) or []:
+        feed = getattr(res, 'peer_stories', None) or []
+        added = 0
+        for peer_stories in feed:
             cand = self._story_candidate(peer_stories)
             if (
                 cand is not None
@@ -1912,6 +1927,13 @@ class Aggregator:
                 and self.stories.unseen(cand)
             ):
                 out[cand.peer_id] = cand
+                added += 1
+        log.info(
+            'stories: %s feed has %d peer(s) with stories, %d new-to-us',
+            which,
+            len(feed),
+            added,
+        )
 
     def _story_candidate(
         self, peer_stories: object
@@ -2319,6 +2341,12 @@ class Aggregator:
             eta = min(whens) - now
             when = 'now' if eta <= 0 else f'in {_fmt_eta(eta)}'
             parts.append(f'next view {self._arr()} {when}')
+        else:
+            # Empty queue: say WHY (asleep, cooldown, silent day) so it is not
+            # a mystery -- the same reason the poll logs.
+            reason = self.stories.blocked_reason(now)
+            if reason:
+                parts.append(f'idle ({reason})')
         nxt = self._story_next_poll
         poll_eta = nxt - now if nxt else 0.0
         if poll_eta > 0:
