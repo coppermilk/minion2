@@ -5,7 +5,8 @@
 Extracted from ``main``: the section builders and small display helpers that
 turn the live aggregator state into the /status text. ``_StatusMixin`` is
 mixed into ``Aggregator`` (its method bodies are unchanged), so they keep
-reading ``self`` state; the TYPE_CHECKING block declares what that state is.
+reading ``self`` state; it inherits ``AggregatorProtocol`` (base.py) so the
+type checker knows what that state is.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
 
+from minions.aggregator.base import AggregatorProtocol
 from minions.aggregator.render import _emoji_markup
 from minions.aggregator.runtime import _fmt_eta
 
@@ -24,13 +26,6 @@ STATUS_PENDING_CATS = 12
 
 if TYPE_CHECKING:
     from minions.aggregator import cats
-    from minions.aggregator import greeter
-    from minions.aggregator import stories
-    from minions.aggregator import users
-    from minions.aggregator.models import Config
-    from minions.aggregator.models import Consts
-    from minions.aggregator.models import Group
-    from minions.aggregator.models import Posted
 
 def _trim(title: str, width: int = 40) -> str:
     """Return a one-line, length-capped title for the /status report."""
@@ -75,27 +70,8 @@ def _user_label(row: dict[str, object]) -> str:
     return f'id {row.get("user_id", "?")}'
 
 
-class _StatusMixin:
+class _StatusMixin(AggregatorProtocol):
     """The /status renderer, mixed into Aggregator (reads its state)."""
-
-    if TYPE_CHECKING:  # attributes/methods provided by Aggregator
-        config: Config
-        consts: Consts
-        groups: list[Group]
-        posted: list[Posted]
-        rejected: set[str]
-        mode: str
-        cats: cats.CatBrain
-        stories: stories.StoryBrain
-        greeter: greeter.Greeter
-        users: users.UserStore
-        _users_enabled: bool
-        _cat_next_rescan: float
-        _story_next_poll: float
-        _rescan_sec: float
-        _pending_views: list[stories.StoryView]
-
-        def live_targets(self) -> tuple[int, ...]: ...
 
     def _ic(self, key: str, fallback: str = '') -> str:
         """Return a /status glyph from the JSON, or the fallback."""

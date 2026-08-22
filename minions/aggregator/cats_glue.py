@@ -5,8 +5,8 @@
 Extracted from ``main``: scheduling human-like cat replies to comments,
 seeding/rescanning the watch-list, and the send primitives (sticker, text
 reply, reaction). ``_CatsMixin`` is mixed into ``Aggregator`` with method
-bodies unchanged, so they keep reading ``self`` state; the TYPE_CHECKING
-block declares that state for mypy.
+bodies unchanged, so they keep reading ``self`` state; it inherits
+``AggregatorProtocol`` (base.py) so the type checker knows that state.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
 from minions.aggregator import cats
+from minions.aggregator.base import AggregatorProtocol
 from minions.aggregator.matching import _needs_human
 from minions.aggregator.matching import _thread_top
 from minions.aggregator.models import _Comment
@@ -31,10 +32,8 @@ from minions.aggregator.status import STATUS_PENDING_CATS
 from minions.aggregator.status import _trim
 
 if TYPE_CHECKING:
-    from telethon import TelegramClient
     from telethon import events
 
-    from minions.aggregator.models import Consts
     from minions.aggregator.premium_emoji import PremiumMessage
 
 log = logging.getLogger('aggregator')
@@ -51,27 +50,8 @@ COMMENT_SCAN = 50
 PRE_FIRE_REFRESH_SEC = 45.0
 
 
-class _CatsMixin:
+class _CatsMixin(AggregatorProtocol):
     """The cat-reply engine, mixed into Aggregator (reads its state)."""
-
-    if TYPE_CHECKING:  # attributes/methods provided by Aggregator (or peers)
-        client: TelegramClient
-        consts: Consts
-        cats: cats.CatBrain
-        _cat_tasks: set[asyncio.Task[None]]
-        _cat_next_rescan: float
-        _rescan_sec: float
-        _thread_rescan_at: dict[int, float]
-
-        def live_targets(self) -> tuple[int, ...]: ...
-
-        async def _watch_post(self, target: int, post_id: int) -> None: ...
-
-        async def _send_status(self, text: str) -> None: ...
-
-        def _pending_cat_line(
-            self, entry: dict[str, object], now: float
-        ) -> str: ...
 
     def _maybe_cat(self, event: events.NewMessage.Event) -> None:
         """If this message comments on one of our posts, schedule a cat react.

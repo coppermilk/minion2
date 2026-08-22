@@ -5,7 +5,8 @@
 Extracted from ``main``: the story-feed poll loop, candidate collection, the
 paced view scheduler, and the /stories report. ``_StoriesMixin`` is mixed
 into ``Aggregator`` with method bodies unchanged, so they keep reading
-``self`` state; the TYPE_CHECKING block declares that state for mypy.
+``self`` state; it inherits ``AggregatorProtocol`` (base.py) so the type
+checker knows that state.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ import contextlib
 import logging
 import random
 import time
-from typing import TYPE_CHECKING
 
 from telethon import utils
 from telethon.tl.functions.stories import GetAllStoriesRequest
@@ -23,35 +23,15 @@ from telethon.tl.functions.stories import IncrementStoryViewsRequest
 from telethon.tl.functions.stories import ReadStoriesRequest
 
 from minions.aggregator import stories
+from minions.aggregator.base import AggregatorProtocol
 from minions.aggregator.models import _iso
 from minions.aggregator.models import _story_epoch
-
-if TYPE_CHECKING:
-    from telethon import TelegramClient
-
-    from minions.aggregator.models import Config
 
 log = logging.getLogger('aggregator')
 
 
-class _StoriesMixin:
+class _StoriesMixin(AggregatorProtocol):
     """Story viewing, mixed into Aggregator (reads its state)."""
-
-    if TYPE_CHECKING:  # attributes/methods provided by Aggregator (or peers)
-        client: TelegramClient
-        config: Config
-        stories: stories.StoryBrain
-        _pending_views: list[stories.StoryView]
-        _story_next_poll: float
-        _story_tasks: set[asyncio.Task[None]]
-
-        async def _chat_label(self, chat_id: int) -> str: ...
-
-        def _stories_line(self) -> str: ...
-
-        def _stories_queue_lines(
-            self, labels: dict[int, str]
-        ) -> list[str]: ...
 
     async def stories_loop(self) -> None:
         """Periodically poll the stories feed and view a human-like handful.

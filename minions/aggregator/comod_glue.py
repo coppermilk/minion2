@@ -4,8 +4,8 @@
 
 Extracted from ``main``: the /comod and /propiska handlers plus their image
 render + caption helpers. ``_ComodMixin`` is mixed into ``Aggregator`` with
-method bodies unchanged, so they keep reading ``self`` state; the
-TYPE_CHECKING block declares that state for mypy.
+method bodies unchanged, so they keep reading ``self`` state; it inherits
+``AggregatorProtocol`` (base.py) so the type checker knows that state.
 """
 
 from __future__ import annotations
@@ -18,28 +18,16 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from minion_core.adapters import files
 from minions.aggregator import comod
-
-if TYPE_CHECKING:
-    from telethon import TelegramClient
-
-    from minions.aggregator.models import Config
+from minions.aggregator.base import AggregatorProtocol
 
 log = logging.getLogger('aggregator')
 
 
-class _ComodMixin:
+class _ComodMixin(AggregatorProtocol):
     """The cabinet commands, mixed into Aggregator (reads its state)."""
-
-    if TYPE_CHECKING:  # attributes provided by Aggregator
-        client: TelegramClient
-        config: Config
-        state_path: Path
-        comod: comod.CabinetRoster
-        _comod: comod.ComodParams
 
     async def cabinet_command(self, text: str) -> None:
         """Move a nick into the cabinet, evict one, or re-post the cabinet.
