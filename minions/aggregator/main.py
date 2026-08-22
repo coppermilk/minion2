@@ -66,14 +66,12 @@ import json
 import logging
 import os
 import random
-import sys
 import threading
 import time
 from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -120,6 +118,11 @@ from minions.aggregator.render import _emoji_markup
 from minions.aggregator.render import _render_constants
 from minions.aggregator.render import _sample_groups
 from minions.aggregator.render import _youtube_thumb
+from minions.aggregator.runtime import _cancel
+from minions.aggregator.runtime import _fmt_eta
+from minions.aggregator.runtime import _log_handlers
+from minions.aggregator.runtime import _touch_health
+from minions.aggregator.runtime import _watchdog
 from minions.aggregator.statefile import _pending_dict
 from minions.aggregator.statefile import _pending_from_dict
 from minions.aggregator.statefile import _posted_dict
@@ -130,100 +133,11 @@ if TYPE_CHECKING:
     from minions.aggregator.premium_emoji import PremiumMessage
 
 
-def _state_base() -> Path | None:
-    """Return the base state dir (AGGREGATOR_STATE_DIR or <DRIVE>).
-
-    Process-level (not per-profile): the log and the watchdog heartbeat live
-    here. Returns None (and the caller degrades) when neither is configured.
-    """
-    base = os.environ.get('AGGREGATOR_STATE_DIR')
-    if not base:
-        drive = os.environ.get('DRIVE')
-        base = str(Path(drive) / 'bots' / 'aggregator') if drive else ''
-    if not base:
-        return None
-    try:
-        Path(base).mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return None
-    return Path(base)
-
-
-def _log_file() -> Path | None:
-    """Return the on-disk log path under the state dir, or None if gone."""
-    base = _state_base()
-    return base / 'aggregator.log' if base is not None else None
-
-
-def _health_file() -> Path | None:
-    """Return the watchdog heartbeat file (mtime = last alive time)."""
-    base = _state_base()
-    return base / 'health' if base is not None else None
-
-
-def _touch_health() -> None:
-    """Stamp the heartbeat file with 'now' -- called only when proven alive."""
-    path = _health_file()
-    if path is None:
-        return
-    try:
-        path.write_text(str(time.time()), encoding='ascii')
-    except OSError:
-        log.warning('watchdog: could not write the heartbeat file')
-
-
-# How often the watchdog thread checks the heartbeat's age.
-_WATCHDOG_POLL_SEC = 30.0
-
-
-def _watchdog(timeout: float) -> None:
-    """Daemon thread: exit the process if the heartbeat goes stale (a hang).
-
-    ``status_loop`` refreshes the heartbeat only after a successful Telegram
-    probe, so a stale file means the event loop stalled OR Telethon wedged --
-    cases no Docker ``restart:`` policy can catch, because the process never
-    exits on its own. Being a plain OS thread it keeps running even when the
-    asyncio loop is frozen, so it can ``os._exit(1)`` and let ``restart:
-    always`` recreate the container. State is committed per operation, so an
-    abrupt exit loses nothing. ``timeout <= 0`` disables it.
-    """
-    path = _health_file()
-    if path is None or timeout <= 0:
-        return
-    while True:
-        time.sleep(_WATCHDOG_POLL_SEC)
-        try:
-            age = time.time() - path.stat().st_mtime
-        except OSError:
-            continue  # not written yet -> do not kill on a cold start
-        if age > timeout:
-            log.error(
-                'watchdog: no heartbeat for %.0fs (> %.0fs); exiting to force '
-                'a restart',
-                age,
-                timeout,
-            )
-            os._exit(1)  # deliberate hard exit so restart: always recreates us
-
-
 def _load_runtime() -> dict[str, object]:
     """Return the 'runtime' section of the constants JSON, or {}."""
     data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
     rt = data.get('runtime')
     return rt if isinstance(rt, dict) else {}
-
-
-def _log_handlers() -> list[logging.Handler]:
-    """Console (for `docker logs`) plus a rotating file (always on disk)."""
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-    path = _log_file()
-    if path is not None:
-        handlers.append(
-            RotatingFileHandler(
-                path, maxBytes=5_000_000, backupCount=2, encoding='utf-8'
-            )
-        )
-    return handlers
 
 
 # force=True reconfigures even if an imported library already installed a root
@@ -321,27 +235,6 @@ COMMENT_SCAN = 50
 PRE_FIRE_REFRESH_SEC = 45.0
 # How many pending cats to list individually in /status (the rest are summed).
 STATUS_PENDING_CATS = 12
-
-
-_SECS_PER_MIN = 60
-_MINS_PER_HOUR = 60
-
-
-def _fmt_eta(seconds: float) -> str:
-    """Return a short countdown like '45s', '8m 12s' or '2h 15m'."""
-    total = max(0, int(seconds))
-    if total < _SECS_PER_MIN:
-        return f'{total}s'
-    mins = total // _SECS_PER_MIN
-    if mins < _MINS_PER_HOUR:
-        return f'{mins}m {total % _SECS_PER_MIN}s'
-    return f'{mins // _MINS_PER_HOUR}h {mins % _MINS_PER_HOUR}m'
-
-
-def _cancel(task: asyncio.Task[object] | None) -> None:
-    """Cancel a background task if it exists (a no-op when None)."""
-    if task is not None:
-        task.cancel()
 
 
 def _str_list(value: object, default: str) -> list[str]:
