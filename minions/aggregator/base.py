@@ -67,6 +67,7 @@ if TYPE_CHECKING:
         _story_tasks: set[asyncio.Task[None]]
         _thread_rescan_at: dict[int, float]
         _pending_views: list[stories.StoryView]
+        _overrides: dict[str, bool]
 
         # --- peer methods implemented on Aggregator or a sibling mixin ---
         def live_targets(self) -> tuple[int, ...]:
@@ -87,6 +88,50 @@ if TYPE_CHECKING:
         def _stories_queue_lines(
             self, labels: dict[int, str]
         ) -> list[str]: ...
+
+        # --- profile + status helpers the command dispatcher calls ---
+        def _bul(self) -> str: ...
+
+        def _dot(self, *, on: bool) -> str: ...
+
+        def _build_profile(self, mode: str) -> None: ...
+
+        def _feature_enabled(self, name: str) -> bool: ...
+
+        def _save_overrides(self) -> None: ...
+
+        async def start_profile(
+            self, *, source_backfill: bool = True
+        ) -> None:
+            """Hydrate the active profile and start its loops."""
+
+        async def stop_profile(self) -> None:
+            """Cancel the active profile's timers and loops."""
+
+        async def switch_mode(self, mode: str) -> None:
+            """Switch the whole bot to live/test."""
+
+        async def status_report(self) -> None:
+            """Post the /status report."""
+
+        # --- command handlers implemented on sibling mixins ---
+        async def requeue_cats(self) -> None:
+            """Rebuild the pending-cat queue (/requeue)."""
+
+        async def answer_all_now(self) -> None:
+            """Answer every pending commenter now (/catnow)."""
+
+        async def users_report(self) -> None:
+            """Post the users-DB summary (/users)."""
+
+        async def stories_report(self) -> None:
+            """Post the story-viewer log (/stories)."""
+
+        async def cabinet_command(self, text: str) -> None:
+            """Run a /comod cabinet command."""
+
+        async def propiska_report(self) -> None:
+            """Post the month's cabinet registry (/propiska_shkaf_month)."""
 
 else:
 
