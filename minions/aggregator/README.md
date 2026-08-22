@@ -64,6 +64,7 @@ and the chats); **`aggregator_constants.json`** carries all behaviour.
 | `max_duration_sec` | a video at/above this many seconds is dropped (not a Short) |
 | `repost_guard_sec` | do not re-post a video whose caption matches one posted within this many seconds -- catches the source re-delivering the same video under new ids (an upstream re-emit, common with chat auto-delete); `0` disables this window (default one week) |
 | `repost_guard_count` | also block a caption matching any of the last N posted videos, regardless of time -- a clock-independent floor so a re-delivered video stays out until N distinct videos have gone out; survives restarts and source floods the time window can miss; `0` disables this window (default `5`). A match in EITHER window blocks the re-post |
+| `discussion_gap_sec` | minimum seconds between consecutive discussion-thread lookups (`GetDiscussionMessageRequest`), which cat seeding fires in bursts on startup/rescan; spacing them out avoids Telegram flood waits; `0` disables the throttle (default `2.0`) |
 | `fields`, `action_value`, `author`, `announce`, `love`, `lead_emoji`, `arrow_down`, `view_label`, `rows`, `platform_emoji` | incoming field names + the post's texts and premium emoji (`lead_emoji` leads the caption line) |
 
 ## Run (without Docker)

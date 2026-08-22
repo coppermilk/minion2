@@ -193,7 +193,7 @@ def _bare_aggregator(fake: _FakeFlush) -> main.Aggregator:
         source=0, targets=(), test_target=0,
         platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
         threshold=0.9, timeout=10800.0, backfill=100, max_duration=180,
-        repost_guard=604800.0, repost_guard_count=5,
+        repost_guard=604800.0, repost_guard_count=5, discussion_gap=0.0,
     )
     agg._deliver = fake.deliver
     agg._react_to_post = fake.react
@@ -274,3 +274,52 @@ def test_flush_requeues_when_nothing_delivered(
     assert 'record' not in fake.order
     assert 'arm' in fake.order  # re-armed
     assert 'save' in fake.order  # the re-queue is persisted
+
+
+def _agg_with_gap(gap: float) -> main.Aggregator:
+    """Build a bare Aggregator whose config sets only the discussion gap."""
+    agg = object.__new__(main.Aggregator)
+    agg.config = main.Config(
+        source=0, targets=(), test_target=0, platforms=('tiktok',),
+        threshold=0.9, timeout=1.0, backfill=0, max_duration=180,
+        repost_guard=0.0, repost_guard_count=0, discussion_gap=gap,
+    )
+    agg._last_discussion_ts = 0.0
+    return agg
+
+
+def test_discussion_throttle_spaces_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call soon after the previous one waits out the remaining gap."""
+    slept: list[float] = []
+
+    async def _fake_sleep(sec: float) -> None:
+        slept.append(sec)
+
+    monkeypatch.setattr(main.asyncio, 'sleep', _fake_sleep)
+    gap = 2.0
+    agg = _agg_with_gap(gap)
+    agg._last_discussion_ts = time.time()  # a call just happened
+
+    asyncio.run(main.Aggregator._throttle_discussion(agg))
+
+    assert slept
+    assert 0 < slept[0] <= gap
+
+
+def test_discussion_throttle_disabled_when_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A zero gap disables the throttle -- no sleep at all."""
+    slept: list[float] = []
+
+    async def _fake_sleep(sec: float) -> None:
+        slept.append(sec)
+
+    monkeypatch.setattr(main.asyncio, 'sleep', _fake_sleep)
+    agg = _agg_with_gap(0.0)
+
+    asyncio.run(main.Aggregator._throttle_discussion(agg))
+
+    assert slept == []

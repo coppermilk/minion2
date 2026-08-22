@@ -351,6 +351,11 @@ class Config:
     # source floods that the time window can miss.
     repost_guard: float
     repost_guard_count: int
+    # Minimum seconds between consecutive GetDiscussionMessageRequest calls
+    # (resolving a post's comment thread). They fire in bursts -- the last
+    # watch_posts posts per target on every startup and rescan -- and Telegram
+    # flood-limits them, so we space them out process-wide. 0 disables.
+    discussion_gap: float
 
 
 @dataclass(frozen=True)
@@ -1107,6 +1112,8 @@ class Aggregator:
         self._pending_views: list[stories.StoryView] = []
         # pre-fire thread refresh debounce, keyed by thread root
         self._thread_rescan_at: dict[int, float] = {}
+        # ts of the last GetDiscussionMessageRequest, for the flood throttle
+        self._last_discussion_ts: float = 0.0
         rt = self._raw.get('runtime')
         rt = rt if isinstance(rt, dict) else {}
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
@@ -3154,10 +3161,27 @@ class Aggregator:
             return
         self.cats.note_post(target, post_id)
 
+    async def _throttle_discussion(self) -> None:
+        """Space out GetDiscussionMessageRequest calls (Telegram flood guard).
+
+        These resolve a post's comment thread and are fired in bursts -- the
+        last ``watch_posts`` posts per target on every startup and rescan --
+        which trips Telegram's flood wait. Keep at least ``discussion_gap``
+        seconds between consecutive calls, process-wide. 0 disables it.
+        """
+        gap = self.config.discussion_gap
+        if gap <= 0:
+            return
+        wait = gap - (time.time() - self._last_discussion_ts)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._last_discussion_ts = time.time()
+
     async def _discussion_thread(
         self, channel: int, post_id: int
     ) -> tuple[int, int] | None:
         """(discussion_chat_id, thread_root_id) for a channel post, or None."""
+        await self._throttle_discussion()
         try:
             disc = await self.client(
                 GetDiscussionMessageRequest(peer=channel, msg_id=post_id)
@@ -3296,6 +3320,9 @@ def _load_config() -> Config:
         # re-emit) are all skipped instead of forming a fresh post. 5 by
         # default; 0 disables this window and leaves only the time guard.
         repost_guard_count=int(data.get('repost_guard_count', 5)),
+        # Space out discussion-thread lookups so cat seeding on startup/rescan
+        # does not trip Telegram flood waits. 2s by default; 0 disables.
+        discussion_gap=float(data.get('discussion_gap_sec', 2.0)),
     )
 
 
