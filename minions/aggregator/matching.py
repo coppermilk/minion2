@@ -158,3 +158,43 @@ def _primary(group: Group, order: Iterable[str]) -> Item:
         if item is not None:
             return item
     return next(iter(group.items.values()))
+
+
+# Link markers that mean a comment wants a real reply (ASCII, so inline);
+# the business/outreach words and any non-ASCII marks (e.g. a full-width '?')
+# live in the constants JSON's "human_words" (BLUEPRINT 4: source stays ASCII).
+_LINK_MARKERS = ('http://', 'https://', 't.me/', 'www.')
+
+
+def _needs_human(text: str, words: tuple[str, ...]) -> bool:
+    """Whether a comment wants a real reply, not an auto sticker.
+
+    A question, a link, or business/outreach wording is exactly where a canned
+    cat STICKER (a message-shaped reply) reads as a non-sequitur. The caller
+    uses this to downgrade such comments to a plain REACTION (safe on anything)
+    instead. It never blocks the reaction -- it only keeps message-stickers off
+    comments a human would actually answer. This is the one light content gate;
+    the engine is otherwise content-agnostic. ``words`` (from the JSON) carries
+    the business terms and any non-ASCII marks.
+    """
+    low = text.lower()
+    if '?' in text:
+        return True
+    if any(u in low for u in _LINK_MARKERS):
+        return True
+    return any(w in low for w in words)
+
+
+def _thread_top(reply: object) -> int | None:
+    """Return the thread-root id a reply belongs to (comment target), or None.
+
+    A comment on a channel post is a reply in the discussion group: its
+    ``reply_to_top_id`` is the post's thread root; a first-level comment has
+    only ``reply_to_msg_id`` (the same root). Either way this yields the id the
+    engine watches, so nested and top-level comments both map to their post.
+    """
+    top = getattr(reply, 'reply_to_top_id', None)
+    if top is not None:
+        return int(top)
+    msg = getattr(reply, 'reply_to_msg_id', None)
+    return int(msg) if msg is not None else None
