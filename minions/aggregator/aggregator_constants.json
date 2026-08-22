@@ -5,6 +5,7 @@
   "backfill": 100,
   "max_duration_sec": 180,
   "repost_guard_sec": 604800,
+  "repost_guard_count": 5,
   "fields": {
     "action": "action",
     "platform": "platform",

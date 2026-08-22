@@ -20,8 +20,14 @@ from YouTube only). After a video is posted, its source message ids are saved
 to disk; on restart, backfill skips any message whose id was already posted, so
 re-posting never happens. A second guard covers a video the source RE-DELIVERS
 under new ids (an upstream re-emit -- common once the chat's auto-delete has
-cleared the old messages): a title >= ``title_match`` similar to one posted
-within ``repost_guard_sec`` is not posted again (0 disables it).
+cleared the old messages): a title >= ``title_match`` similar to a recent post
+is not posted again. "Recent" is two overlapping windows and either one blocks:
+a TIME window (posted within ``repost_guard_sec`` seconds, 0 disables) and a
+COUNT window (among the last ``repost_guard_count`` posted videos, 0 disables).
+The count window is clock-independent, so once a title goes out the next
+``repost_guard_count`` distinct videos must post before that title is eligible
+again -- it holds even if the state file was just restored with stale
+timestamps, or the source floods faster than the time window expects.
 
 Notes:
     * The link is read from ``link`` (or ``url``); the thumbnail from
@@ -333,12 +339,18 @@ class Config:
     timeout: float
     backfill: int
     max_duration: int
-    # Do not re-post a video whose title is >= threshold similar to one already
-    # posted within this many seconds. Guards against the source re-delivering
-    # the same video (new message ids -- e.g. an upstream re-emit after the
-    # chat's auto-delete clears the old ones), which the per-message-id guard
-    # cannot catch. 0 disables the guard.
+    # Do not re-post a video whose title is >= threshold similar to a recent
+    # post. Guards against the source re-delivering the same video (new message
+    # ids -- e.g. an upstream re-emit after the chat's auto-delete clears the
+    # old ones), which the per-message-id guard cannot catch. Two windows, and
+    # a match in EITHER one blocks the re-post:
+    #   repost_guard      -- time window in seconds (0 disables this window).
+    #   repost_guard_count -- how many of the most recent posted videos to
+    #                         guard against, regardless of time (0 disables).
+    # The count window is clock-independent, so it holds through restarts and
+    # source floods that the time window can miss.
     repost_guard: float
+    repost_guard_count: int
 
 
 @dataclass(frozen=True)
@@ -646,19 +658,27 @@ def _is_recent_repost(  # noqa: PLR0913 -- a small pure predicate, flat reads be
     *,
     threshold: float,
     window: float,
+    count: int,
 ) -> bool:
-    """Whether ``title`` matches a video posted within ``window`` seconds.
+    """Whether ``title`` matches a recently posted video (time OR count).
 
     A pure helper (no self) so it is unit-testable: compares the normalized
     title against each recent ``Posted`` record's title by the same fuzzy
-    ratio the in-flight dedup uses. ``window`` <= 0 disables the guard.
+    ratio the in-flight dedup uses. A record counts as recent when it is
+    within ``window`` seconds (a time guard, <= 0 disables it) OR among the
+    last ``count`` posted videos (a clock-independent guard, <= 0 disables
+    it). A match in either window blocks the re-post. With both disabled the
+    guard is off. Records are oldest-first, so the reverse walk stops once a
+    record is outside both windows -- every earlier one is older still.
     """
-    if window <= 0:
+    if window <= 0 and count <= 0:
         return False
     norm = _norm(title)
-    for post in reversed(posted):  # newest first: usually the freshest matches
-        if now - _parse_iso(post.at) > window:
-            break  # older than the window; the rest are older still
+    for idx, post in enumerate(reversed(posted)):  # newest first
+        within_count = idx < count
+        within_window = window > 0 and now - _parse_iso(post.at) <= window
+        if not within_count and not within_window:
+            break  # beyond both guards; the rest are older and further back
         if _similar(norm, _norm(post.title)) >= threshold:
             return True
     return False
@@ -1406,9 +1426,11 @@ class Aggregator:
 
         The per-message-id guard cannot catch a video the source re-delivers
         under NEW ids (an upstream re-emit, common once the chat's auto-delete
-        clears the old messages); this title guard does. Only consulted when no
-        in-flight group matches, so platforms of a video still being collected
-        are never blocked.
+        clears the old messages); this title guard does. It fires on a match
+        in EITHER window: within ``repost_guard`` seconds, or among the last
+        ``repost_guard_count`` posted videos. Only consulted when no in-flight
+        group matches, so platforms of a video still being collected are never
+        blocked.
         """
         return _is_recent_repost(
             self.posted,
@@ -1416,6 +1438,7 @@ class Aggregator:
             time.time(),
             threshold=self.config.threshold,
             window=self.config.repost_guard,
+            count=self.config.repost_guard_count,
         )
 
     def _start(self, item: Item) -> Group:
@@ -2801,6 +2824,21 @@ class Aggregator:
             f'{b} posting {self._arr()} {dest}',
         ]
 
+    def _guard_desc(self) -> str:
+        """One-line summary of the active re-post guard windows.
+
+        Shows both windows so the operator can confirm dedup is armed: the
+        time window (e.g. '7d') and the count window (e.g. 'last 5'). Each
+        reads 'off' when its knob is 0; 'off' overall when both are.
+        """
+        secs = self.config.repost_guard
+        count = self.config.repost_guard_count
+        time_part = _fmt_eta(secs) if secs > 0 else 'off'
+        count_part = f'last {count}' if count > 0 else 'off'
+        if secs <= 0 and count <= 0:
+            return 'off'
+        return f'{time_part}/{count_part}'
+
     def _videos_lines(self) -> list[str]:
         """Videos: counts on the header, then pending + recent posts."""
         b = self._bul()
@@ -2812,6 +2850,7 @@ class Aggregator:
                 f'pending {len(self.groups)} (timeout {window})',
                 f'posted {len(self.posted)}',
                 f'rejected {len(self.rejected)}',
+                f'guard {self._guard_desc()}',
             )
         ]
         for group in self.groups:
@@ -3215,6 +3254,14 @@ def _load_config() -> Config:
         # A week by default: a title posted in the last week is not posted
         # again (matches a typical chat auto-delete window). 0 disables.
         repost_guard=float(data.get('repost_guard_sec', 604800)),
+        # Also block a title matching any of the last N posted videos, no
+        # matter how long ago -- a clock-independent floor so a re-delivered
+        # video cannot slip back in until N distinct videos have gone out.
+        # This is what survives the worst case: the first copy posts on the
+        # timeout, then the same title's later platforms (or an auto-delete
+        # re-emit) are all skipped instead of forming a fresh post. 5 by
+        # default; 0 disables this window and leaves only the time guard.
+        repost_guard_count=int(data.get('repost_guard_count', 5)),
     )
 
 
