@@ -57,6 +57,9 @@ if TYPE_CHECKING:
         posted: list[Posted]
         rejected: set[str]
         _users_enabled: bool
+        _users_enrich: bool
+        _users_store_text: bool
+        _enrich_tasks: set[asyncio.Task[None]]
         _cat_next_rescan: float
         _story_next_poll: float
         _rescan_sec: float
