@@ -14,11 +14,11 @@ instead of a uniform sampler, and stay deterministic under test.
 from __future__ import annotations
 
 import math
+import random
 from typing import TYPE_CHECKING
 from typing import TypeVar
 
 if TYPE_CHECKING:
-    import random
     from collections.abc import Sequence
 
 T = TypeVar('T')
@@ -50,3 +50,29 @@ def weighted_choice(
         if upto >= threshold:
             return item
     return items[-1]
+
+
+class Variety:
+    """Pick from small pools like a person: no back-to-back repeats.
+
+    A person does not use the identical announce line or lead emoji on two
+    posts in a row, which is exactly what a plain ``random.choice`` does now
+    and then. This wraps an RNG and a per-pool memory of the last pick, and
+    suppresses that pick next time (uniform among the rest). In-memory only --
+    cosmetic variety, so a restart may repeat once, which does not matter.
+    """
+
+    def __init__(self, rng: random.Random | None = None) -> None:
+        """Use ``rng`` (default a fresh one) and start with no history."""
+        self._rng = rng or random.Random()  # noqa: S311 -- variety, not crypto
+        self._last: dict[str, object] = {}
+
+    def pick(self, key: str, items: Sequence[T]) -> T:
+        """Return an item from ``items``, avoiding the last one for ``key``."""
+        if len(items) <= 1:
+            return items[0]
+        last = self._last.get(key)
+        weights = [0.0 if item == last else 1.0 for item in items]
+        chosen = weighted_choice(self._rng, items, weights)
+        self._last[key] = chosen
+        return chosen

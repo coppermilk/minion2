@@ -13,6 +13,7 @@ from __future__ import annotations
 import random
 from typing import TYPE_CHECKING
 
+from minions.aggregator.core.humanize_choice import Variety
 from minions.aggregator.core.matching import _HASHTAG_RE
 from minions.aggregator.core.matching import _primary
 from minions.aggregator.core.models import Group
@@ -125,18 +126,28 @@ def _render_constants(consts: Consts) -> PremiumMessage:
     return rich.build()
 
 
-def _compose(
-    group: Group, order: tuple[str, ...], consts: Consts
+def _compose(  # noqa: PLR0913 -- variety is an optional post-decoration picker
+    group: Group,
+    order: tuple[str, ...],
+    consts: Consts,
+    variety: Variety | None = None,
 ) -> PremiumMessage:
-    """Build the full post: author line, description line, and link grid."""
+    """Build the full post: author line, description line, and link grid.
+
+    ``variety`` picks the announce line and the love/lead/arrow emoji so a
+    post does not repeat what the previous one used (see ``humanize_choice``).
+    Default is a fresh, memory-less picker -- the real post path passes a
+    persistent one; previews and tests get plain, independent variety.
+    """
+    pick = (variety or Variety()).pick
     caption = _strip_tags(_primary(group, order).title)
     rich = RichText()
     rich.text(consts.author).text(' ')
-    rich.text(random.choice(consts.announce)).text(' ')  # noqa: S311
-    rich.emoji(random.choice(consts.love)).text('\n\n')  # noqa: S311
-    rich.emoji(random.choice(consts.lead)).text(' ')  # noqa: S311
+    rich.text(pick('announce', consts.announce)).text(' ')
+    rich.emoji(pick('love', consts.love)).text('\n\n')
+    rich.emoji(pick('lead', consts.lead)).text(' ')
     rich.text(caption).text(' ')
-    rich.emoji(random.choice(consts.arrow_down)).text('\n\n')  # noqa: S311
+    rich.emoji(pick('arrow', consts.arrow_down)).text('\n\n')
     _compose_links(rich, group, consts)
     return rich.build()
 

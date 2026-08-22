@@ -84,6 +84,7 @@ from minions.aggregator.core.config import _read_json
 from minions.aggregator.core.config import _resolve_session_path
 from minions.aggregator.core.config import _resolve_state_path
 from minions.aggregator.core.config import load_env
+from minions.aggregator.core.humanize_choice import Variety
 from minions.aggregator.core.matching import _action_ok
 from minions.aggregator.core.matching import _duration_seconds
 from minions.aggregator.core.matching import _extract_fields
@@ -153,6 +154,9 @@ class Aggregator(
         self._raw = _read_json(here.with_name(CONSTANTS_FILE))
         keys = [*self.consts.fields.values(), *_THUMB_ALIASES]
         self._keys = tuple(dict.fromkeys(keys))
+        # Post-decoration picker: keeps the announce line and love/lead/arrow
+        # emoji from repeating on consecutive posts (in-memory; cosmetic).
+        self._variety = Variety()
         # State is per PROFILE (live vs test): each mode has its OWN channel
         # AND its own state files (cats, greeter, posted, dedup), so a test run
         # never touches live state and any future stateful feature is isolated
@@ -555,7 +559,9 @@ class Aggregator(
             len(group.items),
             ', '.join(sorted(group.items)),
         )
-        message = _compose(group, self.config.platforms, self.consts)
+        message = _compose(
+            group, self.config.platforms, self.consts, self._variety
+        )
         posts = await self._deliver_post(message, _youtube_thumb(group))
         if not posts:
             log.warning('post for %r did not go out; re-queueing', group.title)

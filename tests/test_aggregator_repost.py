@@ -147,6 +147,7 @@ def _bare_aggregator(fake: _FakeFlush) -> main.Aggregator:
     agg.posted = []
     agg.processed_ids = set()
     agg.consts = None  # only _compose reads it, and we patch _compose
+    agg._variety = None  # passed to the patched _compose, which ignores it
     agg.config = main.Config(
         source=0, targets=(), test_target=0,
         platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),

@@ -9,6 +9,7 @@ delay, a quiet-hours gate, and a deterministic-per-date silent-day roll.
 
 from __future__ import annotations
 
+import itertools
 import random
 from datetime import UTC
 from datetime import datetime
@@ -68,3 +69,11 @@ def test_weighted_choice_respects_weights() -> None:
     assert picks == {'a', 'c'}  # 'b' (weight 0) never chosen
     only = humanize_choice.weighted_choice(rng, items, [0.0, 0.0, 0.0])
     assert only in items  # all-zero -> a valid uniform pick
+
+
+def test_variety_avoids_back_to_back_repeats() -> None:
+    """A pool of two never repeats; a single-item pool always returns it."""
+    v = humanize_choice.Variety(random.Random(0))
+    picks = [v.pick('k', ('a', 'b')) for _ in range(10)]
+    assert all(a != b for a, b in itertools.pairwise(picks))
+    assert v.pick('solo', ('only',)) == 'only'
