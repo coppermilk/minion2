@@ -46,6 +46,7 @@ def _stub_telethon() -> None:
 
 _stub_telethon()
 
+from minions.aggregator import config  # noqa: E402
 from minions.aggregator import main  # noqa: E402
 from minions.aggregator import matching  # noqa: E402
 from minions.aggregator import render  # noqa: E402
@@ -55,8 +56,8 @@ from minions.aggregator.models import Group  # noqa: E402
 from minions.aggregator.models import Item  # noqa: E402
 from minions.aggregator.models import Posted  # noqa: E402
 
-CONSTS = main._load_constants(
-    Path(main.__file__).with_name('aggregator_constants.json')
+CONSTS = config._load_constants(
+    Path(config.__file__).with_name('aggregator_constants.json')
 )
 
 
@@ -78,7 +79,7 @@ def _config(**over: object) -> Config:
 
 def test_validate_config_accepts_defaults() -> None:
     """A sane config passes validation (no exception)."""
-    main._validate_config(_config())
+    config._validate_config(_config())
 
 
 @pytest.mark.parametrize(
@@ -94,7 +95,7 @@ def test_validate_config_accepts_defaults() -> None:
 def test_validate_config_rejects_bad(over: dict[str, object]) -> None:
     """Each nonsensical knob fails fast with SystemExit."""
     with pytest.raises(SystemExit):
-        main._validate_config(_config(**over))
+        config._validate_config(_config(**over))
 
 
 # ---------------------------------------------------------------- matching
