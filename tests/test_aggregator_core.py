@@ -10,41 +10,13 @@ attributes the method under test touches -- no live client.
 
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import install_telethon_stub
 
-class _AnyMeta(type):
-    """A class whose every attribute is another such class (nested access)."""
-
-    def __getattr__(cls, name: str) -> type:
-        return _AnyMeta(name, (), {})
-
-
-def _stub_telethon() -> None:
-    """Register fake Telethon modules so ``main`` imports without it."""
-    if 'telethon' in sys.modules:
-        return
-    for name in (
-        'telethon',
-        'telethon.events',
-        'telethon.utils',
-        'telethon.tl',
-        'telethon.tl.functions',
-        'telethon.tl.functions.messages',
-        'telethon.tl.functions.stories',
-        'telethon.tl.types',
-    ):
-        module = types.ModuleType(name)
-        module.__getattr__ = lambda attr: _AnyMeta(attr, (), {})  # type: ignore[method-assign]
-        module.__path__ = []  # type: ignore[attr-defined]
-        sys.modules[name] = module
-
-
-_stub_telethon()
+install_telethon_stub()
 
 from minions.aggregator import config  # noqa: E402
 from minions.aggregator import main  # noqa: E402

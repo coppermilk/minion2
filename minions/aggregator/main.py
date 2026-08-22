@@ -122,7 +122,6 @@ from minions.aggregator.stories_glue import _StoriesMixin
 from minions.aggregator.users_glue import _UsersMixin
 
 if TYPE_CHECKING:
-
     from minions.aggregator.premium_emoji import PremiumMessage
 
 

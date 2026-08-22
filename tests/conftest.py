@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from typing import TYPE_CHECKING
 
 import pytest
@@ -13,6 +15,39 @@ from minion_core.settings import load
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+class _AnyMeta(type):
+    """A class whose every attribute is another such class (nested access)."""
+
+    def __getattr__(cls, name: str) -> type:
+        return _AnyMeta(name, (), {})
+
+
+def install_telethon_stub() -> None:
+    """Register fake Telethon modules so ``aggregator.main`` imports w/o it.
+
+    Telethon is a runtime-only extra (``tg``), absent from the test extras,
+    yet the aggregator binds a handful of its names at import. Each stub
+    answers any ``from telethon... import X`` with a throwaway class. Call it
+    before importing ``minions.aggregator.main``; idempotent.
+    """
+    if 'telethon' in sys.modules:
+        return
+    for name in (
+        'telethon',
+        'telethon.events',
+        'telethon.utils',
+        'telethon.tl',
+        'telethon.tl.functions',
+        'telethon.tl.functions.messages',
+        'telethon.tl.functions.stories',
+        'telethon.tl.types',
+    ):
+        module = types.ModuleType(name)
+        module.__getattr__ = lambda attr: _AnyMeta(attr, (), {})
+        module.__path__ = []  # type: ignore[attr-defined]
+        sys.modules[name] = module
 
 
 def make_env(drive: Path, **extra: str) -> dict[str, str]:

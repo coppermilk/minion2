@@ -10,59 +10,17 @@ before importing. Only the pure dedup helpers are exercised here.
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
-import types
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from tests.conftest import install_telethon_stub
+
 if TYPE_CHECKING:
     import pytest
 
-
-class _AnyMeta(type):
-    """A class whose every attribute is another such class (nested access)."""
-
-    def __getattr__(cls, name: str) -> type:
-        return _AnyMeta(name, (), {})
-
-
-def _stub_module(name: str) -> types.ModuleType:
-    """Return a module that fabricates any imported name as a dummy class."""
-    module = types.ModuleType(name)
-
-    def _fabricate(attr: str) -> type:
-        return _AnyMeta(attr, (), {})
-
-    module.__getattr__ = _fabricate  # type: ignore[method-assign]
-    module.__path__ = []  # mark it as a package
-    return module
-
-
-def _stub_telethon() -> None:
-    """Register fake Telethon modules so ``main`` imports without it.
-
-    Telethon is a runtime-only dependency (extra ``tg``), absent from the
-    test extras. Each stub module answers any ``from telethon... import X``
-    with a throwaway class, so ``main`` and its siblings load unchanged.
-    """
-    if 'telethon' in sys.modules:
-        return
-    for name in (
-        'telethon',
-        'telethon.events',
-        'telethon.utils',
-        'telethon.tl',
-        'telethon.tl.functions',
-        'telethon.tl.functions.messages',
-        'telethon.tl.functions.stories',
-        'telethon.tl.types',
-    ):
-        sys.modules[name] = _stub_module(name)
-
-
-_stub_telethon()
+install_telethon_stub()
 
 from minions.aggregator import main  # noqa: E402
 
