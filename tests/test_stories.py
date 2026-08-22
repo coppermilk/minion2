@@ -15,7 +15,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from minions.aggregator import stories
+from minions.aggregator.engines import stories
 
 _MANY = 50
 _NOON = datetime(1970, 1, 1, 12, 0, tzinfo=UTC).timestamp()  # a waking hour

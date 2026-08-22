@@ -40,10 +40,10 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 
-from minions.aggregator.premium_emoji import RichText
+from minions.aggregator.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
-    from minions.aggregator.premium_emoji import PremiumMessage
+    from minions.aggregator.engines.premium_emoji import PremiumMessage
 
 logging.basicConfig(
     level=logging.INFO,

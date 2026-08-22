@@ -26,7 +26,7 @@ _PROTOCOL = 'AggregatorProtocol'
 def _impl_classes() -> dict[str, ast.ClassDef]:
     """Return Aggregator + every ``*Mixin`` class def, keyed by class name."""
     found: dict[str, ast.ClassDef] = {}
-    for path in _AGG.glob('*.py'):
+    for path in _AGG.rglob('*.py'):
         tree = ast.parse(path.read_text(encoding='ascii'))
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and (
@@ -84,7 +84,8 @@ def _decl_name(stmt: ast.stmt) -> str | None:
 
 def _protocol_names() -> set[str]:
     """Return the attribute + method names AggregatorProtocol declares."""
-    tree = ast.parse((_AGG / 'base.py').read_text(encoding='ascii'))
+    base = next(p for p in _AGG.rglob('*.py') if p.name == 'base.py')
+    tree = ast.parse(base.read_text(encoding='ascii'))
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == _PROTOCOL:
             return {n for s in node.body if (n := _decl_name(s)) is not None}

@@ -15,7 +15,7 @@ import types
 from typing import TYPE_CHECKING
 from typing import Never
 
-from minions.aggregator import greeter
+from minions.aggregator.engines import greeter
 
 _CAP_PER_CYCLE = 2
 _CHANNEL_ID = -999

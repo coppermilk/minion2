@@ -22,19 +22,19 @@ from telethon.tl.types import InputReplyToMessage
 from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
-from minions.aggregator import cats
-from minions.aggregator.base import AggregatorProtocol
-from minions.aggregator.matching import _needs_human
-from minions.aggregator.matching import _thread_top
-from minions.aggregator.models import _Comment
-from minions.aggregator.premium_emoji import RichText
-from minions.aggregator.status import STATUS_PENDING_CATS
-from minions.aggregator.status import _trim
+from minions.aggregator.core.base import AggregatorProtocol
+from minions.aggregator.core.matching import _needs_human
+from minions.aggregator.core.matching import _thread_top
+from minions.aggregator.core.models import _Comment
+from minions.aggregator.engines import cats
+from minions.aggregator.engines.premium_emoji import RichText
+from minions.aggregator.glue.status import STATUS_PENDING_CATS
+from minions.aggregator.glue.status import _trim
 
 if TYPE_CHECKING:
     from telethon import events
 
-    from minions.aggregator.premium_emoji import PremiumMessage
+    from minions.aggregator.engines.premium_emoji import PremiumMessage
 
 log = logging.getLogger('aggregator')
 

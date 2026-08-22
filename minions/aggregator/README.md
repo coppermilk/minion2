@@ -26,15 +26,17 @@ code units, as Telegram requires).
 
 ## Files
 
-| File | What it is |
+The package root holds the entry point and data; the code is grouped into
+three subpackages.
+
+| Path | What it is |
 |------|-----------|
-| `main.py` | the aggregator itself (`python -m minions.aggregator.main`) |
-| `premium_emoji.py` | premium-emoji entity builder (`RichText`, `build_post_with_bar`, ...) |
-| `aggregator_constants.json` | editable post texts + premium emoji ids (UTF-8) |
-| `login.py` | log in once and write the session file (`python -m minions.aggregator.login`) |
-| `dump_emoji_ids.py` | dev helper: print the id of every premium emoji you send |
-| `greeter.py` | welcome/farewell DMs from the channel admin log (opt-in) |
-| `users.py` | opt-in users database (SQLite): audience history + activity |
+| `main.py` | the `Aggregator` class (aggregation + posting core) and the entry point (`python -m minions.aggregator.main`) |
+| `aggregator_constants.json`, `assets/` | editable post texts + premium emoji ids (UTF-8) and the cabinet template/fonts |
+| `login.py`, `dump_emoji_ids.py` | log in once / dev helper to print premium-emoji ids |
+| `core/` | pure, stateless building blocks: `models`, `matching`, `statefile`, `render`, `config`, `runtime`, `base` (the `AggregatorProtocol` shared contract) |
+| `glue/` | the Aggregator mixins: `status`, `commands`, and the per-domain wiring `cats`, `stories`, `comod`, `users` |
+| `engines/` | domain engines: `cats` (cat brain), `stories` (viewer), `greeter`, `comod` (cabinet), `users` (SQLite DB), `premium_emoji`, `humanize` |
 
 ## Configuration
 

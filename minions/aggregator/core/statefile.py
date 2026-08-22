@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import time
 
-from minions.aggregator.models import Group
-from minions.aggregator.models import Item
-from minions.aggregator.models import Posted
-from minions.aggregator.models import _iso
-from minions.aggregator.models import _parse_iso
+from minions.aggregator.core.models import Group
+from minions.aggregator.core.models import Item
+from minions.aggregator.core.models import Posted
+from minions.aggregator.core.models import _iso
+from minions.aggregator.core.models import _parse_iso
 
 
 def _posted_dict(post: Posted) -> dict[str, object]:

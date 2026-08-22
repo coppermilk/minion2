@@ -20,8 +20,9 @@ from datetime import timezone
 from pathlib import Path
 
 from minion_core.adapters import files
-from minions.aggregator import comod
-from minions.aggregator.base import AggregatorProtocol
+from minions.aggregator.core.base import AggregatorProtocol
+from minions.aggregator.core.config import PACKAGE_DIR
+from minions.aggregator.engines import comod
 
 log = logging.getLogger('aggregator')
 
@@ -123,15 +124,16 @@ class _ComodMixin(AggregatorProtocol):
             return None
 
     def _comod_asset(self, rel: str) -> Path | None:
-        """Resolve a comod asset path; a relative one sits in this package.
+        """Resolve a comod asset path; a relative one sits in the package.
 
         So 'assets/cabinet.jpg' and 'assets/fonts/Aleo.ttf' are found no matter
-        the working directory. Returns None for a blank path.
+        the working directory (anchored on the package root, not this file's
+        subpackage). Returns None for a blank path.
         """
         if not rel:
             return None
         path = Path(rel)
-        return path if path.is_absolute() else Path(__file__).parent / rel
+        return path if path.is_absolute() else PACKAGE_DIR / rel
 
     def _comod_font(self, rel: str) -> str:
         """Return a bundled font path as a string, or '' when unset/missing.

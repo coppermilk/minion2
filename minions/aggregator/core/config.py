@@ -15,11 +15,17 @@ import logging
 import os
 from pathlib import Path
 
-from minions.aggregator.models import DEFAULT_FIELDS
-from minions.aggregator.models import Config
-from minions.aggregator.models import Consts
+from minions.aggregator.core.models import DEFAULT_FIELDS
+from minions.aggregator.core.models import Config
+from minions.aggregator.core.models import Consts
 
 log = logging.getLogger('aggregator')
+
+# The aggregator package root (minions/aggregator), anchored on this file's
+# location (core/config.py) so it holds no matter where a submodule lives.
+# Data (the constants JSON, the session file) and the repo root are derived
+# from it, not from each caller's ``__file__``.
+PACKAGE_DIR = Path(__file__).resolve().parent.parent
 
 DEFAULT_SOURCE_CHAT_ID = -1004402620527
 DEFAULT_TARGET_CHAT_ID = -1002431466060
@@ -28,8 +34,9 @@ DEFAULT_TARGET_CHAT_ID = -1002431466060
 DEFAULT_PLATFORMS = 'tiktok,youtube,pinterest,instagram'
 # Only Shorts: a video whose known duration reaches this is dropped.
 MAX_SHORT_SEC = 180
-# Files next to this script: the editable constants and the saved state.
+# Data files at the package root: the editable constants and the saved state.
 CONSTANTS_FILE = 'aggregator_constants.json'
+CONSTANTS_PATH = PACKAGE_DIR / CONSTANTS_FILE
 STATE_FILE = 'aggregator_state.json'
 # Which profile is active (live/test). Lives in the base state dir, OUTSIDE the
 # per-profile state, so we know which profile to load at startup.
@@ -38,15 +45,15 @@ MODE_FILE = 'aggregator_mode.json'
 # the base state dir so both profiles share one choice (like the JSON enabled).
 FEATURE_OVERRIDES_FILE = 'feature_overrides.json'
 # The project keeps ONE .env at the repo root (compose's env_file and the
-# Windows launcher both point there). This package is minions/aggregator/, so
-# parents[2] is that repo root. In Docker the vars are already in os.environ
-# (compose env_file), so a missing file here is harmless; env always wins.
-PROJECT_ENV = Path(__file__).resolve().parents[2] / '.env'
-# Last-resort file-session base path: 'telethon.session' next to this package.
+# Windows launcher both point there): two levels above the package
+# (minions/aggregator -> minions -> repo). In Docker the vars are already in
+# os.environ (compose env_file), so a missing file here is harmless; env wins.
+PROJECT_ENV = PACKAGE_DIR.parent.parent / '.env'
+# Last-resort file-session base path: 'telethon.session' at the package root.
 # It is git-ignored, so a session file kept in the repo checkout survives a
 # repo re-sync (deploy/nas-update.sh's `git reset --hard`), exactly like .env.
 # Telethon appends '.session', so the file on disk is 'telethon.session'.
-DEFAULT_SESSION_PATH = Path(__file__).with_name('telethon')
+DEFAULT_SESSION_PATH = PACKAGE_DIR / 'telethon'
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -136,7 +143,7 @@ def _load_constants(path: Path) -> Consts:
 
 def _load_runtime() -> dict[str, object]:
     """Return the 'runtime' section of the constants JSON, or {}."""
-    data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
+    data = _read_json(CONSTANTS_PATH)
     rt = data.get('runtime')
     return rt if isinstance(rt, dict) else {}
 
@@ -236,7 +243,7 @@ def _load_config() -> Config:
     platforms) fails fast here with a message naming the problem, instead of
     a confusing crash later or a bot that silently never completes a group.
     """
-    data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
+    data = _read_json(CONSTANTS_PATH)
     csv = str(data.get('platforms') or DEFAULT_PLATFORMS)
     platforms = tuple(p.strip().lower() for p in csv.split(',') if p.strip())
     try:

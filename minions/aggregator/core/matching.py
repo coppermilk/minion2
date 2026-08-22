@@ -13,16 +13,16 @@ import re
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
-from minions.aggregator.models import _THUMB_ALIASES
-from minions.aggregator.models import Item
-from minions.aggregator.models import _parse_iso
+from minions.aggregator.core.models import _THUMB_ALIASES
+from minions.aggregator.core.models import Item
+from minions.aggregator.core.models import _parse_iso
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from minions.aggregator.models import Consts
-    from minions.aggregator.models import Group
-    from minions.aggregator.models import Posted
+    from minions.aggregator.core.models import Consts
+    from minions.aggregator.core.models import Group
+    from minions.aggregator.core.models import Posted
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text

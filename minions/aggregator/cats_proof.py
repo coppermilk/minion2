@@ -45,7 +45,7 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
-from minions.aggregator import cats
+from minions.aggregator.engines import cats
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
 # Midday on a weekday, inside the active window, so cats are answered promptly.

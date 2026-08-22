@@ -17,15 +17,15 @@ from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
 
-from minions.aggregator.base import AggregatorProtocol
-from minions.aggregator.render import _emoji_markup
-from minions.aggregator.runtime import _fmt_eta
+from minions.aggregator.core.base import AggregatorProtocol
+from minions.aggregator.core.render import _emoji_markup
+from minions.aggregator.core.runtime import _fmt_eta
 
 # How many pending cats to list individually in /status (the rest are summed).
 STATUS_PENDING_CATS = 12
 
 if TYPE_CHECKING:
-    from minions.aggregator import cats
+    from minions.aggregator.engines import cats
 
 def _trim(title: str, width: int = 40) -> str:
     """Return a one-line, length-capped title for the /status report."""

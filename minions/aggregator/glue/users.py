@@ -14,11 +14,11 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from minions.aggregator import users
-from minions.aggregator.base import AggregatorProtocol
-from minions.aggregator.matching import _thread_top
-from minions.aggregator.models import _iso
-from minions.aggregator.status import _user_label
+from minions.aggregator.core.base import AggregatorProtocol
+from minions.aggregator.core.matching import _thread_top
+from minions.aggregator.core.models import _iso
+from minions.aggregator.engines import users
+from minions.aggregator.glue.status import _user_label
 
 if TYPE_CHECKING:
     from telethon import events

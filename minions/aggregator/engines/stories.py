@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.aggregator import humanize
+from minions.aggregator.engines import humanize
 
 if TYPE_CHECKING:
     from collections.abc import Callable

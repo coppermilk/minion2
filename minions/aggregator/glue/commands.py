@@ -15,10 +15,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from minions.aggregator.base import AggregatorProtocol
-from minions.aggregator.render import _compose
-from minions.aggregator.render import _render_constants
-from minions.aggregator.render import _sample_groups
+from minions.aggregator.core.base import AggregatorProtocol
+from minions.aggregator.core.render import _compose
+from minions.aggregator.core.render import _render_constants
+from minions.aggregator.core.render import _sample_groups
 
 if TYPE_CHECKING:
     from telethon import events

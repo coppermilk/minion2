@@ -13,7 +13,7 @@ import random
 from datetime import UTC
 from datetime import datetime
 
-from minions.aggregator import humanize
+from minions.aggregator.engines import humanize
 
 _NOON = datetime(1970, 1, 1, 12, 0, tzinfo=UTC).timestamp()
 _OFFSET = 3

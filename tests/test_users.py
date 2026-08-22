@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from minions.aggregator.users import Identity
-from minions.aggregator.users import MembershipEvent
-from minions.aggregator.users import SeenMessage
-from minions.aggregator.users import UserStore
+from minions.aggregator.engines.users import Identity
+from minions.aggregator.engines.users import MembershipEvent
+from minions.aggregator.engines.users import SeenMessage
+from minions.aggregator.engines.users import UserStore
 
 _FIRST_SEEN = 100.0
 _LAST_SEEN = 200.0

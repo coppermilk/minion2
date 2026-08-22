@@ -13,7 +13,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from minions.aggregator import cats
+from minions.aggregator.engines import cats
 
 _BURST_SIZE = 6
 _HALF = 0.5

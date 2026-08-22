@@ -22,10 +22,10 @@ from telethon.tl.functions.stories import GetAllStoriesRequest
 from telethon.tl.functions.stories import IncrementStoryViewsRequest
 from telethon.tl.functions.stories import ReadStoriesRequest
 
-from minions.aggregator import stories
-from minions.aggregator.base import AggregatorProtocol
-from minions.aggregator.models import _iso
-from minions.aggregator.models import _story_epoch
+from minions.aggregator.core.base import AggregatorProtocol
+from minions.aggregator.core.models import _iso
+from minions.aggregator.core.models import _story_epoch
+from minions.aggregator.engines import stories
 
 log = logging.getLogger('aggregator')
 

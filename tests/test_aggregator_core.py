@@ -10,27 +10,23 @@ attributes the method under test touches -- no live client.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from tests.conftest import install_telethon_stub
 
 install_telethon_stub()
 
-from minions.aggregator import config  # noqa: E402
 from minions.aggregator import main  # noqa: E402
-from minions.aggregator import matching  # noqa: E402
-from minions.aggregator import render  # noqa: E402
-from minions.aggregator import statefile  # noqa: E402
-from minions.aggregator.models import Config  # noqa: E402
-from minions.aggregator.models import Group  # noqa: E402
-from minions.aggregator.models import Item  # noqa: E402
-from minions.aggregator.models import Posted  # noqa: E402
+from minions.aggregator.core import config  # noqa: E402
+from minions.aggregator.core import matching  # noqa: E402
+from minions.aggregator.core import render  # noqa: E402
+from minions.aggregator.core import statefile  # noqa: E402
+from minions.aggregator.core.models import Config  # noqa: E402
+from minions.aggregator.core.models import Group  # noqa: E402
+from minions.aggregator.core.models import Item  # noqa: E402
+from minions.aggregator.core.models import Posted  # noqa: E402
 
-CONSTS = config._load_constants(
-    Path(config.__file__).with_name('aggregator_constants.json')
-)
+CONSTS = config._load_constants(config.CONSTANTS_PATH)
 
 
 def _config(**over: object) -> Config:

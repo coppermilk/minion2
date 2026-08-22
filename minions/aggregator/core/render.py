@@ -13,17 +13,17 @@ from __future__ import annotations
 import random
 from typing import TYPE_CHECKING
 
-from minions.aggregator.matching import _HASHTAG_RE
-from minions.aggregator.matching import _primary
-from minions.aggregator.models import Group
-from minions.aggregator.models import Item
-from minions.aggregator.premium_emoji import RichText
+from minions.aggregator.core.matching import _HASHTAG_RE
+from minions.aggregator.core.matching import _primary
+from minions.aggregator.core.models import Group
+from minions.aggregator.core.models import Item
+from minions.aggregator.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from minions.aggregator.models import Consts
-    from minions.aggregator.premium_emoji import PremiumMessage
+    from minions.aggregator.core.models import Consts
+    from minions.aggregator.engines.premium_emoji import PremiumMessage
 
 # The order emoji types are grouped in for the /emojis catalog message.
 _EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat', 'like')

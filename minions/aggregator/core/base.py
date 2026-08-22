@@ -21,15 +21,15 @@ if TYPE_CHECKING:
 
     from telethon import TelegramClient
 
-    from minions.aggregator import cats
-    from minions.aggregator import comod
-    from minions.aggregator import greeter
-    from minions.aggregator import stories
-    from minions.aggregator import users
-    from minions.aggregator.models import Config
-    from minions.aggregator.models import Consts
-    from minions.aggregator.models import Group
-    from minions.aggregator.models import Posted
+    from minions.aggregator.core.models import Config
+    from minions.aggregator.core.models import Consts
+    from minions.aggregator.core.models import Group
+    from minions.aggregator.core.models import Posted
+    from minions.aggregator.engines import cats
+    from minions.aggregator.engines import comod
+    from minions.aggregator.engines import greeter
+    from minions.aggregator.engines import stories
+    from minions.aggregator.engines import users
 
     class AggregatorProtocol:
         """What every Aggregator mixin may read off ``self`` (type-only).
