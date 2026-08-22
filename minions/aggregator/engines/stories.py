@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.aggregator.engines import humanize
+from minions.aggregator.core import humanize_time
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -222,9 +222,9 @@ class StoryBrain:
         tz = self.params.tz_offset_hours
         if not self.params.enabled:
             return 'disabled'
-        if humanize.in_quiet_hours(now, tz, self.params.quiet_hours):
+        if humanize_time.in_quiet_hours(now, tz, self.params.quiet_hours):
             return 'quiet-hours'
-        if humanize.is_silent_day(now, tz, self.params.silent_day_prob):
+        if humanize_time.is_silent_day(now, tz, self.params.silent_day_prob):
             return 'silent-day'
         wait = self.state.next_session_at - now
         if wait > 0 and not self.params.view_all:
@@ -290,7 +290,7 @@ class StoryBrain:
         pushed a long, heavy-tailed spacing past the last view, so the next
         session is a proper while away (principle 2).
         """
-        when = now + humanize.lognormal(
+        when = now + humanize_time.lognormal(
             self.rng, self.params.latency_log_mu, self.params.latency_log_sigma
         )
         self.state.session_start_at = when
@@ -305,7 +305,7 @@ class StoryBrain:
                     label=cand.label,
                 )
             )
-            when += humanize.lognormal(
+            when += humanize_time.lognormal(
                 self.rng, self.params.gap_log_mu, self.params.gap_log_sigma
             )
         self.state.session_last_at = when
@@ -314,7 +314,7 @@ class StoryBrain:
             # unseen since (seen peers stay filtered out by the seen set).
             self.state.next_session_at = now
         else:
-            spacing = humanize.lognormal(
+            spacing = humanize_time.lognormal(
                 self.rng,
                 self.params.spacing_log_mu,
                 self.params.spacing_log_sigma,

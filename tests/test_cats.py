@@ -140,15 +140,6 @@ def test_lognormal_is_positive_and_heavy_tailed() -> None:
 # --- principle 3: selection has memory (recency penalty)
 
 
-def test_recency_penalty_suppresses_then_recovers() -> None:
-    """Check recency penalty suppresses then recovers."""
-    assert cats._recency_penalty(0.0, 1000.0) == 0.0
-    assert cats._recency_penalty(500.0, 1000.0) < cats._recency_penalty(
-        5000.0, 1000.0
-    )
-    assert cats._recency_penalty(1e9, 1000.0) > _NEAR_ONE
-
-
 def test_just_used_cat_is_avoided(tmp_path: Path) -> None:
     """Check just used cat is avoided."""
     brain = _brain(

@@ -49,7 +49,9 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.aggregator.engines import humanize
+from minions.aggregator.core import humanize_time
+from minions.aggregator.core.humanize_choice import recency_penalty
+from minions.aggregator.core.humanize_choice import weighted_choice
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -248,7 +250,7 @@ class CatState:
 
 def _local(ts: float, params: CatParams) -> datetime:
     """``ts`` as a datetime in the persona's timezone (principle 9)."""
-    return humanize.local(ts, params.tz_offset_hours)
+    return humanize_time.local(ts, params.tz_offset_hours)
 
 
 def _mixture(
@@ -285,7 +287,7 @@ def _density_weight(ts: float, params: CatParams) -> float:
 
 def _lognormal(rng: random.Random, mu: float, sigma: float) -> float:
     """Return a heavy-tailed positive draw (principle 2): exp of a normal."""
-    return humanize.lognormal(rng, mu, sigma)
+    return humanize_time.lognormal(rng, mu, sigma)
 
 
 def _jitter(ts: float, params: CatParams, rng: random.Random) -> float:
@@ -302,7 +304,7 @@ def _is_silent_day(ts: float, params: CatParams) -> bool:
     Deterministic per date (seeded by the date) so a restart does not flip a
     day that was already decided.
     """
-    return humanize.is_silent_day(
+    return humanize_time.is_silent_day(
         ts, params.tz_offset_hours, params.silent_day_prob
     )
 
@@ -317,17 +319,6 @@ def _context_tags(ts: float, params: CatParams) -> frozenset[str]:
     return frozenset(tags)
 
 
-def _recency_penalty(dt: float, half_life: float) -> float:
-    """0 right after a cat is used, recovering to 1 over ``half_life``.
-
-    Principle 3: a just-sent cat is suppressed, then fades back in -- this is
-    what kills both repeats and unnatural uniformity.
-    """
-    if half_life <= 0:
-        return 1.0
-    return 1.0 - math.exp(-dt / half_life)
-
-
 def _mood_bias(cat: CatEmoji, mood: float) -> float:
     """Tilt to lively cats when mood is high, sleepy when low (principle 4)."""
     if 'bodry' in cat.tags:
@@ -335,35 +326,6 @@ def _mood_bias(cat: CatEmoji, mood: float) -> float:
     if 'sleepy' in cat.tags:
         return math.exp(-mood)
     return 1.0
-
-
-def _weighted_choice(
-    pool: tuple[CatEmoji, ...], weights: list[float], rng: random.Random
-) -> CatEmoji:
-    """Pick one cat proportional to its weight (uniform if all zero)."""
-    total = sum(weights)
-    if total <= 0:
-        return rng.choice(pool)
-    threshold = rng.random() * total
-    upto = 0.0
-    for cat, weight in zip(pool, weights, strict=True):
-        upto += weight
-        if upto >= threshold:
-            return cat
-    return pool[-1]
-
-
-def _pick_slot(
-    slots: list[float], weights: list[float], rng: random.Random
-) -> float:
-    """Pick one time slot proportional to its weight (last as fallback)."""
-    threshold = rng.random() * sum(weights)
-    upto = 0.0
-    for slot, weight in zip(slots, weights, strict=True):
-        upto += weight
-        if upto >= threshold:
-            return slot
-    return slots[-1]
 
 
 class CatBrain:
@@ -675,7 +637,7 @@ class CatBrain:
             t += _PLACE_STEP_SEC
         if not slots:
             return None
-        return _pick_slot(slots, weights, self.rng)
+        return weighted_choice(self.rng, slots, weights)
 
     def pick_like(self, key: str) -> list[CatEmoji]:
         """One like for a target, WEIGHTED and DETERMINISTIC in ``key``.
@@ -717,7 +679,7 @@ class CatBrain:
         self._step_mood(now)  # principle 4: advance the daily mood first
         weights = [self._weight(cat, now) for cat in pool]
         roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible-in-key
-        chosen = _weighted_choice(pool, weights, roll)
+        chosen = weighted_choice(roll, pool, weights)
         self.state.cat_last[chosen.emoji_id] = now  # principle 3: recency
         self._save()
         return [chosen]
@@ -770,12 +732,12 @@ class CatBrain:
         """One weighted cat draw at ``now``."""
         pool = self.params.pool
         weights = [self._weight(c, now) for c in pool]
-        return _weighted_choice(pool, weights, self.rng)
+        return weighted_choice(self.rng, pool, weights)
 
     def _weight(self, cat: CatEmoji, now: float) -> float:
         """Return the selection weight: base*recency*mood*context (3,4,5)."""
         dt = now - self.state.cat_last.get(cat.emoji_id, 0.0)
-        weight = cat.base * _recency_penalty(
+        weight = cat.base * recency_penalty(
             dt, self.params.recency_half_life_sec
         )
         weight *= _mood_bias(cat, self.state.mood)
