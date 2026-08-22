@@ -195,7 +195,7 @@ def _bare_aggregator(fake: _FakeFlush) -> main.Aggregator:
         threshold=0.9, timeout=10800.0, backfill=100, max_duration=180,
         repost_guard=604800.0, repost_guard_count=5, discussion_gap=0.0,
     )
-    agg._deliver = fake.deliver
+    agg._deliver_post = fake.deliver
     agg._react_to_post = fake.react
     agg._watch_post = fake.watch
     agg._save = fake.save

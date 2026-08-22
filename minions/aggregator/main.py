@@ -897,7 +897,7 @@ class Aggregator:
             ', '.join(sorted(group.items)),
         )
         message = _compose(group, self.config.platforms, self.consts)
-        posts = await self._deliver(message, _youtube_thumb(group))
+        posts = await self._deliver_post(message, _youtube_thumb(group))
         if not posts:
             log.warning('post for %r did not go out; re-queueing', group.title)
             group.created_at = time.time()  # a fresh timeout, not a tight loop
@@ -2498,7 +2498,7 @@ class Aggregator:
             return (self.config.test_target or self.config.source,)
         return self.config.targets
 
-    async def _deliver(
+    async def _deliver_post(
         self, message: PremiumMessage, thumb: str
     ) -> list[tuple[int, int]]:
         """Send the post to every target; return (target, post_id) delivered.
