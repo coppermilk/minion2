@@ -113,6 +113,24 @@ def _log_handlers() -> list[logging.Handler]:
     return handlers
 
 
+def configure_logging() -> None:
+    """Install console + rotating-file log handlers for the aggregator.
+
+    Called once from ``main()`` -- NOT at import time -- so importing the
+    package (e.g. in tests) never reconfigures the root logger. ``force=True``
+    reconfigures even if an imported library already installed a root handler
+    (which would make a plain basicConfig a no-op and silently drop our INFO
+    level). The file handler keeps the log on disk regardless of the container
+    log tab.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
+        handlers=_log_handlers(),
+        force=True,
+    )
+
+
 def _fmt_eta(seconds: float) -> str:
     """Return a short countdown like '45s', '8m 12s' or '2h 15m'."""
     total = max(0, int(seconds))

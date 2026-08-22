@@ -102,9 +102,9 @@ from minions.aggregator.render import _render_constants
 from minions.aggregator.render import _sample_groups
 from minions.aggregator.render import _youtube_thumb
 from minions.aggregator.runtime import _cancel
-from minions.aggregator.runtime import _log_handlers
 from minions.aggregator.runtime import _touch_health
 from minions.aggregator.runtime import _watchdog
+from minions.aggregator.runtime import configure_logging
 from minions.aggregator.statefile import _pending_dict
 from minions.aggregator.statefile import _pending_from_dict
 from minions.aggregator.statefile import _posted_dict
@@ -125,16 +125,6 @@ def _load_runtime() -> dict[str, object]:
     return rt if isinstance(rt, dict) else {}
 
 
-# force=True reconfigures even if an imported library already installed a root
-# handler -- which would make a plain basicConfig a no-op and silently drop our
-# INFO level (a likely cause of "no logs"). The file handler means the log is
-# always readable on disk, regardless of the container log tab.
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
-    handlers=_log_handlers(),
-    force=True,
-)
 log = logging.getLogger('aggregator')
 
 DEFAULT_SOURCE_CHAT_ID = -1004402620527
@@ -1443,6 +1433,7 @@ def _load_config() -> Config:
 
 async def main() -> None:
     """Listen to the source chat and aggregate videos across platforms."""
+    configure_logging()
     load_env()
 
     api_id = os.environ.get('TELEGRAM_API_ID')
