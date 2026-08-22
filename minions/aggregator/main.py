@@ -1397,38 +1397,76 @@ def _test_target() -> int:
 
 
 def _load_config() -> Config:
-    """Chats come from the env; all behaviour from the constants JSON."""
+    """Chats from the env; behaviour from the constants JSON, validated.
+
+    A bad constants file (a non-numeric knob, an out-of-range threshold, no
+    platforms) fails fast here with a message naming the problem, instead of
+    a confusing crash later or a bot that silently never completes a group.
+    """
     data = _read_json(Path(__file__).with_name(CONSTANTS_FILE))
     csv = str(data.get('platforms') or DEFAULT_PLATFORMS)
     platforms = tuple(p.strip().lower() for p in csv.split(',') if p.strip())
-    return Config(
-        source=_source(),
-        targets=_targets(),
-        test_target=_test_target(),
-        platforms=platforms,
-        threshold=float(data.get('title_match') or 0.9),
-        # Three hours by default: platforms can arrive far apart. The wait is
-        # a local timer (asyncio.sleep), so it costs Telegram nothing.
-        timeout=float(data.get('timeout_sec') or 10800),
-        # Recent source messages to scan at startup for unprocessed ones.
-        backfill=int(data.get('backfill') or 100),
-        # A video whose known duration reaches this many seconds is dropped.
-        max_duration=int(data.get('max_duration_sec') or MAX_SHORT_SEC),
-        # A week by default: a title posted in the last week is not posted
-        # again (matches a typical chat auto-delete window). 0 disables.
-        repost_guard=float(data.get('repost_guard_sec', 604800)),
-        # Also block a title matching any of the last N posted videos, no
-        # matter how long ago -- a clock-independent floor so a re-delivered
-        # video cannot slip back in until N distinct videos have gone out.
-        # This is what survives the worst case: the first copy posts on the
-        # timeout, then the same title's later platforms (or an auto-delete
-        # re-emit) are all skipped instead of forming a fresh post. 5 by
-        # default; 0 disables this window and leaves only the time guard.
-        repost_guard_count=int(data.get('repost_guard_count', 5)),
-        # Space out discussion-thread lookups so cat seeding on startup/rescan
-        # does not trip Telegram flood waits. 2s by default; 0 disables.
-        discussion_gap=float(data.get('discussion_gap_sec', 2.0)),
+    try:
+        config = Config(
+            source=_source(),
+            targets=_targets(),
+            test_target=_test_target(),
+            platforms=platforms,
+            threshold=float(data.get('title_match') or 0.9),
+            # Three hours by default: platforms can arrive far apart. The wait
+            # is a local timer (asyncio.sleep), so it costs Telegram nothing.
+            timeout=float(data.get('timeout_sec') or 10800),
+            # Recent source messages to scan at startup for unprocessed ones.
+            backfill=int(data.get('backfill') or 100),
+            # A video at/above this many seconds is dropped (not a Short).
+            max_duration=int(data.get('max_duration_sec') or MAX_SHORT_SEC),
+            # A week by default: a title posted in the last week is not posted
+            # again (matches a typical chat auto-delete window). 0 disables.
+            repost_guard=float(data.get('repost_guard_sec', 604800)),
+            # Also block a title matching any of the last N posted videos, no
+            # matter how long ago -- a clock-independent floor so a
+            # re-delivered video cannot slip back in until N distinct videos
+            # have gone out. Survives the worst case: the first copy posts on
+            # the timeout, then the same title's later platforms (or an
+            # auto-delete re-emit) are skipped, not re-posted. 5 by default;
+            # 0 disables this window and leaves only the time guard.
+            repost_guard_count=int(data.get('repost_guard_count', 5)),
+            # Space out discussion-thread lookups so cat seeding on
+            # startup/rescan does not trip flood waits. 2s default; 0 disables.
+            discussion_gap=float(data.get('discussion_gap_sec', 2.0)),
+        )
+    except (TypeError, ValueError) as exc:
+        msg = f'{CONSTANTS_FILE}: a numeric knob is not a number ({exc})'
+        raise SystemExit(msg) from exc
+    _validate_config(config)
+    return config
+
+
+def _validate_config(config: Config) -> None:
+    """Fail fast on a nonsensical constants file (range/emptiness checks)."""
+    problems: list[str] = []
+    if not config.platforms:
+        problems.append('platforms is empty')
+    if not 0.0 < config.threshold <= 1.0:
+        problems.append(
+            f'title_match must be in (0, 1], got {config.threshold}'
+        )
+    non_negative = (
+        ('timeout_sec', config.timeout),
+        ('max_duration_sec', float(config.max_duration)),
+        ('backfill', float(config.backfill)),
+        ('repost_guard_sec', config.repost_guard),
+        ('repost_guard_count', float(config.repost_guard_count)),
+        ('discussion_gap_sec', config.discussion_gap),
     )
+    problems += [
+        f'{name} must be >= 0, got {value}'
+        for name, value in non_negative
+        if value < 0
+    ]
+    if problems:
+        msg = f'{CONSTANTS_FILE}: ' + '; '.join(problems)
+        raise SystemExit(msg)
 
 
 async def main() -> None:
