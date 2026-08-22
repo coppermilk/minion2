@@ -1461,7 +1461,18 @@ class Aggregator:
         await self._flush(group)
 
     async def _flush(self, group: Group) -> None:
-        """Post the collected links once, mark the sources, then forget it."""
+        """Post the collected links once, mark the sources, then forget it.
+
+        Ordering is deliberate and durable: we RECORD the post and SAVE state
+        the instant the message is delivered, BEFORE the ancillary react/watch
+        steps. Those steps do slow, flood-prone Telegram calls; if one of them
+        raises or the process is restarted mid-way (common), the message is
+        already out. Recording after them -- the old order -- left the post
+        unrecorded and the pending group still on disk, so the next restart
+        re-flushed it and re-posted the same video again and again. If nothing
+        is delivered (flood wait, network), the group is re-queued for a later
+        retry instead of being dropped.
+        """
         if group not in self.groups:
             return
         self.groups.remove(group)
@@ -1474,10 +1485,20 @@ class Aggregator:
             ', '.join(sorted(group.items)),
         )
         message = _compose(group, self.config.platforms, self.consts)
-        await self._post(message, _youtube_thumb(group))
-        self._record_posted(group)
+        posts = await self._deliver(message, _youtube_thumb(group))
+        if not posts:
+            log.warning('post for %r did not go out; re-queueing', group.title)
+            group.created_at = time.time()  # a fresh timeout, not a tight loop
+            self.groups.append(group)
+            self._arm(group)
+            self._save()
+            return
+        self._record_posted(group)  # commit BEFORE react/watch (see docstring)
         log.info('posted %r', group.title)
         self._save()
+        for target, post_id in posts:
+            await self._react_to_post(target, post_id)
+            await self._watch_post(target, post_id)
 
     def _record_posted(self, group: Group) -> None:
         """Append a readable posted record; rebuild the dedup id set."""
@@ -3065,13 +3086,26 @@ class Aggregator:
             return (self.config.test_target or self.config.source,)
         return self.config.targets
 
-    async def _post(self, message: PremiumMessage, thumb: str) -> None:
-        """Send to every target; react to the post, then watch its comments."""
+    async def _deliver(
+        self, message: PremiumMessage, thumb: str
+    ) -> list[tuple[int, int]]:
+        """Send the post to every target; return (target, post_id) delivered.
+
+        Only the SEND is here -- the caller records state from the returned
+        list, then does the react/watch steps. A send that raises (flood wait,
+        network) is logged and skipped so one bad target neither aborts the
+        others nor blocks recording the ones that did go out. An empty result
+        means nothing was delivered and the caller should re-queue.
+        """
+        posts: list[tuple[int, int]] = []
         for target in self.live_targets():
-            sent = await self._send_post(target, message, thumb)
-            post_id = int(getattr(sent, 'id', 0) or 0)
-            await self._react_to_post(target, post_id)
-            await self._watch_post(target, post_id)
+            try:
+                sent = await self._send_post(target, message, thumb)
+            except Exception:
+                log.exception('send to %s failed', target)
+                continue
+            posts.append((target, int(getattr(sent, 'id', 0) or 0)))
+        return posts
 
     async def _react_to_post(self, target: int, post_id: int) -> None:
         """Immediately place a cat reaction ON a freshly-posted message.

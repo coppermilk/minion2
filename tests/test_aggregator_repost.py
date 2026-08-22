@@ -9,11 +9,16 @@ before importing. Only the pure dedup helpers are exercised here.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
 import types
 from datetime import UTC
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class _AnyMeta(type):
@@ -145,3 +150,127 @@ def test_fuzzy_match_ignores_hashtag_and_emoji_tail() -> None:
         posted, variant, time.time(),
         threshold=0.9, window=0, count=3,
     )
+
+
+
+
+class _FakeFlush:
+    """Stand in for a flush's I/O and record the order side effects run in."""
+
+    def __init__(self, delivered: list[tuple[int, int]]) -> None:
+        self.order: list[str] = []
+        self._delivered = delivered
+
+    async def deliver(self, *_: object) -> list[tuple[int, int]]:
+        self.order.append('deliver')
+        return list(self._delivered)
+
+    async def react(self, *_: object) -> None:
+        self.order.append('react')
+
+    async def watch(self, *_: object) -> None:
+        self.order.append('watch')
+
+    def save(self) -> None:
+        self.order.append('save')
+
+    def arm(self, *_: object) -> None:
+        self.order.append('arm')
+
+
+def _bare_aggregator(fake: _FakeFlush) -> main.Aggregator:
+    """Build an Aggregator with only what the flush path touches (no __init__).
+
+    ``__init__`` opens a Telethon client and loads real state, so we make the
+    instance directly and wire in the fake collaborators.
+    """
+    agg = object.__new__(main.Aggregator)
+    agg.groups = []
+    agg.posted = []
+    agg.processed_ids = set()
+    agg.consts = None  # only _compose reads it, and we patch _compose
+    agg.config = main.Config(
+        source=0, targets=(), test_target=0,
+        platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
+        threshold=0.9, timeout=10800.0, backfill=100, max_duration=180,
+        repost_guard=604800.0, repost_guard_count=5,
+    )
+    agg._deliver = fake.deliver
+    agg._react_to_post = fake.react
+    agg._watch_post = fake.watch
+    agg._save = fake.save
+    agg._arm = fake.arm
+
+    def _record_posted(group: main.Group) -> None:
+        fake.order.append('record')
+        main.Aggregator._record_posted(agg, group)
+
+    agg._record_posted = _record_posted
+    return agg
+
+
+def _sample_group() -> main.Group:
+    """Return a two-platform group like the one that looped in the wild."""
+    items = {
+        'pinterest': main.Item(
+            key='pinterest', platform='pinterest', title='V',
+            url='https://pin/1', thumbnail='', duration='', msg_id=539,
+        ),
+        'youtube': main.Item(
+            key='youtube', platform='youtube', title='V',
+            url='https://yt/1', thumbnail='', duration='', msg_id=546,
+        ),
+    }
+    return main.Group(title='V', items=items, msg_ids={539, 546})
+
+
+def _patch_compose(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub message composition so no Telethon types are needed."""
+    monkeypatch.setattr(main, '_compose', lambda *a, **k: object())
+    monkeypatch.setattr(main, '_youtube_thumb', lambda group: '')
+
+
+def test_flush_records_and_saves_before_react_watch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delivered post is recorded and persisted before the flaky steps.
+
+    This is the fix for the re-post loop: the old order recorded AFTER
+    react/watch, so a failure or restart in those steps left the post
+    unrecorded and re-posted it on the next start.
+    """
+    _patch_compose(monkeypatch)
+    fake = _FakeFlush(delivered=[(1, 100)])
+    agg = _bare_aggregator(fake)
+    group = _sample_group()
+    agg.groups.append(group)
+
+    asyncio.run(main.Aggregator._flush(agg, group))
+
+    assert fake.order.index('record') < fake.order.index('react')
+    assert fake.order.index('save') < fake.order.index('react')
+    assert fake.order.index('save') < fake.order.index('watch')
+    assert group not in agg.groups
+    assert len(agg.posted) == 1
+    # The source ids are now marked processed, so a backfill re-scan skips
+    # them -- the mechanism that stops the daily re-post.
+    assert agg.processed_ids == {539, 546}
+
+
+def test_flush_requeues_when_nothing_delivered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post that does not go out is re-queued, not dropped or recorded."""
+    _patch_compose(monkeypatch)
+    fake = _FakeFlush(delivered=[])
+    agg = _bare_aggregator(fake)
+    group = _sample_group()
+    agg.groups.append(group)
+
+    asyncio.run(main.Aggregator._flush(agg, group))
+
+    assert group in agg.groups  # kept for a later retry
+    assert agg.posted == []  # not recorded
+    assert 'record' not in fake.order
+    assert 'arm' in fake.order  # re-armed
+    assert 'save' in fake.order  # the re-queue is persisted
