@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import json
 import types
+from datetime import UTC
+from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Never
 
@@ -43,6 +45,9 @@ def _params(**over: object) -> object:
         'dm_jitter_sec': 0.0,
         'max_dm_per_run': 10,
         'max_dm_per_day': 5,
+        'tz_offset_hours': 0.0,
+        'wake_start_hour': 0.0,
+        'wake_end_hour': 24.0,
     }
     base.update(over)
     return greeter.GreeterParams(**base)
@@ -344,3 +349,41 @@ def test_load_greeter_params_defaults_off_with_target_channel() -> None:
     params = greeter.load_greeter_params({}, -999)
     assert params.enabled is False
     assert params.channel == _CHANNEL_ID
+
+
+def _at_hour(hour: int) -> float:
+    """Return a UTC timestamp at wall-clock ``hour`` (tz offset 0 in tests)."""
+    return datetime(1970, 1, 1, hour, tzinfo=UTC).timestamp()
+
+
+def test_awake_only_inside_the_waking_window(tmp_path: Path) -> None:
+    """The persona sleeps outside its wake window (no 4am welcome DMs)."""
+    g = _greeter(
+        tmp_path, _FakeClient(), wake_start_hour=7.0, wake_end_hour=17.0
+    )
+    assert g.awake(_at_hour(3)) is False  # pre-dawn
+    assert g.awake(_at_hour(12)) is True  # midday
+    assert g.awake(_at_hour(22)) is False  # night
+    # A 0..24 window (the persona-less default) is always awake.
+    always = _greeter(
+        tmp_path, _FakeClient(), wake_start_hour=0.0, wake_end_hour=24.0
+    )
+    assert always.awake(_at_hour(3)) is True
+
+
+def test_sleep_defers_events_until_wake(tmp_path: Path) -> None:
+    """A join outside the window is deferred; the cursor does not advance."""
+    client = _FakeClient([_join(1, 100)])
+    g = greeter.Greeter(
+        client,
+        _params(wake_start_hour=7.0, wake_end_hour=17.0),
+        greeter.GreeterIO(tmp_path / 'g.json'),
+    )
+    asyncio.run(g.sync())  # baseline
+    client.log.append(_join(2, 200))
+    g.awake = lambda _now: False  # type: ignore[method-assign]
+    asyncio.run(g.sync())
+    assert client.dms == []  # asleep: nobody greeted
+    g.awake = lambda _now: True  # type: ignore[method-assign]
+    asyncio.run(g.sync())
+    assert [uid for uid, _text in client.dms] == [200]  # re-read on wake

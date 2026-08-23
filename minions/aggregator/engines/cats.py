@@ -64,6 +64,11 @@ if TYPE_CHECKING:
 _PLACE_STEP_SEC = 300.0
 # One observation added to the current hour bucket per heartbeat (mark_alive).
 _ALIVE_STEP = 1.0
+# A comment only joins an already-planned session if that session is within
+# reach of NOW. A session forced far ahead (the cursor landed past the window
+# edge, so the next session opens next morning) must NOT vacuum up this
+# evening's comments -- else a whole evening batch stampedes the 7:00 edge.
+_SESSION_REACH_SEC = 7200.0
 # A persisted emoji row is an [id, fallback] pair.
 _EMOJI_ROW_LEN = 2
 # datetime.weekday(): Monday is 0, so Saturday (5) and up is the weekend.
@@ -523,6 +528,7 @@ class CatBrain:
             s_last > 0.0
             and earliest <= s_last + self.params.session_idle_sec
             and (s_last - s_start) < self.params.session_max_sec
+            and (s_last - now) < _SESSION_REACH_SEC  # not a far-ahead session
         )
         if in_session:
             gap = _lognormal(

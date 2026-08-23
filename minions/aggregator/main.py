@@ -83,6 +83,7 @@ from minions.aggregator.core.config import _load_runtime
 from minions.aggregator.core.config import _read_json
 from minions.aggregator.core.config import _resolve_session_path
 from minions.aggregator.core.config import _resolve_state_path
+from minions.aggregator.core.config import apply_persona
 from minions.aggregator.core.config import load_env
 from minions.aggregator.core.humanize_choice import Variety
 from minions.aggregator.core.matching import _action_ok
@@ -152,6 +153,7 @@ class Aggregator(
         self.config = config
         self.consts = _load_constants(here.with_name(CONSTANTS_FILE))
         self._raw = _read_json(here.with_name(CONSTANTS_FILE))
+        apply_persona(self._raw)  # one persona clock shared by all engines
         keys = [*self.consts.fields.values(), *_THUMB_ALIASES]
         self._keys = tuple(dict.fromkeys(keys))
         # Post-decoration picker: keeps the announce line and love/lead/arrow

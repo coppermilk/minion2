@@ -43,6 +43,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from minions.aggregator.core import humanize_time
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
@@ -65,6 +67,11 @@ class GreeterParams:
     dm_jitter_sec: float
     max_dm_per_run: int
     max_dm_per_day: int  # hard daily ceiling -- the real anti-ban knob
+    # Persona clock: welcome/farewell DMs only go out during waking hours (no
+    # one messages at 4am). Outside the window the cycle defers -- see Greeter.
+    tz_offset_hours: float
+    wake_start_hour: float
+    wake_end_hour: float
 
 
 @dataclass
@@ -114,6 +121,9 @@ def load_greeter_params(
         dm_jitter_sec=float(cfg.get('dm_jitter_sec') or 30.0),
         max_dm_per_run=int(cfg.get('max_dm_per_run') or 10),
         max_dm_per_day=int(cfg.get('max_dm_per_day') or 5),
+        tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
+        wake_start_hour=float(cfg.get('wake_start_hour', 0.0)),
+        wake_end_hour=float(cfg.get('wake_end_hour', 24.0)),
     )
 
 
@@ -152,6 +162,21 @@ class Greeter:
         # user_id, joined, left) -- the users DB taps this. Fired even during
         # the silent baseline and on re-reads; the DB dedups on admin_log_id.
         self._on_event = io.on_event
+
+    def awake(self, now: float) -> bool:
+        """Whether the persona is awake now (DMs only in waking hours).
+
+        No one sends a welcome DM at 4am. Outside the waking window we defer:
+        the admin-log cursor does NOT advance for un-greeted joiners, so they
+        are re-read and greeted on the first poll after wake-up (the users DB
+        sink in ``_emit`` still ran, so membership capture is not delayed).
+        A 0..24 (or start>=end) window means always awake.
+        """
+        start, end = self.params.wake_start_hour, self.params.wake_end_hour
+        if start >= end:
+            return True
+        hour = humanize_time.local(now, self.params.tz_offset_hours).hour
+        return start <= hour < end
 
     async def sync(self) -> None:
         """Poll the admin log; baseline on first run, else greet new events."""
@@ -241,8 +266,18 @@ class Greeter:
 
         ``last_event_id`` advances only past events we actually handle, so a
         cap or flood leaves the rest to be re-read on a later poll (tomorrow,
-        once the daily counter resets) -- the cursor IS the queue.
+        once the daily counter resets) -- the cursor IS the queue. Outside the
+        waking window it defers everything (no 4am DMs); the cursor stays put,
+        so the backlog is re-read and greeted on the first poll after wake-up.
         """
+        if not self.awake(time.time()):
+            log.info(
+                'greeter: asleep (wake %g-%gh); %d event(s) deferred',
+                self.params.wake_start_hour,
+                self.params.wake_end_hour,
+                len(events),
+            )
+            return
         sent = 0
         for eid, uid, joined, left in sorted(events):
             try:

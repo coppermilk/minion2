@@ -52,6 +52,7 @@ def _params(**over: object) -> stories.StoryParams:
         'max_peers_tracked': 500,
         'seen_per_peer': 40,
         'log_limit': 50,
+        'catch_up_max': 12,
     }
     base.update(over)
     return stories.StoryParams(**base)
@@ -189,16 +190,32 @@ def test_skipping_still_views_at_least_one(tmp_path: Path) -> None:
     assert [v.peer_id for v in views] == [7]
 
 
-def test_view_all_sweeps_everyone_without_cooldown(tmp_path: Path) -> None:
-    """Check view all sweeps everyone without cooldown."""
-    # Catch-up: ignore the cap/skip and the between-session cooldown.
+def test_view_all_sweeps_without_the_per_session_cap(tmp_path: Path) -> None:
+    """Catch-up ignores the per-session cap/skip (up to the catch-up cap)."""
+    # Ten peers is under catch_up_max (12), so all are swept: no cap, no skip.
     brain = _brain(
         tmp_path, view_all=True, per_session_max=2, skip_peer_prob=1.0
     )
     cands = [_cand(p, (1,), last_ts=float(p)) for p in range(10)]
     views = brain.plan(cands, now=_NOON)
-    assert len(views) == len(cands)  # all of them, no cap, no skip
-    assert brain.blocked_reason(_NOON + 1) is None  # no cooldown after a sweep
+    assert len(views) == len(cands)  # all ten, no per-session cap, no skip
+
+
+def test_view_all_respects_the_cooldown(tmp_path: Path) -> None:
+    """Catch-up now waits between sessions, so a backlog drains over polls."""
+    brain = _brain(tmp_path, view_all=True)
+    brain.plan([_cand(p, (1,), last_ts=float(p)) for p in range(5)], now=_NOON)
+    # After a catch-up session the next poll is on the normal cooldown, so the
+    # night's backlog is cleared a session at a time -- not swept every poll.
+    assert brain.blocked_reason(_NOON + 1) is not None
+
+
+def test_view_all_caps_at_catch_up_max(tmp_path: Path) -> None:
+    """A backlog larger than catch_up_max is viewed a capped chunk per poll."""
+    brain = _brain(tmp_path, view_all=True, catch_up_max=_LOG_CAP)
+    cands = [_cand(p, (1,), last_ts=float(p)) for p in range(_MANY)]
+    views = brain.plan(cands, now=_NOON)
+    assert len(views) == _LOG_CAP  # the freshest catch_up_max, rest next poll
 
 
 # --- marking / bookkeeping

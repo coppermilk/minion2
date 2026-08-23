@@ -106,6 +106,68 @@ def emoji_of(catalog: list[dict[str, object]], etype: str) -> list[dict]:
     return [e for e in catalog if e.get('type') == etype]
 
 
+def _engine(data: dict[str, object], name: str) -> dict[str, object]:
+    """Return engine sub-config ``name``, creating an empty one if absent."""
+    got = data.get(name)
+    if not isinstance(got, dict):
+        got = {}
+        data[name] = got
+    return got
+
+
+def _fan_window(  # noqa: PLR0913 -- the window's start/end/quiet read best flat
+    data: dict[str, object], start: object, end: object, quiet: object
+) -> None:
+    """Fan the waking window into cats/greeter and stories' quiet hours.
+
+    Does nothing unless both edges are given. Stories' quiet hours are the
+    explicit ``quiet`` when set, else everything OUTSIDE the waking window.
+    """
+    if start is None or end is None:
+        return
+    cats = _engine(data, 'cats')
+    cats.setdefault('active_start_hour', start)
+    cats.setdefault('active_end_hour', end)
+    greeter = _engine(data, 'greeter')
+    greeter.setdefault('wake_start_hour', start)
+    greeter.setdefault('wake_end_hour', end)
+    outside = [h for h in range(24) if not (start <= h < end)]
+    _engine(data, 'stories').setdefault(
+        'quiet_hours', outside if quiet is None else quiet
+    )
+
+
+def apply_persona(data: dict[str, object]) -> dict[str, object]:
+    """Fill the shared persona clock into each engine's sub-config.
+
+    One account is one person, so cats / stories / greeter must share ONE
+    waking window, quiet hours and timezone -- otherwise the same "person"
+    reacts only 7-17 but watches stories until 23 and DMs at 4am, which reads
+    as three schedules. The top-level ``persona`` block is the single source of
+    truth; ``setdefault`` means an engine that still sets its own key overrides
+    (a deliberate per-engine exception). Mutates and returns ``data``.
+
+    persona keys: ``tz_offset_hours``, ``wake_start_hour``, ``wake_end_hour``
+    and optional ``quiet_hours`` (extra hard-silent hours; when absent,
+    stories' quiet hours are derived as everything OUTSIDE the waking window).
+    """
+    persona = data.get('persona')
+    if not isinstance(persona, dict):
+        return data
+    tz = persona.get('tz_offset_hours')
+    quiet = persona.get('quiet_hours')
+    if tz is not None:
+        for name in ('cats', 'stories', 'greeter', 'comod'):
+            _engine(data, name).setdefault('tz_offset_hours', tz)
+    _fan_window(
+        data, persona.get('wake_start_hour'), persona.get('wake_end_hour'),
+        quiet,
+    )
+    if quiet is not None:
+        _engine(data, 'cats').setdefault('quiet_hours', quiet)
+    return data
+
+
 def _load_constants(path: Path) -> Consts:
     """Load the post constants from JSON, ignoring unknown keys."""
     data = _read_json(path)

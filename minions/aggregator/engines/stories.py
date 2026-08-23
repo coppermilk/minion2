@@ -98,6 +98,7 @@ class StoryParams:
     max_peers_tracked: int  # cap the persisted seen map (drop oldest peers)
     seen_per_peer: int  # cap the per-peer seen id list (newest kept)
     log_limit: int  # how many recent views to keep for /status and /stories
+    catch_up_max: int  # cap on peers viewed per poll in view_all (anti-binge)
 
 
 @dataclass(frozen=True)
@@ -200,8 +201,13 @@ class StoryBrain:
             return []
         # Catch-up: view every unseen peer this poll. Otherwise a human glance:
         # a capped, partly-skipped handful.
+        # view_all catches up on the backlog, but still capped per poll so a
+        # night's unseen stories are not swept in one machine-fast morning
+        # binge -- the freshest catch_up_max now, the rest next poll.
         chosen = (
-            eligible if self.params.view_all else self._pick_peers(eligible)
+            eligible[: self.params.catch_up_max]
+            if self.params.view_all
+            else self._pick_peers(eligible)
         )
         if not chosen:
             return []
@@ -227,8 +233,12 @@ class StoryBrain:
         if humanize_time.is_silent_day(now, tz, self.params.silent_day_prob):
             return 'silent-day'
         wait = self.state.next_session_at - now
-        if wait > 0 and not self.params.view_all:
-            return f'cooldown {int(wait)}s'  # catch-up ignores the cooldown
+        if wait > 0:
+            # catch-up (view_all) ALSO waits between sessions -- it clears the
+            # backlog a session's worth at a time at the normal human rhythm,
+            # NOT a fast drain every poll, so a night's stories do not all land
+            # in one morning burst.
+            return f'cooldown {int(wait)}s'
         return None
 
     def _eligible(
@@ -309,17 +319,16 @@ class StoryBrain:
                 self.rng, self.params.gap_log_mu, self.params.gap_log_sigma
             )
         self.state.session_last_at = when
-        if self.params.view_all:
-            # Catch-up: no cooldown, so the next poll sweeps whatever became
-            # unseen since (seen peers stay filtered out by the seen set).
-            self.state.next_session_at = now
-        else:
-            spacing = humanize_time.lognormal(
-                self.rng,
-                self.params.spacing_log_mu,
-                self.params.spacing_log_sigma,
-            )
-            self.state.next_session_at = when + spacing
+        # The between-session cursor is pushed a heavy-tailed spacing past the
+        # last view -- for catch-up (view_all) TOO, so a backlog is cleared a
+        # session's worth at a time at the human rhythm rather than swept every
+        # poll (which dumped a whole night's stories in one morning burst).
+        spacing = humanize_time.lognormal(
+            self.rng,
+            self.params.spacing_log_mu,
+            self.params.spacing_log_sigma,
+        )
+        self.state.next_session_at = when + spacing
         self._save()
         return views
 
@@ -445,6 +454,7 @@ def load_story_params(
         view_all=bool(cfg.get('view_all', False)),
         include_archived=bool(cfg.get('include_archived', False)),
         tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
+        catch_up_max=int(cfg.get('catch_up_max') or 12),
         quiet_hours=frozenset(
             int(h) for h in (cfg.get('quiet_hours') or [1, 2, 3, 4, 5, 6, 7])
         ),
