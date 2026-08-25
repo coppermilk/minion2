@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 _HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
+# A prefix shorter than this is too generic to trust as a same-video signal.
+_MIN_PREFIX_CHARS = 12
 
 
 def _norm(title: str) -> str:
@@ -41,7 +43,19 @@ def _norm(title: str) -> str:
 
 
 def _similar(a: str, b: str) -> float:
-    """Similarity ratio of two normalized titles, in [0, 1]."""
+    """Similarity of two normalized titles, in [0, 1] (prefix-aware).
+
+    The same video often carries a longer caption on one platform -- a second
+    sentence, or hashtags stripped unevenly -- so the shorter caption is a
+    clean PREFIX of the longer. ``SequenceMatcher.ratio`` falls off with the
+    length gap (a prefix can score ~0.6), which splits one video into two
+    half-collected groups that then wait forever for each other's platforms.
+    A long-enough exact prefix is a strong same-video signal, so treat it as a
+    full match; otherwise fall back to the plain ratio.
+    """
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) >= _MIN_PREFIX_CHARS and long.startswith(short):
+        return 1.0
     return SequenceMatcher(None, a, b).ratio()
 
 

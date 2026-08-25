@@ -106,6 +106,32 @@ def test_needs_human_flags_questions_and_links() -> None:
     assert not matching._needs_human('nice one', ())
 
 
+def test_similar_merges_a_longer_caption_of_the_same_video() -> None:
+    """A short caption that is a prefix of a longer one is the same video.
+
+    This is the "combining did not work" bug: one platform's caption carried a
+    second sentence, so the plain ratio fell under the threshold and the video
+    split into two half-collected groups.
+    """
+    short = matching._norm('Ты можешь не верить в себя')
+    long = matching._norm('Ты можешь не верить в себя. Невилл будет гордиться')
+    assert matching._similar(short, long) == 1.0  # prefix -> same video
+    assert matching._similar(long, short) == 1.0  # order-independent
+
+
+def test_similar_does_not_merge_a_short_generic_prefix() -> None:
+    """A prefix under the min length is too generic to force a match."""
+    assert matching._similar('да', 'да ладно тебе не может быть') < 0.9  # noqa: PLR2004
+
+
+def test_similar_keeps_ratio_for_unrelated_titles() -> None:
+    """Unrelated captions stay well below the match threshold."""
+    assert matching._similar(
+        matching._norm('Ты можешь не верить в себя'),
+        matching._norm('Совсем другое видео про котов'),
+    ) < 0.9  # noqa: PLR2004
+
+
 # ------------------------------------------------------------------ render
 
 
