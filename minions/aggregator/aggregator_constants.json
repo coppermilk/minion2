@@ -336,7 +336,7 @@
     "react_enabled": true,
     "react_fraction_target": 0.20,
     "react_pool": ["❤", "👍"],
-    "react_max_per_day": 50
+    "react_max_per_day": 70
   },
   "runtime": {
     "_note": "Self-healing watchdog. status_loop touches a health file only after a successful Telegram probe; a daemon thread os._exit(1)s if it goes stale (a hang), so Docker restart:always recreates the container. watchdog_sec=0 disables it.",
