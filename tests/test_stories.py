@@ -53,6 +53,13 @@ def _params(**over: object) -> stories.StoryParams:
         'seen_per_peer': 40,
         'log_limit': 50,
         'catch_up_max': 12,
+        # Push the aversion arm out of [0,1] so the Wundt peak is p=1: these
+        # mechanic tests then view every unseen id (the exposure-fraction tests
+        # below override this to exercise the real ~2/3 curve).
+        'exposure_c1': 0.45,
+        'exposure_c2': 5.0,
+        'exposure_k': 8.0,
+        'view_control_gain': 1.0,
     }
     base.update(over)
     return stories.StoryParams(**base)
@@ -228,6 +235,47 @@ def test_mark_viewed_dedups_and_counts_fresh(tmp_path: Path) -> None:
     brain.mark_viewed(7, (2, 3), ts=_NOON)  # 2 already seen -> only 3 is fresh
     assert brain.seen_count() == _THREE
     assert set(brain.state.seen['7']) == {1, 2, 3}
+
+
+# --- Berlyne exposure control (view a fraction toward the Wundt peak)
+
+
+_EXPO_TOL = 0.05
+_EXPO_POLLS = 300
+
+
+def test_view_split_converges_to_the_wundt_peak(tmp_path: Path) -> None:
+    """viewed/offered steers to ~0.675, not 1 -- we skip ~1/3 on purpose."""
+    brain = _brain(tmp_path, exposure_c2=0.90)  # real curve (not view-all)
+    p_star = brain._view_target()
+    assert abs(p_star - 0.675) < _EXPO_TOL
+    peer, sid = 7, 0
+    for _ in range(_EXPO_POLLS):
+        unseen = (sid, sid + 1, sid + 2)
+        sid += 3
+        view_ids, skip_ids = brain._view_split(peer, unseen, p_star)
+        brain._record_skips(peer, skip_ids)  # skips: offered, never viewed
+        brain.mark_viewed(peer, view_ids, ts=_NOON)  # views: offered + viewed
+    key = str(peer)
+    ratio = brain.state.viewed[key] / brain.state.offered[key]
+    assert abs(ratio - p_star) < _EXPO_TOL
+
+
+def test_skipped_stories_are_recorded_seen(tmp_path: Path) -> None:
+    """A deliberately-skipped story is not re-offered (marked seen at once)."""
+    brain = _brain(tmp_path, exposure_c2=0.90)
+    _view, skip = brain._view_split(7, (1, 2, 3, 4, 5), brain._view_target())
+    brain._record_skips(7, skip)
+    for sid in skip:
+        assert sid in set(brain.state.seen['7'])  # would not be offered again
+
+
+def test_view_all_exposure_still_views_every_story(tmp_path: Path) -> None:
+    """With the aversion arm pushed out, the peak is p=1 -- view everything."""
+    brain = _brain(tmp_path)  # base _params sets exposure_c2=5.0
+    view_ids, skip_ids = brain._view_split(7, (1, 2, 3), brain._view_target())
+    assert view_ids == (1, 2, 3)
+    assert skip_ids == ()
 
 
 def test_views_today_counts_only_todays_views(tmp_path: Path) -> None:

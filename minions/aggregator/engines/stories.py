@@ -45,6 +45,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minions.aggregator.core import humanize_time
+from minions.aggregator.engines import attachment
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -99,6 +100,16 @@ class StoryParams:
     seen_per_peer: int  # cap the per-peer seen id list (newest kept)
     log_limit: int  # how many recent views to keep for /status and /stories
     catch_up_max: int  # cap on peers viewed per poll in view_all (anti-binge)
+    # Berlyne exposure control: we view a FRACTION of each peer's stories,
+    # toward the Wundt peak (~2/3), not all -- viewing everything sits
+    # on the aversion side (reads as stalking). c1/c2/k shape the curve (see
+    # engines/attachment.py); its argmax is the per-peer view target, and gain
+    # is how hard we correct a peer that is above/below it. Defaults so nothing
+    # changes for a caller that does not set them.
+    exposure_c1: float = 0.45
+    exposure_c2: float = 0.90
+    exposure_k: float = 8.0
+    view_control_gain: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -152,6 +163,16 @@ class StoryState:
     session_last_at: float = 0.0
     total_views: int = 0  # peers viewed all-time (a simple odometer)
     log: list[dict[str, object]] = field(default_factory=list)
+    # Per-peer relationship counters (unbounded, so p = viewed/offered stays a
+    # true fraction even when seen is capped): stories we were offered,
+    # actually viewed, and reacted to. Drive the Berlyne exposure/reciprocity
+    # control. A skipped story counts as offered but not viewed.
+    offered: dict[str, int] = field(default_factory=dict)
+    viewed: dict[str, int] = field(default_factory=dict)
+    reacted: dict[str, int] = field(default_factory=dict)
+    react_day: str = ''  # UTC-local date of react_today
+    react_today: int = 0  # reactions sent today (against react_max_per_day)
+    last_react: float = 0.0  # ts of the last reaction, for the min-gap pacing
 
 
 class StoryBrain:
@@ -288,6 +309,57 @@ class StoryBrain:
         hi = max(lo, self.params.per_session_max)
         return self.rng.randint(lo, hi)
 
+    def _view_target(self) -> float:
+        """Return the per-peer view fraction to steer toward (Wundt peak)."""
+        return attachment.exposure_peak(
+            attachment.WundtParams(
+                c1=self.params.exposure_c1,
+                c2=self.params.exposure_c2,
+                k=self.params.exposure_k,
+            )
+        )
+
+    def _view_split(
+        self, peer_id: int, unseen: tuple[int, ...], p_star: float
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        """Split a peer's unseen ids into (view, skip), steering p -> p_star.
+
+        Per story a Bernoulli draw with a corrective probability, so the
+        running ``viewed/offered`` converges on the Wundt peak: a peer we have
+        over-viewed peer gets skipped harder, an under-viewed one viewed more.
+        """
+        key = str(peer_id)
+        offered = self.state.offered.get(key, 0)
+        viewed = self.state.viewed.get(key, 0)
+        gain = self.params.view_control_gain
+        view_ids: list[int] = []
+        skip_ids: list[int] = []
+        for sid in unseen:
+            p_cur = viewed / offered if offered else p_star
+            prob = min(1.0, max(0.0, p_star + gain * (p_star - p_cur)))
+            if self.rng.random() < prob:
+                view_ids.append(sid)
+                viewed += 1
+            else:
+                skip_ids.append(sid)
+            offered += 1
+        return tuple(view_ids), tuple(skip_ids)
+
+    def _record_skips(self, peer_id: int, skip_ids: tuple[int, ...]) -> None:
+        """Mark deliberately-skipped stories seen (offered, never viewed).
+
+        Decided once at plan time so a skipped story is not re-offered every
+        poll (which would drive p back to 1); it counts as offered, not viewed.
+        """
+        key = str(peer_id)
+        prior = self.state.seen.get(key, [])
+        fresh = [sid for sid in skip_ids if sid not in set(prior)]
+        if not fresh:
+            return
+        self.state.seen[key] = (prior + fresh)[-self.params.seen_per_peer :]
+        self.state.offered[key] = self.state.offered.get(key, 0) + len(fresh)
+        self._touch_peer(key)
+
     def _lay_out(
         self,
         chosen: list[tuple[StoryCandidate, tuple[int, ...]]],
@@ -295,22 +367,29 @@ class StoryBrain:
     ) -> list[StoryView]:
         """Stagger the chosen peers across one session and set the cursors.
 
-        The first view lands a short "just opened the app" beat from now; each
-        next peer follows a lognormal gap later. The between-session cursor is
-        pushed a long, heavy-tailed spacing past the last view, so the next
-        session is a proper while away (principle 2).
+        Each peer's unseen ids are split toward the Wundt view fraction: only
+        the chosen subset becomes a view (the skipped rest is recorded seen so
+        it is not re-offered). The first view lands a short "just opened the
+        app" beat from now; each next peer follows a lognormal gap later; the
+        between-session cursor is pushed a long, heavy-tailed spacing past the
+        last view (principle 2).
         """
+        p_star = self._view_target()
         when = now + humanize_time.lognormal(
             self.rng, self.params.latency_log_mu, self.params.latency_log_sigma
         )
         self.state.session_start_at = when
         views: list[StoryView] = []
         for cand, unseen in chosen:
+            view_ids, skip_ids = self._view_split(cand.peer_id, unseen, p_star)
+            self._record_skips(cand.peer_id, skip_ids)
+            if not view_ids:
+                continue  # this peer was skipped entirely this pass
             views.append(
                 StoryView(
                     peer_id=cand.peer_id,
-                    story_ids=unseen,
-                    max_id=cand.max_id,
+                    story_ids=view_ids,
+                    max_id=max(view_ids),
                     when=when,
                     label=cand.label,
                 )
@@ -356,6 +435,8 @@ class StoryBrain:
             return
         merged = prior + fresh
         self.state.seen[key] = merged[-self.params.seen_per_peer :]
+        self.state.offered[key] = self.state.offered.get(key, 0) + len(fresh)
+        self.state.viewed[key] = self.state.viewed.get(key, 0) + len(fresh)
         self._touch_peer(key)
         self.state.last_view = now
         self.state.total_views += len(fresh)
@@ -378,6 +459,9 @@ class StoryBrain:
         while len(self.state.seen_order) > self.params.max_peers_tracked:
             oldest = self.state.seen_order.pop(0)
             self.state.seen.pop(oldest, None)
+            self.state.offered.pop(oldest, None)
+            self.state.viewed.pop(oldest, None)
+            self.state.reacted.pop(oldest, None)
 
     def recent_log(self, limit: int) -> list[dict[str, object]]:
         """Return recent views, newest first (for /status, /stories)."""
@@ -433,6 +517,12 @@ class StoryBrain:
             session_last_at=float(raw.get('session_last_at', 0.0)),
             total_views=int(raw.get('total_views', 0)),
             log=[dict(e) for e in (raw.get('log') or [])],
+            offered=_int_map(raw.get('offered')),
+            viewed=_int_map(raw.get('viewed')),
+            reacted=_int_map(raw.get('reacted')),
+            react_day=str(raw.get('react_day', '')),
+            react_today=int(raw.get('react_today', 0)),
+            last_react=float(raw.get('last_react', 0.0)),
         )
 
     def _save(self) -> None:
@@ -446,12 +536,25 @@ class StoryBrain:
             'session_last_at': self.state.session_last_at,
             'total_views': self.state.total_views,
             'log': self.state.log,
+            'offered': self.state.offered,
+            'viewed': self.state.viewed,
+            'reacted': self.state.reacted,
+            'react_day': self.state.react_day,
+            'react_today': self.state.react_today,
+            'last_react': self.state.last_react,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
         )
         tmp.replace(self.path)
+
+
+def _int_map(raw: object) -> dict[str, int]:
+    """Coerce a persisted ``{peer: count}`` map to ``dict[str, int]``."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): int(v) for k, v in raw.items()}
 
 
 def load_story_params(
@@ -491,4 +594,8 @@ def load_story_params(
         max_peers_tracked=int(cfg.get('max_peers_tracked', 500)),
         seen_per_peer=int(cfg.get('seen_per_peer', 40)),
         log_limit=int(cfg.get('log_limit', 50)),
+        exposure_c1=float(cfg.get('exposure_c1', 0.45)),
+        exposure_c2=float(cfg.get('exposure_c2', 0.90)),
+        exposure_k=float(cfg.get('exposure_k', 8.0)),
+        view_control_gain=float(cfg.get('view_control_gain', 1.0)),
     )
