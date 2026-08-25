@@ -384,6 +384,25 @@ def test_sleep_defers_events_until_wake(tmp_path: Path) -> None:
     g.awake = lambda _now: False  # type: ignore[method-assign]
     asyncio.run(g.sync())
     assert client.dms == []  # asleep: nobody greeted
+    assert g.deferred == 1  # and the queue is visible
     g.awake = lambda _now: True  # type: ignore[method-assign]
     asyncio.run(g.sync())
     assert [uid for uid, _text in client.dms] == [200]  # re-read on wake
+    assert g.deferred == 0  # queue drained
+
+
+def test_sync_now_reports_asleep_with_deferred_count(tmp_path: Path) -> None:
+    """/greetnow while asleep says so and how many events wait."""
+    client = _FakeClient([_join(1, 100)])
+    g = greeter.Greeter(
+        client,
+        _params(wake_start_hour=7.0, wake_end_hour=17.0),
+        greeter.GreeterIO(tmp_path / 'g.json'),
+    )
+    asyncio.run(g.sync())  # baseline
+    client.log.append(_join(2, 200))
+    g.awake = lambda _now: False  # type: ignore[method-assign]
+    summary = asyncio.run(g.sync_now())
+    assert 'asleep' in summary
+    assert g.deferred == 1
+    assert client.dms == []

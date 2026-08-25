@@ -158,6 +158,7 @@ class Greeter:
         self._channel_at = ''  # '@username' cache for {channel}
         self._channel_url = ''  # 't.me/username' cache for {channel_url}
         self.next_sync = 0.0  # epoch of the next scheduled poll (0 = not set)
+        self.deferred = 0  # events seen but not yet greeted (asleep / capped)
         # Optional sink for EVERY fetched admin-log event (admin_log_id,
         # user_id, joined, left) -- the users DB taps this. Fired even during
         # the silent baseline and on re-reads; the DB dedups on admin_log_id.
@@ -205,11 +206,21 @@ class Greeter:
         before = self.state.dm_today
         started_before = self.state.started
         await self.sync()
+        return self._sync_summary(before, started_before=started_before)
+
+    def _sync_summary(self, before: int, *, started_before: bool) -> str:
+        """One-line /greetnow result: baseline, asleep, no-admin, or sent."""
         if not self.state.started:
             return 'greeter: cannot read admin log (admin?)'
         cursor = self.state.last_event_id
         if not started_before:
             return f'greeter: baseline at event {cursor} (no DMs sent)'
+        if not self.awake(time.time()):
+            return (
+                f'greeter: asleep (wake {self.params.wake_start_hour:g}-'
+                f'{self.params.wake_end_hour:g}h); '
+                f'{self.deferred} event(s) deferred'
+            )
         sent = self.state.dm_today - before
         return f'greeter: {sent} DM(s) sent (up to event {cursor})'
 
@@ -271,6 +282,7 @@ class Greeter:
         so the backlog is re-read and greeted on the first poll after wake-up.
         """
         if not self.awake(time.time()):
+            self.deferred = len(events)
             log.info(
                 'greeter: asleep (wake %g-%gh); %d event(s) deferred',
                 self.params.wake_start_hour,
@@ -278,17 +290,21 @@ class Greeter:
                 len(events),
             )
             return
+        ordered = sorted(events)
         sent = 0
-        for eid, uid, joined, left in sorted(events):
+        handled = 0
+        for eid, uid, joined, left in ordered:
             try:
                 did = await self._handle(uid, joined=joined, left=left)
             except _FloodStopError:
                 log.warning('greeter: cap hit; the rest wait for a later poll')
                 break
             self.state.last_event_id = max(self.state.last_event_id, eid)
+            handled += 1
             sent += int(did)
             if sent >= self.params.max_dm_per_run:
                 break
+        self.deferred = len(ordered) - handled  # left for a later poll
         self._save()
 
     async def _handle(self, uid: int, *, joined: bool, left: bool) -> bool:

@@ -136,20 +136,46 @@ class _StatusMixin(AggregatorProtocol):
         return [head, self._greeter_schedule_line()]
 
     def _greeter_schedule_line(self) -> str:
-        """Return the greeter's check period and next-check time (clock)."""
-        period = int(self.greeter.params.poll_sec)
-        nxt = self.greeter.next_sync
+        """Return the greeter's awake/asleep state and its next action time.
+
+        When asleep (outside the persona wake window) DMs are held, so this
+        says so, when it wakes, and how many events are queued -- answering
+        "is anything queued?" instead of a silent, idle-looking greeter.
+        """
+        gp = self.greeter.params
         b = self._bul()
+        now = time.time()
+        if not self.greeter.awake(now):
+            window = f'{gp.wake_start_hour:g}-{gp.wake_end_hour:g}h'
+            return (
+                f'{b} asleep (wake {window}) {self._arr()} '
+                f'wakes {self._greeter_wake_eta(now)} '
+                f'{b} {self.greeter.deferred} queued'
+            )
+        period = int(gp.poll_sec)
+        nxt = self.greeter.next_sync
         if nxt <= 0:
             return f'{b} check {period}s {b} next: first run'
-        tz = timezone(timedelta(hours=self.cats.params.tz_offset_hours))
+        tz = timezone(timedelta(hours=gp.tz_offset_hours))
         clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
-        eta = nxt - time.time()
+        eta = nxt - now
         when = 'now' if eta <= 0 else _fmt_eta(eta)
         return (
-            f'{self._bul()} check {period}s {self._arr()} '
-            f'next {clock} (in {when})'
+            f'{b} check {period}s {self._arr()} next {clock} (in {when})'
         )
+
+    def _greeter_wake_eta(self, now: float) -> str:
+        """Return 'HH:MM (in Xd Yh)' for the greeter's next wake-up."""
+        gp = self.greeter.params
+        tz = timezone(timedelta(hours=gp.tz_offset_hours))
+        local = datetime.fromtimestamp(now, tz=tz)
+        wake = local.replace(
+            hour=int(gp.wake_start_hour), minute=0, second=0, microsecond=0
+        )
+        if wake <= local:
+            wake += timedelta(days=1)
+        eta = _fmt_eta(wake.timestamp() - now)
+        return f'{wake.strftime("%H:%M")} (in {eta})'
 
     def _routing_lines(self, labels: dict[int, str]) -> list[str]:
         """Source, the live targets, and where posts go NOW (test vs live)."""
