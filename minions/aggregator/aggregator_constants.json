@@ -299,10 +299,11 @@
     "enrich": true
   },
   "persona": {
-    "_note": "ЕДИНЫЕ ЧАСЫ ПЕРСОНАЖА — один источник правды для cats/stories/greeter/comod (см. core/config.py apply_persona). tz_offset_hours — UTC-сдвиг. wake_start_hour/wake_end_hour — окно бодрствования [start,end): коты активны в нём, greeter шлёт ЛС только в нём, тихие часы сторис = всё ВНЕ окна. Правишь ЗДЕСЬ — двигаются все движки разом. Пер-движковый ключ в его секции перекрывает persona (намеренное исключение).",
+    "_note": "ЕДИНЫЕ ЧАСЫ ПЕРСОНАЖА — один источник правды для cats/stories/greeter/comod (см. core/config.py apply_persona). tz_offset_hours — UTC-сдвиг. wake_start_hour/wake_end_hour — окно бодрствования [start,end): коты активны в нём, greeter шлёт ЛС только в нём, тихие часы сторис = всё ВНЕ окна. silent_day_prob — шанс, что человек весь день не заходил (коты и сторис молчат в ОДНИ и те же дни). Правишь ЗДЕСЬ — двигаются все движки разом. Пер-движковый ключ в его секции перекрывает persona (намеренное исключение).",
     "tz_offset_hours": 3,
     "wake_start_hour": 7,
-    "wake_end_hour": 17
+    "wake_end_hour": 17,
+    "silent_day_prob": 0.08
   },
   "stories": {
     "_note": "Human-like story viewing (NO reactions -- just a view + a log of who was viewed). On by default; turn it off at runtime with /stories_off (or set enabled=false here). Telegram's feed only returns contacts/followed peers, and we only ever view UNSEEN stories, so it never walks the whole contact list. view_all=true (catch-up) views EVERY unseen story each poll -- no per-session cap, no skip, no long cooldown -- so all current stories are swept at once (a small dwell/gap between them stays, to respect flood limits); false is the human handful-then-rest. include_archived=true also views the stories of people whose chats you moved to the Archive (the hidden feed). poll_sec_test/live set how often the feed is re-polled (test tight, live relaxed).",
@@ -315,7 +316,6 @@
     "per_session_min": 2,
     "per_session_max": 6,
     "skip_peer_prob": 0.35,
-    "silent_day_prob": 0.06,
     "latency_log_mu": 2.5,
     "latency_log_sigma": 0.8,
     "gap_log_mu": 2.3,
@@ -381,7 +381,6 @@
     "skip_prob": 0.12,
     "double_prob": 0.06,
     "double_gap_sec": 40,
-    "silent_day_prob": 0.08,
     "recency_half_life_sec": 172800,
     "mood_phi": 0.8,
     "mood_sigma": 0.35,

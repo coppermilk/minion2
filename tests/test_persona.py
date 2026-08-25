@@ -21,6 +21,7 @@ _WAKE_START = 7
 _WAKE_END = 17
 _OVERRIDE_START = 9
 _HOURS = 24
+_SILENT = 0.08
 
 
 def _block(data: dict[str, object], name: str) -> dict[str, object]:
@@ -49,6 +50,16 @@ def test_persona_fans_the_clock_into_every_engine() -> None:
     greeter = _block(data, 'greeter')
     assert greeter['wake_start_hour'] == _WAKE_START
     assert greeter['wake_end_hour'] == _WAKE_END
+
+
+def test_silent_day_prob_reaches_cats_and_stories() -> None:
+    """One persona silent-day chance fans to both behavioural engines."""
+    data: dict[str, object] = {
+        'persona': {**_persona(), 'silent_day_prob': _SILENT},
+    }
+    config.apply_persona(data)
+    assert _block(data, 'cats')['silent_day_prob'] == _SILENT
+    assert _block(data, 'stories')['silent_day_prob'] == _SILENT
 
 
 def test_stories_quiet_hours_are_the_complement_of_the_window() -> None:

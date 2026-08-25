@@ -137,34 +137,55 @@ def _fan_window(  # noqa: PLR0913 -- the window's start/end/quiet read best flat
     )
 
 
+def _fan_key(  # noqa: PLR0913 -- data + the (names, key, value) fan read flat
+    data: dict[str, object],
+    names: tuple[str, ...],
+    key: str,
+    value: object,
+) -> None:
+    """``setdefault`` ``key``=``value`` into each named engine block.
+
+    Skips a value that was not given (``None``); ``setdefault`` means an engine
+    that still sets its own key keeps it (a deliberate per-engine exception).
+    """
+    if value is None:
+        return
+    for name in names:
+        _engine(data, name).setdefault(key, value)
+
+
 def apply_persona(data: dict[str, object]) -> dict[str, object]:
-    """Fill the shared persona clock into each engine's sub-config.
+    """Fill the shared persona traits into each engine's sub-config.
 
     One account is one person, so cats / stories / greeter must share ONE
-    waking window, quiet hours and timezone -- otherwise the same "person"
-    reacts only 7-17 but watches stories until 23 and DMs at 4am, which reads
-    as three schedules. The top-level ``persona`` block is the single source of
-    truth; ``setdefault`` means an engine that still sets its own key overrides
-    (a deliberate per-engine exception). Mutates and returns ``data``.
+    waking window, quiet hours, timezone and silent-day chance -- otherwise the
+    same "person" reacts only 7-17 but watches stories until 23 and DMs at 4am,
+    or has a "did not show up" day for cats but not for stories, which reads as
+    several schedules. The top-level ``persona`` block is the single source of
+    truth (``setdefault``, so an engine may still override its own key).
+    Mutates and returns ``data``.
 
-    persona keys: ``tz_offset_hours``, ``wake_start_hour``, ``wake_end_hour``
-    and optional ``quiet_hours`` (extra hard-silent hours; when absent,
-    stories' quiet hours are derived as everything OUTSIDE the waking window).
+    persona keys: ``tz_offset_hours``, ``wake_start_hour``, ``wake_end_hour``,
+    ``silent_day_prob`` and optional ``quiet_hours`` (extra hard-silent hours;
+    when absent, stories' quiet hours are the complement of the waking window).
     """
     persona = data.get('persona')
     if not isinstance(persona, dict):
         return data
-    tz = persona.get('tz_offset_hours')
     quiet = persona.get('quiet_hours')
-    if tz is not None:
-        for name in ('cats', 'stories', 'greeter', 'comod'):
-            _engine(data, name).setdefault('tz_offset_hours', tz)
+    _fan_key(
+        data, ('cats', 'stories', 'greeter', 'comod'),
+        'tz_offset_hours', persona.get('tz_offset_hours'),
+    )
     _fan_window(
         data, persona.get('wake_start_hour'), persona.get('wake_end_hour'),
         quiet,
     )
-    if quiet is not None:
-        _engine(data, 'cats').setdefault('quiet_hours', quiet)
+    # One silent-day roll (is_silent_day seeds by date), one shared threshold,
+    # so cats and stories fall silent on the SAME days -- one person offline.
+    _fan_key(data, ('cats', 'stories'), 'silent_day_prob',
+             persona.get('silent_day_prob'))
+    _fan_key(data, ('cats',), 'quiet_hours', quiet)
     return data
 
 
