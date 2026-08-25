@@ -274,10 +274,54 @@ class _StatusMixin(AggregatorProtocol):
             ),
             f'{b} window {window} (prior) {b} learned {learned}',
             self._cat_rescan_line(),
+            *self._cat_attach_lines(labels),
             *self._last_posts_lines(labels),
             *self._pending_cat_lines(),
             f'{b} /catnow {b} /requeue',
         ]
+
+    def _who(self, labels: dict[int, str], key: str) -> str:
+        """Resolve a commenter id to a name via ``labels``, else the raw id."""
+        try:
+            return labels.get(int(key), key)
+        except (TypeError, ValueError):
+            return key
+
+    def _cat_attach_lines(self, labels: dict[int, str]) -> list[str]:
+        """Return the per-commenter like-attachment readout (Berlyne control).
+
+        exposure p = engaged/commented (steered to the Wundt peak ~0.67),
+        reciprocity r = stickered/engaged (steered to 0.20). A~ is the partial
+        index exposure(p)*recip(r). Shows today's like/sticker counts vs caps,
+        the aggregate, and the three warmest commenters. Empty when the control
+        is off.
+        """
+        brain = self.cats
+        if not brain.params.attach_enabled:
+            return []
+        now = time.time()
+        b = self._bul()
+        today = (
+            f'{b} today likes {brain.likes_today(now)}/'
+            f'{brain.params.like_max_per_day} {b} stickers '
+            f'{brain.stickers_today(now)}/{brain.params.sticker_max_per_day}'
+        )
+        warm = brain.warmth()
+        if not warm:
+            return [today]
+        n = len(warm)
+        mean_p = sum(w.p for w in warm) / n
+        mean_r = sum(w.r for w in warm) / n
+        head = (
+            f'{b} attach {n} commenters {self._arr()} '
+            f'p~{mean_p:.2f} r~{mean_r:.2f}'
+        )
+        rows = [
+            f'    {self._who(labels, w.label)}  A {w.index:.2f} {b} '
+            f'p {w.p:.2f} r {w.r:.2f}'
+            for w in warm[:STATUS_WARM_PEERS]
+        ]
+        return [today, head, *rows]
 
     def _cat_rescan_line(self) -> str:
         """Return the auto-rescan period and the countdown to the next one."""

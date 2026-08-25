@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING
 from minions.aggregator.core import humanize_time
 from minions.aggregator.core.humanize_choice import recency_penalty
 from minions.aggregator.core.humanize_choice import weighted_choice
+from minions.aggregator.engines import attachment
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -114,6 +115,29 @@ class Cat:
     text: str = ''  # a snippet of the comment being answered (for status)
     emojis: tuple[tuple[str, str], ...] = ()  # the chosen (id, fallback) cats
     kind: str = 'react'  # 'react' = a like reaction; 'reply' = thread sticker
+
+
+@dataclass(frozen=True)
+class Warmth:
+    """One commenter's attachment readout for /status: exposure, recip, index.
+
+    Mirrors the story engine's ``Warmth``. ``index`` is the partial Berlyne
+    index exposure(p) * recip(r) -- the two factors we steer per commenter
+    (variety/mass_pen are not tracked per person, so they are left out).
+    """
+
+    label: str
+    p: float  # engaged / commented (exposure: fraction of comments we like)
+    r: float  # stickered / engaged (reciprocity: fraction upgraded to sticker)
+    index: float
+    commented: int
+
+
+def _int_map(raw: object) -> dict[str, int]:
+    """Parse a persisted {str: int} map (a per-commenter counter)."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): int(v) for k, v in raw.items()}
 
 
 def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
@@ -220,6 +244,31 @@ class CatParams:
     # posts created (and commented on) while it runs, without waiting for a
     # restart or a manual /requeue. 0 turns the auto-rescan off.
     rescan_sec: float
+    # --- Berlyne attachment control (per commenter) -----------------------
+    # When on, we do NOT like every comment. Instead the fraction of a
+    # person's comments we engage (like or sticker) is steered toward the
+    # Wundt peak (~0.67): liking everything reads as desperate, so a heavy
+    # commenter is throttled while a newcomer is still acknowledged. Off
+    # reproduces the old behaviour (like_all likes every comment). The like
+    # reaction is the EXPOSURE act; the thread sticker is the RECIPROCITY act.
+    attach_enabled: bool = True
+    # The Wundt exposure curve params (engines/attachment.py): their argmax IS
+    # the like-fraction target -- there is no separate 0.67 constant.
+    exposure_c1: float = 0.45
+    exposure_c2: float = 0.90
+    exposure_k: float = 8.0
+    # Feedback gain of the exposure control: how hard an over/under-liked
+    # commenter is corrected back toward the peak.
+    like_control_gain: float = 1.0
+    # Reciprocity target: among the comments we engage, the fraction upgraded
+    # from a plain like to the stronger thread STICKER (r = stickered/engaged).
+    recip_fraction_target: float = 0.20
+    recip_control_gain: float = 1.0
+    # Ban-surface caps (persona tz, date-keyed). like_max_per_day caps total
+    # engagements a day (the like reaction dominates); sticker_max_per_day caps
+    # the message-shaped stickers, the real ban surface. 0 disables the cap.
+    like_max_per_day: int = 400
+    sticker_max_per_day: int = 40
 
 
 @dataclass
@@ -249,8 +298,21 @@ class CatState:
     alive_ts: float = 0.0  # last heartbeat, for decay
     # Sticker gate, per post key 'chat:root': engagements since the last
     # sticker there, and recent engagement timestamps (for the burst test).
+    # Retired by the Berlyne reciprocity control (kept readable for old files).
     since_sticker: dict[str, int] = field(default_factory=dict)
     recent_engaged: dict[str, list[float]] = field(default_factory=dict)
+    # Per-commenter relationship memory (keyed by sender id as str), spanning
+    # posts so a person is remembered across our posts (the point of adapting
+    # to each individual). ``engaged`` is a subset of ``commented``;
+    # ``stickered`` a subset of ``engaged`` -- exactly view>react in stories.
+    commented: dict[str, int] = field(default_factory=dict)
+    engaged: dict[str, int] = field(default_factory=dict)
+    stickered: dict[str, int] = field(default_factory=dict)
+    # Date-keyed daily caps: engagements (likes) and stickers placed today.
+    engage_day: str = ''
+    engage_today: int = 0
+    sticker_day: str = ''
+    sticker_today: int = 0
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -715,6 +777,135 @@ class CatBrain:
         self._save()
         return fire
 
+    def _exposure_target(self) -> float:
+        """Return the per-commenter like fraction to steer to (Wundt peak)."""
+        return attachment.exposure_peak(
+            attachment.WundtParams(
+                c1=self.params.exposure_c1,
+                c2=self.params.exposure_c2,
+                k=self.params.exposure_k,
+            )
+        )
+
+    def _take_like(self, today: str) -> bool:
+        """Consume one engagement from today's budget; False when capped."""
+        if self.state.engage_day != today:
+            self.state.engage_day, self.state.engage_today = today, 0
+        cap = self.params.like_max_per_day
+        if cap > 0 and self.state.engage_today >= cap:
+            return False
+        self.state.engage_today += 1
+        return True
+
+    def _take_sticker(self, today: str) -> bool:
+        """Consume one sticker from today's budget; False when capped."""
+        if self.state.sticker_day != today:
+            self.state.sticker_day, self.state.sticker_today = today, 0
+        cap = self.params.sticker_max_per_day
+        if cap > 0 and self.state.sticker_today >= cap:
+            return False
+        self.state.sticker_today += 1
+        return True
+
+    def _engage(self, person: str) -> bool:
+        """Grant an engagement (like) if the daily cap allows; record it."""
+        today = _local(self.clock(), self.params).date().isoformat()
+        if not self._take_like(today):
+            self._save()
+            return False
+        self.state.engaged[person] = self.state.engaged.get(person, 0) + 1
+        self._save()
+        return True
+
+    def decide_engage(self, person: str) -> bool:
+        """Whether to like ``person``'s comment, steering p -> the Wundt peak.
+
+        Exposure control: the running ``engaged/commented`` is nudged toward
+        the peak (~0.67) by a per-comment Bernoulli, so a heavy commenter is
+        throttled (no desperate like-everything) while a newcomer is kept warm.
+        The FIRST comment from a person is always engaged (a warm hello); the
+        control starts from the second. Records the comment as offered either
+        way, so a rescan never re-rolls a decided comment.
+        """
+        commented = self.state.commented.get(person, 0) + 1
+        self.state.commented[person] = commented
+        if commented == 1:
+            return self._engage(person)  # first comment: always acknowledge
+        p_star = self._exposure_target()
+        prior = commented - 1  # comments decided before this one
+        p_cur = self.state.engaged.get(person, 0) / prior if prior else p_star
+        gain = self.params.like_control_gain
+        prob = min(1.0, max(0.0, p_star + gain * (p_star - p_cur)))
+        if self.rng.random() < prob:
+            return self._engage(person)
+        self._save()
+        return False
+
+    def decide_sticker(self, person: str, *, content_ok: bool) -> bool:
+        """Whether to upgrade this engagement to a sticker, steering r -> 0.20.
+
+        Reciprocity control among the comments we engage: the stronger,
+        message-shaped sticker replaces the plain like about one time in five
+        (``recip_fraction_target``), nudged by feedback so stickered/engaged
+        converges. ``content_ok`` is False for a question/link/business comment
+        (a sticker reads as a non-sequitur there) -- then it stays a like and
+        the reciprocity roll is not consumed. Capped per day (stickers are the
+        message ban surface). Call once, only when ``decide_engage`` returned
+        True (so ``engaged`` already counts this comment).
+        """
+        if not content_ok:
+            return False
+        prior_eng = max(0, self.state.engaged.get(person, 0) - 1)
+        prior_stk = self.state.stickered.get(person, 0)
+        r_target = self.params.recip_fraction_target
+        r_cur = prior_stk / (prior_eng or 1)
+        gain = self.params.recip_control_gain
+        prob = min(1.0, max(0.0, r_target + gain * (r_target - r_cur)))
+        if self.rng.random() >= prob:
+            return False
+        today = _local(self.clock(), self.params).date().isoformat()
+        if not self._take_sticker(today):
+            return False
+        self.state.stickered[person] = prior_stk + 1
+        self._save()
+        return True
+
+    def warmth(self) -> list[Warmth]:
+        """Per-commenter attachment readout for /status, warmest first.
+
+        ``index`` is the partial Berlyne index exposure(p) * recip(r) over the
+        two factors steered per person; a commenter needs at least one recorded
+        comment to appear.
+        """
+        wp = attachment.WundtParams(
+            c1=self.params.exposure_c1,
+            c2=self.params.exposure_c2,
+            k=self.params.exposure_k,
+        )
+        rows: list[Warmth] = []
+        for key, commented in self.state.commented.items():
+            if commented <= 0:
+                continue
+            engaged = self.state.engaged.get(key, 0)
+            p = engaged / commented
+            r = self.state.stickered.get(key, 0) / engaged if engaged else 0.0
+            idx = attachment.exposure(p, wp) * attachment.recip(r)
+            rows.append(Warmth(key, p, r, idx, commented))
+        rows.sort(key=lambda w: w.index, reverse=True)
+        return rows
+
+    def likes_today(self, now: float) -> int:
+        """Engagements (likes) placed on the local date of ``now`` (else 0)."""
+        today = _local(now, self.params).date().isoformat()
+        return self.state.engage_today if self.state.engage_day == today else 0
+
+    def stickers_today(self, now: float) -> int:
+        """Stickers placed on the local date of ``now`` (else 0)."""
+        today = _local(now, self.params).date().isoformat()
+        if self.state.sticker_day != today:
+            return 0
+        return self.state.sticker_today
+
     def emit(self) -> list[CatEmoji]:
         """Pick the cat(s) to send now and record the send (principles 3,4,7).
 
@@ -796,6 +987,13 @@ class CatBrain:
                 str(k): [float(t) for t in v]
                 for k, v in (raw.get('recent_engaged') or {}).items()
             },
+            commented=_int_map(raw.get('commented')),
+            engaged=_int_map(raw.get('engaged')),
+            stickered=_int_map(raw.get('stickered')),
+            engage_day=str(raw.get('engage_day', '')),
+            engage_today=int(raw.get('engage_today', 0)),
+            sticker_day=str(raw.get('sticker_day', '')),
+            sticker_today=int(raw.get('sticker_today', 0)),
         )
 
     def _save(self) -> None:
@@ -815,6 +1013,13 @@ class CatBrain:
             'alive_ts': self.state.alive_ts,
             'since_sticker': self.state.since_sticker,
             'recent_engaged': self.state.recent_engaged,
+            'commented': self.state.commented,
+            'engaged': self.state.engaged,
+            'stickered': self.state.stickered,
+            'engage_day': self.state.engage_day,
+            'engage_today': self.state.engage_today,
+            'sticker_day': self.state.sticker_day,
+            'sticker_today': self.state.sticker_today,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(
@@ -907,4 +1112,13 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         burst_count=int(cats.get('burst_count', 4)),
         burst_window_sec=float(cats.get('burst_window_sec', 3600.0)),
         rescan_sec=float(cats.get('rescan_sec', 300.0)),
+        attach_enabled=bool(cats.get('attach_enabled', True)),
+        exposure_c1=float(cats.get('exposure_c1', 0.45)),
+        exposure_c2=float(cats.get('exposure_c2', 0.90)),
+        exposure_k=float(cats.get('exposure_k', 8.0)),
+        like_control_gain=float(cats.get('like_control_gain', 1.0)),
+        recip_fraction_target=float(cats.get('recip_fraction_target', 0.20)),
+        recip_control_gain=float(cats.get('recip_control_gain', 1.0)),
+        like_max_per_day=int(cats.get('like_max_per_day', 400)),
+        sticker_max_per_day=int(cats.get('sticker_max_per_day', 40)),
     )

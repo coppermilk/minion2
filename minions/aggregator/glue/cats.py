@@ -96,38 +96,30 @@ class _CatsMixin(AggregatorProtocol):
         on which comment, and the send places that same cat rather than a fresh
         random one.
         """
-        # When liking everything, key per COMMENT (chat:root:person:msg) so a
-        # person's every comment is liked; otherwise once per (post, person).
-        # The key keeps the 'chat:root:' prefix so note_post's pruning holds.
-        like_all = self.cats.params.like_all
+        # When liking everything OR steering exposure per person, key per
+        # COMMENT (chat:root:person:msg) so each comment is decided once;
+        # otherwise once per (post, person). The key keeps the 'chat:root:'
+        # prefix so note_post's pruning holds.
+        attach = self.cats.params.attach_enabled
+        per_comment = self.cats.params.like_all or attach
         key = f'{comment.chat}:{comment.root}:{person}'
-        if like_all:
+        if per_comment:
             key = f'{key}:{comment.msg_id}'
         when = self.cats.schedule(key, engaged=engaged)
         if when is None:
             return
-        # Default is a like REACTION; now and then (deterministic gate) it is a
-        # thread STICKER instead -- a premium cat emoji sent as a message. The
-        # emoji is pseudo-random but deterministic in the comment id, so the
-        # same comment always resolves to the same thing after a restart.
-        seed = f'{comment.chat}:{comment.msg_id}'
-        post_key = f'{comment.chat}:{comment.root}'
-        # A thread STICKER is a message-shaped reply, so it only fits plain
-        # enthusiasm; on a question / link / business comment it reads as a
-        # non-sequitur. Check content FIRST (so a suppressed sticker does not
-        # consume the burst gate), and downgrade to a safe REACTION there.
-        allow_sticker = not _needs_human(comment.text, self.consts.human_words)
-        sticker = (
-            not like_all
-            and allow_sticker
-            and self.cats.should_sticker(post_key)
-        )
-        if sticker:
-            specs, kind = self.cats.pick_cat(seed), 'reply'
-        else:  # like_all always places a like reaction (never a sticker)
-            specs, kind = self.cats.pick_like(seed), 'react'
-        if not specs:  # empty pool -> nothing to place
+        # Berlyne exposure control: like only a Wundt-peak fraction of a
+        # person's comments (the first is always liked). A steered skip still
+        # leaves the key recorded as decided (schedule marked it), so a rescan
+        # never re-rolls it into a like.
+        if attach and not self.cats.decide_engage(person):
             return
+        # Choose the like reaction vs. the rarer thread sticker (deterministic
+        # in the comment id), then place it.
+        chosen = self._choose_reaction(person, comment)
+        if chosen is None:  # empty pool -> nothing to place
+            return
+        specs, kind = chosen
         cat = cats.Cat(
             chat=comment.chat,
             reply_to=comment.msg_id,
@@ -139,6 +131,44 @@ class _CatsMixin(AggregatorProtocol):
         )
         self.cats.add_pending(cat)
         self._arm_cat(cat)
+
+    def _choose_reaction(
+        self, person: str, comment: _Comment
+    ) -> tuple[list[cats.CatEmoji], str] | None:
+        """Pick (emoji specs, kind) for this comment: a like or a sticker.
+
+        A thread STICKER is a message-shaped reply, so it only fits plain
+        enthusiasm; on a question/link/business comment it reads as a
+        non-sequitur, so those stay a like reaction. The emoji is deterministic
+        in the comment id (same reaction after a restart). None when the pool
+        is empty (nothing to place).
+        """
+        seed = f'{comment.chat}:{comment.msg_id}'
+        post_key = f'{comment.chat}:{comment.root}'
+        allow_sticker = not _needs_human(comment.text, self.consts.human_words)
+        if self._pick_sticker(person, post_key, allow_sticker=allow_sticker):
+            specs, kind = self.cats.pick_cat(seed), 'reply'
+        else:
+            specs, kind = self.cats.pick_like(seed), 'react'
+        return (specs, kind) if specs else None
+
+    def _pick_sticker(
+        self, person: str, post_key: str, *, allow_sticker: bool
+    ) -> bool:
+        """Whether this engagement is a thread sticker rather than a like.
+
+        With the attachment control on, the reciprocity law decides (steering
+        stickered/engaged to the target); else the legacy burst/silence gate
+        does. Either way a question/link comment (``allow_sticker`` False)
+        stays a plain like.
+        """
+        if self.cats.params.attach_enabled:
+            return self.cats.decide_sticker(person, content_ok=allow_sticker)
+        return (
+            not self.cats.params.like_all
+            and allow_sticker
+            and self.cats.should_sticker(post_key)
+        )
 
     def _arm_cat(self, cat: cats.Cat) -> None:
         """Create the fire-later task for a scheduled (persisted) cat."""

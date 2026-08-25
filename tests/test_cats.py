@@ -664,3 +664,128 @@ def test_load_cat_params_reads_the_pool() -> None:
     assert len(params.pool) == 1  # only the type=cat entry
     assert params.pool[0].emoji_id == '9'
     assert params.pool[0].tags == ('bodry',)
+
+
+# --- Berlyne attachment control on comment-likes (exposure + reciprocity) ---
+
+_EXPOSURE_PEAK = 0.675  # argmax of the default Wundt curve (c1.45 c2.90 k8)
+_RECIP_TARGET = 0.20
+_CONVERGE_TOL = 0.05
+_CONVERGE_N = 2000
+_LIKE_CAP = 5
+_STICKER_CAP = 2
+
+
+def _no_caps(tmp_path: Path, seed: int = 0, **over: object) -> object:
+    """Build a brain with the daily caps off, to isolate the control laws."""
+    over.setdefault('like_max_per_day', 0)
+    over.setdefault('sticker_max_per_day', 0)
+    return _brain(tmp_path, seed, **over)
+
+
+def test_decide_engage_always_likes_the_first_comment(tmp_path: Path) -> None:
+    """A newcomer's very first comment is always engaged (a warm hello)."""
+    brain = _no_caps(tmp_path)
+    assert brain.decide_engage('newbie') is True
+    assert brain.state.commented['newbie'] == 1
+    assert brain.state.engaged['newbie'] == 1
+
+
+def test_exposure_converges_to_the_wundt_peak(tmp_path: Path) -> None:
+    """engaged/commented for a heavy commenter converges on ~0.67, not 1."""
+    brain = _no_caps(tmp_path, seed=7)
+    engaged = sum(brain.decide_engage('heavy') for _ in range(_CONVERGE_N))
+    p = engaged / _CONVERGE_N
+    assert abs(p - _EXPOSURE_PEAK) < _CONVERGE_TOL
+    assert brain.state.commented['heavy'] == _CONVERGE_N
+
+
+def test_reciprocity_converges_to_the_target(tmp_path: Path) -> None:
+    """Among engaged comments, stickered/engaged converges on ~0.20."""
+    brain = _no_caps(tmp_path, seed=3)
+    engaged = 0
+    stickered = 0
+    for _ in range(_CONVERGE_N):
+        if brain.decide_engage('fan'):
+            engaged += 1
+            if brain.decide_sticker('fan', content_ok=True):
+                stickered += 1
+    r = stickered / engaged
+    assert abs(r - _RECIP_TARGET) < _CONVERGE_TOL
+
+
+def test_a_steered_skip_is_recorded_not_re_rolled(tmp_path: Path) -> None:
+    """A skipped comment bumps commented once and is never engaged later."""
+    brain = _no_caps(tmp_path, seed=1)
+    brain.decide_engage('p')  # first: always engaged
+    # Drive p above the peak so the next draws are skips, then count.
+    before = brain.state.commented['p']
+    decisions = [brain.decide_engage('p') for _ in range(50)]
+    assert brain.state.commented['p'] == before + 50  # each counted once
+    assert brain.state.engaged['p'] <= 1 + sum(decisions)  # no phantom likes
+
+
+def test_daily_like_cap_clamps_engagements(tmp_path: Path) -> None:
+    """like_max_per_day caps total engagements in a day, no matter the flow."""
+    brain = _brain(
+        tmp_path, like_max_per_day=_LIKE_CAP, sticker_max_per_day=0
+    )
+    for _ in range(200):
+        brain.decide_engage('spammer')
+    assert brain.likes_today(_ts()) == _LIKE_CAP
+    assert brain.state.engaged['spammer'] == _LIKE_CAP
+
+
+def test_daily_sticker_cap_clamps_stickers(tmp_path: Path) -> None:
+    """sticker_max_per_day caps the message-shaped stickers in a day."""
+    brain = _brain(
+        tmp_path,
+        like_max_per_day=0,
+        sticker_max_per_day=_STICKER_CAP,
+        seed=3,
+    )
+    for _ in range(500):
+        if brain.decide_engage('fan'):
+            brain.decide_sticker('fan', content_ok=True)
+    assert brain.stickers_today(_ts()) == _STICKER_CAP
+    assert brain.state.stickered['fan'] == _STICKER_CAP
+
+
+def test_a_question_comment_never_becomes_a_sticker(tmp_path: Path) -> None:
+    """content_ok False keeps a plain like; the reciprocity roll is spared."""
+    brain = _no_caps(tmp_path)
+    brain.decide_engage('asker')  # engaged
+    for _ in range(20):
+        assert brain.decide_sticker('asker', content_ok=False) is False
+    assert brain.state.stickered.get('asker', 0) == 0
+
+
+def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
+    """commented/engaged/stickered survive a restart (relationship memory)."""
+    path = tmp_path / 'cats_state.json'
+    brain = cats.CatBrain(_params(like_max_per_day=0), path, random.Random(2))
+    brain.clock = _ts
+    for _ in range(30):
+        if brain.decide_engage('mem'):
+            brain.decide_sticker('mem', content_ok=True)
+    saved = (
+        brain.state.commented['mem'],
+        brain.state.engaged['mem'],
+        brain.state.stickered.get('mem', 0),
+    )
+    fresh = cats.CatBrain(_params(like_max_per_day=0), path, random.Random(2))
+    assert fresh.state.commented['mem'] == saved[0]
+    assert fresh.state.engaged['mem'] == saved[1]
+    assert fresh.state.stickered.get('mem', 0) == saved[2]
+
+
+def test_warmth_ranks_commenters_by_attachment_index(tmp_path: Path) -> None:
+    """warmth() lists commenters warmest-first with p/r/index per person."""
+    brain = _no_caps(tmp_path, seed=5)
+    for _ in range(40):
+        if brain.decide_engage('a'):
+            brain.decide_sticker('a', content_ok=True)
+    brain.decide_engage('b')  # a single, cold acquaintance
+    warm = brain.warmth()
+    assert {w.label for w in warm} == {'a', 'b'}
+    assert warm == sorted(warm, key=lambda w: w.index, reverse=True)

@@ -400,7 +400,17 @@
     "session_gap_log_sigma": 0.6,
     "session_idle_sec": 900,
     "session_max_sec": 1200,
-    "max_reply_delay_sec": 86400
+    "max_reply_delay_sec": 86400,
+    "_note_attach": "Berlyne attachment control on comment-likes (кривая Берлайна на лайки, та же логика, что и на сторис). attach_enabled=true: НЕ лайкаем каждый коммент -- доля лайкнутых комментов человека держится у пика кривой Вундта (~0.67 = engaged/commented), иначе лайкать всё подряд читается как навязчивость; тяжёлого комментатора притормаживаем, новичка всё равно приветствуем. Лайк-реакция = ЭКСПОЗИЦИЯ; тред-стикер = ВЗАИМНОСТЬ (recip_fraction_target=0.20 = stickered/engaged, ~1 из 5 engaged становится стикером). ПЕРВЫЙ коммент человека лайкаем всегда. exposure_c1/c2/k -- параметры кривой Вундта, их argmax И ЕСТЬ целевая доля (нет отдельной 0.67). like_control_gain/recip_control_gain -- сила обратной связи. like_max_per_day кап на все engagement за день (лайки дешёвые), sticker_max_per_day -- на стикеры (сообщения = реальная бан-поверхность), 0 = без капа, в tz персоны. Память по человеку (commented/engaged/stickered) живёт в cats_state.json и НЕ сбрасывается при откате поста -- это и есть адаптация к каждому. attach_enabled=false возвращает старое поведение like_all.",
+    "attach_enabled": true,
+    "exposure_c1": 0.45,
+    "exposure_c2": 0.90,
+    "exposure_k": 8.0,
+    "like_control_gain": 1.0,
+    "recip_fraction_target": 0.20,
+    "recip_control_gain": 1.0,
+    "like_max_per_day": 400,
+    "sticker_max_per_day": 40
   },
   "greeter": {
     "enabled": true,
