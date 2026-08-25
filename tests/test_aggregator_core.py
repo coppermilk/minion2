@@ -10,9 +10,15 @@ attributes the method under test touches -- no live client.
 
 from __future__ import annotations
 
+import json
+from typing import TYPE_CHECKING
+
 import pytest
 
 from tests.conftest import install_telethon_stub
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 install_telethon_stub()
 
@@ -111,24 +117,27 @@ def test_similar_merges_a_longer_caption_of_the_same_video() -> None:
 
     This is the "combining did not work" bug: one platform's caption carried a
     second sentence, so the plain ratio fell under the threshold and the video
-    split into two half-collected groups.
+    split into two half-collected groups. (ASCII stand-in for a real caption,
+    per the repo-wide ASCII source gate.)
     """
-    short = matching._norm('Ты можешь не верить в себя')
-    long = matching._norm('Ты можешь не верить в себя. Невилл будет гордиться')
+    short = matching._norm('you can choose not to believe in yourself')
+    long = matching._norm(
+        'you can choose not to believe in yourself, neville will be proud'
+    )
     assert matching._similar(short, long) == 1.0  # prefix -> same video
     assert matching._similar(long, short) == 1.0  # order-independent
 
 
 def test_similar_does_not_merge_a_short_generic_prefix() -> None:
     """A prefix under the min length is too generic to force a match."""
-    assert matching._similar('да', 'да ладно тебе не может быть') < 0.9  # noqa: PLR2004
+    assert matching._similar('no', 'no way that cannot be true') < 0.9  # noqa: PLR2004
 
 
 def test_similar_keeps_ratio_for_unrelated_titles() -> None:
     """Unrelated captions stay well below the match threshold."""
     assert matching._similar(
-        matching._norm('Ты можешь не верить в себя'),
-        matching._norm('Совсем другое видео про котов'),
+        matching._norm('you can choose not to believe in yourself'),
+        matching._norm('a completely different video about cats'),
     ) < 0.9  # noqa: PLR2004
 
 
@@ -225,3 +234,65 @@ def test_short_or_reject_drops_long_video() -> None:
     item = Item('tiktok', 'tiktok', 'Long one', 'u', '', '5:00', 5)
     assert agg._short_or_reject(item, 5) is None
     assert matching._norm('Long one') in agg.rejected
+
+
+# ------------------------------------------------------ per-service modes
+
+
+def test_default_mode_follows_json_enabled() -> None:
+    """Aggregator defaults live; a feature is live only if its JSON is on."""
+    agg = object.__new__(main.Aggregator)
+    agg._raw = {'cats': {'enabled': True}, 'stories': {'enabled': False}}
+    assert agg._default_mode('aggregator') == 'live'
+    assert agg._default_mode('cats') == 'live'
+    assert agg._default_mode('stories') == 'off'
+
+
+def test_migrate_service_modes_from_legacy_global(tmp_path: Path) -> None:
+    """A pre-per-service install seeds from the old global mode + overrides."""
+    agg = object.__new__(main.Aggregator)
+    agg._raw = {
+        'cats': {'enabled': True}, 'stories': {'enabled': True},
+        'users': {'enabled': False}, 'greeter': {'enabled': False},
+    }
+    agg._overrides_path = tmp_path / 'absent.json'  # no legacy overrides
+    modes = agg._migrate_service_modes({'mode': 'test'})
+    assert modes['aggregator'] == 'test'  # poster always followed the mode
+    assert modes['cats'] == 'test'  # on -> the legacy mode
+    assert modes['users'] == 'off'  # disabled -> off
+
+
+def test_load_service_modes_reads_and_cleans_the_block(
+    tmp_path: Path,
+) -> None:
+    """The stored services block is read; a junk value falls to the default."""
+    agg = object.__new__(main.Aggregator)
+    agg._raw = {'cats': {'enabled': True}}
+    agg._mode_path = tmp_path / 'mode.json'
+    agg._overrides_path = tmp_path / 'ov.json'
+    agg._mode_path.write_text(json.dumps({'services': {
+        'aggregator': 'test', 'cats': 'off', 'stories': 'live',
+        'users': 'bogus', 'greeter': 'off',
+    }}))
+    modes = agg._load_service_modes()
+    assert modes['aggregator'] == 'test'
+    assert modes['cats'] == 'off'
+    assert modes['users'] == 'off'  # 'bogus' -> users default (JSON off)
+
+
+def test_feature_enabled_is_mode_not_off() -> None:
+    """A service counts as enabled unless its mode is 'off'."""
+    agg = object.__new__(main.Aggregator)
+    agg._modes = {'cats': 'test', 'stories': 'off', 'greeter': 'live'}
+    assert agg._feature_enabled('cats') is True
+    assert agg._feature_enabled('greeter') is True
+    assert agg._feature_enabled('stories') is False
+
+
+def test_service_dir_follows_each_services_mode(tmp_path: Path) -> None:
+    """A test service lands in base/test; a live one in base."""
+    agg = object.__new__(main.Aggregator)
+    agg._state_base = tmp_path
+    agg._modes = {'aggregator': 'live', 'cats': 'test'}
+    assert agg._service_dir('aggregator') == tmp_path
+    assert agg._service_dir('cats') == tmp_path / 'test'

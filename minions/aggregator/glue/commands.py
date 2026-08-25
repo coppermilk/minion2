@@ -76,6 +76,19 @@ COMMAND_FEATURES = '/features'
 FEATURE_NAMES = ('cats', 'stories', 'users', 'greeter')
 FEATURE_ON_SUFFIX = '_on'
 FEATURE_OFF_SUFFIX = '_off'
+# /services prints a table of every service and its mode, and each service
+# takes '/<service> off|test|live' to sandbox it on its own (test = its own
+# state, and for the poster/greeter its own destination) while others stay
+# live. The poster ('aggregator') is a service too, so it finally has an off.
+COMMAND_SERVICES = '/services'
+SERVICE_NAMES = ('aggregator', *FEATURE_NAMES)
+SERVICE_MODES = ('off', 'test', 'live')
+_SERVICE_CMD_WORDS = 2  # '/<service> <mode>'
+
+
+def _is_mode_arg(parts: list[str]) -> bool:
+    """Whether ``parts`` is a '/<service> <mode>' with a valid mode word."""
+    return len(parts) == _SERVICE_CMD_WORDS and parts[1] in SERVICE_MODES
 
 
 class _CommandsMixin(AggregatorProtocol):
@@ -92,6 +105,10 @@ class _CommandsMixin(AggregatorProtocol):
         # before the exact table, because the name is dynamic (one pair per
         # feature) rather than a fixed command string.
         if await self._feature_command(text):
+            return True
+        # Service modes: /services and '/<service> off|test|live'. Matched here
+        # (before the exact table) because '/<service> <mode>' carries an arg.
+        if await self._service_command(text):
             return True
         handlers = {
             COMMAND_HELP: self.help_report,
@@ -137,6 +154,52 @@ class _CommandsMixin(AggregatorProtocol):
                     return True
         return False
 
+    async def _service_command(self, text: str) -> bool:
+        """Handle /services and '/<service> off|test|live', else False."""
+        parts = text.split()
+        word = parts[0] if parts else ''
+        if word == COMMAND_SERVICES:
+            await self.services_report()
+            return True
+        name = word[1:] if word.startswith('/') else ''
+        if name in SERVICE_NAMES and _is_mode_arg(parts):
+            await self.set_service_mode(name, parts[1])
+            return True
+        return False
+
+    async def set_service_mode(self, name: str, mode: str) -> None:
+        """Set one service's mode (off/test/live), persist, restart its loops.
+
+        No-op-reports when already there; otherwise records the mode, tears the
+        profile down and rebuilds it so this service's dir/enabled/destination
+        take effect while the others keep their own modes.
+        """
+        if self._modes.get(name) == mode:
+            await self.client.send_message(
+                self.config.source, f'{name}: already {mode}'
+            )
+            return
+        self._modes[name] = mode
+        self._save_service_modes()
+        await self.stop_profile()
+        self._build_profile()
+        await self.start_profile(source_backfill=False)
+        log.info('service %s -> %s', name, mode)
+        await self.client.send_message(self.config.source, f'{name}: {mode}')
+
+    async def services_report(self) -> None:
+        """Post the service table: each service's mode and switch command."""
+        lines = ['Services']
+        for name in SERVICE_NAMES:
+            mode = self._modes.get(name, 'off')
+            dot = self._dot(on=mode != 'off')
+            lines.append(
+                f'{self._bul()} {dot} {name}: {mode.upper()}'
+                f'   /{name} off|test|live'
+            )
+        await self.client.send_message(self.config.source, '\n'.join(lines))
+        log.info('sent services report to %s', self.config.source)
+
     async def _unknown_command(
         self, event: events.NewMessage.Event, text: str
     ) -> bool:
@@ -151,28 +214,13 @@ class _CommandsMixin(AggregatorProtocol):
         return True
 
     async def switch_feature(self, name: str, *, on: bool) -> None:
-        """Turn a feature on/off at runtime (persisted), restarting its loops.
+        """Turn a feature on/off (a thin alias over ``set_service_mode``).
 
-        No-op-reports when already in the wanted state; otherwise records the
-        override, then tears the profile down and rebuilds it in the same mode
-        so the feature's background loops actually start or stop.
+        ``_on`` brings it up in the aggregator's current mode, so toggling a
+        feature on while the bot is testing joins the test sandbox; ``_off``
+        sets it off. Granular per-service test/live uses ``/<service> <mode>``.
         """
-        if self._feature_enabled(name) == on:
-            state = 'on' if on else 'off'
-            await self.client.send_message(
-                self.config.source, f'{name}: already {state}'
-            )
-            return
-        self._overrides[name] = on
-        self._save_overrides()
-        await self.stop_profile()
-        self._build_profile(self.mode)
-        await self.start_profile(source_backfill=False)
-        state = 'on' if on else 'off'
-        log.info('feature %s switched %s', name, state)
-        await self.client.send_message(
-            self.config.source, f'{name}: switched {state}'
-        )
+        await self.set_service_mode(name, self.mode if on else 'off')
 
     async def features_report(self) -> None:
         """Post each feature's on/off state and its switch commands."""

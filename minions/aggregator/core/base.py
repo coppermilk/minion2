@@ -67,7 +67,7 @@ if TYPE_CHECKING:
         _story_tasks: set[asyncio.Task[None]]
         _thread_rescan_at: dict[int, float]
         _pending_views: list[stories.StoryView]
-        _overrides: dict[str, bool]
+        _modes: dict[str, str]  # service -> 'off' | 'test' | 'live'
 
         # --- peer methods implemented on Aggregator or a sibling mixin ---
         def live_targets(self) -> tuple[int, ...]:
@@ -94,11 +94,14 @@ if TYPE_CHECKING:
 
         def _dot(self, *, on: bool) -> str: ...
 
-        def _build_profile(self, mode: str) -> None: ...
+        def _build_profile(self) -> None: ...
 
         def _feature_enabled(self, name: str) -> bool: ...
 
-        def _save_overrides(self) -> None: ...
+        def _save_service_modes(self) -> None: ...
+
+        async def set_service_mode(self, name: str, mode: str) -> None:
+            """Set one service's mode (off/test/live) and rebuild."""
 
         async def start_profile(
             self, *, source_backfill: bool = True

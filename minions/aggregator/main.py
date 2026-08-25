@@ -117,6 +117,8 @@ from minions.aggregator.engines import users
 from minions.aggregator.engines.premium_emoji import build_premium_message
 from minions.aggregator.glue.cats import _CatsMixin
 from minions.aggregator.glue.commands import FEATURE_NAMES
+from minions.aggregator.glue.commands import SERVICE_MODES
+from minions.aggregator.glue.commands import SERVICE_NAMES
 from minions.aggregator.glue.commands import _CommandsMixin
 from minions.aggregator.glue.comod import _ComodMixin
 from minions.aggregator.glue.status import _StatusMixin
@@ -168,7 +170,7 @@ class Aggregator(
         self._state_base = base_state.parent
         self._mode_path = self._state_base / MODE_FILE
         self._overrides_path = self._state_base / FEATURE_OVERRIDES_FILE
-        self._overrides = self._load_overrides()
+        self._modes = self._load_service_modes()
         self._cat_tasks: set[asyncio.Task[None]] = set()
         self._greeter_task: asyncio.Task[None] | None = None
         self._cat_rescan_task: asyncio.Task[None] | None = None
@@ -187,19 +189,30 @@ class Aggregator(
         rt = self._raw.get('runtime')
         rt = rt if isinstance(rt, dict) else {}
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
-        self._build_profile(self._load_mode())
+        self._build_profile()
 
-    def _build_profile(self, mode: str) -> None:
-        """(Re)bind every mode-scoped part -- channel + state files -- to MODE.
+    def _service_dir(self, name: str) -> Path:
+        """Return (and create) the state dir for a service's OWN mode.
 
-        Live and test are full profiles: each has its own destination channel
-        and its own cats/greeter/posted state on disk, so switching is a total,
-        automatic sandbox. Resets the in-memory containers; ``start_profile``
-        then hydrates them from THIS profile's files.
+        Test state lives in ``base/test``, live (and off) in ``base``, so one
+        service can sandbox its state while another stays live.
         """
-        self.mode = mode
-        pdir = self._profile_dir(mode)
+        pdir = self._profile_dir(self._modes[name])
         pdir.mkdir(parents=True, exist_ok=True)
+        return pdir
+
+    def _build_profile(self) -> None:
+        """(Re)bind every service to ITS OWN mode -- dir, enabled, channel.
+
+        Each service is off/test/live independently (``self._modes``): test
+        state lives in ``base/test``, live in ``base``, off builds it inert
+        (``enabled=False``, the loop still runs but no-ops). The poster's
+        containers and ``live_targets`` follow the aggregator's mode; the
+        greeter's channel follows the greeter's. ``start_profile`` then
+        hydrates each from its own files.
+        """
+        self.mode = self._modes['aggregator']
+        pdir = self._service_dir('aggregator')
         self.state_path = pdir / STATE_FILE
         self.groups: list[Group] = []
         self.rejected: set[str] = set()
@@ -207,36 +220,37 @@ class Aggregator(
         self.processed_ids: set[int] = set()
         self._cat_tasks = set()
         self._cat_next_rescan = 0.0
-        self._rescan_sec = self._rescan_interval(mode)
-        # Each feature's on/off is the JSON default unless a /<name>_on|off
-        # runtime override is set (``_feature_enabled``), so a toggle survives
-        # a restart. The params are frozen, so the flag is swapped via replace.
+        self._rescan_sec = self._rescan_interval(self._modes['cats'])
+        # A service is enabled when its mode != 'off' (``_feature_enabled``).
+        # The params are frozen, so the flag is swapped via replace.
         cat_params = replace(
             cats.load_cat_params(self._raw),
             enabled=self._feature_enabled('cats'),
         )
-        self.cats = cats.CatBrain(cat_params, pdir / 'cats_state.json')
+        self.cats = cats.CatBrain(
+            cat_params, self._service_dir('cats') / 'cats_state.json'
+        )
         # Story viewer: watches friends'/contacts' stories the way a person
         # does -- a glance now and then, no reactions -- with its own
-        # per-profile seen set and view log. Poll cadence follows the profile.
+        # per-service seen set and view log. Poll cadence follows its mode.
         story_params = replace(
-            stories.load_story_params(self._raw, mode),
+            stories.load_story_params(self._raw, self._modes['stories']),
             enabled=self._feature_enabled('stories'),
         )
         self.stories = stories.StoryBrain(
-            story_params, pdir / 'stories_state.json'
+            story_params, self._service_dir('stories') / 'stories_state.json'
         )
         self._story_next_poll = 0.0
         self._pending_views = []
-        # Users DB: its own SQLite file per profile, so live and test audiences
+        # Users DB: its own SQLite file per mode, so live and test audiences
         # never mix. Config lives in the 'users' JSON section.
         ucfg = self._raw.get('users')
         ucfg = ucfg if isinstance(ucfg, dict) else {}
         self._users_enabled = self._feature_enabled('users')
         self._users_store_text = bool(ucfg.get('store_message_text', True))
         self._users_enrich = bool(ucfg.get('enrich', True))
-        self.users = users.UserStore(pdir / 'users.db')
-        gchannel = self._profile_channel(mode)
+        self.users = users.UserStore(self._service_dir('users') / 'users.db')
+        gchannel = self._profile_channel(self._modes['greeter'])
         greeter_params = replace(
             greeter.load_greeter_params(self._raw, gchannel),
             enabled=self._feature_enabled('greeter'),
@@ -245,13 +259,11 @@ class Aggregator(
             self.client,
             greeter_params,
             greeter.GreeterIO(
-                pdir / 'greeter_state.json',
+                self._service_dir('greeter') / 'greeter_state.json',
                 self._on_membership_event,
             ),
         )
-        # The cabinet ("shkaf"): a per-profile shelf roster with a 7-day timer,
-        # plus its render/announcement config. Its rendered image is written
-        # next to the roster so live and test never share a file.
+        # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
         self.comod = comod.CabinetRoster(pdir / 'comod.json')
         self._comod = comod.load_comod_params(self._raw)
 
@@ -278,22 +290,54 @@ class Aggregator(
             return self.config.test_target or self.config.source
         return self.config.targets[0] if self.config.targets else 0
 
-    def _load_mode(self) -> str:
-        """Return the active profile ('live' or 'test'), default 'live'."""
+    def _load_service_modes(self) -> dict[str, str]:
+        """Load each service's mode, migrating the legacy mode + overrides.
+
+        Reads ``{"services": {name: mode}}``; if that block is absent (an
+        install from before per-service modes) it seeds from the old global
+        ``mode`` file and feature-overrides file so nothing changes on upgrade.
+        """
         try:
             raw = json.loads(self._mode_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
-            return 'live'
-        return 'test' if str(raw.get('mode')) == 'test' else 'live'
+            raw = {}
+        stored = raw.get('services')
+        if isinstance(stored, dict):
+            return {
+                n: self._clean_mode(n, stored.get(n)) for n in SERVICE_NAMES
+            }
+        return self._migrate_service_modes(raw)
 
-    def _save_mode(self) -> None:
-        """Persist the active profile so a restart resumes the same mode."""
+    def _clean_mode(self, name: str, value: object) -> str:
+        """Return a valid stored mode, else the service's default."""
+        if value in SERVICE_MODES:
+            return str(value)
+        return self._default_mode(name)
+
+    def _default_mode(self, name: str) -> str:
+        """Return a service's default mode (live, else off if disabled)."""
+        if name == 'aggregator':
+            return 'live'
+        return 'live' if self._feature_default(name) else 'off'
+
+    def _migrate_service_modes(self, raw: dict[str, object]) -> dict[str, str]:
+        """Seed per-service modes from the legacy global mode + overrides."""
+        legacy = 'test' if str(raw.get('mode')) == 'test' else 'live'
+        overrides = self._load_overrides()
+        modes = {'aggregator': legacy}
+        for name in FEATURE_NAMES:
+            on = overrides.get(name, self._feature_default(name))
+            modes[name] = legacy if on else 'off'
+        return modes
+
+    def _save_service_modes(self) -> None:
+        """Persist every service's mode so a restart resumes them."""
         self._mode_path.write_text(
-            json.dumps({'mode': self.mode}), encoding='utf-8'
+            json.dumps({'services': self._modes}, indent=2), encoding='utf-8'
         )
 
     def _load_overrides(self) -> dict[str, bool]:
-        """Load the persisted feature on/off overrides (empty if none)."""
+        """Load the legacy feature on/off overrides file (empty if none)."""
         try:
             raw = json.loads(self._overrides_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
@@ -304,12 +348,6 @@ class Aggregator(
             if str(k) in FEATURE_NAMES
         }
 
-    def _save_overrides(self) -> None:
-        """Persist the feature overrides so a toggle survives a restart."""
-        self._overrides_path.write_text(
-            json.dumps(self._overrides, indent=2), encoding='utf-8'
-        )
-
     def _feature_default(self, name: str) -> bool:
         """Return a feature's JSON default ``enabled`` (its section flag)."""
         section = self._raw.get(name)
@@ -317,8 +355,8 @@ class Aggregator(
         return bool(section.get('enabled', False))
 
     def _feature_enabled(self, name: str) -> bool:
-        """Return a feature's effective on/off: override else JSON default."""
-        return self._overrides.get(name, self._feature_default(name))
+        """Whether a service is active (its mode is not 'off')."""
+        return self._modes.get(name, 'off') != 'off'
 
     async def start_profile(self, *, source_backfill: bool = True) -> None:
         """Hydrate the active profile and start its background loops.
@@ -371,18 +409,21 @@ class Aggregator(
         self._pending_views.clear()
 
     async def switch_mode(self, mode: str) -> None:
-        """Switch the WHOLE bot to MODE (the /test and /live commands).
+        """Switch every ACTIVE service to MODE (the /test and /live commands).
 
-        Total sandbox: tear the current profile down, rebind channel + state
-        files to MODE, hydrate it. Posts, cats, greeter and any future feature
-        all follow -- isolated -- with nothing carried across. Persisted, so a
-        restart comes up in the same mode.
+        A total sandbox, as before: the poster always follows, and any service
+        currently on moves to MODE too; a service that is off stays off. Tear
+        the profile down, rebind each service, hydrate. Persisted, so a restart
+        comes up the same. Per-service overrides use ``set_service_mode``.
         """
-        if mode != self.mode:
-            await self.stop_profile()
-            self._build_profile(mode)
-            self._save_mode()
-            await self.start_profile(source_backfill=False)
+        self._modes = {
+            n: mode if (n == 'aggregator' or m != 'off') else 'off'
+            for n, m in self._modes.items()
+        }
+        await self.stop_profile()
+        self._build_profile()
+        self._save_service_modes()
+        await self.start_profile(source_backfill=False)
         labels = await self._chat_labels()
         dest = ', '.join(labels.get(t, str(t)) for t in self.live_targets())
         await self.client.send_message(
