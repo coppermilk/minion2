@@ -31,7 +31,26 @@
     "доел последние пельмени и выложил новое видео",
     "монтировал с температурой 37. если я умру - знайте, это видео было ради вас",
     "доел мясо, запил вискарём и залил новое видео. Нормально?",
-    "вместо того чтобы кого-то чпокнуть, я чпокал финальный рендер"
+    "вместо того чтобы кого-то чпокнуть, я чпокал финальный рендер",
+    "три ночи без сна, один нервный срыв - и вот оно",
+    "если я завтра не проснусь - знайте, это видео было последним",
+    "ради этого ролика я отменил все планы (и жизнь)",
+    "доел последние дошираки и выложил бэнгер",
+    "запил кофе слезами и залил новое видео",
+    "вместо ужина - финальный рендер. Приятного просмотра",
+    "доел пельмени холодными, зато видео горячее",
+    "съел всё, что было в холодильнике, и только потом выложил",
+    "хотел лечь спать, а вместо этого домонтировал до 5 утра",
+    "будильник звонил три раза, я его послал и доделал",
+    "специально для тех, кто ждёт. Держите",
+    "упал с кровати, но для вас всё равно домонтировал",
+    "если это видео вам не зайдёт - я лично приду и посмотрю, как вы его не смотрите",
+    "монтировал в одних трусах и с температурой. Люблю вас",
+    "монтировал до трясущихся рук, но для вас выложил",
+    "хотел всё сжечь, но вспомнил про вас и залил",
+    "ради ваших комментариев пережил этот ад",
+    "если бы не вы - давно бы удалил канал",
+    "монтировал с температурой и экзистенциальным кризисом"
   ],
   "emoji": [
     {
@@ -288,7 +307,7 @@
   "stories": {
     "_note": "Human-like story viewing (NO reactions -- just a view + a log of who was viewed). On by default; turn it off at runtime with /stories_off (or set enabled=false here). Telegram's feed only returns contacts/followed peers, and we only ever view UNSEEN stories, so it never walks the whole contact list. view_all=true (catch-up) views EVERY unseen story each poll -- no per-session cap, no skip, no long cooldown -- so all current stories are swept at once (a small dwell/gap between them stays, to respect flood limits); false is the human handful-then-rest. include_archived=true also views the stories of people whose chats you moved to the Archive (the hidden feed). poll_sec_test/live set how often the feed is re-polled (test tight, live relaxed).",
     "enabled": true,
-    "view_all": true,
+    "view_all": false,
     "include_archived": true,
     "poll_sec": 1800,
     "poll_sec_test": 300,
