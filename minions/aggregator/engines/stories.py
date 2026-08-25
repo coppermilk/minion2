@@ -1,12 +1,13 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Human-like viewing of friends' and contacts' stories (no reactions).
+"""Human-like viewing of friends' and contacts' stories (Berlyne model).
 
 The aggregator's user account also *watches stories*, the way a person idly
-would: it opens Telegram now and then, glances at a handful of the newest
-unseen stories from people it follows, marks them seen, and closes the app --
-it never leaves NO reaction, never comments, never likes. Just a view, plus a
-log of whose stories were watched.
+would: it opens Telegram now and then, glances at a FRACTION of the newest
+unseen stories from people it follows (toward the peak of the Wundt attraction
+curve, not all of them), leaves an occasional heart/thumb, and closes the app.
+The choices are per-peer so each relationship is steered toward the peak; see
+``engines/attachment.py`` for the model.
 
 Like ``cats.py`` this module is deliberately Telethon-free (pure Python +
 stdlib) so every decision is unit-testable; ``main.py`` owns the client, feeds
@@ -110,6 +111,15 @@ class StoryParams:
     exposure_c2: float = 0.90
     exposure_k: float = 8.0
     view_control_gain: float = 1.0
+    # Reciprocity: heart/thumb a FRACTION (react_fraction_target) of the
+    # stories we view, so a viewer sees an occasional reaction, not silence --
+    # the term that lifts attachment off zero. Capped hard per day (a ban
+    # surface); pool kept to a couple of safe standard reactions (escapes keep
+    # this file ASCII; the JSON carries the real glyphs). Off = view-only.
+    react_enabled: bool = True
+    react_fraction_target: float = 0.20
+    react_pool: tuple[str, ...] = ('\u2764', '\U0001f44d')
+    react_max_per_day: int = 50
 
 
 @dataclass(frozen=True)
@@ -144,6 +154,10 @@ class StoryView:
     max_id: int
     when: float
     label: str = ''
+    # The subset of story_ids to react to, and the reaction glyph chosen for
+    # this view (empty when none) -- decided at plan time, sent by the glue.
+    react_ids: tuple[int, ...] = ()
+    react_emoji: str = ''
 
 
 @dataclass
@@ -360,6 +374,34 @@ class StoryBrain:
         self.state.offered[key] = self.state.offered.get(key, 0) + len(fresh)
         self._touch_peer(key)
 
+    def _react_budget(self, now: float) -> int:
+        """Return how many reactions are still allowed today (date roll)."""
+        if not self.params.react_enabled or self.params.react_max_per_day <= 0:
+            return 0
+        today = humanize_time.local(
+            now, self.params.tz_offset_hours
+        ).date().isoformat()
+        used = self.state.react_today if self.state.react_day == today else 0
+        return max(0, self.params.react_max_per_day - used)
+
+    def _plan_reacts(
+        self, view_ids: tuple[int, ...], budget: int
+    ) -> tuple[tuple[int, ...], int]:
+        """Pick which viewed ids to react to, targeting the reaction fraction.
+
+        A per-story Bernoulli at ``react_fraction_target`` (so reacted/viewed
+        converges on it), stopped by the remaining daily ``budget``. Returns
+        the chosen ids and the budget left.
+        """
+        chosen: list[int] = []
+        for sid in view_ids:
+            if budget <= 0:
+                break
+            if self.rng.random() < self.params.react_fraction_target:
+                chosen.append(sid)
+                budget -= 1
+        return tuple(chosen), budget
+
     def _lay_out(
         self,
         chosen: list[tuple[StoryCandidate, tuple[int, ...]]],
@@ -375,6 +417,7 @@ class StoryBrain:
         last view (principle 2).
         """
         p_star = self._view_target()
+        budget = self._react_budget(now)
         when = now + humanize_time.lognormal(
             self.rng, self.params.latency_log_mu, self.params.latency_log_sigma
         )
@@ -385,6 +428,9 @@ class StoryBrain:
             self._record_skips(cand.peer_id, skip_ids)
             if not view_ids:
                 continue  # this peer was skipped entirely this pass
+            react_ids, budget = self._plan_reacts(view_ids, budget)
+            pool = self.params.react_pool
+            emoji = self.rng.choice(pool) if react_ids and pool else ''
             views.append(
                 StoryView(
                     peer_id=cand.peer_id,
@@ -392,6 +438,8 @@ class StoryBrain:
                     max_id=max(view_ids),
                     when=when,
                     label=cand.label,
+                    react_ids=react_ids,
+                    react_emoji=emoji,
                 )
             )
             when += humanize_time.lognormal(
@@ -451,6 +499,27 @@ class StoryBrain:
         del self.state.log[: -self.params.log_limit]
         self._save()
 
+    def mark_reacted(self, peer_id: int, count: int, now: float) -> None:
+        """Record ``count`` reactions sent to ``peer_id`` (persisted).
+
+        Rolls the per-day counter over at local midnight, bumps the per-peer
+        reaction tally (so r = reacted/viewed stays true), and stamps the last
+        reaction time. Called by the glue after the reactions actually go out.
+        """
+        if count <= 0:
+            return
+        today = humanize_time.local(
+            now, self.params.tz_offset_hours
+        ).date().isoformat()
+        if self.state.react_day != today:
+            self.state.react_day = today
+            self.state.react_today = 0
+        self.state.react_today += count
+        key = str(peer_id)
+        self.state.reacted[key] = self.state.reacted.get(key, 0) + count
+        self.state.last_react = now
+        self._save()
+
     def _touch_peer(self, key: str) -> None:
         """Mark ``key`` most-recently-seen, dropping the oldest past cap."""
         if key in self.state.seen_order:
@@ -470,6 +539,11 @@ class StoryBrain:
     def seen_count(self) -> int:
         """Return how many stories have been viewed all-time (the odometer)."""
         return self.state.total_views
+
+    def reacts_today(self, now: float, tz: float) -> int:
+        """Return reactions sent on the local date of ``now`` (0 past it)."""
+        today = humanize_time.local(now, tz).date().isoformat()
+        return self.state.react_today if self.state.react_day == today else 0
 
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
@@ -598,4 +672,10 @@ def load_story_params(
         exposure_c2=float(cfg.get('exposure_c2', 0.90)),
         exposure_k=float(cfg.get('exposure_k', 8.0)),
         view_control_gain=float(cfg.get('view_control_gain', 1.0)),
+        react_enabled=bool(cfg.get('react_enabled', True)),
+        react_fraction_target=float(cfg.get('react_fraction_target', 0.20)),
+        react_pool=tuple(
+            str(e) for e in (cfg.get('react_pool') or ['\u2764', '\U0001f44d'])
+        ),
+        react_max_per_day=int(cfg.get('react_max_per_day', 50)),
     )

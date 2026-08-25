@@ -21,6 +21,8 @@ from telethon import utils
 from telethon.tl.functions.stories import GetAllStoriesRequest
 from telethon.tl.functions.stories import IncrementStoryViewsRequest
 from telethon.tl.functions.stories import ReadStoriesRequest
+from telethon.tl.functions.stories import SendReactionRequest
+from telethon.tl.types import ReactionEmoji
 
 from minions.aggregator.core.base import AggregatorProtocol
 from minions.aggregator.core.models import _iso
@@ -182,28 +184,54 @@ class _StoriesMixin(AggregatorProtocol):
             self._pending_views.remove(view)
 
     async def _view_stories(self, view: stories.StoryView) -> None:
-        """Open each unseen story (human dwell), then mark the peer read.
+        """Open each chosen story (human dwell), react to some, mark read.
 
         Opens the stories one at a time with a short random dwell between them
         (a person does not blink through a whole set instantly), incrementing
-        each story's view counter, then marks the peer read up to ``max_id`` --
-        the authoritative "seen" signal. Never sends a reaction.
+        each story's view counter and leaving an occasional heart/thumb on the
+        ids the brain chose (``react_ids``), then marks the peer read up to
+        ``max_id``. Reactions are recorded (against the daily cap) as they go.
         """
         peer = await self.client.get_input_entity(view.peer_id)
         params = self.stories.params
+        react_set = set(view.react_ids)
+        sent = 0
         for sid in view.story_ids:
             await asyncio.sleep(
                 random.uniform(  # noqa: S311 -- human dwell, not crypto
                     params.dwell_min_sec, params.dwell_max_sec
                 )
             )
-            try:
-                await self.client(
-                    IncrementStoryViewsRequest(peer=peer, id=[sid])
-                )
-            except Exception:  # noqa: BLE001 -- best-effort; ReadStories marks
-                log.debug('stories: increment view failed for %s', sid)
+            await self._increment_view(peer, sid)
+            if sid in react_set:
+                sent += await self._react_to_story(peer, sid, view.react_emoji)
         await self.client(ReadStoriesRequest(peer=peer, max_id=view.max_id))
+        if sent:
+            self.stories.mark_reacted(view.peer_id, sent, time.time())
+
+    async def _increment_view(self, peer: object, sid: int) -> None:
+        """Register one story view (best-effort; ReadStories is the mark)."""
+        try:
+            await self.client(IncrementStoryViewsRequest(peer=peer, id=[sid]))
+        except Exception:  # noqa: BLE001 -- best-effort; ReadStories marks
+            log.debug('stories: increment view failed for %s', sid)
+
+    async def _react_to_story(
+        self, peer: object, sid: int, emoji: str
+    ) -> int:
+        """Leave one reaction on a story; return 1 on success, 0 on failure."""
+        try:
+            await self.client(
+                SendReactionRequest(
+                    peer=peer,
+                    story_id=sid,
+                    reaction=ReactionEmoji(emoticon=emoji),
+                )
+            )
+        except Exception:  # noqa: BLE001 -- best-effort, capped per day
+            log.debug('stories: reaction failed for %s', sid)
+            return 0
+        return 1
 
     async def stories_report(self) -> None:
         """Post the story-viewer log to the source chat (/stories command)."""

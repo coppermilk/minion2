@@ -242,6 +242,8 @@ def test_mark_viewed_dedups_and_counts_fresh(tmp_path: Path) -> None:
 
 _EXPO_TOL = 0.05
 _EXPO_POLLS = 300
+_R_TARGET = 0.20
+_FIVE = 5
 
 
 def test_view_split_converges_to_the_wundt_peak(tmp_path: Path) -> None:
@@ -276,6 +278,60 @@ def test_view_all_exposure_still_views_every_story(tmp_path: Path) -> None:
     view_ids, skip_ids = brain._view_split(7, (1, 2, 3), brain._view_target())
     assert view_ids == (1, 2, 3)
     assert skip_ids == ()
+
+
+# --- reciprocity (heart/thumb a fraction of the stories we view)
+
+
+def test_react_fraction_converges_to_target(tmp_path: Path) -> None:
+    """reacted/viewed steers to ~0.20 -- an occasional heart, not silence."""
+    brain = _brain(tmp_path)  # react_fraction_target defaults to 0.20
+    reacted = viewed = 0
+    budget = 1_000_000  # effectively uncapped for the ratio test
+    for _ in range(_EXPO_POLLS):
+        ids = (1, 2, 3)
+        r_ids, budget = brain._plan_reacts(ids, budget)
+        reacted += len(r_ids)
+        viewed += len(ids)
+    assert abs(reacted / viewed - _R_TARGET) < _EXPO_TOL
+
+
+def test_react_budget_caps_the_day(tmp_path: Path) -> None:
+    """No more than react_max_per_day reactions go out, then it floors at 0."""
+    brain = _brain(tmp_path, react_max_per_day=_THREE)
+    assert brain._react_budget(_NOON) == _THREE
+    brain.mark_reacted(7, _TWO, _NOON)
+    assert brain._react_budget(_NOON) == _THREE - _TWO
+    brain.mark_reacted(7, _FIVE, _NOON)  # overshoots via one call
+    assert brain._react_budget(_NOON) == 0
+
+
+def test_react_disabled_plans_no_reactions(tmp_path: Path) -> None:
+    """With reactions off the budget is zero and nothing is planned."""
+    brain = _brain(tmp_path, react_enabled=False)
+    assert brain._react_budget(_NOON) == 0
+    r_ids, _budget = brain._plan_reacts((1, 2, 3), 999)
+    assert r_ids == ()
+
+
+def test_react_counter_rolls_over_daily(tmp_path: Path) -> None:
+    """The daily counter resets at local midnight; the per-peer tally stays."""
+    brain = _brain(tmp_path)
+    brain.mark_reacted(7, _FIVE, _NOON)
+    assert brain.state.react_today == _FIVE
+    brain.mark_reacted(7, _TWO, _NOON + 86400.0)  # the next day
+    assert brain.state.react_today == _TWO  # reset, then +2
+    assert brain.state.reacted['7'] == _FIVE + _TWO  # cumulative per peer
+
+
+def test_plan_attaches_reactions(tmp_path: Path) -> None:
+    """A planned view carries its react ids (subset) and a glyph from pool."""
+    brain = _brain(tmp_path, react_fraction_target=1.0)
+    views = brain.plan([_cand(7, (1, 2, 3))], now=_NOON)
+    assert views
+    view = views[0]
+    assert view.react_ids == view.story_ids  # target 1.0 -> react to all seen
+    assert view.react_emoji in brain.params.react_pool
 
 
 def test_views_today_counts_only_todays_views(tmp_path: Path) -> None:

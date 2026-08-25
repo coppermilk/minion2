@@ -368,9 +368,12 @@ class _StatusMixin(AggregatorProtocol):
         now = time.time()
         tz = self.stories.params.tz_offset_hours
         today = self.stories.views_today(now, tz)
+        reacted = self.stories.reacts_today(now, tz)
+        cap = self.stories.params.react_max_per_day
         parts = [
             f'{self._dot(on=True)} on',
             f'{today} today',
+            f'{reacted}/{cap} reacted',
             f'{len(self._pending_views)} queued',
         ]
         whens = [v.when for v in self._pending_views]
