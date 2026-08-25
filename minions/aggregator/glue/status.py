@@ -25,6 +25,8 @@ from minions.aggregator.glue.commands import SERVICE_NAMES
 
 # How many pending cats to list individually in /status (the rest are summed).
 STATUS_PENDING_CATS = 12
+# How many of the warmest story peers to list in the attachment readout.
+STATUS_WARM_PEERS = 3
 
 if TYPE_CHECKING:
     from minions.aggregator.engines import cats
@@ -361,7 +363,36 @@ class _StatusMixin(AggregatorProtocol):
             return [
                 self._head('stories', 'Stories', f'{self._dot(on=False)} off')
             ]
-        return [self._stories_line(), *self._stories_queue_lines(labels)]
+        return [
+            self._stories_line(),
+            *self._stories_queue_lines(labels),
+            *self._attachment_lines(),
+        ]
+
+    def _attachment_lines(self) -> list[str]:
+        """Return the per-peer attachment readout (warmest peers first).
+
+        The Berlyne index we steer each viewer toward: exposure (viewed/
+        offered, aiming ~0.67) and reciprocity (reacted/viewed, aiming 0.20).
+        A~ is the partial index exposure(p)*recip(r) (variety/burst not tracked
+        per peer). Shows the aggregate plus the three warmest relationships.
+        """
+        warm = self.stories.warmth()
+        if not warm:
+            return []
+        b = self._bul()
+        n = len(warm)
+        mean_p = sum(w.p for w in warm) / n
+        mean_r = sum(w.r for w in warm) / n
+        head = (
+            f'{b} attach {n} peers {self._arr()} '
+            f'p~{mean_p:.2f} r~{mean_r:.2f}'
+        )
+        rows = [
+            f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'
+            for w in warm[:STATUS_WARM_PEERS]
+        ]
+        return [head, *rows]
 
     def _stories_line(self) -> str:
         """Return the story-viewer header: on, count, next view, next poll."""

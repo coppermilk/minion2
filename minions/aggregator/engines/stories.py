@@ -160,6 +160,22 @@ class StoryView:
     react_emoji: str = ''
 
 
+@dataclass(frozen=True)
+class Warmth:
+    """One peer's attachment readout for /status: exposure, reciprocity, index.
+
+    ``index`` is the partial Berlyne index exposure(p) * recip(r) -- the two
+    factors we actually control per peer (variety/mass_pen are not tracked
+    per peer, so they are left out rather than assumed).
+    """
+
+    label: str
+    p: float  # viewed / offered (exposure)
+    r: float  # reacted / viewed (reciprocity)
+    index: float
+    offered: int
+
+
 @dataclass
 class StoryState:
     """The persisted memory: what we have already seen, and the session cursor.
@@ -544,6 +560,40 @@ class StoryBrain:
         """Return reactions sent on the local date of ``now`` (0 past it)."""
         today = humanize_time.local(now, tz).date().isoformat()
         return self.state.react_today if self.state.react_day == today else 0
+
+    def _recent_labels(self) -> dict[str, str]:
+        """Map peer id -> its most recent @name/title from the view log."""
+        out: dict[str, str] = {}
+        for entry in self.state.log:
+            label = str(entry.get('label') or '')
+            if label:
+                out[str(entry.get('peer_id'))] = label
+        return out
+
+    def warmth(self) -> list[Warmth]:
+        """Per-peer attachment readout for /status, warmest first.
+
+        ``index`` is the partial Berlyne index exposure(p) * recip(r) -- the
+        two factors controlled per peer; a peer needs at least one offered
+        story to appear.
+        """
+        labels = self._recent_labels()
+        wp = attachment.WundtParams(
+            c1=self.params.exposure_c1,
+            c2=self.params.exposure_c2,
+            k=self.params.exposure_k,
+        )
+        rows: list[Warmth] = []
+        for key, offered in self.state.offered.items():
+            if offered <= 0:
+                continue
+            viewed = self.state.viewed.get(key, 0)
+            p = viewed / offered
+            r = self.state.reacted.get(key, 0) / viewed if viewed else 0.0
+            idx = attachment.exposure(p, wp) * attachment.recip(r)
+            rows.append(Warmth(labels.get(key, key), p, r, idx, offered))
+        rows.sort(key=lambda w: w.index, reverse=True)
+        return rows
 
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
