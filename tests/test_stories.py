@@ -230,6 +230,15 @@ def test_mark_viewed_dedups_and_counts_fresh(tmp_path: Path) -> None:
     assert set(brain.state.seen['7']) == {1, 2, 3}
 
 
+def test_views_today_counts_only_todays_views(tmp_path: Path) -> None:
+    """/status shows today's views: the log entries on today's local date."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(1, (1, 2), ts=_NOON - 86400.0)  # yesterday: excluded
+    brain.mark_viewed(2, (3,), ts=_NOON)  # today: 1
+    brain.mark_viewed(3, (4, 5), ts=_NOON)  # today: 2
+    assert brain.views_today(_NOON, 0.0) == _THREE  # today's 1 + 2 only
+
+
 def test_mark_viewed_is_idempotent(tmp_path: Path) -> None:
     """Check mark viewed is idempotent."""
     brain = _brain(tmp_path)

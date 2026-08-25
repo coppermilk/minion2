@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 from minions.aggregator.core.base import AggregatorProtocol
 from minions.aggregator.core.render import _emoji_markup
 from minions.aggregator.core.runtime import _fmt_eta
+from minions.aggregator.glue.commands import SERVICE_ACTIONS
+from minions.aggregator.glue.commands import SERVICE_NAMES
 
 # How many pending cats to list individually in /status (the rest are summed).
 STATUS_PENDING_CATS = 12
@@ -111,6 +113,8 @@ class _StatusMixin(AggregatorProtocol):
             '',
             self._users_line(),
             *self._stories_lines(labels),
+            '',
+            *self._services_lines(),
         ]
         if self.consts.status_help:
             legend = ' '.join(
@@ -336,6 +340,21 @@ class _StatusMixin(AggregatorProtocol):
         )
         return lines
 
+    def _services_lines(self) -> list[str]:
+        """Return the service control table: each mode + its tap commands.
+
+        Underscore commands (``/cats_test`` ...) so Telegram renders each as a
+        single tappable command; every service is off/test/live on its own.
+        """
+        lines = [self._head('services', 'Services')]
+        for name in SERVICE_NAMES:
+            mode = self._modes.get(name, 'off')
+            dot = self._dot(on=mode != 'off')
+            cmds = '  '.join(f'/{name}_{a}' for a in SERVICE_ACTIONS)
+            lines.append(f'{self._bul()} {dot} {name}: {mode.upper()}')
+            lines.append(f'   {cmds}')
+        return lines
+
     def _stories_lines(self, labels: dict[int, str]) -> list[str]:
         """Return the story-viewer section: header plus the view queue."""
         if not self.stories.params.enabled:
@@ -347,9 +366,11 @@ class _StatusMixin(AggregatorProtocol):
     def _stories_line(self) -> str:
         """Return the story-viewer header: on, count, next view, next poll."""
         now = time.time()
+        tz = self.stories.params.tz_offset_hours
+        today = self.stories.views_today(now, tz)
         parts = [
             f'{self._dot(on=True)} on',
-            f'{self.stories.seen_count()} viewed',
+            f'{today} today',
             f'{len(self._pending_views)} queued',
         ]
         whens = [v.when for v in self._pending_views]

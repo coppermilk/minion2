@@ -74,21 +74,29 @@ COMMAND_LIVE = '/live'
 # the change takes effect at once. The togglable feature sections, by name:
 COMMAND_FEATURES = '/features'
 FEATURE_NAMES = ('cats', 'stories', 'users', 'greeter')
-FEATURE_ON_SUFFIX = '_on'
-FEATURE_OFF_SUFFIX = '_off'
-# /services prints a table of every service and its mode, and each service
-# takes '/<service> off|test|live' to sandbox it on its own (test = its own
-# state, and for the poster/greeter its own destination) while others stay
-# live. The poster ('aggregator') is a service too, so it finally has an off.
+# /services prints a table of every service, its mode, and the ready tap
+# commands. Each service takes '/<service>_<action>' where action is
+# on|off|test|live (on aliases live) -- so one service can be sandboxed on its
+# own (test = its own state, and for the poster/greeter its own destination)
+# while the others stay live. The poster ('aggregator') is a service too, so it
+# finally has an off. Underscore form (not '/<service> <mode>') so Telegram
+# renders each as a single tappable command.
 COMMAND_SERVICES = '/services'
 SERVICE_NAMES = ('aggregator', *FEATURE_NAMES)
 SERVICE_MODES = ('off', 'test', 'live')
-_SERVICE_CMD_WORDS = 2  # '/<service> <mode>'
+# Tap-command action word -> the mode it sets (rendered in this order).
+SERVICE_ACTIONS = {'on': 'live', 'off': 'off', 'test': 'test', 'live': 'live'}
 
 
-def _is_mode_arg(parts: list[str]) -> bool:
-    """Whether ``parts`` is a '/<service> <mode>' with a valid mode word."""
-    return len(parts) == _SERVICE_CMD_WORDS and parts[1] in SERVICE_MODES
+def _service_action(word: str) -> tuple[str, str] | None:
+    """Parse a '/<service>_<action>' command word into (service, mode)."""
+    for action, mode in SERVICE_ACTIONS.items():
+        suffix = '_' + action
+        if word.endswith(suffix):
+            name = word[1:-len(suffix)]  # strip '/' and '_<action>'
+            if name in SERVICE_NAMES:
+                return name, mode
+    return None
 
 
 class _CommandsMixin(AggregatorProtocol):
@@ -101,13 +109,9 @@ class _CommandsMixin(AggregatorProtocol):
         if text.split()[:1] == [COMMAND_COMOD]:
             await self.cabinet_command(text)
             return True
-        # Feature switches: /features and every '/<name>_on|off'. Matched here,
-        # before the exact table, because the name is dynamic (one pair per
-        # feature) rather than a fixed command string.
-        if await self._feature_command(text):
-            return True
-        # Service modes: /services and '/<service> off|test|live'. Matched here
-        # (before the exact table) because '/<service> <mode>' carries an arg.
+        # /services, /features and every '/<service>_<action>' tap command.
+        # Matched here (before the exact table) because the service name is
+        # dynamic rather than a fixed command string.
         if await self._service_command(text):
             return True
         handlers = {
@@ -131,41 +135,24 @@ class _CommandsMixin(AggregatorProtocol):
         await handler()
         return True
 
-    async def _feature_command(self, text: str) -> bool:
-        """Handle /features and any '/<name>_on|off', else return False.
-
-        A toggle flips the feature's persisted override and restarts the
-        profile so the change takes effect at once. An unknown feature name is
-        left unhandled (so it falls through to the /help nudge).
-        """
-        parts = text.split(maxsplit=1)
-        word = parts[0] if parts else ''
-        if word == COMMAND_FEATURES:
-            await self.features_report()
-            return True
-        for suffix, on in (
-            (FEATURE_ON_SUFFIX, True),
-            (FEATURE_OFF_SUFFIX, False),
-        ):
-            if word.endswith(suffix):
-                name = word[1:-len(suffix)]  # strip '/' and the suffix
-                if name in FEATURE_NAMES:
-                    await self.switch_feature(name, on=on)
-                    return True
-        return False
-
     async def _service_command(self, text: str) -> bool:
-        """Handle /services and '/<service> off|test|live', else False."""
-        parts = text.split()
-        word = parts[0] if parts else ''
-        if word == COMMAND_SERVICES:
-            await self.services_report()
+        """Handle /services, /features and '/<service>_<action>', else False.
+
+        Actions are on|off|test|live (on aliases live). One toggle rebuilds
+        only what changed; an unknown name falls through to the /help nudge.
+        """
+        words = text.split()
+        word = words[0] if words else ''
+        if word in (COMMAND_SERVICES, COMMAND_FEATURES):
+            # The service table lives inside /status now, so both shortcuts
+            # render the full status (which carries the tap-command table).
+            await self.status_report()
             return True
-        name = word[1:] if word.startswith('/') else ''
-        if name in SERVICE_NAMES and _is_mode_arg(parts):
-            await self.set_service_mode(name, parts[1])
-            return True
-        return False
+        parsed = _service_action(word)
+        if parsed is None:
+            return False
+        await self.set_service_mode(*parsed)
+        return True
 
     async def set_service_mode(self, name: str, mode: str) -> None:
         """Set one service's mode (off/test/live), persist, restart its loops.
@@ -187,19 +174,6 @@ class _CommandsMixin(AggregatorProtocol):
         log.info('service %s -> %s', name, mode)
         await self.client.send_message(self.config.source, f'{name}: {mode}')
 
-    async def services_report(self) -> None:
-        """Post the service table: each service's mode and switch command."""
-        lines = ['Services']
-        for name in SERVICE_NAMES:
-            mode = self._modes.get(name, 'off')
-            dot = self._dot(on=mode != 'off')
-            lines.append(
-                f'{self._bul()} {dot} {name}: {mode.upper()}'
-                f'   /{name} off|test|live'
-            )
-        await self.client.send_message(self.config.source, '\n'.join(lines))
-        log.info('sent services report to %s', self.config.source)
-
     async def _unknown_command(
         self, event: events.NewMessage.Event, text: str
     ) -> bool:
@@ -212,27 +186,6 @@ class _CommandsMixin(AggregatorProtocol):
             self.config.source, self.consts.help_hint
         )
         return True
-
-    async def switch_feature(self, name: str, *, on: bool) -> None:
-        """Turn a feature on/off (a thin alias over ``set_service_mode``).
-
-        ``_on`` brings it up in the aggregator's current mode, so toggling a
-        feature on while the bot is testing joins the test sandbox; ``_off``
-        sets it off. Granular per-service test/live uses ``/<service> <mode>``.
-        """
-        await self.set_service_mode(name, self.mode if on else 'off')
-
-    async def features_report(self) -> None:
-        """Post each feature's on/off state and its switch commands."""
-        lines = ['Features']
-        for name in FEATURE_NAMES:
-            dot = self._dot(on=self._feature_enabled(name))
-            cmds = f'/{name}_on  /{name}_off'
-            lines.append(f'{self._bul()} {dot} {name}  {cmds}')
-        await self.client.send_message(
-            self.config.source, '\n'.join(lines)
-        )
-        log.info('sent features report to %s', self.config.source)
 
     async def help_report(self) -> None:
         """Send the plain-language command menu (/help and /start)."""

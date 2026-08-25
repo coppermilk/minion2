@@ -387,6 +387,23 @@ class StoryBrain:
         """Return how many stories have been viewed all-time (the odometer)."""
         return self.state.total_views
 
+    def views_today(self, now: float, tz: float) -> int:
+        """Return how many stories were viewed on the local date of ``now``.
+
+        Summed from the view log (each entry carries its ``ts`` and ``count``),
+        so it resets naturally at local midnight -- what /status shows instead
+        of the all-time odometer.
+        """
+        today = humanize_time.local(now, tz).date()
+        total = 0
+        for entry in self.state.log:
+            ts = entry.get('ts')
+            if isinstance(ts, int | float) and (
+                humanize_time.local(ts, tz).date() == today
+            ):
+                total += int(entry.get('count', 0) or 0)
+        return total
+
     def _load(self) -> StoryState:
         """Reload the persisted memory, or start fresh if none/corrupt."""
         if not self.path.exists():
