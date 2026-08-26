@@ -813,6 +813,17 @@ def test_ledger_backfill_skipped_when_populated(tmp_path: Path) -> None:
     assert 'alice' not in brain.state.ledger.offered
 
 
+def test_remember_caches_commenter_name_and_persists(tmp_path: Path) -> None:
+    """A remembered @name shows in warmth and survives a reload."""
+    path = tmp_path / 'cats_state.json'
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    brain.decide_engage('770')
+    brain.remember('770', '@vasya (770)')
+    assert next(w.label for w in brain.warmth()) == '@vasya (770)'
+    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    assert next(w.label for w in fresh.warmth()) == '@vasya (770)'
+
+
 def test_warmth_lists_recent_commenters_first(tmp_path: Path) -> None:
     """warmth() lists the most recent commenter first with p/r/index."""
     brain = _no_caps(tmp_path, seed=5)

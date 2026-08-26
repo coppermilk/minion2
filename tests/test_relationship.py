@@ -108,3 +108,14 @@ def test_warmth_orders_by_recency_and_evict_drops_a_peer() -> None:
     assert next(r.label for r in relationship.warmth(led, _CONTROL)) == 'early'
     led.evict('early')
     assert 'early' not in led.offered
+
+
+def test_remember_labels_warmth_and_ignores_the_bare_id() -> None:
+    """A cached @name shows in warmth; a label equal to the id is ignored."""
+    led = relationship.Ledger()
+    led.add_take('552', 1)
+    led.remember('552', '@liriiu (552)')
+    led.remember('552', '552')  # a failed resolve must not clobber the name
+    assert next(r.label for r in relationship.warmth(led, _CONTROL)) == (
+        '@liriiu (552)'
+    )

@@ -498,6 +498,7 @@ class StoryBrain:
         merged = prior + fresh
         self.state.seen[key] = merged[-self.params.seen_per_peer :]
         self.state.ledger.add_take(key, len(fresh))
+        self.state.ledger.remember(key, label)  # @name for /status
         self._touch_peer(key)
         self.state.last_view = now
         self.state.total_views += len(fresh)
@@ -547,20 +548,9 @@ class StoryBrain:
         """Return reactions sent on the local date of ``now`` (0 past it)."""
         return self.state.ledger.recips_today(now, tz)
 
-    def _recent_labels(self) -> dict[str, str]:
-        """Map peer id -> its most recent @name/title from the view log."""
-        out: dict[str, str] = {}
-        for entry in self.state.log:
-            label = str(entry.get('label') or '')
-            if label:
-                out[str(entry.get('peer_id'))] = label
-        return out
-
     def warmth(self) -> list[relationship.Warmth]:
-        """Per-peer attachment readout for /status, warmest first."""
-        return relationship.warmth(
-            self.state.ledger, self._control(), self._recent_labels()
-        )
+        """Per-peer attachment readout for /status, most recent first."""
+        return relationship.warmth(self.state.ledger, self._control())
 
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
@@ -614,6 +604,10 @@ class StoryBrain:
                 recip=relationship.int_map(raw.get('reacted')),
                 recip_day=str(raw.get('react_day', '')),
                 recip_today=int(raw.get('react_today', 0)),
+                names={
+                    str(k): str(v)
+                    for k, v in (raw.get('names') or {}).items()
+                },
             ),
             last_react=float(raw.get('last_react', 0.0)),
         )
@@ -634,6 +628,7 @@ class StoryBrain:
             'reacted': self.state.ledger.recip,
             'react_day': self.state.ledger.recip_day,
             'react_today': self.state.ledger.recip_today,
+            'names': self.state.ledger.names,
             'last_react': self.state.last_react,
         }
         tmp = self.path.with_suffix('.tmp')

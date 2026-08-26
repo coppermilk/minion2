@@ -819,8 +819,15 @@ class CatBrain:
         return True
 
     def warmth(self) -> list[relationship.Warmth]:
-        """Per-commenter attachment readout for /status, warmest first."""
+        """Per-commenter attachment readout for /status, most recent first."""
         return relationship.warmth(self.state.ledger, self._control())
+
+    def remember(self, person: str, label: str) -> None:
+        """Cache a commenter's @name for /status (persisted)."""
+        if not label or label == person:
+            return
+        self.state.ledger.remember(person, label)
+        self._save()
 
     def likes_today(self, now: float) -> int:
         """Engagements (likes) placed on the local date of ``now`` (else 0)."""
@@ -941,6 +948,10 @@ class CatBrain:
                 take_today=int(raw.get('engage_today', 0)),
                 recip_day=str(raw.get('sticker_day', '')),
                 recip_today=int(raw.get('sticker_today', 0)),
+                names={
+                    str(k): str(v)
+                    for k, v in (raw.get('names') or {}).items()
+                },
             ),
         )
         self._backfill_ledger(state)
@@ -970,6 +981,7 @@ class CatBrain:
             'engage_today': self.state.ledger.take_today,
             'sticker_day': self.state.ledger.recip_day,
             'sticker_today': self.state.ledger.recip_today,
+            'names': self.state.ledger.names,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(

@@ -274,27 +274,21 @@ class _StatusMixin(AggregatorProtocol):
             ),
             f'{b} window {window} (prior) {b} learned {learned}',
             self._cat_rescan_line(),
-            *self._cat_attach_lines(labels),
+            *self._cat_attach_lines(),
             *self._last_posts_lines(labels),
             *self._pending_cat_lines(),
             f'{b} /catnow {b} /requeue',
         ]
 
-    def _who(self, labels: dict[int, str], key: str) -> str:
-        """Resolve a commenter id to a name via ``labels``, else the raw id."""
-        try:
-            return labels.get(int(key), key)
-        except (TypeError, ValueError):
-            return key
-
-    def _cat_attach_lines(self, labels: dict[int, str]) -> list[str]:
+    def _cat_attach_lines(self) -> list[str]:
         """Return the per-commenter like-attachment readout (Berlyne control).
 
         exposure p = engaged/commented (steered to the Wundt peak ~0.67),
         reciprocity r = stickered/engaged (steered to 0.20). A~ is the partial
         index exposure(p)*recip(r). Shows today's like/sticker counts vs caps,
-        the aggregate, and the most RECENT commenters (latest first). Empty
-        when the control is off.
+        the aggregate, and the most RECENT commenters (latest first). Labels
+        come from the ledger's cached @names (same as stories). Empty when the
+        control is off.
         """
         brain = self.cats
         if not brain.params.attach_enabled:
@@ -317,8 +311,7 @@ class _StatusMixin(AggregatorProtocol):
             f'p~{mean_p:.2f} r~{mean_r:.2f}'
         )
         rows = [
-            f'    {self._who(labels, w.label)}  A {w.index:.2f} {b} '
-            f'p {w.p:.2f} r {w.r:.2f}'
+            f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'
             for w in warm[:STATUS_WARM_PEERS]
         ]
         return [today, head, *rows]

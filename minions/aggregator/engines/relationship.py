@@ -115,6 +115,10 @@ class Ledger:
     take_today: int = 0
     recip_day: str = ''
     recip_today: int = 0
+    # Peer id -> a display label (@name / title), so /status shows names, not
+    # raw ids -- the same readout the story and like engines share. Populated
+    # as each engine learns a peer's name (a story view, a resolved commenter).
+    names: dict[str, str] = field(default_factory=dict)
 
     def take_prob(self, peer: str, control: Control) -> float:
         """Exposure probability for one more of ``peer``'s offers.
@@ -216,27 +220,32 @@ class Ledger:
         stamp = humanize_time.local(now, tz).date().isoformat()
         return self.recip_today if self.recip_day == stamp else 0
 
+    def remember(self, peer: str, label: str) -> None:
+        """Cache ``peer``'s display label (@name / title) for /status.
+
+        Ignores an empty label or one that is just the id again, so a failed
+        resolution never overwrites a real name already learned.
+        """
+        if label and label != peer:
+            self.names[peer] = label
+
     def evict(self, peer: str) -> None:
-        """Drop a peer's counters (rolled off the tracked set)."""
+        """Drop a peer's counters and cached name (rolled off the set)."""
         self.offered.pop(peer, None)
         self.taken.pop(peer, None)
         self.recip.pop(peer, None)
+        self.names.pop(peer, None)
 
 
-def warmth(
-    ledger: Ledger,
-    control: Control,
-    labels: dict[str, str] | None = None,
-) -> list[Warmth]:
+def warmth(ledger: Ledger, control: Control) -> list[Warmth]:
     """Per-peer attachment readout, MOST RECENT peer first.
 
     Ordered by recency (the last-interacted-with peer first), not by score, so
     /status shows the people we just engaged rather than an all-time hall of
     fame. ``index`` is the partial Berlyne index exposure(p) * recip(r); a peer
-    needs at least one recorded offer to appear. ``labels`` maps a peer id to a
-    display name (falling back to the raw id).
+    needs at least one recorded offer to appear. The label is the peer's cached
+    display name (``ledger.names``), falling back to the raw id.
     """
-    names = labels or {}
     rows: list[Warmth] = []
     for key in reversed(ledger.offered):  # newest interaction first
         offered = ledger.offered[key]
@@ -246,5 +255,5 @@ def warmth(
         p = taken / offered
         r = ledger.recip.get(key, 0) / taken if taken else 0.0
         idx = attachment.exposure(p, control.wundt) * attachment.recip(r)
-        rows.append(Warmth(names.get(key, key), p, r, idx, offered))
+        rows.append(Warmth(ledger.names.get(key, key), p, r, idx, offered))
     return rows

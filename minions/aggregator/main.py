@@ -121,6 +121,7 @@ from minions.aggregator.glue.commands import SERVICE_MODES
 from minions.aggregator.glue.commands import SERVICE_NAMES
 from minions.aggregator.glue.commands import _CommandsMixin
 from minions.aggregator.glue.comod import _ComodMixin
+from minions.aggregator.glue.status import STATUS_WARM_PEERS
 from minions.aggregator.glue.status import _StatusMixin
 from minions.aggregator.glue.stories import _StoriesMixin
 from minions.aggregator.glue.users import _UsersMixin
@@ -681,12 +682,28 @@ class Aggregator(
 
     async def _chat_labels(self) -> dict[int, str]:
         """Resolve every chat shown in /status to a readable @name or title."""
+        await self._resolve_attach_labels()
         ids = {self.config.source, *self.config.targets}
         if self.config.test_target:
             ids.add(self.config.test_target)
         ids |= {chat for chat, _ in self.cats.posts}
         ids |= {v.peer_id for v in self._pending_views}  # story-view queue
         return {cid: await self._chat_label(cid) for cid in ids}
+
+    async def _resolve_attach_labels(self) -> None:
+        """Cache the shown commenters' @names via the shared chat-label helper.
+
+        The like engine only knows commenter ids; resolve the ones about to
+        appear in /status (the most recent) to @names, the same readout the
+        story engine shows for its peers, and cache them on the ledger so it is
+        a one-time lookup per person.
+        """
+        if not self.cats.params.enabled:
+            return
+        for row in self.cats.warmth()[:STATUS_WARM_PEERS]:
+            pid = row.label
+            if pid.lstrip('-').isdigit():  # still a raw id -> resolve it
+                self.cats.remember(pid, await self._chat_label(int(pid)))
 
     async def _chat_label(self, chat_id: int) -> str:
         """Return a chat's @username (or "title") for /status, else id."""
