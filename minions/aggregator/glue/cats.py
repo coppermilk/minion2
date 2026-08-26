@@ -144,31 +144,14 @@ class _CatsMixin(AggregatorProtocol):
         is empty (nothing to place).
         """
         seed = f'{comment.chat}:{comment.msg_id}'
-        post_key = f'{comment.chat}:{comment.root}'
         allow_sticker = not _needs_human(comment.text, self.consts.human_words)
-        if self._pick_sticker(person, post_key, allow_sticker=allow_sticker):
+        # The reciprocity control decides sticker vs like at our target rate
+        # (no activity-burst gate); a question/link comment stays a plain like.
+        if self.cats.decide_sticker(person, content_ok=allow_sticker):
             specs, kind = self.cats.pick_cat(seed), 'reply'
         else:
             specs, kind = self.cats.pick_like(seed), 'react'
         return (specs, kind) if specs else None
-
-    def _pick_sticker(
-        self, person: str, post_key: str, *, allow_sticker: bool
-    ) -> bool:
-        """Whether this engagement is a thread sticker rather than a like.
-
-        With the attachment control on, the reciprocity law decides (steering
-        stickered/engaged to the target); else the legacy burst/silence gate
-        does. Either way a question/link comment (``allow_sticker`` False)
-        stays a plain like.
-        """
-        if self.cats.params.attach_enabled:
-            return self.cats.decide_sticker(person, content_ok=allow_sticker)
-        return (
-            not self.cats.params.like_all
-            and allow_sticker
-            and self.cats.should_sticker(post_key)
-        )
 
     def _arm_cat(self, cat: cats.Cat) -> None:
         """Create the fire-later task for a scheduled (persisted) cat."""

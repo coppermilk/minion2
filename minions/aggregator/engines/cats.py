@@ -211,15 +211,6 @@ class CatParams:
     # recomputable after a restart (no persisted cursor). Separate from the cat
     # ``pool``.
     like_pool: tuple[CatEmoji, ...]
-    # The sticker-reply gate (deterministic): now and then, INSTEAD of a like
-    # reaction, the bot replies in the thread with a premium cat emoji (a
-    # message that reads like a sticker). It fires for a comment only when BOTH
-    # hold for its post: at least ``sticker_gap`` engagements since the last
-    # sticker there (the "long silence"), AND a burst of >= ``burst_count``
-    # engaged comments within ``burst_window_sec``. All state-driven, no dice.
-    sticker_gap: int
-    burst_count: int
-    burst_window_sec: float
     # How often (seconds) the bot re-scans the targets on its own -- picking up
     # posts created (and commented on) while it runs, without waiting for a
     # restart or a manual /requeue. 0 turns the auto-rescan off.
@@ -276,11 +267,6 @@ class CatState:
         default_factory=dict
     )  # hour -> decayed obs
     alive_ts: float = 0.0  # last heartbeat, for decay
-    # Sticker gate, per post key 'chat:root': engagements since the last
-    # sticker there, and recent engagement timestamps (for the burst test).
-    # Retired by the Berlyne reciprocity control (kept readable for old files).
-    since_sticker: dict[str, int] = field(default_factory=dict)
-    recent_engaged: dict[str, list[float]] = field(default_factory=dict)
     # Per-commenter relationship memory (the shared Berlyne ledger), spanning
     # posts so a person is remembered across our posts (the point of adapting
     # to each individual): offered=commented, taken=engaged (liked),
@@ -415,15 +401,6 @@ class CatBrain:
         live = tuple(f'{c}:{m}:' for c, m in self.state.posts)
         self.state.catted = {
             k for k in self.state.catted if k.startswith(live)
-        }
-        # The sticker gate is per post 'chat:root'; drop rolled-off posts so
-        # the persisted maps stay bounded (like ``catted``).
-        keep = {f'{c}:{m}' for c, m in self.state.posts}
-        self.state.since_sticker = {
-            k: v for k, v in self.state.since_sticker.items() if k in keep
-        }
-        self.state.recent_engaged = {
-            k: v for k, v in self.state.recent_engaged.items() if k in keep
         }
         self._save()
 
@@ -727,31 +704,6 @@ class CatBrain:
         self._save()
         return [chosen]
 
-    def should_sticker(self, post_key: str) -> bool:
-        """Whether THIS engagement under ``post_key`` is a thread sticker.
-
-        Deterministic, state-driven (no dice): a sticker fires only when both
-        hold -- at least ``sticker_gap`` engagements have accrued under this
-        post since its last sticker (the long silence), AND at least
-        ``burst_count`` engagements landed within ``burst_window_sec`` (the
-        activity spike). On a sticker the silence counter resets; otherwise it
-        grows. Call once per engaged comment, in order.
-        """
-        now = self.clock()
-        recent = [
-            t
-            for t in self.state.recent_engaged.get(post_key, [])
-            if now - t < self.params.burst_window_sec
-        ]
-        recent.append(now)
-        self.state.recent_engaged[post_key] = recent
-        since = self.state.since_sticker.get(post_key, 0)
-        burst = len(recent) >= self.params.burst_count
-        fire = burst and since >= self.params.sticker_gap
-        self.state.since_sticker[post_key] = 0 if fire else since + 1
-        self._save()
-        return fire
-
     def _control(self) -> relationship.Control:
         """Build the shared Berlyne control from this engine's params."""
         p = self.params
@@ -932,14 +884,6 @@ class CatBrain:
                 str(k): float(v) for k, v in (raw.get('alive') or {}).items()
             },
             alive_ts=float(raw.get('alive_ts', 0.0)),
-            since_sticker={
-                str(k): int(v)
-                for k, v in (raw.get('since_sticker') or {}).items()
-            },
-            recent_engaged={
-                str(k): [float(t) for t in v]
-                for k, v in (raw.get('recent_engaged') or {}).items()
-            },
             ledger=relationship.Ledger(
                 offered=relationship.int_map(raw.get('commented')),
                 taken=relationship.int_map(raw.get('engaged')),
@@ -972,8 +916,6 @@ class CatBrain:
             'pending': self.state.pending,
             'alive': self.state.alive,
             'alive_ts': self.state.alive_ts,
-            'since_sticker': self.state.since_sticker,
-            'recent_engaged': self.state.recent_engaged,
             'commented': self.state.ledger.offered,
             'engaged': self.state.ledger.taken,
             'stickered': self.state.ledger.recip,
@@ -1070,9 +1012,6 @@ def load_cat_params(data: dict[str, object]) -> CatParams:
         max_reply_delay_sec=float(cats.get('max_reply_delay_sec', 21600.0)),
         pool=pool,
         like_pool=like_pool,
-        sticker_gap=int(cats.get('sticker_gap', 6)),
-        burst_count=int(cats.get('burst_count', 4)),
-        burst_window_sec=float(cats.get('burst_window_sec', 3600.0)),
         rescan_sec=float(cats.get('rescan_sec', 300.0)),
         attach_enabled=bool(cats.get('attach_enabled', True)),
         exposure_c1=float(cats.get('exposure_c1', 0.45)),

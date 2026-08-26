@@ -168,11 +168,11 @@ def _comment(brain: cats.CatBrain, c: _Comment) -> cats.Cat | None:
             f'no cat (dedup / skip / silent day)'
         )
         return None
-    # Default is a like REACTION; the deterministic gate turns some into a
-    # thread STICKER. The emoji is pseudo-random but deterministic in the
-    # comment id (recomputable after a restart).
+    # Default is a like REACTION; the reciprocity control turns some into a
+    # thread STICKER at our target rate. The emoji is pseudo-random but
+    # deterministic in the comment id (recomputable after a restart).
     seed = f'{_CHAT}:{c.msg_id}'
-    if brain.should_sticker(f'{_CHAT}:{c.root}'):
+    if brain.decide_sticker(c.person, content_ok=True):
         specs, kind, label = brain.pick_cat(seed), 'reply', 'STICKER in thread'
     else:
         specs, kind, label = brain.pick_like(seed), 'react', 'LIKE reaction'
@@ -355,35 +355,36 @@ def main() -> None:
         )
     print()
 
-    _sticker_gate_demo(brain.params)
+    _sticker_rate_demo(brain.params)
     print()
     _closing(len(brain.state.pending))
 
 
-def _sticker_gate_demo(params: cats.CatParams) -> None:
-    """Show the deterministic react-vs-sticker gate firing under one post.
+def _sticker_rate_demo(params: cats.CatParams) -> None:
+    """Show the reciprocity control placing stickers at our target rate.
 
-    The live default (>= sticker_gap silence AND >= burst_count in the window)
-    is too slow for a short demo, so this uses a small 2/2 gate to make the
-    pattern visible: likes until BOTH conditions hold, then a sticker, then the
-    silence resets. Same code path as production (``should_sticker``).
+    No activity-burst gate: among the comments we engage, about
+    ``recip_fraction_target`` become a thread STICKER instead of a like, the
+    running fraction steered onto the target (same code path as production,
+    ``decide_sticker``).
     """
     print(
-        f'STEP 9  the sticker gate (deterministic). Live default: >= '
-        f'{params.sticker_gap} since last'
+        f'STEP 9  sticker vs like by the reciprocity control: about '
+        f'{params.recip_fraction_target:.0%} of engaged comments become a '
+        f'thread sticker (no activity-burst gate).'
     )
-    print(
-        f'        sticker AND >= {params.burst_count} engagements within '
-        f'{params.burst_window_sec:.0f}s. Demo with a 2/2 gate:'
-    )
-    tuned = dataclasses.replace(params, sticker_gap=2, burst_count=2)
     path = Path(tempfile.gettempdir()) / 'cats_proof_gate.json'
     path.unlink(missing_ok=True)
-    brain = cats.CatBrain(tuned, path, random.Random(0))  # noqa: S311 -- demo
-    brain.clock = lambda: _NOW  # one window, so the burst always holds
-    for i in range(1, 7):
-        kind = 'STICKER' if brain.should_sticker('demo:post') else 'like'
-        print(f'          engagement {i}: {kind}')
+    brain = cats.CatBrain(params, path, random.Random(0))  # noqa: S311 -- demo
+    brain.clock = lambda: _NOW
+    stickers = engaged = 0
+    for _ in range(200):
+        if brain.decide_engage('demo'):
+            engaged += 1
+            if brain.decide_sticker('demo', content_ok=True):
+                stickers += 1
+    rate = stickers / engaged if engaged else 0.0
+    print(f'          {stickers}/{engaged} engaged -> stickers (~{rate:.0%})')
 
 
 if __name__ == '__main__':

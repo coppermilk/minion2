@@ -78,9 +78,6 @@ def _params(**over: object) -> object:
             cats.CatEmoji('L2', 'y', 1.0, ()),
             cats.CatEmoji('L3', 'z', 1.0, ()),
         ),
-        'sticker_gap': 6,
-        'burst_count': 4,
-        'burst_window_sec': 3600.0,
         'rescan_sec': 300.0,
     }
     base.update(over)
@@ -523,51 +520,6 @@ def test_pick_cat_returns_one_from_the_cat_pool(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
     ids = {c.emoji_id for c in brain.params.pool}
     assert brain.pick_cat('chat:5001')[0].emoji_id in ids
-
-
-def test_sticker_needs_both_silence_and_burst(tmp_path: Path) -> None:
-    # gap=3, burst=3: the first 3 engagements build the silence; only once
-    # BOTH the gap is met AND >=3 landed in the window does a sticker fire.
-    """Check sticker needs both silence and burst."""
-    brain = _brain(tmp_path, sticker_gap=3, burst_count=3)
-    brain.clock = lambda: 1000.0  # all inside one burst window
-    fires = [brain.should_sticker('c:1') for _ in range(5)]
-    assert fires == [False, False, False, True, False]
-
-
-def test_sticker_resets_the_silence_after_firing(tmp_path: Path) -> None:
-    """Check sticker resets the silence after firing."""
-    brain = _brain(tmp_path, sticker_gap=2, burst_count=1)
-    brain.clock = lambda: 1000.0
-    fires = [brain.should_sticker('c:1') for _ in range(6)]
-    # every (gap+1)-th engagement fires, then the counter resets
-    assert fires == [False, False, True, False, False, True]
-
-
-def test_sticker_burst_window_expires(tmp_path: Path) -> None:
-    # Spread engagements far apart: the burst never accumulates, so despite
-    # plenty of silence, no sticker fires.
-    """Check sticker burst window expires."""
-    brain = _brain(
-        tmp_path, sticker_gap=1, burst_count=3, burst_window_sec=100.0
-    )
-    now = [0.0]
-    brain.clock = lambda: now[0]
-    fired = False
-    for _ in range(10):
-        now[0] += 200.0  # each engagement is outside the previous window
-        fired = fired or brain.should_sticker('c:1')
-    assert fired is False
-
-
-def test_sticker_gate_is_per_post(tmp_path: Path) -> None:
-    """Check sticker gate is per post."""
-    brain = _brain(tmp_path, sticker_gap=1, burst_count=1)
-    brain.clock = lambda: 1000.0
-    # post A accrues silence; post B is independent (its own counter)
-    assert brain.should_sticker('A') is False
-    assert brain.should_sticker('B') is False
-    assert brain.should_sticker('A') is True  # A's 2nd engagement fires
 
 
 def test_pending_kind_round_trips(tmp_path: Path) -> None:
