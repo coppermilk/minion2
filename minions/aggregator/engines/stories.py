@@ -552,6 +552,18 @@ class StoryBrain:
         """Per-peer attachment readout for /status, most recent first."""
         return relationship.warmth(self.state.ledger, self._control())
 
+    def remember(self, peer: str, label: str) -> None:
+        """Cache a peer's @name for /status (persisted).
+
+        Story views already remember the candidate's label at ``mark_viewed``;
+        this lets the status path fill in a peer viewed before that cache
+        existed (resolved through the shared chat-label helper).
+        """
+        if not label or label == peer:
+            return
+        self.state.ledger.remember(peer, label)
+        self._save()
+
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
 

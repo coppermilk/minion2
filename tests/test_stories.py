@@ -343,6 +343,18 @@ def test_plan_attaches_reactions(tmp_path: Path) -> None:
     assert view.react_emoji in brain.params.react_pool
 
 
+def test_remember_fills_a_peer_name_and_persists(tmp_path: Path) -> None:
+    """A peer viewed before the name cache existed can be labelled later."""
+    path = tmp_path / 'stories_state.json'
+    brain = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    brain.mark_viewed(552, (1, 2), ts=_NOON)  # no label -> raw id in warmth
+    assert next(w.label for w in brain.warmth()) == '552'
+    brain.remember('552', '@liriiu (552)')  # status path resolves it
+    assert next(w.label for w in brain.warmth()) == '@liriiu (552)'
+    fresh = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    assert next(w.label for w in fresh.warmth()) == '@liriiu (552)'
+
+
 def test_warmth_lists_recent_peers_first(tmp_path: Path) -> None:
     """warmth() reports per-peer p/r/index, most RECENT peer first."""
     brain = _brain(tmp_path)

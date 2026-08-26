@@ -112,6 +112,7 @@ from minions.aggregator.core.statefile import _posted_from_dict
 from minions.aggregator.engines import cats
 from minions.aggregator.engines import comod
 from minions.aggregator.engines import greeter
+from minions.aggregator.engines import relationship
 from minions.aggregator.engines import stories
 from minions.aggregator.engines import users
 from minions.aggregator.engines.premium_emoji import build_premium_message
@@ -127,6 +128,8 @@ from minions.aggregator.glue.stories import _StoriesMixin
 from minions.aggregator.glue.users import _UsersMixin
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from minions.aggregator.engines.premium_emoji import PremiumMessage
 
 
@@ -691,19 +694,32 @@ class Aggregator(
         return {cid: await self._chat_label(cid) for cid in ids}
 
     async def _resolve_attach_labels(self) -> None:
-        """Cache the shown commenters' @names via the shared chat-label helper.
+        """Cache the shown peers' @names via the shared chat-label helper.
 
-        The like engine only knows commenter ids; resolve the ones about to
-        appear in /status (the most recent) to @names, the same readout the
-        story engine shows for its peers, and cache them on the ledger so it is
-        a one-time lookup per person.
+        Both attachment readouts (comment likes and story views) only keep peer
+        ids; resolve the ones about to appear in /status (the most recent) to
+        @names through the shared resolver and cache them on each ledger, so it
+        is a one-time lookup per peer.
         """
-        if not self.cats.params.enabled:
-            return
-        for row in self.cats.warmth()[:STATUS_WARM_PEERS]:
+        if self.cats.params.enabled:
+            await self._resolve_rows(
+                self.cats.warmth(), self.cats.remember
+            )
+        if self.stories.params.enabled:
+            await self._resolve_rows(
+                self.stories.warmth(), self.stories.remember
+            )
+
+    async def _resolve_rows(
+        self,
+        rows: list[relationship.Warmth],
+        remember: Callable[[str, str], None],
+    ) -> None:
+        """Resolve the shown rows' raw-id labels to @names and cache them."""
+        for row in rows[:STATUS_WARM_PEERS]:
             pid = row.label
             if pid.lstrip('-').isdigit():  # still a raw id -> resolve it
-                self.cats.remember(pid, await self._chat_label(int(pid)))
+                remember(pid, await self._chat_label(int(pid)))
 
     async def _chat_label(self, chat_id: int) -> str:
         """Return a chat's @username (or "title") for /status, else id."""
