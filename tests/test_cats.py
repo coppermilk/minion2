@@ -780,13 +780,14 @@ def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
     assert fresh.state.ledger.recip.get('mem', 0) == saved[2]
 
 
-def test_warmth_ranks_commenters_by_attachment_index(tmp_path: Path) -> None:
-    """warmth() lists commenters warmest-first with p/r/index per person."""
+def test_warmth_lists_recent_commenters_first(tmp_path: Path) -> None:
+    """warmth() lists the most recent commenter first with p/r/index."""
     brain = _no_caps(tmp_path, seed=5)
     for _ in range(40):
         if brain.decide_engage('a'):
             brain.decide_sticker('a', content_ok=True)
-    brain.decide_engage('b')  # a single, cold acquaintance
+    brain.decide_engage('b')  # commented more recently than 'a'
     warm = brain.warmth()
-    assert {w.label for w in warm} == {'a', 'b'}
-    assert warm == sorted(warm, key=lambda w: w.index, reverse=True)
+    assert [w.label for w in warm] == ['b', 'a']  # newest first, not by score
+    brain.decide_engage('a')  # 'a' comments again -> back to the front
+    assert next(w.label for w in brain.warmth()) == 'a'

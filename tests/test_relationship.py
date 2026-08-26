@@ -96,14 +96,15 @@ def test_recip_left_reads_without_consuming() -> None:
     assert led.recip_left(ctrl, _NOON, _TZ) == _CAP - 1  # still, read-only
 
 
-def test_warmth_ranks_by_index_and_evict_drops_a_peer() -> None:
-    """warmth() is index-sorted; evict removes a peer's counters."""
+def test_warmth_orders_by_recency_and_evict_drops_a_peer() -> None:
+    """warmth() lists the most recent peer first; evict removes a peer."""
     led = relationship.Ledger()
-    led.add_take('warm', 2)
-    led.add_recip('warm', 1, _NOON, _TZ)
-    led.add_offer('cold', 3)  # offered but never taken
+    led.add_take('early', 2)
+    led.add_recip('early', 1, _NOON, _TZ)
+    led.add_offer('late', 3)  # interacted with more recently
     rows = relationship.warmth(led, _CONTROL)
-    assert [row.label for row in rows] == ['warm', 'cold']
-    assert rows == sorted(rows, key=lambda r: r.index, reverse=True)
-    led.evict('warm')
-    assert 'warm' not in led.offered
+    assert [row.label for row in rows] == ['late', 'early']  # newest first
+    led.add_offer('early')  # touching 'early' again moves it to the front
+    assert next(r.label for r in relationship.warmth(led, _CONTROL)) == 'early'
+    led.evict('early')
+    assert 'early' not in led.offered

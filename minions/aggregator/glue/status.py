@@ -293,8 +293,8 @@ class _StatusMixin(AggregatorProtocol):
         exposure p = engaged/commented (steered to the Wundt peak ~0.67),
         reciprocity r = stickered/engaged (steered to 0.20). A~ is the partial
         index exposure(p)*recip(r). Shows today's like/sticker counts vs caps,
-        the aggregate, and the three warmest commenters. Empty when the control
-        is off.
+        the aggregate, and the most RECENT commenters (latest first). Empty
+        when the control is off.
         """
         brain = self.cats
         if not brain.params.attach_enabled:
@@ -414,12 +414,12 @@ class _StatusMixin(AggregatorProtocol):
         ]
 
     def _attachment_lines(self) -> list[str]:
-        """Return the per-peer attachment readout (warmest peers first).
+        """Return the per-peer attachment readout (most RECENT peers first).
 
         The Berlyne index we steer each viewer toward: exposure (viewed/
         offered, aiming ~0.67) and reciprocity (reacted/viewed, aiming 0.20).
         A~ is the partial index exposure(p)*recip(r) (variety/burst not tracked
-        per peer). Shows the aggregate plus the three warmest relationships.
+        per peer). Shows the aggregate plus the peers we most recently viewed.
         """
         warm = self.stories.warmth()
         if not warm:

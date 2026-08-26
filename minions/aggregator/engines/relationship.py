@@ -143,12 +143,17 @@ class Ledger:
         return steer(r_cur, control.recip_target, control.recip_gain)
 
     def add_offer(self, peer: str, n: int = 1) -> None:
-        """Record ``n`` more chances from ``peer`` (offers, not taken)."""
-        self.offered[peer] = self.offered.get(peer, 0) + n
+        """Record ``n`` more chances from ``peer`` (offers, not taken).
+
+        Re-inserts the peer at the end of ``offered`` so its dict order tracks
+        recency (most recently interacted-with last), which is what the
+        /status readout shows -- the latest people, not the top-scored.
+        """
+        self.offered[peer] = self.offered.pop(peer, 0) + n
 
     def add_take(self, peer: str, n: int) -> None:
         """Record ``n`` exposures actually taken (also counts them offered)."""
-        self.offered[peer] = self.offered.get(peer, 0) + n
+        self.offered[peer] = self.offered.pop(peer, 0) + n  # move to end
         self.taken[peer] = self.taken.get(peer, 0) + n
 
     def bump_take(self, peer: str) -> None:
@@ -223,15 +228,18 @@ def warmth(
     control: Control,
     labels: dict[str, str] | None = None,
 ) -> list[Warmth]:
-    """Per-peer attachment readout, warmest first.
+    """Per-peer attachment readout, MOST RECENT peer first.
 
-    ``index`` is the partial Berlyne index exposure(p) * recip(r); a peer needs
-    at least one recorded offer to appear. ``labels`` maps a peer id to a
+    Ordered by recency (the last-interacted-with peer first), not by score, so
+    /status shows the people we just engaged rather than an all-time hall of
+    fame. ``index`` is the partial Berlyne index exposure(p) * recip(r); a peer
+    needs at least one recorded offer to appear. ``labels`` maps a peer id to a
     display name (falling back to the raw id).
     """
     names = labels or {}
     rows: list[Warmth] = []
-    for key, offered in ledger.offered.items():
+    for key in reversed(ledger.offered):  # newest interaction first
+        offered = ledger.offered[key]
         if offered <= 0:
             continue
         taken = ledger.taken.get(key, 0)
@@ -239,5 +247,4 @@ def warmth(
         r = ledger.recip.get(key, 0) / taken if taken else 0.0
         idx = attachment.exposure(p, control.wundt) * attachment.recip(r)
         rows.append(Warmth(names.get(key, key), p, r, idx, offered))
-    rows.sort(key=lambda row: row.index, reverse=True)
     return rows

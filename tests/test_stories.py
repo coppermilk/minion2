@@ -343,22 +343,21 @@ def test_plan_attaches_reactions(tmp_path: Path) -> None:
     assert view.react_emoji in brain.params.react_pool
 
 
-def test_warmth_ranks_peers_by_attachment(tmp_path: Path) -> None:
-    """warmth() reports per-peer p/r/index, warmest first, labels from log."""
+def test_warmth_lists_recent_peers_first(tmp_path: Path) -> None:
+    """warmth() reports per-peer p/r/index, most RECENT peer first."""
     brain = _brain(tmp_path)
-    # peer 7: viewed 2 of 3 offered (p~0.67), reacted to 1 (r 0.5) -> warm
+    # peer 7 (earlier): viewed 2 of 3 offered (p~0.67), reacted to 1 (r 0.5)
     brain._record_skips(7, (100,))  # 1 offered, skipped
     brain.mark_viewed(7, (101, 102), label='@warm', ts=_NOON)
     brain.mark_reacted(7, 1, _NOON)
-    # peer 8: viewed all, no reactions (r 0) -> cooler
+    # peer 8 (more recent): viewed all, no reactions (r 0)
     brain.mark_viewed(8, (200, 201), label='@cool', ts=_NOON)
     rows = brain.warmth()
-    assert [w.label for w in rows] == ['@warm', '@cool']  # warmest first
-    warm = rows[0]
-    assert abs(warm.p - 2 / 3) < 0.02  # noqa: PLR2004 -- 2 viewed of 3 offered
+    assert [w.label for w in rows] == ['@cool', '@warm']  # newest first
+    cool, warm = rows
     assert warm.r == 0.5  # noqa: PLR2004 -- 1 reaction of 2 viewed
-    assert rows[1].r == 0.0  # no reactions -> zero reciprocity
-    assert rows[1].index < warm.index
+    assert cool.r == 0.0  # no reactions -> zero reciprocity
+    assert cool.index < warm.index  # listed first by recency, not by score
 
 
 def test_views_today_counts_only_todays_views(tmp_path: Path) -> None:
