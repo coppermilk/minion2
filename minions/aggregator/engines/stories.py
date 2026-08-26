@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING
 
 from minions.aggregator.core import humanize_time
 from minions.aggregator.engines import attachment
+from minions.aggregator.engines import relationship
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -160,22 +161,6 @@ class StoryView:
     react_emoji: str = ''
 
 
-@dataclass(frozen=True)
-class Warmth:
-    """One peer's attachment readout for /status: exposure, reciprocity, index.
-
-    ``index`` is the partial Berlyne index exposure(p) * recip(r) -- the two
-    factors we actually control per peer (variety/mass_pen are not tracked
-    per peer, so they are left out rather than assumed).
-    """
-
-    label: str
-    p: float  # viewed / offered (exposure)
-    r: float  # reacted / viewed (reciprocity)
-    index: float
-    offered: int
-
-
 @dataclass
 class StoryState:
     """The persisted memory: what we have already seen, and the session cursor.
@@ -193,15 +178,11 @@ class StoryState:
     session_last_at: float = 0.0
     total_views: int = 0  # peers viewed all-time (a simple odometer)
     log: list[dict[str, object]] = field(default_factory=list)
-    # Per-peer relationship counters (unbounded, so p = viewed/offered stays a
-    # true fraction even when seen is capped): stories we were offered,
-    # actually viewed, and reacted to. Drive the Berlyne exposure/reciprocity
-    # control. A skipped story counts as offered but not viewed.
-    offered: dict[str, int] = field(default_factory=dict)
-    viewed: dict[str, int] = field(default_factory=dict)
-    reacted: dict[str, int] = field(default_factory=dict)
-    react_day: str = ''  # UTC-local date of react_today
-    react_today: int = 0  # reactions sent today (against react_max_per_day)
+    # Per-peer relationship memory (the shared Berlyne ledger): offered=stories
+    # offered, taken=viewed, recip=reacted, with the date-keyed reaction cap.
+    # Unbounded, so p = viewed/offered stays a true fraction even when seen is
+    # trimmed; a skipped story counts as offered but not viewed.
+    ledger: relationship.Ledger = field(default_factory=relationship.Ledger)
     last_react: float = 0.0  # ts of the last reaction, for the min-gap pacing
 
 
@@ -339,35 +320,50 @@ class StoryBrain:
         hi = max(lo, self.params.per_session_max)
         return self.rng.randint(lo, hi)
 
+    def _control(self) -> relationship.Control:
+        """Build the shared Berlyne control from this engine's params.
+
+        Views are uncapped (take_cap=0); reactions carry the daily cap.
+        """
+        p = self.params
+        return relationship.Control(
+            wundt=attachment.WundtParams(
+                c1=p.exposure_c1, c2=p.exposure_c2, k=p.exposure_k
+            ),
+            take_gain=p.view_control_gain,
+            recip_target=p.react_fraction_target,
+            take_cap=0,
+            recip_cap=p.react_max_per_day,
+        )
+
+    def _tz(self) -> float:
+        """Return the persona timezone offset (for the daily counters)."""
+        return self.params.tz_offset_hours
+
     def _view_target(self) -> float:
         """Return the per-peer view fraction to steer toward (Wundt peak)."""
-        return attachment.exposure_peak(
-            attachment.WundtParams(
-                c1=self.params.exposure_c1,
-                c2=self.params.exposure_c2,
-                k=self.params.exposure_k,
-            )
-        )
+        return self._control().take_target()
 
     def _view_split(
         self, peer_id: int, unseen: tuple[int, ...], p_star: float
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """Split a peer's unseen ids into (view, skip), steering p -> p_star.
 
-        Per story a Bernoulli draw with a corrective probability, so the
-        running ``viewed/offered`` converges on the Wundt peak: a peer we have
-        over-viewed peer gets skipped harder, an under-viewed one viewed more.
+        Per story a Bernoulli draw with the shared corrective probability, so
+        the running ``viewed/offered`` converges on the Wundt peak: an
+        over-viewed peer is skipped harder, an under-viewed one viewed more.
+        Runs on local counters (the ledger commits at ``mark_viewed`` /
+        ``_record_skips``, so the plan/commit split survives I/O that fails).
         """
         key = str(peer_id)
-        offered = self.state.offered.get(key, 0)
-        viewed = self.state.viewed.get(key, 0)
+        offered = self.state.ledger.offered.get(key, 0)
+        viewed = self.state.ledger.taken.get(key, 0)
         gain = self.params.view_control_gain
         view_ids: list[int] = []
         skip_ids: list[int] = []
         for sid in unseen:
             p_cur = viewed / offered if offered else p_star
-            prob = min(1.0, max(0.0, p_star + gain * (p_star - p_cur)))
-            if self.rng.random() < prob:
+            if self.rng.random() < relationship.steer(p_cur, p_star, gain):
                 view_ids.append(sid)
                 viewed += 1
             else:
@@ -387,33 +383,33 @@ class StoryBrain:
         if not fresh:
             return
         self.state.seen[key] = (prior + fresh)[-self.params.seen_per_peer :]
-        self.state.offered[key] = self.state.offered.get(key, 0) + len(fresh)
+        self.state.ledger.add_offer(key, len(fresh))
         self._touch_peer(key)
 
     def _react_budget(self, now: float) -> int:
         """Return how many reactions are still allowed today (date roll)."""
-        if not self.params.react_enabled or self.params.react_max_per_day <= 0:
+        if not self.params.react_enabled:
             return 0
-        today = humanize_time.local(
-            now, self.params.tz_offset_hours
-        ).date().isoformat()
-        used = self.state.react_today if self.state.react_day == today else 0
-        return max(0, self.params.react_max_per_day - used)
+        return self.state.ledger.recip_left(self._control(), now, self._tz())
 
     def _plan_reacts(
-        self, view_ids: tuple[int, ...], budget: int
+        self, peer_id: int, view_ids: tuple[int, ...], budget: int
     ) -> tuple[tuple[int, ...], int]:
-        """Pick which viewed ids to react to, targeting the reaction fraction.
+        """Pick which viewed ids to react to, steering recip/taken -> target.
 
-        A per-story Bernoulli at ``react_fraction_target`` (so reacted/viewed
-        converges on it), stopped by the remaining daily ``budget``. Returns
-        the chosen ids and the budget left.
+        The shared reciprocity control: a per-story Bernoulli at the corrective
+        probability (so reacted/viewed converges on ``react_fraction_target``),
+        stopped by the remaining daily ``budget``. Returns the chosen ids and
+        the budget left.
         """
+        key = str(peer_id)
+        ctrl = self._control()
         chosen: list[int] = []
         for sid in view_ids:
             if budget <= 0:
                 break
-            if self.rng.random() < self.params.react_fraction_target:
+            prob = self.state.ledger.recip_prob(key, ctrl, taken_now=False)
+            if self.rng.random() < prob:
                 chosen.append(sid)
                 budget -= 1
         return tuple(chosen), budget
@@ -444,7 +440,9 @@ class StoryBrain:
             self._record_skips(cand.peer_id, skip_ids)
             if not view_ids:
                 continue  # this peer was skipped entirely this pass
-            react_ids, budget = self._plan_reacts(view_ids, budget)
+            react_ids, budget = self._plan_reacts(
+                cand.peer_id, view_ids, budget
+            )
             pool = self.params.react_pool
             emoji = self.rng.choice(pool) if react_ids and pool else ''
             views.append(
@@ -499,8 +497,7 @@ class StoryBrain:
             return
         merged = prior + fresh
         self.state.seen[key] = merged[-self.params.seen_per_peer :]
-        self.state.offered[key] = self.state.offered.get(key, 0) + len(fresh)
-        self.state.viewed[key] = self.state.viewed.get(key, 0) + len(fresh)
+        self.state.ledger.add_take(key, len(fresh))
         self._touch_peer(key)
         self.state.last_view = now
         self.state.total_views += len(fresh)
@@ -524,15 +521,7 @@ class StoryBrain:
         """
         if count <= 0:
             return
-        today = humanize_time.local(
-            now, self.params.tz_offset_hours
-        ).date().isoformat()
-        if self.state.react_day != today:
-            self.state.react_day = today
-            self.state.react_today = 0
-        self.state.react_today += count
-        key = str(peer_id)
-        self.state.reacted[key] = self.state.reacted.get(key, 0) + count
+        self.state.ledger.add_recip(str(peer_id), count, now, self._tz())
         self.state.last_react = now
         self._save()
 
@@ -544,9 +533,7 @@ class StoryBrain:
         while len(self.state.seen_order) > self.params.max_peers_tracked:
             oldest = self.state.seen_order.pop(0)
             self.state.seen.pop(oldest, None)
-            self.state.offered.pop(oldest, None)
-            self.state.viewed.pop(oldest, None)
-            self.state.reacted.pop(oldest, None)
+            self.state.ledger.evict(oldest)
 
     def recent_log(self, limit: int) -> list[dict[str, object]]:
         """Return recent views, newest first (for /status, /stories)."""
@@ -558,8 +545,7 @@ class StoryBrain:
 
     def reacts_today(self, now: float, tz: float) -> int:
         """Return reactions sent on the local date of ``now`` (0 past it)."""
-        today = humanize_time.local(now, tz).date().isoformat()
-        return self.state.react_today if self.state.react_day == today else 0
+        return self.state.ledger.recips_today(now, tz)
 
     def _recent_labels(self) -> dict[str, str]:
         """Map peer id -> its most recent @name/title from the view log."""
@@ -570,30 +556,11 @@ class StoryBrain:
                 out[str(entry.get('peer_id'))] = label
         return out
 
-    def warmth(self) -> list[Warmth]:
-        """Per-peer attachment readout for /status, warmest first.
-
-        ``index`` is the partial Berlyne index exposure(p) * recip(r) -- the
-        two factors controlled per peer; a peer needs at least one offered
-        story to appear.
-        """
-        labels = self._recent_labels()
-        wp = attachment.WundtParams(
-            c1=self.params.exposure_c1,
-            c2=self.params.exposure_c2,
-            k=self.params.exposure_k,
+    def warmth(self) -> list[relationship.Warmth]:
+        """Per-peer attachment readout for /status, warmest first."""
+        return relationship.warmth(
+            self.state.ledger, self._control(), self._recent_labels()
         )
-        rows: list[Warmth] = []
-        for key, offered in self.state.offered.items():
-            if offered <= 0:
-                continue
-            viewed = self.state.viewed.get(key, 0)
-            p = viewed / offered
-            r = self.state.reacted.get(key, 0) / viewed if viewed else 0.0
-            idx = attachment.exposure(p, wp) * attachment.recip(r)
-            rows.append(Warmth(labels.get(key, key), p, r, idx, offered))
-        rows.sort(key=lambda w: w.index, reverse=True)
-        return rows
 
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
@@ -641,11 +608,13 @@ class StoryBrain:
             session_last_at=float(raw.get('session_last_at', 0.0)),
             total_views=int(raw.get('total_views', 0)),
             log=[dict(e) for e in (raw.get('log') or [])],
-            offered=_int_map(raw.get('offered')),
-            viewed=_int_map(raw.get('viewed')),
-            reacted=_int_map(raw.get('reacted')),
-            react_day=str(raw.get('react_day', '')),
-            react_today=int(raw.get('react_today', 0)),
+            ledger=relationship.Ledger(
+                offered=relationship.int_map(raw.get('offered')),
+                taken=relationship.int_map(raw.get('viewed')),
+                recip=relationship.int_map(raw.get('reacted')),
+                recip_day=str(raw.get('react_day', '')),
+                recip_today=int(raw.get('react_today', 0)),
+            ),
             last_react=float(raw.get('last_react', 0.0)),
         )
 
@@ -660,11 +629,11 @@ class StoryBrain:
             'session_last_at': self.state.session_last_at,
             'total_views': self.state.total_views,
             'log': self.state.log,
-            'offered': self.state.offered,
-            'viewed': self.state.viewed,
-            'reacted': self.state.reacted,
-            'react_day': self.state.react_day,
-            'react_today': self.state.react_today,
+            'offered': self.state.ledger.offered,
+            'viewed': self.state.ledger.taken,
+            'reacted': self.state.ledger.recip,
+            'react_day': self.state.ledger.recip_day,
+            'react_today': self.state.ledger.recip_today,
             'last_react': self.state.last_react,
         }
         tmp = self.path.with_suffix('.tmp')
@@ -672,13 +641,6 @@ class StoryBrain:
             json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
         )
         tmp.replace(self.path)
-
-
-def _int_map(raw: object) -> dict[str, int]:
-    """Coerce a persisted ``{peer: count}`` map to ``dict[str, int]``."""
-    if not isinstance(raw, dict):
-        return {}
-    return {str(k): int(v) for k, v in raw.items()}
 
 
 def load_story_params(

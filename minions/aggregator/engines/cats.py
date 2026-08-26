@@ -53,6 +53,7 @@ from minions.aggregator.core import humanize_time
 from minions.aggregator.core.humanize_choice import recency_penalty
 from minions.aggregator.core.humanize_choice import weighted_choice
 from minions.aggregator.engines import attachment
+from minions.aggregator.engines import relationship
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -115,29 +116,6 @@ class Cat:
     text: str = ''  # a snippet of the comment being answered (for status)
     emojis: tuple[tuple[str, str], ...] = ()  # the chosen (id, fallback) cats
     kind: str = 'react'  # 'react' = a like reaction; 'reply' = thread sticker
-
-
-@dataclass(frozen=True)
-class Warmth:
-    """One commenter's attachment readout for /status: exposure, recip, index.
-
-    Mirrors the story engine's ``Warmth``. ``index`` is the partial Berlyne
-    index exposure(p) * recip(r) -- the two factors we steer per commenter
-    (variety/mass_pen are not tracked per person, so they are left out).
-    """
-
-    label: str
-    p: float  # engaged / commented (exposure: fraction of comments we like)
-    r: float  # stickered / engaged (reciprocity: fraction upgraded to sticker)
-    index: float
-    commented: int
-
-
-def _int_map(raw: object) -> dict[str, int]:
-    """Parse a persisted {str: int} map (a per-commenter counter)."""
-    if not isinstance(raw, dict):
-        return {}
-    return {str(k): int(v) for k, v in raw.items()}
 
 
 def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
@@ -301,18 +279,13 @@ class CatState:
     # Retired by the Berlyne reciprocity control (kept readable for old files).
     since_sticker: dict[str, int] = field(default_factory=dict)
     recent_engaged: dict[str, list[float]] = field(default_factory=dict)
-    # Per-commenter relationship memory (keyed by sender id as str), spanning
+    # Per-commenter relationship memory (the shared Berlyne ledger), spanning
     # posts so a person is remembered across our posts (the point of adapting
-    # to each individual). ``engaged`` is a subset of ``commented``;
-    # ``stickered`` a subset of ``engaged`` -- exactly view>react in stories.
-    commented: dict[str, int] = field(default_factory=dict)
-    engaged: dict[str, int] = field(default_factory=dict)
-    stickered: dict[str, int] = field(default_factory=dict)
-    # Date-keyed daily caps: engagements (likes) and stickers placed today.
-    engage_day: str = ''
-    engage_today: int = 0
-    sticker_day: str = ''
-    sticker_today: int = 0
+    # to each individual): offered=commented, taken=engaged (liked),
+    # recip=stickered, with the date-keyed like/sticker daily caps.
+    ledger: relationship.Ledger = field(
+        default_factory=relationship.Ledger
+    )
 
 
 def _local(ts: float, params: CatParams) -> datetime:
@@ -777,134 +750,87 @@ class CatBrain:
         self._save()
         return fire
 
-    def _exposure_target(self) -> float:
-        """Return the per-commenter like fraction to steer to (Wundt peak)."""
-        return attachment.exposure_peak(
-            attachment.WundtParams(
-                c1=self.params.exposure_c1,
-                c2=self.params.exposure_c2,
-                k=self.params.exposure_k,
-            )
+    def _control(self) -> relationship.Control:
+        """Build the shared Berlyne control from this engine's params."""
+        p = self.params
+        return relationship.Control(
+            wundt=attachment.WundtParams(
+                c1=p.exposure_c1, c2=p.exposure_c2, k=p.exposure_k
+            ),
+            take_gain=p.like_control_gain,
+            recip_target=p.recip_fraction_target,
+            recip_gain=p.recip_control_gain,
+            take_cap=p.like_max_per_day,
+            recip_cap=p.sticker_max_per_day,
         )
 
-    def _take_like(self, today: str) -> bool:
-        """Consume one engagement from today's budget; False when capped."""
-        if self.state.engage_day != today:
-            self.state.engage_day, self.state.engage_today = today, 0
-        cap = self.params.like_max_per_day
-        if cap > 0 and self.state.engage_today >= cap:
+    def _grant_engage(self, person: str) -> bool:
+        """Commit one engagement (like) to the ledger if the cap allows."""
+        led = self.state.ledger
+        if not led.spend_take(self._control(), self.clock(), self._tz()):
             return False
-        self.state.engage_today += 1
-        return True
-
-    def _take_sticker(self, today: str) -> bool:
-        """Consume one sticker from today's budget; False when capped."""
-        if self.state.sticker_day != today:
-            self.state.sticker_day, self.state.sticker_today = today, 0
-        cap = self.params.sticker_max_per_day
-        if cap > 0 and self.state.sticker_today >= cap:
-            return False
-        self.state.sticker_today += 1
-        return True
-
-    def _engage(self, person: str) -> bool:
-        """Grant an engagement (like) if the daily cap allows; record it."""
-        today = _local(self.clock(), self.params).date().isoformat()
-        if not self._take_like(today):
-            self._save()
-            return False
-        self.state.engaged[person] = self.state.engaged.get(person, 0) + 1
-        self._save()
+        led.bump_take(person)
         return True
 
     def decide_engage(self, person: str) -> bool:
         """Whether to like ``person``'s comment, steering p -> the Wundt peak.
 
-        Exposure control: the running ``engaged/commented`` is nudged toward
-        the peak (~0.67) by a per-comment Bernoulli, so a heavy commenter is
+        Exposure control: the running ``taken/offered`` is nudged toward the
+        peak (~0.67) by a per-comment Bernoulli, so a heavy commenter is
         throttled (no desperate like-everything) while a newcomer is kept warm.
         The FIRST comment from a person is always engaged (a warm hello); the
         control starts from the second. Records the comment as offered either
         way, so a rescan never re-rolls a decided comment.
         """
-        commented = self.state.commented.get(person, 0) + 1
-        self.state.commented[person] = commented
-        if commented == 1:
-            return self._engage(person)  # first comment: always acknowledge
-        p_star = self._exposure_target()
-        prior = commented - 1  # comments decided before this one
-        p_cur = self.state.engaged.get(person, 0) / prior if prior else p_star
-        gain = self.params.like_control_gain
-        prob = min(1.0, max(0.0, p_star + gain * (p_star - p_cur)))
-        if self.rng.random() < prob:
-            return self._engage(person)
+        led = self.state.ledger
+        first = led.offered.get(person, 0) == 0
+        prob = led.take_prob(person, self._control())
+        take = first or self.rng.random() < prob
+        led.add_offer(person)  # count this comment (recorded before granting)
+        ok = self._grant_engage(person) if take else False
         self._save()
-        return False
+        return ok
 
     def decide_sticker(self, person: str, *, content_ok: bool) -> bool:
         """Whether to upgrade this engagement to a sticker, steering r -> 0.20.
 
         Reciprocity control among the comments we engage: the stronger,
         message-shaped sticker replaces the plain like about one time in five
-        (``recip_fraction_target``), nudged by feedback so stickered/engaged
+        (``recip_fraction_target``), nudged by feedback so recip/taken
         converges. ``content_ok`` is False for a question/link/business comment
         (a sticker reads as a non-sequitur there) -- then it stays a like and
         the reciprocity roll is not consumed. Capped per day (stickers are the
         message ban surface). Call once, only when ``decide_engage`` returned
-        True (so ``engaged`` already counts this comment).
+        True (so the take already counts this comment).
         """
         if not content_ok:
             return False
-        prior_eng = max(0, self.state.engaged.get(person, 0) - 1)
-        prior_stk = self.state.stickered.get(person, 0)
-        r_target = self.params.recip_fraction_target
-        r_cur = prior_stk / (prior_eng or 1)
-        gain = self.params.recip_control_gain
-        prob = min(1.0, max(0.0, r_target + gain * (r_target - r_cur)))
+        led = self.state.ledger
+        ctrl = self._control()
+        prob = led.recip_prob(person, ctrl, taken_now=True)
         if self.rng.random() >= prob:
             return False
-        today = _local(self.clock(), self.params).date().isoformat()
-        if not self._take_sticker(today):
+        if not led.spend_recip(ctrl, self.clock(), self._tz()):
             return False
-        self.state.stickered[person] = prior_stk + 1
+        led.recip[person] = led.recip.get(person, 0) + 1
         self._save()
         return True
 
-    def warmth(self) -> list[Warmth]:
-        """Per-commenter attachment readout for /status, warmest first.
-
-        ``index`` is the partial Berlyne index exposure(p) * recip(r) over the
-        two factors steered per person; a commenter needs at least one recorded
-        comment to appear.
-        """
-        wp = attachment.WundtParams(
-            c1=self.params.exposure_c1,
-            c2=self.params.exposure_c2,
-            k=self.params.exposure_k,
-        )
-        rows: list[Warmth] = []
-        for key, commented in self.state.commented.items():
-            if commented <= 0:
-                continue
-            engaged = self.state.engaged.get(key, 0)
-            p = engaged / commented
-            r = self.state.stickered.get(key, 0) / engaged if engaged else 0.0
-            idx = attachment.exposure(p, wp) * attachment.recip(r)
-            rows.append(Warmth(key, p, r, idx, commented))
-        rows.sort(key=lambda w: w.index, reverse=True)
-        return rows
+    def warmth(self) -> list[relationship.Warmth]:
+        """Per-commenter attachment readout for /status, warmest first."""
+        return relationship.warmth(self.state.ledger, self._control())
 
     def likes_today(self, now: float) -> int:
         """Engagements (likes) placed on the local date of ``now`` (else 0)."""
-        today = _local(now, self.params).date().isoformat()
-        return self.state.engage_today if self.state.engage_day == today else 0
+        return self.state.ledger.takes_today(now, self._tz())
 
     def stickers_today(self, now: float) -> int:
         """Stickers placed on the local date of ``now`` (else 0)."""
-        today = _local(now, self.params).date().isoformat()
-        if self.state.sticker_day != today:
-            return 0
-        return self.state.sticker_today
+        return self.state.ledger.recips_today(now, self._tz())
+
+    def _tz(self) -> float:
+        """Return the persona timezone offset (for the daily counters)."""
+        return self.params.tz_offset_hours
 
     def emit(self) -> list[CatEmoji]:
         """Pick the cat(s) to send now and record the send (principles 3,4,7).
@@ -987,13 +913,15 @@ class CatBrain:
                 str(k): [float(t) for t in v]
                 for k, v in (raw.get('recent_engaged') or {}).items()
             },
-            commented=_int_map(raw.get('commented')),
-            engaged=_int_map(raw.get('engaged')),
-            stickered=_int_map(raw.get('stickered')),
-            engage_day=str(raw.get('engage_day', '')),
-            engage_today=int(raw.get('engage_today', 0)),
-            sticker_day=str(raw.get('sticker_day', '')),
-            sticker_today=int(raw.get('sticker_today', 0)),
+            ledger=relationship.Ledger(
+                offered=relationship.int_map(raw.get('commented')),
+                taken=relationship.int_map(raw.get('engaged')),
+                recip=relationship.int_map(raw.get('stickered')),
+                take_day=str(raw.get('engage_day', '')),
+                take_today=int(raw.get('engage_today', 0)),
+                recip_day=str(raw.get('sticker_day', '')),
+                recip_today=int(raw.get('sticker_today', 0)),
+            ),
         )
 
     def _save(self) -> None:
@@ -1013,13 +941,13 @@ class CatBrain:
             'alive_ts': self.state.alive_ts,
             'since_sticker': self.state.since_sticker,
             'recent_engaged': self.state.recent_engaged,
-            'commented': self.state.commented,
-            'engaged': self.state.engaged,
-            'stickered': self.state.stickered,
-            'engage_day': self.state.engage_day,
-            'engage_today': self.state.engage_today,
-            'sticker_day': self.state.sticker_day,
-            'sticker_today': self.state.sticker_today,
+            'commented': self.state.ledger.offered,
+            'engaged': self.state.ledger.taken,
+            'stickered': self.state.ledger.recip,
+            'engage_day': self.state.ledger.take_day,
+            'engage_today': self.state.ledger.take_today,
+            'sticker_day': self.state.ledger.recip_day,
+            'sticker_today': self.state.ledger.recip_today,
         }
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(

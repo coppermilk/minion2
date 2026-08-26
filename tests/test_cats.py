@@ -687,8 +687,8 @@ def test_decide_engage_always_likes_the_first_comment(tmp_path: Path) -> None:
     """A newcomer's very first comment is always engaged (a warm hello)."""
     brain = _no_caps(tmp_path)
     assert brain.decide_engage('newbie') is True
-    assert brain.state.commented['newbie'] == 1
-    assert brain.state.engaged['newbie'] == 1
+    assert brain.state.ledger.offered['newbie'] == 1
+    assert brain.state.ledger.taken['newbie'] == 1
 
 
 def test_exposure_converges_to_the_wundt_peak(tmp_path: Path) -> None:
@@ -697,7 +697,7 @@ def test_exposure_converges_to_the_wundt_peak(tmp_path: Path) -> None:
     engaged = sum(brain.decide_engage('heavy') for _ in range(_CONVERGE_N))
     p = engaged / _CONVERGE_N
     assert abs(p - _EXPOSURE_PEAK) < _CONVERGE_TOL
-    assert brain.state.commented['heavy'] == _CONVERGE_N
+    assert brain.state.ledger.offered['heavy'] == _CONVERGE_N
 
 
 def test_reciprocity_converges_to_the_target(tmp_path: Path) -> None:
@@ -719,10 +719,11 @@ def test_a_steered_skip_is_recorded_not_re_rolled(tmp_path: Path) -> None:
     brain = _no_caps(tmp_path, seed=1)
     brain.decide_engage('p')  # first: always engaged
     # Drive p above the peak so the next draws are skips, then count.
-    before = brain.state.commented['p']
+    before = brain.state.ledger.offered['p']
     decisions = [brain.decide_engage('p') for _ in range(50)]
-    assert brain.state.commented['p'] == before + 50  # each counted once
-    assert brain.state.engaged['p'] <= 1 + sum(decisions)  # no phantom likes
+    assert brain.state.ledger.offered['p'] == before + 50  # each counted once
+    taken = brain.state.ledger.taken['p']
+    assert taken <= 1 + sum(decisions)  # no phantom likes
 
 
 def test_daily_like_cap_clamps_engagements(tmp_path: Path) -> None:
@@ -733,7 +734,7 @@ def test_daily_like_cap_clamps_engagements(tmp_path: Path) -> None:
     for _ in range(200):
         brain.decide_engage('spammer')
     assert brain.likes_today(_ts()) == _LIKE_CAP
-    assert brain.state.engaged['spammer'] == _LIKE_CAP
+    assert brain.state.ledger.taken['spammer'] == _LIKE_CAP
 
 
 def test_daily_sticker_cap_clamps_stickers(tmp_path: Path) -> None:
@@ -748,7 +749,7 @@ def test_daily_sticker_cap_clamps_stickers(tmp_path: Path) -> None:
         if brain.decide_engage('fan'):
             brain.decide_sticker('fan', content_ok=True)
     assert brain.stickers_today(_ts()) == _STICKER_CAP
-    assert brain.state.stickered['fan'] == _STICKER_CAP
+    assert brain.state.ledger.recip['fan'] == _STICKER_CAP
 
 
 def test_a_question_comment_never_becomes_a_sticker(tmp_path: Path) -> None:
@@ -757,7 +758,7 @@ def test_a_question_comment_never_becomes_a_sticker(tmp_path: Path) -> None:
     brain.decide_engage('asker')  # engaged
     for _ in range(20):
         assert brain.decide_sticker('asker', content_ok=False) is False
-    assert brain.state.stickered.get('asker', 0) == 0
+    assert brain.state.ledger.recip.get('asker', 0) == 0
 
 
 def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
@@ -769,14 +770,14 @@ def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
         if brain.decide_engage('mem'):
             brain.decide_sticker('mem', content_ok=True)
     saved = (
-        brain.state.commented['mem'],
-        brain.state.engaged['mem'],
-        brain.state.stickered.get('mem', 0),
+        brain.state.ledger.offered['mem'],
+        brain.state.ledger.taken['mem'],
+        brain.state.ledger.recip.get('mem', 0),
     )
     fresh = cats.CatBrain(_params(like_max_per_day=0), path, random.Random(2))
-    assert fresh.state.commented['mem'] == saved[0]
-    assert fresh.state.engaged['mem'] == saved[1]
-    assert fresh.state.stickered.get('mem', 0) == saved[2]
+    assert fresh.state.ledger.offered['mem'] == saved[0]
+    assert fresh.state.ledger.taken['mem'] == saved[1]
+    assert fresh.state.ledger.recip.get('mem', 0) == saved[2]
 
 
 def test_warmth_ranks_commenters_by_attachment_index(tmp_path: Path) -> None:

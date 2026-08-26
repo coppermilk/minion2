@@ -259,7 +259,7 @@ def test_view_split_converges_to_the_wundt_peak(tmp_path: Path) -> None:
         brain._record_skips(peer, skip_ids)  # skips: offered, never viewed
         brain.mark_viewed(peer, view_ids, ts=_NOON)  # views: offered + viewed
     key = str(peer)
-    ratio = brain.state.viewed[key] / brain.state.offered[key]
+    ratio = brain.state.ledger.taken[key] / brain.state.ledger.offered[key]
     assert abs(ratio - p_star) < _EXPO_TOL
 
 
@@ -284,16 +284,24 @@ def test_view_all_exposure_still_views_every_story(tmp_path: Path) -> None:
 
 
 def test_react_fraction_converges_to_target(tmp_path: Path) -> None:
-    """reacted/viewed steers to ~0.20 -- an occasional heart, not silence."""
+    """recip/taken steers to ~0.20 -- an occasional heart, not silence.
+
+    Closed-loop: each poll plans reactions, then commits the views and hearts
+    to the ledger (as the glue does), so the running fraction feeds back.
+    """
     brain = _brain(tmp_path)  # react_fraction_target defaults to 0.20
-    reacted = viewed = 0
+    peer = 7
     budget = 1_000_000  # effectively uncapped for the ratio test
+    sid = 1
     for _ in range(_EXPO_POLLS):
-        ids = (1, 2, 3)
-        r_ids, budget = brain._plan_reacts(ids, budget)
-        reacted += len(r_ids)
-        viewed += len(ids)
-    assert abs(reacted / viewed - _R_TARGET) < _EXPO_TOL
+        ids = (sid, sid + 1, sid + 2)
+        sid += 3
+        r_ids, budget = brain._plan_reacts(peer, ids, budget)
+        brain.mark_viewed(peer, ids, ts=_NOON)
+        brain.mark_reacted(peer, len(r_ids), _NOON)
+    key = str(peer)
+    ratio = brain.state.ledger.recip[key] / brain.state.ledger.taken[key]
+    assert abs(ratio - _R_TARGET) < _EXPO_TOL
 
 
 def test_react_budget_caps_the_day(tmp_path: Path) -> None:
@@ -309,8 +317,9 @@ def test_react_budget_caps_the_day(tmp_path: Path) -> None:
 def test_react_disabled_plans_no_reactions(tmp_path: Path) -> None:
     """With reactions off the budget is zero and nothing is planned."""
     brain = _brain(tmp_path, react_enabled=False)
-    assert brain._react_budget(_NOON) == 0
-    r_ids, _budget = brain._plan_reacts((1, 2, 3), 999)
+    budget = brain._react_budget(_NOON)
+    assert budget == 0
+    r_ids, _budget = brain._plan_reacts(7, (1, 2, 3), budget)
     assert r_ids == ()
 
 
@@ -318,10 +327,10 @@ def test_react_counter_rolls_over_daily(tmp_path: Path) -> None:
     """The daily counter resets at local midnight; the per-peer tally stays."""
     brain = _brain(tmp_path)
     brain.mark_reacted(7, _FIVE, _NOON)
-    assert brain.state.react_today == _FIVE
+    assert brain.state.ledger.recip_today == _FIVE
     brain.mark_reacted(7, _TWO, _NOON + 86400.0)  # the next day
-    assert brain.state.react_today == _TWO  # reset, then +2
-    assert brain.state.reacted['7'] == _FIVE + _TWO  # cumulative per peer
+    assert brain.state.ledger.recip_today == _TWO  # reset, then +2
+    assert brain.state.ledger.recip['7'] == _FIVE + _TWO  # cumulative per peer
 
 
 def test_plan_attaches_reactions(tmp_path: Path) -> None:

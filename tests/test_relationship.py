@@ -1,0 +1,109 @@
+# Copyright (C) 2026 Artem Herych. All rights reserved.
+# Proprietary -- no use without the author's prior approval.
+"""The shared per-peer relationship control (engines/relationship.py).
+
+The story and like engines both drive this: one memory (``Ledger``) and one
+control law (``steer``). These pin the shared kernel independently of either
+engine's plan/commit wiring.
+"""
+
+from __future__ import annotations
+
+import random
+
+from minions.aggregator.engines import attachment
+from minions.aggregator.engines import relationship
+
+_TZ = 0.0
+_NOON = 12 * 3600.0  # a fixed local timestamp (tz 0)
+_NEXT_DAY = _NOON + 86400.0
+_TARGET = 0.20
+_TOL = 0.05
+_STEPS = 3000
+_CAP = 4
+_CONTROL = relationship.Control(wundt=attachment.WundtParams())
+
+
+def _steer_only() -> relationship.Control:
+    """Build a control with no daily caps, to isolate the steering law."""
+    return relationship.Control(wundt=attachment.WundtParams())
+
+
+def test_steer_pushes_below_target_up_and_above_target_down() -> None:
+    """The P-controller corrects toward the target from either side."""
+    assert relationship.steer(0.0, _TARGET, 1.0) > _TARGET
+    assert relationship.steer(0.5, _TARGET, 1.0) < _TARGET
+    assert relationship.steer(_TARGET, _TARGET, 1.0) == _TARGET
+
+
+def test_steer_clamps_to_a_probability() -> None:
+    """A large correction never leaves the [0, 1] range."""
+    assert relationship.steer(1.0, _TARGET, 5.0) == 0.0
+    assert relationship.steer(0.0, 0.9, 5.0) == 1.0
+
+
+def test_take_prob_converges_offered_taken_to_the_wundt_peak() -> None:
+    """Repeated take decisions drive taken/offered onto the exposure peak."""
+    led = relationship.Ledger()
+    ctrl = _steer_only()
+    rng = random.Random(0)
+    peer = 'p'
+    for _ in range(_STEPS):
+        if rng.random() < led.take_prob(peer, ctrl):
+            led.bump_take(peer)
+        led.add_offer(peer)
+    ratio = led.taken[peer] / led.offered[peer]
+    assert abs(ratio - ctrl.take_target()) < _TOL
+
+
+def test_recip_prob_converges_recip_taken_to_the_target() -> None:
+    """Repeated recip decisions drive recip/taken onto recip_target."""
+    led = relationship.Ledger()
+    ctrl = _steer_only()
+    rng = random.Random(1)
+    peer = 'p'
+    for _ in range(_STEPS):
+        led.bump_take(peer)  # every step is a taken exposure
+        if rng.random() < led.recip_prob(peer, ctrl, taken_now=True):
+            led.recip[peer] = led.recip.get(peer, 0) + 1
+    ratio = led.recip[peer] / led.taken[peer]
+    assert abs(ratio - _TARGET) < _TOL
+
+
+def test_spend_take_and_recip_clamp_at_the_daily_cap() -> None:
+    """Daily budgets stop at the cap and roll over at local midnight."""
+    led = relationship.Ledger()
+    ctrl = relationship.Control(
+        wundt=attachment.WundtParams(), take_cap=_CAP, recip_cap=_CAP
+    )
+    taken = sum(led.spend_take(ctrl, _NOON, _TZ) for _ in range(100))
+    recipped = sum(led.spend_recip(ctrl, _NOON, _TZ) for _ in range(100))
+    assert taken == _CAP
+    assert recipped == _CAP
+    assert led.takes_today(_NOON, _TZ) == _CAP
+    # Next local day: the counters reset, so the cap is available again.
+    assert led.spend_take(ctrl, _NEXT_DAY, _TZ) is True
+    assert led.takes_today(_NEXT_DAY, _TZ) == 1
+
+
+def test_recip_left_reads_without_consuming() -> None:
+    """The story engine's plan-time budget read does not spend a slot."""
+    led = relationship.Ledger()
+    ctrl = relationship.Control(wundt=attachment.WundtParams(), recip_cap=_CAP)
+    assert led.recip_left(ctrl, _NOON, _TZ) == _CAP
+    led.add_recip('p', 1, _NOON, _TZ)
+    assert led.recip_left(ctrl, _NOON, _TZ) == _CAP - 1
+    assert led.recip_left(ctrl, _NOON, _TZ) == _CAP - 1  # still, read-only
+
+
+def test_warmth_ranks_by_index_and_evict_drops_a_peer() -> None:
+    """warmth() is index-sorted; evict removes a peer's counters."""
+    led = relationship.Ledger()
+    led.add_take('warm', 2)
+    led.add_recip('warm', 1, _NOON, _TZ)
+    led.add_offer('cold', 3)  # offered but never taken
+    rows = relationship.warmth(led, _CONTROL)
+    assert [row.label for row in rows] == ['warm', 'cold']
+    assert rows == sorted(rows, key=lambda r: r.index, reverse=True)
+    led.evict('warm')
+    assert 'warm' not in led.offered
