@@ -335,7 +335,7 @@
     "_note_react": "Reciprocity: leave a heart/thumb on a FRACTION (react_fraction_target) of the stories we view, so a viewer sees an occasional reaction instead of a silent watcher -- the term that lifts attachment off zero. react_max_per_day is a HARD anti-ban ceiling (reactions on stories are automated engagement); react_pool is the reaction glyphs to choose from. react_enabled=false leaves stories view-only.",
     "react_enabled": true,
     "react_fraction_target": 0.20,
-    "react_pool": ["❤", "👍"],
+    "react_pool": ["✊", "👍"],
     "react_max_per_day": 70
   },
   "runtime": {

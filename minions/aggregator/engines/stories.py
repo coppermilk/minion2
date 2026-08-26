@@ -119,7 +119,7 @@ class StoryParams:
     # this file ASCII; the JSON carries the real glyphs). Off = view-only.
     react_enabled: bool = True
     react_fraction_target: float = 0.20
-    react_pool: tuple[str, ...] = ('\u2764', '\U0001f44d')
+    react_pool: tuple[str, ...] = ('\u270a', '\U0001f44d')
     react_max_per_day: int = 50
 
 
@@ -687,7 +687,7 @@ def load_story_params(
         react_enabled=bool(cfg.get('react_enabled', True)),
         react_fraction_target=float(cfg.get('react_fraction_target', 0.20)),
         react_pool=tuple(
-            str(e) for e in (cfg.get('react_pool') or ['\u2764', '\U0001f44d'])
+            str(e) for e in (cfg.get('react_pool') or ['\u270a', '\U0001f44d'])
         ),
         react_max_per_day=int(cfg.get('react_max_per_day', 50)),
     )
