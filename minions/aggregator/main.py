@@ -252,7 +252,9 @@ class Aggregator(
         self.users = users.UserStore(self._service_dir('users') / 'users.db')
         gchannel = self._profile_channel(self._modes['greeter'])
         greeter_params = replace(
-            greeter.load_greeter_params(self._raw, gchannel),
+            greeter.load_greeter_params(
+                self._raw, gchannel, self._modes['greeter']
+            ),
             enabled=self._feature_enabled('greeter'),
         )
         self.greeter = greeter.Greeter(

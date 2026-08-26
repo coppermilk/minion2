@@ -299,8 +299,9 @@ How it behaves like a person, not a scraper:
 
 It shares its human-timing kit (`humanize.py`) with the `cats` engine, so the
 "when does a person act" logic lives in one place. The re-poll cadence follows
-the profile like the cat rescan does: **test tight (5 min)**, **live relaxed
-(30 min)**. Read the log with **`/stories`** (how many, and whose, most recent
+the profile like the cat rescan does: **test tight (5 min)**, **live hourly**
+(all live polls -- cats, greeter, stories -- are held to at most once an hour).
+Read the log with **`/stories`** (how many, and whose, most recent
 first); `/status` gains a one-line stories summary. State is a per-profile
 `stories_state.json`; `test` and `live` keep separate seen sets and logs.
 

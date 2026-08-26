@@ -104,11 +104,19 @@ def _norm_event(event: object) -> tuple[int, int, bool, bool]:
 
 
 def load_greeter_params(
-    data: dict[str, object], default_channel: int
+    data: dict[str, object], default_channel: int, mode: str = 'live'
 ) -> GreeterParams:
-    """Load the greeter params; channel falls back to the aggregator target."""
+    """Load the greeter params; channel falls back to the aggregator target.
+
+    The admin-log poll cadence is per profile (like the cats rescan): test
+    tight, live relaxed to at most hourly. Live events (ChatAction) still catch
+    a join/leave in real time, so the poll is only the diff-based safety net --
+    hourly in live is plenty. Both fall back to ``poll_sec``.
+    """
     cfg = data.get('greeter') if isinstance(data.get('greeter'), dict) else {}
     cfg = cfg or {}
+    default_poll = float(cfg.get('poll_sec') or 600.0)
+    poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
     return GreeterParams(
         enabled=bool(cfg.get('enabled', False)),
         channel=int(cfg.get('channel') or default_channel),
@@ -116,7 +124,7 @@ def load_greeter_params(
         welcome_back=str(cfg.get('welcome_back') or ''),
         farewell=str(cfg.get('farewell') or ''),
         fallback_name=str(cfg.get('fallback_name') or 'friend'),
-        poll_sec=float(cfg.get('poll_sec') or 600.0),
+        poll_sec=float(cfg.get(poll_key) or default_poll),
         dm_min_gap_sec=float(cfg.get('dm_min_gap_sec') or 30.0),
         dm_jitter_sec=float(cfg.get('dm_jitter_sec') or 30.0),
         max_dm_per_run=int(cfg.get('max_dm_per_run') or 10),
