@@ -73,6 +73,8 @@ _ALIVE_STEP = 1.0
 _SESSION_REACH_SEC = 7200.0
 # A persisted emoji row is an [id, fallback] pair.
 _EMOJI_ROW_LEN = 2
+# A catted dedup key is 'chat:root:person[:msg]', so the person is field 3.
+_CATTED_PERSON_FIELDS = 3
 # datetime.weekday(): Monday is 0, so Saturday (5) and up is the weekend.
 _SATURDAY = 5
 # Local hours: midnight..noon reads sleepy, noon..midnight bodry.
@@ -877,6 +879,24 @@ class CatBrain:
         self.state.mood = self.params.mood_phi * self.state.mood + noise
         self.state.mood_day = day
 
+    def _backfill_ledger(self, state: CatState) -> None:
+        """Seed the relationship ledger from historically-liked comments.
+
+        A state file written before the attachment control has an empty ledger
+        but a full ``catted`` set (every comment we already liked). Seed
+        offered=taken per commenter from it, so the /status coefficients show
+        the history at once instead of only new comments; the control then
+        steers each person from there. Runs only while the ledger is empty, so
+        a real engagement (which persists the ledger) supersedes it.
+        """
+        if state.ledger.offered or not state.catted:
+            return
+        for key in state.catted:
+            parts = key.split(':')
+            person = parts[2] if len(parts) >= _CATTED_PERSON_FIELDS else ''
+            if person:
+                state.ledger.add_take(person, 1)
+
     def _load(self) -> CatState:
         """Reload the persisted memory, or start fresh if none/corrupt."""
         if not self.path.exists():
@@ -885,7 +905,7 @@ class CatBrain:
             raw = json.loads(self.path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             return CatState()
-        return CatState(
+        state = CatState(
             mood=float(raw.get('mood', 0.0)),
             mood_day=str(raw.get('mood_day', '')),
             last_send=float(raw.get('last_send', 0.0)),
@@ -923,6 +943,8 @@ class CatBrain:
                 recip_today=int(raw.get('sticker_today', 0)),
             ),
         )
+        self._backfill_ledger(state)
+        return state
 
     def _save(self) -> None:
         """Persist the memory atomically as readable JSON."""

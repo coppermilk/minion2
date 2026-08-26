@@ -8,6 +8,7 @@ design, so every one of the nine behavioural principles is checked here.
 
 from __future__ import annotations
 
+import json
 import random
 from datetime import UTC
 from datetime import datetime
@@ -778,6 +779,38 @@ def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
     assert fresh.state.ledger.offered['mem'] == saved[0]
     assert fresh.state.ledger.taken['mem'] == saved[1]
     assert fresh.state.ledger.recip.get('mem', 0) == saved[2]
+
+
+def test_ledger_backfills_from_catted_history(tmp_path: Path) -> None:
+    """A pre-attach state file (catted, no ledger) seeds coefficients on load.
+
+    Each already-liked comment counts as offered=taken for its commenter, so
+    /status shows the history at once instead of only new comments.
+    """
+    path = tmp_path / 'cats_state.json'
+    path.write_text(
+        json.dumps(
+            {'catted': ['10:20:alice:1', '10:20:alice:2', '10:20:bob:3']}
+        )
+    )
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    assert brain.state.ledger.offered == {'alice': 2, 'bob': 1}
+    assert brain.state.ledger.taken == {'alice': 2, 'bob': 1}
+    assert {w.label for w in brain.warmth()} == {'alice', 'bob'}
+
+
+def test_ledger_backfill_skipped_when_populated(tmp_path: Path) -> None:
+    """A state file that already has ledger data is not re-seeded."""
+    path = tmp_path / 'cats_state.json'
+    path.write_text(
+        json.dumps(
+            {'catted': ['10:20:alice:1'], 'commented': {'bob': 5},
+             'engaged': {'bob': 3}}
+        )
+    )
+    brain = cats.CatBrain(_params(), path, random.Random(0))
+    assert brain.state.ledger.offered == {'bob': 5}  # catted not merged in
+    assert 'alice' not in brain.state.ledger.offered
 
 
 def test_warmth_lists_recent_commenters_first(tmp_path: Path) -> None:
