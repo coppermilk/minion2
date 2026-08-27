@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import statefile
 
@@ -56,22 +57,22 @@ log = logging.getLogger('userbot')
 class GreeterParams:
     """Every greeter tunable, from the constants JSON 'greeter' section."""
 
-    enabled: bool
-    channel: int  # the channel to watch (resolved: JSON value or the target)
-    welcome: str
-    welcome_back: str  # for someone who LEFT and later re-subscribed
-    farewell: str
-    fallback_name: str  # fills {name} when the real name is unresolvable
-    poll_sec: float
-    dm_min_gap_sec: float
-    dm_jitter_sec: float
-    max_dm_per_run: int
-    max_dm_per_day: int  # hard daily ceiling -- the real anti-ban knob
+    enabled: bool = False
+    channel: int = 0  # the channel to watch (JSON value, else the target)
+    welcome: str = 'Welcome!'
+    welcome_back: str = ''  # for someone who LEFT and later re-subscribed
+    farewell: str = ''
+    fallback_name: str = 'friend'  # fills {name} when the name will not
+    poll_sec: float = 600.0
+    dm_min_gap_sec: float = 30.0
+    dm_jitter_sec: float = 30.0
+    max_dm_per_run: int = 10
+    max_dm_per_day: int = 5  # hard daily ceiling -- the real anti-ban knob
     # Persona clock: welcome/farewell DMs only go out during waking hours (no
     # one messages at 4am). Outside the window the cycle defers -- see Greeter.
-    tz_offset_hours: float
-    wake_start_hour: float
-    wake_end_hour: float
+    tz_offset_hours: float = 3.0
+    wake_start_hour: float = 0.0
+    wake_end_hour: float = 24.0
 
 
 @dataclass
@@ -108,30 +109,24 @@ def load_greeter_params(
 ) -> GreeterParams:
     """Load the greeter params; channel falls back to the aggregator target.
 
-    The admin-log poll cadence is per profile (like the reactions rescan): test
-    tight, live relaxed to at most hourly. Live events (ChatAction) still catch
-    a join/leave in real time, so the poll is only the diff-based safety net --
-    hourly in live is plenty. Both fall back to ``poll_sec``.
+    Every knob reads its own key and falls back to its own declared default
+    (``core/codec.py``). Two cannot: the channel, where a blank means "use
+    the poster's target" (the live constants rely on that), and the
+    admin-log cadence, which is per profile like the reactions rescan --
+    test tight, live relaxed to at most hourly, both falling back to
+    ``poll_sec``. Live ChatAction events still catch a join/leave in real
+    time, so the poll is only the diff-based safety net.
     """
-    cfg = data.get('greeter') if isinstance(data.get('greeter'), dict) else {}
-    cfg = cfg or {}
-    default_poll = float(cfg.get('poll_sec') or 600.0)
+    cfg = codec.section(data, 'greeter')
+    default_poll = float(cfg.get('poll_sec') or GreeterParams.poll_sec)
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
-    return GreeterParams(
-        enabled=bool(cfg.get('enabled', False)),
-        channel=int(cfg.get('channel') or default_channel),
-        welcome=str(cfg.get('welcome') or 'Welcome!'),
-        welcome_back=str(cfg.get('welcome_back') or ''),
-        farewell=str(cfg.get('farewell') or ''),
-        fallback_name=str(cfg.get('fallback_name') or 'friend'),
-        poll_sec=float(cfg.get(poll_key) or default_poll),
-        dm_min_gap_sec=float(cfg.get('dm_min_gap_sec') or 30.0),
-        dm_jitter_sec=float(cfg.get('dm_jitter_sec') or 30.0),
-        max_dm_per_run=int(cfg.get('max_dm_per_run') or 10),
-        max_dm_per_day=int(cfg.get('max_dm_per_day') or 5),
-        tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
-        wake_start_hour=float(cfg.get('wake_start_hour', 0.0)),
-        wake_end_hour=float(cfg.get('wake_end_hour', 24.0)),
+    return codec.decode(
+        GreeterParams,
+        cfg,
+        {
+            'channel': int(cfg.get('channel') or default_channel),
+            'poll_sec': float(cfg.get(poll_key) or default_poll),
+        },
     )
 
 

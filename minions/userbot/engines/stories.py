@@ -45,6 +45,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
+from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
 from minions.userbot.core import statefile
@@ -58,50 +59,50 @@ if TYPE_CHECKING:
 class StoryParams:
     """Every tunable, loaded from the constants JSON 'stories' section."""
 
-    enabled: bool
+    enabled: bool = False
     # Catch-up mode: view EVERY unseen story each poll -- no per-session cap,
     # no skip, no long cooldown between sessions -- so all currently-active
     # stories are swept at once instead of a slow human trickle. Quiet hours
     # and the odd silent day still apply, and the per-story dwell / small gap
     # between peers stay (viewing dozens instantly would trip Telegram's flood
     # limits). Off is the human-like handful-then-rest behaviour.
-    view_all: bool
+    view_all: bool = False
     # Also view the stories of people whose CHATS were moved to the Archive
     # (Telegram's "hidden" stories feed). Off keeps to the main feed only --
     # archived contacts are left alone. ``main.py`` polls the hidden feed too
     # when this is on; the brain treats both feeds' peers the same.
-    include_archived: bool
+    include_archived: bool = False
     # The persona's UTC offset: quiet hours / the silent-day date are read in
     # THIS timezone, so the cadence matches the human, not the server clock.
-    tz_offset_hours: float
-    quiet_hours: frozenset[int]  # local hours with no viewing (asleep)
+    tz_offset_hours: float = 3.0
+    quiet_hours: frozenset[int] = frozenset({1, 2, 3, 4, 5, 6, 7})
     # How often ``main.py`` re-polls the stories feed (test tight, live
     # relaxed; both default via ``poll_sec``). Carried for main, not the brain.
-    poll_sec: float
+    poll_sec: float = 1800.0
     # One session views between min and max peers -- a glance, not the whole
     # feed. Picked per session so the count itself varies.
-    per_session_min: int
-    per_session_max: int
-    skip_peer_prob: float  # chance an eligible peer is skipped this pass
-    silent_day_prob: float  # chance a whole day views nothing
+    per_session_min: int = 2
+    per_session_max: int = 6
+    skip_peer_prob: float = 0.35  # chance an eligible peer is skipped
+    silent_day_prob: float = 0.06  # chance a whole day views nothing
     # First view lands a short, human "just opened the app" beat after the
     # plan; gap_* is the lognormal pause between one peer and the next in a
     # session; spacing_* is the long, heavy-tailed gap to the NEXT session.
-    latency_log_mu: float
-    latency_log_sigma: float
-    gap_log_mu: float
-    gap_log_sigma: float
-    spacing_log_mu: float
-    spacing_log_sigma: float
+    latency_log_mu: float = 2.5
+    latency_log_sigma: float = 0.8
+    gap_log_mu: float = 2.3
+    gap_log_sigma: float = 0.7
+    spacing_log_mu: float = 8.6
+    spacing_log_sigma: float = 1.0
     # How long to linger on each individual story (main.py dwells this long
     # between marking one story and the next, so a peer's set is not opened in
     # a single machine-fast blink). Carried for main; the brain does not sleep.
-    dwell_min_sec: float
-    dwell_max_sec: float
-    max_peers_tracked: int  # cap the persisted seen map (drop oldest peers)
-    seen_per_peer: int  # cap the per-peer seen id list (newest kept)
-    log_limit: int  # how many recent views to keep for /status and /stories
-    catch_up_max: int  # cap on peers viewed per poll in view_all (anti-binge)
+    dwell_min_sec: float = 2.0
+    dwell_max_sec: float = 9.0
+    max_peers_tracked: int = 500  # cap the persisted seen map (oldest go)
+    seen_per_peer: int = 40  # cap the per-peer seen id list (newest kept)
+    log_limit: int = 50  # recent views kept for /status and /stories
+    catch_up_max: int = 12  # peers per poll in view_all (anti-binge)
     # Berlyne exposure control: we view a FRACTION of each peer's stories,
     # toward the Wundt peak (~2/3), not all -- viewing everything sits
     # on the aversion side (reads as stalking). c1/c2/k shape the curve (see
@@ -645,46 +646,16 @@ def load_story_params(
 ) -> StoryParams:
     """Load the stories engine's parameters from the JSON 'stories' key.
 
-    ``mode`` selects the re-poll cadence (test tight, live relaxed), mirroring
-    the reactions rescan interval; both fall back to ``poll_sec``.
+    Every knob reads its own key and falls back to its own declared default
+    (``core/codec.py``). Only the re-poll cadence is spelled out: it is per
+    profile (test tight, live relaxed), mirroring the reactions rescan
+    interval, and both fall back to ``poll_sec``.
     """
-    cfg = data.get('stories') if isinstance(data.get('stories'), dict) else {}
-    cfg = cfg or {}
-    default_poll = float(cfg.get('poll_sec', 1800.0))
+    cfg = codec.section(data, 'stories')
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
-    return StoryParams(
-        enabled=bool(cfg.get('enabled', False)),
-        view_all=bool(cfg.get('view_all', False)),
-        include_archived=bool(cfg.get('include_archived', False)),
-        tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
-        catch_up_max=int(cfg.get('catch_up_max') or 12),
-        quiet_hours=frozenset(
-            int(h) for h in (cfg.get('quiet_hours') or [1, 2, 3, 4, 5, 6, 7])
-        ),
-        poll_sec=float(cfg.get(poll_key, default_poll)),
-        per_session_min=int(cfg.get('per_session_min', 2)),
-        per_session_max=int(cfg.get('per_session_max', 6)),
-        skip_peer_prob=float(cfg.get('skip_peer_prob', 0.35)),
-        silent_day_prob=float(cfg.get('silent_day_prob', 0.06)),
-        latency_log_mu=float(cfg.get('latency_log_mu', 2.5)),
-        latency_log_sigma=float(cfg.get('latency_log_sigma', 0.8)),
-        gap_log_mu=float(cfg.get('gap_log_mu', 2.3)),
-        gap_log_sigma=float(cfg.get('gap_log_sigma', 0.7)),
-        spacing_log_mu=float(cfg.get('spacing_log_mu', 8.6)),
-        spacing_log_sigma=float(cfg.get('spacing_log_sigma', 1.0)),
-        dwell_min_sec=float(cfg.get('dwell_min_sec', 2.0)),
-        dwell_max_sec=float(cfg.get('dwell_max_sec', 9.0)),
-        max_peers_tracked=int(cfg.get('max_peers_tracked', 500)),
-        seen_per_peer=int(cfg.get('seen_per_peer', 40)),
-        log_limit=int(cfg.get('log_limit', 50)),
-        exposure_c1=float(cfg.get('exposure_c1', 0.45)),
-        exposure_c2=float(cfg.get('exposure_c2', 0.90)),
-        exposure_k=float(cfg.get('exposure_k', 8.0)),
-        view_control_gain=float(cfg.get('view_control_gain', 1.0)),
-        react_enabled=bool(cfg.get('react_enabled', True)),
-        react_fraction_target=float(cfg.get('react_fraction_target', 0.20)),
-        react_pool=tuple(
-            str(e) for e in (cfg.get('react_pool') or ['\u270a', '\U0001f44d'])
-        ),
-        react_max_per_day=int(cfg.get('react_max_per_day', 50)),
+    default_poll = float(cfg.get('poll_sec', StoryParams.poll_sec))
+    return codec.decode(
+        StoryParams,
+        cfg,
+        {'poll_sec': float(cfg.get(poll_key, default_poll))},
     )

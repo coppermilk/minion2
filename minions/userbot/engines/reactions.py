@@ -53,6 +53,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
+from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
 from minions.userbot.core import statefile
@@ -157,78 +158,78 @@ def _reaction_from_entry(entry: dict[str, object], when: float) -> Reaction:
 class ReactionParams:
     """Every tunable, loaded from the constants JSON 'reactions' section."""
 
-    enabled: bool
+    enabled: bool = False
     # Like ABSOLUTELY every comment: bypass the human-like gates (skip_prob,
     # silent days, the asleep/stale drop) so each comment always gets a like
     # reaction. Dedup and the manual-reply check still apply -- a comment is
     # liked once, not repeatedly. Off = the human-like behaviour.
-    like_all: bool
+    like_all: bool = False
     # When the target is a CHANNEL, its comments live in the linked discussion
     # group. True: resolve each post's discussion thread and react only there
     # (so reactions land in the channel post's comments). False: match replies
-    # to
-    # the post id directly (the target is a plain group).
-    comments_in_discussion: bool
-    # Whether to also drop a reaction on our OWN fresh posts
-    # (immediately,
-    # no human-like wait). Optional and off by default: the engine's job is
+    # to the post id directly (the target is a plain group).
+    comments_in_discussion: bool = False
+    # Whether to also drop a reaction on our OWN fresh posts (immediately, no
+    # human-like wait). Optional and off by default: the engine's job is
     # reacting to COMMENTERS; liking our own posts is a separate extra.
-    react_to_posts: bool
-    watch_posts: int
-    hours_weekday: tuple[tuple[float, float, float], ...]
-    hours_weekend: tuple[tuple[float, float, float], ...]
-    quiet_hours: frozenset[int]
+    react_to_posts: bool = False
+    watch_posts: int = 4
+    hours_weekday: tuple[tuple[float, float, float], ...] = (
+        (9.0, 2.0, 1.0),
+        (21.0, 2.5, 1.3),
+    )
+    hours_weekend: tuple[tuple[float, float, float], ...] = (
+        (11.0, 3.0, 1.0),
+        (22.0, 3.0, 1.2),
+    )
+    quiet_hours: frozenset[int] = frozenset({2, 3, 4, 5, 6})
     # The DECLARED uptime window in local hours [start, end) -- a prior only.
     # The engine also LEARNS the real on-hours (mark_alive), and blends the two
     # by confidence, so it adapts to whatever hours the NAS is actually up, not
     # just this rule of thumb. start >= end (or 0/24) means "up all day".
-    active_start: float
-    active_end: float
+    # (JSON keys: active_start_hour / active_end_hour.)
+    active_start: float = 0.0
+    active_end: float = 24.0
     # How the learned uptime is weighed: uptime_half_life_sec fades old
     # observations (so a changed schedule is followed), uptime_learn_obs is how
     # many heartbeats of history earn full trust in the learned curve over the
     # declared window. skip_if_manually_replied drops the reaction when the
-    # operator
-    # has already replied to that comment by hand.
-    uptime_half_life_sec: float
-    uptime_learn_obs: float
-    skip_if_manually_replied: bool
+    # operator has already replied to that comment by hand.
+    uptime_half_life_sec: float = 864000.0
+    uptime_learn_obs: float = 2000.0
+    skip_if_manually_replied: bool = True
     # The persona's UTC offset: hours/dates are read in THIS timezone, so the
     # cadence matches the legend, not the server's clock (principle 9).
-    tz_offset_hours: float
-    latency_log_mu: float
-    latency_log_sigma: float
-    spacing_log_mu: float
-    spacing_log_sigma: float
-    jitter_sec: float
-    skip_prob: float
-    silent_day_prob: float
-    recency_half_life_sec: float
-    mood_phi: float
-    mood_sigma: float
-    feedback_speedup: float
+    tz_offset_hours: float = 3.0
+    latency_log_mu: float = 7.0
+    latency_log_sigma: float = 1.2
+    spacing_log_mu: float = 9.5
+    spacing_log_sigma: float = 1.3
+    jitter_sec: float = 90.0
+    skip_prob: float = 0.12
+    silent_day_prob: float = 0.08
+    recency_half_life_sec: float = 172800.0
+    mood_phi: float = 0.8
+    mood_sigma: float = 0.35
+    feedback_speedup: float = 0.4
     # Session model (see ReactionBrain._plan): spacing_* is the long gap
-    # BETWEEN
-    # comment-answering sessions; the fields below shape ONE session.
-    session_gap_log_mu: float  # log-mean of the short intra-session gap
-    session_gap_log_sigma: float
-    session_idle_sec: float  # a silence longer than this ends the session
-    session_max_sec: float  # hard cap on one session's span
-    max_reply_delay_sec: (
-        float  # a reaction older than this is too stale -> skip
-    )
-    pool: tuple[ReactionEmoji, ...]
+    # BETWEEN comment-answering sessions; the fields below shape ONE session.
+    session_gap_log_mu: float = 3.8  # log-mean of the intra-session gap
+    session_gap_log_sigma: float = 0.6
+    session_idle_sec: float = 900.0  # a longer silence ends the session
+    session_max_sec: float = 1200.0  # hard cap on one session's span
+    max_reply_delay_sec: float = 21600.0  # older than this -> too stale
+    pool: tuple[ReactionEmoji, ...] = ()
     # The LIKE pool: the emoji placed as the default reaction. Chosen
     # pseudo-randomly but DETERMINISTICALLY -- seeded by the target id, so the
     # same comment/post always yields the same like: varied across targets, yet
     # recomputable after a restart (no persisted cursor). Separate from the
-    # reaction
-    # ``pool``.
-    like_pool: tuple[ReactionEmoji, ...]
+    # reaction ``pool``.
+    like_pool: tuple[ReactionEmoji, ...] = ()
     # How often (seconds) the bot re-scans the targets on its own -- picking up
     # posts created (and commented on) while it runs, without waiting for a
     # restart or a manual /requeue. 0 turns the auto-rescan off.
-    rescan_sec: float
+    rescan_sec: float = 300.0
     # --- Berlyne attachment control (per commenter) -----------------------
     # When on, we do NOT like every comment. Instead the fraction of a
     # person's comments we engage (like or sticker) is steered toward the
@@ -954,84 +955,51 @@ def _peaks(
     return tuple(out)
 
 
-def _entries_of_type(data: dict[str, object], etype: str) -> list[dict]:
-    """Return the emoji dicts of one ``type`` from the top-level array."""
+def _pool(data: dict[str, object], etype: str) -> tuple[ReactionEmoji, ...]:
+    """Build one emoji pool from the unified top-level ``emoji`` array."""
     top = data.get('emoji')
-    if not isinstance(top, list):
-        return []
-    return [e for e in top if isinstance(e, dict) and e.get('type') == etype]
+    rows = top if isinstance(top, list) else []
+    return tuple(
+        _emoji(e)
+        for e in rows
+        if isinstance(e, dict) and e.get('type') == etype
+    )
 
 
 def load_reaction_params(data: dict[str, object]) -> ReactionParams:
-    """Load the reaction engine's params from the 'reactions' JSON key."""
-    reactions = (
-        data.get('reactions')
-        if isinstance(data.get('reactions'), dict)
-        else {}
-    )
-    reactions = reactions or {}
-    pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'reaction'))
-    like_pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'like'))
-    return ReactionParams(
-        enabled=bool(reactions.get('enabled', False)),
-        like_all=bool(reactions.get('like_all', False)),
-        comments_in_discussion=bool(
-            reactions.get('comments_in_discussion', False)
-        ),
-        react_to_posts=bool(reactions.get('react_to_posts', False)),
-        watch_posts=int(reactions.get('watch_posts') or 4),
-        hours_weekday=_peaks(reactions.get('hours_weekday'))
-        or ((9.0, 2.0, 1.0), (21.0, 2.5, 1.3)),
-        hours_weekend=_peaks(reactions.get('hours_weekend'))
-        or ((11.0, 3.0, 1.0), (22.0, 3.0, 1.2)),
-        quiet_hours=frozenset(
-            int(h) for h in (reactions.get('quiet_hours') or [2, 3, 4, 5, 6])
-        ),
-        active_start=float(reactions.get('active_start_hour', 0.0)),
-        active_end=float(reactions.get('active_end_hour', 24.0)),
-        uptime_half_life_sec=float(
-            reactions.get('uptime_half_life_sec', 864000.0)
-        ),
-        uptime_learn_obs=float(reactions.get('uptime_learn_obs', 2000.0)),
-        skip_if_manually_replied=bool(
-            reactions.get('skip_if_manually_replied', True)
-        ),
-        tz_offset_hours=float(reactions.get('tz_offset_hours', 3.0)),
-        latency_log_mu=float(reactions.get('latency_log_mu', 7.0)),
-        latency_log_sigma=float(reactions.get('latency_log_sigma', 1.2)),
-        spacing_log_mu=float(reactions.get('spacing_log_mu', 9.5)),
-        spacing_log_sigma=float(reactions.get('spacing_log_sigma', 1.3)),
-        jitter_sec=float(reactions.get('jitter_sec', 90.0)),
-        skip_prob=float(reactions.get('skip_prob', 0.12)),
-        silent_day_prob=float(reactions.get('silent_day_prob', 0.08)),
-        recency_half_life_sec=float(
-            reactions.get('recency_half_life_sec', 172800.0)
-        ),
-        mood_phi=float(reactions.get('mood_phi', 0.8)),
-        mood_sigma=float(reactions.get('mood_sigma', 0.35)),
-        feedback_speedup=float(reactions.get('feedback_speedup', 0.4)),
-        session_gap_log_mu=float(reactions.get('session_gap_log_mu', 3.8)),
-        session_gap_log_sigma=float(
-            reactions.get('session_gap_log_sigma', 0.6)
-        ),
-        session_idle_sec=float(reactions.get('session_idle_sec', 900.0)),
-        session_max_sec=float(reactions.get('session_max_sec', 1200.0)),
-        max_reply_delay_sec=float(
-            reactions.get('max_reply_delay_sec', 21600.0)
-        ),
-        pool=pool,
-        like_pool=like_pool,
-        rescan_sec=float(reactions.get('rescan_sec', 300.0)),
-        attach_enabled=bool(reactions.get('attach_enabled', True)),
-        exposure_c1=float(reactions.get('exposure_c1', 0.45)),
-        exposure_c2=float(reactions.get('exposure_c2', 0.90)),
-        exposure_k=float(reactions.get('exposure_k', 8.0)),
-        like_control_gain=float(reactions.get('like_control_gain', 1.0)),
-        recip_fraction_target=float(
-            reactions.get('recip_fraction_target', 0.20)
-        ),
-        recip_control_gain=float(reactions.get('recip_control_gain', 1.0)),
-        like_max_per_day=int(reactions.get('like_max_per_day', 400)),
-        sticker_max_per_day=int(reactions.get('sticker_max_per_day', 40)),
-        label=str(reactions.get('label', '')),
+    """Load the reaction engine's params from the 'reactions' JSON key.
+
+    Every scalar knob reads its own key and falls back to its own declared
+    default (``core/codec.py``); only what a plain key cannot express is
+    spelled out here -- the two emoji pools, the Gaussian day curves, and
+    the uptime window whose JSON keys carry an ``_hour`` suffix.
+    """
+    cfg = codec.section(data, 'reactions')
+    return codec.decode(
+        ReactionParams,
+        cfg,
+        {
+            'pool': _pool(data, 'reaction'),
+            'like_pool': _pool(data, 'like'),
+            'hours_weekday': _peaks(cfg.get('hours_weekday'))
+            or ReactionParams.hours_weekday,
+            'hours_weekend': _peaks(cfg.get('hours_weekend'))
+            or ReactionParams.hours_weekend,
+            # A BLANK list falls back to the default rather than meaning
+            # "no quiet hours at all". The live constants set this key to an
+            # empty list, and the engine has always run on the 2-6 default
+            # because the old loader read a blank as unset -- taking it
+            # literally now would start scheduling reactions overnight. Kept
+            # deliberately; drop the ``or`` to honour a blank list.
+            'quiet_hours': frozenset(
+                int(h)
+                for h in (cfg.get('quiet_hours') or ReactionParams.quiet_hours)
+            ),
+            'active_start': float(
+                cfg.get('active_start_hour', ReactionParams.active_start)
+            ),
+            'active_end': float(
+                cfg.get('active_end_hour', ReactionParams.active_end)
+            ),
+        },
     )
