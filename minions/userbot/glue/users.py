@@ -1,11 +1,11 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The opt-in users database glue, mixed into Aggregator.
+"""The opt-in users database glue, mixed into Userbot.
 
 Extracted from ``main``: recording seen commenters and join/leave events to
 the users DB, lazy identity enrichment, and the /users report. ``_UsersMixin``
-is mixed into ``Aggregator`` with method bodies unchanged; it inherits
-``AggregatorProtocol`` (base.py) so the type checker knows the shared state.
+is mixed into ``Userbot`` with method bodies unchanged; it inherits
+``UserbotProtocol`` (base.py) so the type checker knows the shared state.
 """
 
 from __future__ import annotations
@@ -14,20 +14,20 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from minions.aggregator.core.base import AggregatorProtocol
-from minions.aggregator.core.matching import _thread_top
-from minions.aggregator.core.models import _iso
-from minions.aggregator.engines import users
-from minions.aggregator.glue.status import _user_label
+from minions.userbot.core.base import UserbotProtocol
+from minions.userbot.core.matching import _thread_top
+from minions.userbot.core.models import _iso
+from minions.userbot.engines import users
+from minions.userbot.glue.status import _user_label
 
 if TYPE_CHECKING:
     from telethon import events
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 
-class _UsersMixin(AggregatorProtocol):
-    """The users-DB recording + /users report, mixed into Aggregator."""
+class _UsersMixin(UserbotProtocol):
+    """The users-DB recording + /users report, mixed into Userbot."""
 
     def _record_user_message(self, event: events.NewMessage.Event) -> None:
         """Log a seen audience message to the users DB (a discussion comment).

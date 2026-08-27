@@ -32,7 +32,7 @@ dependencies = [
 ml = ['torch', 'torchvision', 'transformers', 'facenet-pytorch']
 llm = ['google-genai']
 links = ['yt-dlp']
-# The aggregator userbot (minions/aggregator): a Telethon USER account is the
+# The aggregator userbot (minions/userbot): a Telethon USER account is the
 # only kind that may send premium emoji. Baked into the one shared image.
 tg = ['telethon>=1.36,<2']
 dev = [
@@ -56,7 +56,7 @@ minion_core = ['py.typed', 'prompts/*.md']
 # The aggregator's editable post constants (UTF-8 texts + premium emoji ids),
 # the cabinet ("/comod") template photo (assets/), and the shelf-label font
 # (assets/fonts/): Liberation Serif Bold Italic (Latin + Cyrillic).
-'minions.aggregator' = [
+'minions.userbot' = [
     'aggregator_constants.json',
     'assets/*',
     'assets/fonts/*',
@@ -140,9 +140,9 @@ convention = 'pep257'
 # the session file; dump_emoji_ids.py prints each premium emoji id;
 # cats_proof.py's printed narration is the deliverable. T201 (no print)
 # targets stray debug prints in library code, not a tool's own output.
-'minions/aggregator/login.py' = ['T201']
-'minions/aggregator/dump_emoji_ids.py' = ['T201']
-'minions/aggregator/cats_proof.py' = ['T201']
+'minions/userbot/login.py' = ['T201']
+'minions/userbot/dump_emoji_ids.py' = ['T201']
+'minions/userbot/cats_proof.py' = ['T201']
 'minions/donate/login.py' = ['T201']
 
 # ---------------------------------------------------------------- mypy
@@ -181,12 +181,12 @@ follow_imports = 'skip'
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# The aggregator userbot rides the kernel package tree (minions/aggregator) but
+# The aggregator userbot rides the kernel package tree (minions/userbot) but
 # is a standalone Telethon app, not part of the strict kernel gate -- exactly
 # like services.* above. Telethon is untyped and its event/message objects are
 # duck-typed here, so keep it out of strict checking; ruff (ALL) still lints it.
 # The donate userbot is a sibling Telethon app on its own account, same story.
-module = ['minions.aggregator.*', 'minions.donate.*']
+module = ['minions.userbot.*', 'minions.donate.*']
 ignore_errors = true
 
 # -------------------------------------------------------------- pytest

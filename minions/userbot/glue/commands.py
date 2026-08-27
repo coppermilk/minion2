@@ -1,12 +1,12 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The chat command dispatcher, mixed into Aggregator.
+"""The chat command dispatcher, mixed into Userbot.
 
 Extracted from ``main``: the /command table and the feature on/off switches,
 plus the small handlers that render straight back to the source chat
 (/help, /emojis, /preview, /features, /test, /live, /greetnow). Handlers that
 live on other mixins (cats, comod, users, stories) are dispatched through
-``self``. ``_CommandsMixin`` inherits ``AggregatorProtocol`` (base.py) so the
+``self``. ``_CommandsMixin`` inherits ``UserbotProtocol`` (base.py) so the
 type checker knows that shared surface.
 """
 
@@ -15,15 +15,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from minions.aggregator.core.base import AggregatorProtocol
-from minions.aggregator.core.render import _compose
-from minions.aggregator.core.render import _render_constants
-from minions.aggregator.core.render import _sample_groups
+from minions.userbot.core.base import UserbotProtocol
+from minions.userbot.core.render import _compose
+from minions.userbot.core.render import _render_constants
+from minions.userbot.core.render import _sample_groups
 
 if TYPE_CHECKING:
     from telethon import events
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 
 # Chat commands (from ANY chat, ANYONE), always rendered into the source chat:
@@ -99,8 +99,8 @@ def _service_action(word: str) -> tuple[str, str] | None:
     return None
 
 
-class _CommandsMixin(AggregatorProtocol):
-    """The /command dispatcher + feature switches, mixed into Aggregator."""
+class _CommandsMixin(UserbotProtocol):
+    """The /command dispatcher + feature switches, mixed into Userbot."""
 
     async def _command(self, text: str) -> bool:
         """Run a matching /command, returning True if one handled the text."""

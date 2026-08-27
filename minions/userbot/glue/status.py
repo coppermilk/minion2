@@ -4,8 +4,8 @@
 
 Extracted from ``main``: the section builders and small display helpers that
 turn the live aggregator state into the /status text. ``_StatusMixin`` is
-mixed into ``Aggregator`` (its method bodies are unchanged), so they keep
-reading ``self`` state; it inherits ``AggregatorProtocol`` (base.py) so the
+mixed into ``Userbot`` (its method bodies are unchanged), so they keep
+reading ``self`` state; it inherits ``UserbotProtocol`` (base.py) so the
 type checker knows what that state is.
 """
 
@@ -17,11 +17,11 @@ from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
 
-from minions.aggregator.core.base import AggregatorProtocol
-from minions.aggregator.core.render import _emoji_markup
-from minions.aggregator.core.runtime import _fmt_eta
-from minions.aggregator.glue.commands import SERVICE_ACTIONS
-from minions.aggregator.glue.commands import SERVICE_NAMES
+from minions.userbot.core.base import UserbotProtocol
+from minions.userbot.core.render import _emoji_markup
+from minions.userbot.core.runtime import _fmt_eta
+from minions.userbot.glue.commands import SERVICE_ACTIONS
+from minions.userbot.glue.commands import SERVICE_NAMES
 
 # How many pending cats to list individually in /status (the rest are summed).
 STATUS_PENDING_CATS = 12
@@ -29,7 +29,7 @@ STATUS_PENDING_CATS = 12
 STATUS_WARM_PEERS = 3
 
 if TYPE_CHECKING:
-    from minions.aggregator.engines import cats
+    from minions.userbot.engines import cats
 
 def _trim(title: str, width: int = 40) -> str:
     """Return a one-line, length-capped title for the /status report."""
@@ -74,8 +74,8 @@ def _user_label(row: dict[str, object]) -> str:
     return f'id {row.get("user_id", "?")}'
 
 
-class _StatusMixin(AggregatorProtocol):
-    """The /status renderer, mixed into Aggregator (reads its state)."""
+class _StatusMixin(UserbotProtocol):
+    """The /status renderer, mixed into Userbot (reads its state)."""
 
     def _ic(self, key: str, fallback: str = '') -> str:
         """Return a /status glyph from the JSON, or the fallback."""
@@ -103,7 +103,7 @@ class _StatusMixin(AggregatorProtocol):
         """Return status: header, routing, videos, cats, greeter, users."""
         flag = 'TEST' if self.mode == 'test' else 'LIVE'
         parts = [
-            self._head('title', 'Aggregator', f'{self._dot(on=True)} {flag}'),
+            self._head('title', 'Userbot', f'{self._dot(on=True)} {flag}'),
             '',
             *self._routing_lines(labels),
             '',

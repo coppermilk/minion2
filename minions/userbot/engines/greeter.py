@@ -43,13 +43,13 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.aggregator.core import humanize_time
+from minions.userbot.core import humanize_time
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 
 @dataclass(frozen=True)

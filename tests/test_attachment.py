@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The Berlyne attachment model (minions/aggregator/engines/attachment.py).
+"""The Berlyne attachment model (minions/userbot/engines/attachment.py).
 
 Pins the original functional forms: the Wundt exposure curve (a difference of
 two logistics, NOT p^2(1-p)), its ~0.675 peak, the saturating reciprocity
@@ -9,7 +9,7 @@ response, and the qualitative scenario ranking the model is meant to produce.
 
 from __future__ import annotations
 
-from minions.aggregator.engines import attachment
+from minions.userbot.engines import attachment
 
 _PEAK = 0.675
 _PEAK_TOL = 0.02

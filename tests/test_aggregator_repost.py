@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 install_telethon_stub()
 
-from minions.aggregator import main  # noqa: E402
+from minions.userbot import main  # noqa: E402
 
 
 def _post(title: str, age_days: float) -> main.Posted:
@@ -136,13 +136,13 @@ class _FakeFlush:
         self.order.append('arm')
 
 
-def _bare_aggregator(fake: _FakeFlush) -> main.Aggregator:
-    """Build an Aggregator with only what the flush path touches (no __init__).
+def _bare_aggregator(fake: _FakeFlush) -> main.Userbot:
+    """Build an Userbot with only what the flush path touches (no __init__).
 
     ``__init__`` opens a Telethon client and loads real state, so we make the
     instance directly and wire in the fake collaborators.
     """
-    agg = object.__new__(main.Aggregator)
+    agg = object.__new__(main.Userbot)
     agg.groups = []
     agg.posted = []
     agg.processed_ids = set()
@@ -162,7 +162,7 @@ def _bare_aggregator(fake: _FakeFlush) -> main.Aggregator:
 
     def _record_posted(group: main.Group) -> None:
         fake.order.append('record')
-        main.Aggregator._record_posted(agg, group)
+        main.Userbot._record_posted(agg, group)
 
     agg._record_posted = _record_posted
     return agg
@@ -204,7 +204,7 @@ def test_flush_records_and_saves_before_react_watch(
     group = _sample_group()
     agg.groups.append(group)
 
-    asyncio.run(main.Aggregator._flush(agg, group))
+    asyncio.run(main.Userbot._flush(agg, group))
 
     assert fake.order.index('record') < fake.order.index('react')
     assert fake.order.index('save') < fake.order.index('react')
@@ -226,7 +226,7 @@ def test_flush_requeues_when_nothing_delivered(
     group = _sample_group()
     agg.groups.append(group)
 
-    asyncio.run(main.Aggregator._flush(agg, group))
+    asyncio.run(main.Userbot._flush(agg, group))
 
     assert group in agg.groups  # kept for a later retry
     assert agg.posted == []  # not recorded
@@ -235,9 +235,9 @@ def test_flush_requeues_when_nothing_delivered(
     assert 'save' in fake.order  # the re-queue is persisted
 
 
-def _agg_with_gap(gap: float) -> main.Aggregator:
-    """Build a bare Aggregator whose config sets only the discussion gap."""
-    agg = object.__new__(main.Aggregator)
+def _agg_with_gap(gap: float) -> main.Userbot:
+    """Build a bare Userbot whose config sets only the discussion gap."""
+    agg = object.__new__(main.Userbot)
     agg.config = main.Config(
         source=0, targets=(), test_target=0, platforms=('tiktok',),
         threshold=0.9, timeout=1.0, backfill=0, max_duration=180,
@@ -261,7 +261,7 @@ def test_discussion_throttle_spaces_calls(
     agg = _agg_with_gap(gap)
     agg._last_discussion_ts = time.time()  # a call just happened
 
-    asyncio.run(main.Aggregator._throttle_discussion(agg))
+    asyncio.run(main.Userbot._throttle_discussion(agg))
 
     assert slept
     assert 0 < slept[0] <= gap
@@ -279,6 +279,6 @@ def test_discussion_throttle_disabled_when_zero(
     monkeypatch.setattr(main.asyncio, 'sleep', _fake_sleep)
     agg = _agg_with_gap(0.0)
 
-    asyncio.run(main.Aggregator._throttle_discussion(agg))
+    asyncio.run(main.Userbot._throttle_discussion(agg))
 
     assert slept == []

@@ -73,68 +73,68 @@ from telethon import TelegramClient
 from telethon import events
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
-from minions.aggregator.core.client import build_client
-from minions.aggregator.core.config import CONSTANTS_FILE
-from minions.aggregator.core.config import FEATURE_OVERRIDES_FILE
-from minions.aggregator.core.config import MODE_FILE
-from minions.aggregator.core.config import STATE_FILE
-from minions.aggregator.core.config import _load_config
-from minions.aggregator.core.config import _load_constants
-from minions.aggregator.core.config import _load_runtime
-from minions.aggregator.core.config import _read_json
-from minions.aggregator.core.config import _resolve_session_path
-from minions.aggregator.core.config import _resolve_state_path
-from minions.aggregator.core.config import apply_persona
-from minions.aggregator.core.config import load_env
-from minions.aggregator.core.humanize_choice import Variety
-from minions.aggregator.core.matching import _action_ok
-from minions.aggregator.core.matching import _duration_seconds
-from minions.aggregator.core.matching import _extract_fields
-from minions.aggregator.core.matching import _is_recent_repost
-from minions.aggregator.core.matching import _norm
-from minions.aggregator.core.matching import _parse_item
-from minions.aggregator.core.matching import _similar
-from minions.aggregator.core.models import _THUMB_ALIASES
-from minions.aggregator.core.models import Config
-from minions.aggregator.core.models import Group
-from minions.aggregator.core.models import Item
-from minions.aggregator.core.models import Posted
-from minions.aggregator.core.models import _iso
-from minions.aggregator.core.render import _compose
-from minions.aggregator.core.render import _youtube_thumb
-from minions.aggregator.core.runtime import _cancel
-from minions.aggregator.core.runtime import _touch_health
-from minions.aggregator.core.runtime import _watchdog
-from minions.aggregator.core.runtime import configure_logging
-from minions.aggregator.core.statefile import _pending_dict
-from minions.aggregator.core.statefile import _pending_from_dict
-from minions.aggregator.core.statefile import _posted_dict
-from minions.aggregator.core.statefile import _posted_from_dict
-from minions.aggregator.engines import cats
-from minions.aggregator.engines import comod
-from minions.aggregator.engines import greeter
-from minions.aggregator.engines import relationship
-from minions.aggregator.engines import stories
-from minions.aggregator.engines import users
-from minions.aggregator.engines.premium_emoji import build_premium_message
-from minions.aggregator.glue.cats import _CatsMixin
-from minions.aggregator.glue.commands import FEATURE_NAMES
-from minions.aggregator.glue.commands import SERVICE_MODES
-from minions.aggregator.glue.commands import SERVICE_NAMES
-from minions.aggregator.glue.commands import _CommandsMixin
-from minions.aggregator.glue.comod import _ComodMixin
-from minions.aggregator.glue.status import STATUS_WARM_PEERS
-from minions.aggregator.glue.status import _StatusMixin
-from minions.aggregator.glue.stories import _StoriesMixin
-from minions.aggregator.glue.users import _UsersMixin
+from minions.userbot.core.client import build_client
+from minions.userbot.core.config import CONSTANTS_FILE
+from minions.userbot.core.config import FEATURE_OVERRIDES_FILE
+from minions.userbot.core.config import MODE_FILE
+from minions.userbot.core.config import STATE_FILE
+from minions.userbot.core.config import _load_config
+from minions.userbot.core.config import _load_constants
+from minions.userbot.core.config import _load_runtime
+from minions.userbot.core.config import _read_json
+from minions.userbot.core.config import _resolve_session_path
+from minions.userbot.core.config import _resolve_state_path
+from minions.userbot.core.config import apply_persona
+from minions.userbot.core.config import load_env
+from minions.userbot.core.humanize_choice import Variety
+from minions.userbot.core.matching import _action_ok
+from minions.userbot.core.matching import _duration_seconds
+from minions.userbot.core.matching import _extract_fields
+from minions.userbot.core.matching import _is_recent_repost
+from minions.userbot.core.matching import _norm
+from minions.userbot.core.matching import _parse_item
+from minions.userbot.core.matching import _similar
+from minions.userbot.core.models import _THUMB_ALIASES
+from minions.userbot.core.models import Config
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Item
+from minions.userbot.core.models import Posted
+from minions.userbot.core.models import _iso
+from minions.userbot.core.render import _compose
+from minions.userbot.core.render import _youtube_thumb
+from minions.userbot.core.runtime import _cancel
+from minions.userbot.core.runtime import _touch_health
+from minions.userbot.core.runtime import _watchdog
+from minions.userbot.core.runtime import configure_logging
+from minions.userbot.core.statefile import _pending_dict
+from minions.userbot.core.statefile import _pending_from_dict
+from minions.userbot.core.statefile import _posted_dict
+from minions.userbot.core.statefile import _posted_from_dict
+from minions.userbot.engines import cats
+from minions.userbot.engines import comod
+from minions.userbot.engines import greeter
+from minions.userbot.engines import relationship
+from minions.userbot.engines import stories
+from minions.userbot.engines import users
+from minions.userbot.engines.premium_emoji import build_premium_message
+from minions.userbot.glue.cats import _CatsMixin
+from minions.userbot.glue.commands import FEATURE_NAMES
+from minions.userbot.glue.commands import SERVICE_MODES
+from minions.userbot.glue.commands import SERVICE_NAMES
+from minions.userbot.glue.commands import _CommandsMixin
+from minions.userbot.glue.comod import _ComodMixin
+from minions.userbot.glue.status import STATUS_WARM_PEERS
+from minions.userbot.glue.status import _StatusMixin
+from minions.userbot.glue.stories import _StoriesMixin
+from minions.userbot.glue.users import _UsersMixin
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from minions.aggregator.engines.premium_emoji import PremiumMessage
+    from minions.userbot.engines.premium_emoji import PremiumMessage
 
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 # How often to log the pending videos and what each still awaits.
 STATUS_INTERVAL = 60
@@ -143,7 +143,7 @@ STATUS_INTERVAL = 60
 POSTED_CAP = 300
 
 
-class Aggregator(
+class Userbot(
     _StatusMixin,
     _ComodMixin,
     _StoriesMixin,
@@ -1017,7 +1017,7 @@ async def main() -> None:
     session_path = _resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
     client = build_client(session_path, int(api_id), api_hash)
-    agg = Aggregator(client, config)
+    agg = Userbot(client, config)
 
     # Listen everywhere the account can see: the /emojis preview command works
     # from ANY chat and for ANYONE (it renders back into the source chat);

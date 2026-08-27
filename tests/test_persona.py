@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The shared persona clock (minions/aggregator/core/config.py apply_persona).
+"""The shared persona clock (minions/userbot/core/config.py apply_persona).
 
 One account is one person, so a single top-level ``persona`` block is the one
 source of truth for the waking window, quiet hours and timezone; it is fanned
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from minions.aggregator.core import config
+from minions.userbot.core import config
 
 _TZ = 3
 _WAKE_START = 7

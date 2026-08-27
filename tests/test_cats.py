@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The aggregator's human-like cat-reply engine (minions/aggregator/cats.py).
+"""The aggregator's human-like cat-reply engine (minions/userbot/cats.py).
 
 Pure-logic tests: no Telethon, no network -- the engine is stdlib-only by
 design, so every one of the nine behavioural principles is checked here.
@@ -14,7 +14,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from minions.aggregator.engines import cats
+from minions.userbot.engines import cats
 
 _BURST_SIZE = 6
 _HALF = 0.5

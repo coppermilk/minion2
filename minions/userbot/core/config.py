@@ -15,13 +15,13 @@ import logging
 import os
 from pathlib import Path
 
-from minions.aggregator.core.models import DEFAULT_FIELDS
-from minions.aggregator.core.models import Config
-from minions.aggregator.core.models import Consts
+from minions.userbot.core.models import DEFAULT_FIELDS
+from minions.userbot.core.models import Config
+from minions.userbot.core.models import Consts
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
-# The aggregator package root (minions/aggregator), anchored on this file's
+# The aggregator package root (minions/userbot), anchored on this file's
 # location (core/config.py) so it holds no matter where a submodule lives.
 # Data (the constants JSON, the session file) and the repo root are derived
 # from it, not from each caller's ``__file__``.
@@ -46,7 +46,7 @@ MODE_FILE = 'aggregator_mode.json'
 FEATURE_OVERRIDES_FILE = 'feature_overrides.json'
 # The project keeps ONE .env at the repo root (compose's env_file and the
 # Windows launcher both point there): two levels above the package
-# (minions/aggregator -> minions -> repo). In Docker the vars are already in
+# (minions/userbot -> minions -> repo). In Docker the vars are already in
 # os.environ (compose env_file), so a missing file here is harmless; env wins.
 PROJECT_ENV = PACKAGE_DIR.parent.parent / '.env'
 # Last-resort file-session base path: 'telethon.session' at the package root.

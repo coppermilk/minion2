@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import asyncio
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 _SECS_PER_MIN = 60
 _MINS_PER_HOUR = 60

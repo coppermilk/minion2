@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The aggregator's users database (minions/aggregator/users.py).
+"""The aggregator's users database (minions/userbot/users.py).
 
 Pure-logic tests against a temp SQLite file: no Telethon, no network. Every
 write is idempotent, so re-reads (deferred admin-log events, comment rescans)
@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from minions.aggregator.engines.users import Identity
-from minions.aggregator.engines.users import MembershipEvent
-from minions.aggregator.engines.users import SeenMessage
-from minions.aggregator.engines.users import UserStore
+from minions.userbot.engines.users import Identity
+from minions.userbot.engines.users import MembershipEvent
+from minions.userbot.engines.users import SeenMessage
+from minions.userbot.engines.users import UserStore
 
 _FIRST_SEEN = 100.0
 _LAST_SEEN = 200.0

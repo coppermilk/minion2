@@ -23,8 +23,8 @@ from telethon import TelegramClient
 from telethon import events
 from telethon.tl.types import MessageEntityCustomEmoji
 
-from minions.aggregator.core.config import _resolve_session_path
-from minions.aggregator.core.config import load_env
+from minions.userbot.core.config import _resolve_session_path
+from minions.userbot.core.config import load_env
 
 logging.basicConfig(
     level=logging.INFO,

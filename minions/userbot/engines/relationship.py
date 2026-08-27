@@ -26,8 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 
-from minions.aggregator.core import humanize_time
-from minions.aggregator.engines import attachment
+from minions.userbot.core import humanize_time
+from minions.userbot.engines import attachment
 
 
 def int_map(raw: object) -> dict[str, int]:

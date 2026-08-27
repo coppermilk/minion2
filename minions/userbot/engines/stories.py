@@ -45,9 +45,9 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.aggregator.core import humanize_time
-from minions.aggregator.engines import attachment
-from minions.aggregator.engines import relationship
+from minions.userbot.core import humanize_time
+from minions.userbot.engines import attachment
+from minions.userbot.engines import relationship
 
 if TYPE_CHECKING:
     from collections.abc import Callable

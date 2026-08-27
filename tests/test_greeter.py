@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The subscriber greeter (minions/aggregator/greeter.py).
+"""The subscriber greeter (minions/userbot/greeter.py).
 
 Telethon-free: the client is duck-typed, so a fake async client drives the
 admin-log detection, the silent baseline, the welcome/farewell logic and the
@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Never
 
-from minions.aggregator.engines import greeter
+from minions.userbot.engines import greeter
 
 _CAP_PER_CYCLE = 2
 _CHANNEL_ID = -999

@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The shared human-mimicry primitives (minions/aggregator/humanize_time.py).
+"""The shared human-mimicry primitives (minions/userbot/humanize_time.py).
 
 Pure functions used by both behavioural brains (cats, stories); these pin the
 properties the brains rely on: local-time reading, a positive heavy-tailed
@@ -14,8 +14,8 @@ import random
 from datetime import UTC
 from datetime import datetime
 
-from minions.aggregator.core import humanize_choice
-from minions.aggregator.core import humanize_time
+from minions.userbot.core import humanize_choice
+from minions.userbot.core import humanize_time
 
 _NOON = datetime(1970, 1, 1, 12, 0, tzinfo=UTC).timestamp()
 _OFFSET = 3

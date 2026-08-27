@@ -1,12 +1,12 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The shared state contract for the Aggregator mixins.
+"""The shared state contract for the Userbot mixins.
 
 Each glue mixin (status, cats, stories, comod, users, commands) reads state
-and calls peer methods off ``self`` that ``Aggregator`` provides. Rather than
+and calls peer methods off ``self`` that ``Userbot`` provides. Rather than
 each mixin re-declaring those names in its own ``TYPE_CHECKING`` block (four
 hand-kept copies that can silently drift), they all inherit
-``AggregatorProtocol``: one place that tells the type checker what ``self``
+``UserbotProtocol``: one place that tells the type checker what ``self``
 carries. At runtime it is an empty marker base, so it adds no behaviour and
 no import of Telethon.
 """
@@ -21,20 +21,20 @@ if TYPE_CHECKING:
 
     from telethon import TelegramClient
 
-    from minions.aggregator.core.models import Config
-    from minions.aggregator.core.models import Consts
-    from minions.aggregator.core.models import Group
-    from minions.aggregator.core.models import Posted
-    from minions.aggregator.engines import cats
-    from minions.aggregator.engines import comod
-    from minions.aggregator.engines import greeter
-    from minions.aggregator.engines import stories
-    from minions.aggregator.engines import users
+    from minions.userbot.core.models import Config
+    from minions.userbot.core.models import Consts
+    from minions.userbot.core.models import Group
+    from minions.userbot.core.models import Posted
+    from minions.userbot.engines import cats
+    from minions.userbot.engines import comod
+    from minions.userbot.engines import greeter
+    from minions.userbot.engines import stories
+    from minions.userbot.engines import users
 
-    class AggregatorProtocol:
-        """What every Aggregator mixin may read off ``self`` (type-only).
+    class UserbotProtocol:
+        """What every Userbot mixin may read off ``self`` (type-only).
 
-        Declared once here and inherited by each mixin; ``Aggregator`` itself
+        Declared once here and inherited by each mixin; ``Userbot`` itself
         provides the real attributes and implementations. Only the type
         checker sees this body -- at runtime the class below is empty.
         """
@@ -69,7 +69,7 @@ if TYPE_CHECKING:
         _pending_views: list[stories.StoryView]
         _modes: dict[str, str]  # service -> 'off' | 'test' | 'live'
 
-        # --- peer methods implemented on Aggregator or a sibling mixin ---
+        # --- peer methods implemented on Userbot or a sibling mixin ---
         def live_targets(self) -> tuple[int, ...]:
             """Return the active profile's post destinations."""
 
@@ -138,5 +138,5 @@ if TYPE_CHECKING:
 
 else:
 
-    class AggregatorProtocol:
+    class UserbotProtocol:
         """Runtime marker base for the mixins (empty; see the typed body)."""

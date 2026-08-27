@@ -1,11 +1,11 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The cabinet ("comod") commands, mixed into Aggregator.
+"""The cabinet ("comod") commands, mixed into Userbot.
 
 Extracted from ``main``: the /comod and /propiska handlers plus their image
-render + caption helpers. ``_ComodMixin`` is mixed into ``Aggregator`` with
+render + caption helpers. ``_ComodMixin`` is mixed into ``Userbot`` with
 method bodies unchanged, so they keep reading ``self`` state; it inherits
-``AggregatorProtocol`` (base.py) so the type checker knows that state.
+``UserbotProtocol`` (base.py) so the type checker knows that state.
 """
 
 from __future__ import annotations
@@ -20,15 +20,15 @@ from datetime import timezone
 from pathlib import Path
 
 from minion_core.adapters import files
-from minions.aggregator.core.base import AggregatorProtocol
-from minions.aggregator.core.config import PACKAGE_DIR
-from minions.aggregator.engines import comod
+from minions.userbot.core.base import UserbotProtocol
+from minions.userbot.core.config import PACKAGE_DIR
+from minions.userbot.engines import comod
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 
-class _ComodMixin(AggregatorProtocol):
-    """The cabinet commands, mixed into Aggregator (reads its state)."""
+class _ComodMixin(UserbotProtocol):
+    """The cabinet commands, mixed into Userbot (reads its state)."""
 
     async def cabinet_command(self, text: str) -> None:
         """Move a nick into the cabinet, evict one, or re-post the cabinet.

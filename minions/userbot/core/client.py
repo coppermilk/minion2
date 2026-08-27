@@ -31,12 +31,12 @@ from typing import TYPE_CHECKING
 
 from telethon import TelegramClient
 
-from minions.aggregator.core.config import _load_runtime
+from minions.userbot.core.config import _load_runtime
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 # Sleep off Telegram flood waits up to this many seconds (rather than raising).
 # An hour absorbs every transient rate limit an idle-to-busy userbot hits; a

@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The aggregator's human-like story viewer (minions/aggregator/stories.py).
+"""The aggregator's human-like story viewer (minions/userbot/stories.py).
 
 Pure-logic tests: no Telethon, no network. The brain only ever plans views of
 UNSEEN stories, in human-like sessions, and never re-views one it has already
@@ -15,7 +15,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from minions.aggregator.engines import stories
+from minions.userbot.engines import stories
 
 _MANY = 50
 _NOON = datetime(1970, 1, 1, 12, 0, tzinfo=UTC).timestamp()  # a waking hour

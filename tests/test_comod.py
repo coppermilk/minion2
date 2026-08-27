@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from minions.aggregator.engines import comod
+from minions.userbot.engines import comod
 
 _MAX_SHELVES = 10
 _THREE_SHELVES = 3

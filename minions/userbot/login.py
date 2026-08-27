@@ -6,14 +6,14 @@ Run this ONCE interactively (it asks for your phone, the login code Telegram
 sends, and your 2FA password if you have one). It writes the Telethon session
 file -- full account access -- and prints where it wrote it:
 
-    python -m minions.aggregator.login
+    python -m minions.userbot.login
 
 The intended flow: run it on the machine where logging in is convenient (e.g.
 Windows), then point the aggregator at that file. By default the file is
 ``telethon.session`` next to this package; set ``TELEGRAM_SESSION_FILE`` to
 write it elsewhere (e.g. ``/data/bots/aggregator/session`` for the container's
 persistent mount -- ``.session`` is appended for you). After it exists,
-``python -m minions.aggregator.main`` logs in silently on every start, across
+``python -m minions.userbot.main`` logs in silently on every start, across
 reboots and machine moves, because the auth key now lives in that file.
 
 The 2FA password only authorises this login; it is NOT stored in the session
@@ -26,9 +26,9 @@ from __future__ import annotations
 
 import os
 
-from minions.aggregator.core.client import build_client
-from minions.aggregator.core.config import _resolve_session_path
-from minions.aggregator.core.config import load_env
+from minions.userbot.core.client import build_client
+from minions.userbot.core.config import _resolve_session_path
+from minions.userbot.core.config import load_env
 
 
 def main() -> None:
@@ -68,7 +68,7 @@ def main() -> None:
     print('=' * 70)
     print(
         'Copy this file to where the aggregator runs (or set '
-        'TELEGRAM_SESSION_FILE), then `python -m minions.aggregator.main` '
+        'TELEGRAM_SESSION_FILE), then `python -m minions.userbot.main` '
         'logs in silently.'
     )
 

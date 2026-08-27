@@ -1,12 +1,12 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The cat-reply engine glue, mixed into Aggregator.
+"""The cat-reply engine glue, mixed into Userbot.
 
 Extracted from ``main``: scheduling human-like cat replies to comments,
 seeding/rescanning the watch-list, and the send primitives (sticker, text
-reply, reaction). ``_CatsMixin`` is mixed into ``Aggregator`` with method
+reply, reaction). ``_CatsMixin`` is mixed into ``Userbot`` with method
 bodies unchanged, so they keep reading ``self`` state; it inherits
-``AggregatorProtocol`` (base.py) so the type checker knows that state.
+``UserbotProtocol`` (base.py) so the type checker knows that state.
 """
 
 from __future__ import annotations
@@ -22,21 +22,21 @@ from telethon.tl.types import InputReplyToMessage
 from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
-from minions.aggregator.core.base import AggregatorProtocol
-from minions.aggregator.core.matching import _needs_human
-from minions.aggregator.core.matching import _thread_top
-from minions.aggregator.core.models import _Comment
-from minions.aggregator.engines import cats
-from minions.aggregator.engines.premium_emoji import RichText
-from minions.aggregator.glue.status import STATUS_PENDING_CATS
-from minions.aggregator.glue.status import _trim
+from minions.userbot.core.base import UserbotProtocol
+from minions.userbot.core.matching import _needs_human
+from minions.userbot.core.matching import _thread_top
+from minions.userbot.core.models import _Comment
+from minions.userbot.engines import cats
+from minions.userbot.engines.premium_emoji import RichText
+from minions.userbot.glue.status import STATUS_PENDING_CATS
+from minions.userbot.glue.status import _trim
 
 if TYPE_CHECKING:
     from telethon import events
 
-    from minions.aggregator.engines.premium_emoji import PremiumMessage
+    from minions.userbot.engines.premium_emoji import PremiumMessage
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 # How many recent messages to scan when checking whether the operator already
 # replied to a comment by hand (so the bot does not pile a cat on top).
@@ -50,8 +50,8 @@ COMMENT_SCAN = 50
 PRE_FIRE_REFRESH_SEC = 45.0
 
 
-class _CatsMixin(AggregatorProtocol):
-    """The cat-reply engine, mixed into Aggregator (reads its state)."""
+class _CatsMixin(UserbotProtocol):
+    """The cat-reply engine, mixed into Userbot (reads its state)."""
 
     def _maybe_cat(self, event: events.NewMessage.Event) -> None:
         """If this message comments on one of our posts, schedule a cat react.

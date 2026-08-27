@@ -16,7 +16,7 @@ distracted-human timing.
 
 This is a DRY RUN: it never connects to Telegram, it just prints the exact
 SendReaction payloads the live bot would send. To see real reactions, run the
-bot (python -m minions.aggregator.main); a live comment reaction is DELAYED on
+bot (python -m minions.userbot.main); a live comment reaction is DELAYED on
 purpose (to read as human), so send /catnow in the control chat to fire the
 queue immediately.
 
@@ -26,7 +26,7 @@ is stood in for -- we print the exact payload (the ``SendReaction`` request
 with its ``ReactionCustomEmoji`` and the target comment id) that
 ``main._send_cats`` would hand to Telethon.
 
-    python -m minions.aggregator.cats_proof
+    python -m minions.userbot.cats_proof
 
 Deterministic (seeded RNG + a fixed clock), so the output is reproducible and
 the timing reads as a distracted human, not a scheduler. Source stays ASCII;
@@ -45,7 +45,7 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
-from minions.aggregator.engines import cats
+from minions.userbot.engines import cats
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
 # Midday on a weekday, inside the active window, so cats are answered promptly.
@@ -234,7 +234,7 @@ def _closing(count: int) -> None:
     )
     print()
     print('NOTE: this was a DRY RUN -- no Telegram, no real reactions. Live:')
-    print('  1) run the bot:  python -m minions.aggregator.main')
+    print('  1) run the bot:  python -m minions.userbot.main')
     print('  2) a live comment reaction is DELAYED (human-like); to see it')
     print('     now, send /catnow in the control chat.')
     print('  3) the discussion group must ALLOW custom-emoji reactions (else')

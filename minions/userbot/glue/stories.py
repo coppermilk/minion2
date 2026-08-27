@@ -1,11 +1,11 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Human-like story viewing, mixed into Aggregator.
+"""Human-like story viewing, mixed into Userbot.
 
 Extracted from ``main``: the story-feed poll loop, candidate collection, the
 paced view scheduler, and the /stories report. ``_StoriesMixin`` is mixed
-into ``Aggregator`` with method bodies unchanged, so they keep reading
-``self`` state; it inherits ``AggregatorProtocol`` (base.py) so the type
+into ``Userbot`` with method bodies unchanged, so they keep reading
+``self`` state; it inherits ``UserbotProtocol`` (base.py) so the type
 checker knows that state.
 """
 
@@ -24,16 +24,16 @@ from telethon.tl.functions.stories import ReadStoriesRequest
 from telethon.tl.functions.stories import SendReactionRequest
 from telethon.tl.types import ReactionEmoji
 
-from minions.aggregator.core.base import AggregatorProtocol
-from minions.aggregator.core.models import _iso
-from minions.aggregator.core.models import _story_epoch
-from minions.aggregator.engines import stories
+from minions.userbot.core.base import UserbotProtocol
+from minions.userbot.core.models import _iso
+from minions.userbot.core.models import _story_epoch
+from minions.userbot.engines import stories
 
-log = logging.getLogger('aggregator')
+log = logging.getLogger('userbot')
 
 
-class _StoriesMixin(AggregatorProtocol):
-    """Story viewing, mixed into Aggregator (reads its state)."""
+class _StoriesMixin(UserbotProtocol):
+    """Story viewing, mixed into Userbot (reads its state)."""
 
     async def stories_loop(self) -> None:
         """Periodically poll the stories feed and view a human-like handful.

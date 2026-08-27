@@ -3,7 +3,7 @@
 """Safety-net tests for the aggregator core and its pure helpers.
 
 ``main`` imports Telethon at module load, absent from the test extras, so a
-handful of Telethon names are stubbed before importing. The Aggregator flow
+handful of Telethon names are stubbed before importing. The Userbot flow
 tests build the instance with ``object.__new__`` and wire only the few
 attributes the method under test touches -- no live client.
 """
@@ -22,15 +22,15 @@ if TYPE_CHECKING:
 
 install_telethon_stub()
 
-from minions.aggregator import main  # noqa: E402
-from minions.aggregator.core import config  # noqa: E402
-from minions.aggregator.core import matching  # noqa: E402
-from minions.aggregator.core import render  # noqa: E402
-from minions.aggregator.core import statefile  # noqa: E402
-from minions.aggregator.core.models import Config  # noqa: E402
-from minions.aggregator.core.models import Group  # noqa: E402
-from minions.aggregator.core.models import Item  # noqa: E402
-from minions.aggregator.core.models import Posted  # noqa: E402
+from minions.userbot import main  # noqa: E402
+from minions.userbot.core import config  # noqa: E402
+from minions.userbot.core import matching  # noqa: E402
+from minions.userbot.core import render  # noqa: E402
+from minions.userbot.core import statefile  # noqa: E402
+from minions.userbot.core.models import Config  # noqa: E402
+from minions.userbot.core.models import Group  # noqa: E402
+from minions.userbot.core.models import Item  # noqa: E402
+from minions.userbot.core.models import Posted  # noqa: E402
 
 CONSTS = config._load_constants(config.CONSTANTS_PATH)
 
@@ -185,12 +185,12 @@ def test_pending_round_trip_keeps_items_and_time() -> None:
     assert back.created_at == group.created_at
 
 
-# ------------------------------------------------------- Aggregator core flow
+# ------------------------------------------------------- Userbot core flow
 
 
-def _bare_core() -> main.Aggregator:
-    """Return an Aggregator with just the core-flow collaborators wired."""
-    agg = object.__new__(main.Aggregator)
+def _bare_core() -> main.Userbot:
+    """Return an Userbot with just the core-flow collaborators wired."""
+    agg = object.__new__(main.Userbot)
     agg.config = _config()
     agg.consts = CONSTS
     agg.groups = []
@@ -240,8 +240,8 @@ def test_short_or_reject_drops_long_video() -> None:
 
 
 def test_default_mode_follows_json_enabled() -> None:
-    """Aggregator defaults live; a feature is live only if its JSON is on."""
-    agg = object.__new__(main.Aggregator)
+    """Userbot defaults live; a feature is live only if its JSON is on."""
+    agg = object.__new__(main.Userbot)
     agg._raw = {'cats': {'enabled': True}, 'stories': {'enabled': False}}
     assert agg._default_mode('aggregator') == 'live'
     assert agg._default_mode('cats') == 'live'
@@ -250,7 +250,7 @@ def test_default_mode_follows_json_enabled() -> None:
 
 def test_migrate_service_modes_from_legacy_global(tmp_path: Path) -> None:
     """A pre-per-service install seeds from the old global mode + overrides."""
-    agg = object.__new__(main.Aggregator)
+    agg = object.__new__(main.Userbot)
     agg._raw = {
         'cats': {'enabled': True}, 'stories': {'enabled': True},
         'users': {'enabled': False}, 'greeter': {'enabled': False},
@@ -266,7 +266,7 @@ def test_load_service_modes_reads_and_cleans_the_block(
     tmp_path: Path,
 ) -> None:
     """The stored services block is read; a junk value falls to the default."""
-    agg = object.__new__(main.Aggregator)
+    agg = object.__new__(main.Userbot)
     agg._raw = {'cats': {'enabled': True}}
     agg._mode_path = tmp_path / 'mode.json'
     agg._overrides_path = tmp_path / 'ov.json'
@@ -282,7 +282,7 @@ def test_load_service_modes_reads_and_cleans_the_block(
 
 def test_feature_enabled_is_mode_not_off() -> None:
     """A service counts as enabled unless its mode is 'off'."""
-    agg = object.__new__(main.Aggregator)
+    agg = object.__new__(main.Userbot)
     agg._modes = {'cats': 'test', 'stories': 'off', 'greeter': 'live'}
     assert agg._feature_enabled('cats') is True
     assert agg._feature_enabled('greeter') is True
@@ -291,7 +291,7 @@ def test_feature_enabled_is_mode_not_off() -> None:
 
 def test_service_dir_follows_each_services_mode(tmp_path: Path) -> None:
     """A test service lands in base/test; a live one in base."""
-    agg = object.__new__(main.Aggregator)
+    agg = object.__new__(main.Userbot)
     agg._state_base = tmp_path
     agg._modes = {'aggregator': 'live', 'cats': 'test'}
     assert agg._service_dir('aggregator') == tmp_path

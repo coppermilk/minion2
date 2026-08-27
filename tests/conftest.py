@@ -30,7 +30,7 @@ def install_telethon_stub() -> None:
     Telethon is a runtime-only extra (``tg``), absent from the test extras,
     yet the aggregator binds a handful of its names at import. Each stub
     answers any ``from telethon... import X`` with a throwaway class. Call it
-    before importing ``minions.aggregator.main``; idempotent.
+    before importing ``minions.userbot.main``; idempotent.
     """
     if 'telethon' in sys.modules:
         return

@@ -13,18 +13,18 @@ from __future__ import annotations
 import random
 from typing import TYPE_CHECKING
 
-from minions.aggregator.core.humanize_choice import Variety
-from minions.aggregator.core.matching import _HASHTAG_RE
-from minions.aggregator.core.matching import _primary
-from minions.aggregator.core.models import Group
-from minions.aggregator.core.models import Item
-from minions.aggregator.engines.premium_emoji import RichText
+from minions.userbot.core.humanize_choice import Variety
+from minions.userbot.core.matching import _HASHTAG_RE
+from minions.userbot.core.matching import _primary
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Item
+from minions.userbot.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from minions.aggregator.core.models import Consts
-    from minions.aggregator.engines.premium_emoji import PremiumMessage
+    from minions.userbot.core.models import Consts
+    from minions.userbot.engines.premium_emoji import PremiumMessage
 
 # The order emoji types are grouped in for the /emojis catalog message.
 _EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat', 'like')
