@@ -1,21 +1,54 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Serialize/deserialize the aggregator's posted + pending state.
+"""How state reaches disk: the shared atomic IO, plus the poster's shapes.
 
-Extracted from ``main``: the readable JSON shapes for a Posted record and a
-pending Group, and their inverses. Pure functions over the models, so the
-on-disk schema lives in one place.
+Every engine persists through ``read_state`` / ``write_state``, so the CT-A
+invariant is proven in one place: the watchdog turns a hang into a hard
+``os._exit(1)``, which makes a half-written state file a case that happens.
+The Posted/Group codecs below are the poster's own on-disk schema.
 """
 
 from __future__ import annotations
 
+import json
 import time
+from typing import TYPE_CHECKING
 
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.core.models import Posted
 from minions.userbot.core.models import iso
 from minions.userbot.core.models import parse_iso
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from pathlib import Path
+
+
+def read_state(path: Path) -> dict[str, object]:
+    """Return a state file's contents, or ``{}`` if there is none to read.
+
+    Missing, unreadable and not-an-object all mean "start from your
+    defaults". A caller for whom that would silently discard history reads
+    the file itself instead (see the poster's ``restore``).
+    """
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):  # JSONDecodeError is a ValueError
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_state(path: Path, data: Mapping[str, object]) -> None:
+    """Persist a state file atomically, as readable UTF-8 JSON.
+
+    Via a sibling ``.tmp``, so a kill mid-write leaves the old state whole.
+    """
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
+    )
+    tmp.replace(path)
 
 
 def posted_dict(post: Posted) -> dict[str, object]:

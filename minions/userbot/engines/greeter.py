@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import asyncio
 import html
-import json
 import logging
 import random
 import time
@@ -44,6 +43,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import humanize
+from minions.userbot.core import statefile
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -429,11 +429,8 @@ class Greeter:
         re-read the whole admin log and mass-DM. The welcome_back memory
         (``left``) is carried over in that migration.
         """
-        if not self.path.exists():
-            return GreeterState()
-        try:
-            raw = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
+        raw = statefile.read_state(self.path)
+        if not raw:  # before the 'last_event_id' probe: nothing is not legacy
             return GreeterState()
         stored = int(raw.get('channel', 0) or 0)
         if stored and stored != self.params.channel:
@@ -458,15 +455,11 @@ class Greeter:
     def _save(self) -> None:
         """Persist the state atomically as readable JSON."""
         data = {
-            'channel': self.params.channel,  # which channel this state is for
+            'channel': self.params.channel,  # the channel this is for
             'left': sorted(self.state.left),
             'started': self.state.started,
             'last_event_id': self.state.last_event_id,
             'dm_day': self.state.dm_day,
             'dm_today': self.state.dm_today,
         }
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.path)
+        statefile.write_state(self.path, data)

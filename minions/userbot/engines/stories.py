@@ -38,7 +38,6 @@ this source stays ASCII.
 
 from __future__ import annotations
 
-import json
 import random
 import time
 from dataclasses import dataclass
@@ -48,6 +47,7 @@ from typing import TYPE_CHECKING
 from minions.userbot.core import attachment
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
+from minions.userbot.core import statefile
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -583,11 +583,8 @@ class StoryBrain:
 
     def _load(self) -> StoryState:
         """Reload the persisted memory, or start fresh if none/corrupt."""
-        if not self.path.exists():
-            return StoryState()
-        try:
-            raw = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
+        raw = statefile.read_state(self.path)
+        if not raw:
             return StoryState()
         seen = {
             str(k): [int(x) for x in v]
@@ -640,11 +637,7 @@ class StoryBrain:
             'names': self.state.ledger.names,
             'last_react': self.state.last_react,
         }
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.path)
+        statefile.write_state(self.path, data)
 
 
 def load_story_params(

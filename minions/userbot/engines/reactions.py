@@ -45,7 +45,6 @@ All texts/ids live in the constants JSON, so this source stays ASCII.
 
 from __future__ import annotations
 
-import json
 import math
 import random
 import time
@@ -56,6 +55,7 @@ from typing import TYPE_CHECKING
 from minions.userbot.core import attachment
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
+from minions.userbot.core import statefile
 from minions.userbot.core.humanize import recency_penalty
 from minions.userbot.core.humanize import weighted_choice
 
@@ -867,11 +867,8 @@ class ReactionBrain:
 
     def _load(self) -> ReactionState:
         """Reload the persisted memory, or start fresh if none/corrupt."""
-        if not self.path.exists():
-            return ReactionState()
-        try:
-            raw = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
+        raw = statefile.read_state(self.path)
+        if not raw:
             return ReactionState()
         state = ReactionState(
             mood=float(raw.get('mood', 0.0)),
@@ -931,11 +928,7 @@ class ReactionBrain:
             'sticker_today': self.state.ledger.recip_today,
             'names': self.state.ledger.names,
         }
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.path)
+        statefile.write_state(self.path, data)
 
 
 def _emoji(raw: dict[str, object]) -> ReactionEmoji:

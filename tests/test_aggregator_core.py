@@ -11,15 +11,12 @@ attributes the method under test touches -- no live client.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
 
 import pytest
 
 from tests.conftest import install_telethon_stub
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 install_telethon_stub()
 
@@ -193,6 +190,48 @@ def test_pending_round_trip_keeps_items_and_time() -> None:
     assert back.msg_ids == {9}
     assert back.items['tiktok'].url == 'u'
     assert back.created_at == group.created_at
+
+
+def test_read_state_degrades_to_empty(tmp_path: Path) -> None:
+    """Missing, unreadable and not-an-object all read as "no state"."""
+    assert statefile.read_state(tmp_path / 'absent.json') == {}
+    bad = tmp_path / 'bad.json'
+    bad.write_text('{oops', encoding='utf-8')
+    assert statefile.read_state(bad) == {}
+    listed = tmp_path / 'list.json'
+    listed.write_text('[1, 2]', encoding='utf-8')
+    assert statefile.read_state(listed) == {}
+
+
+def test_write_state_round_trips_and_leaves_no_temp(tmp_path: Path) -> None:
+    """The write lands whole, keeps non-ASCII, and cleans up after itself."""
+    path = tmp_path / 'state.json'
+    statefile.write_state(path, {'name': '\u0448\u043a\u0430\u0444'})
+    assert statefile.read_state(path) == {'name': '\u0448\u043a\u0430\u0444'}
+    assert not (tmp_path / 'state.tmp').exists()
+
+
+def test_write_state_keeps_the_old_file_when_the_move_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A kill between writing and moving leaves the old state whole (CT-A).
+
+    The watchdog turns a hang into a hard ``os._exit(1)``, so a write
+    interrupted part-way is a case that happens. Injecting a failure at the
+    ``replace`` proves the new bytes land in a sibling temp file first --
+    the previous state is never the thing being overwritten.
+    """
+    path = tmp_path / 'state.json'
+    statefile.write_state(path, {'n': 1})
+
+    def boom(self: Path, target: Path) -> Path:
+        msg = f'interrupted moving {self} onto {target}'
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, 'replace', boom)
+    with pytest.raises(OSError, match='interrupted moving'):
+        statefile.write_state(path, {'n': 2})
+    assert statefile.read_state(path) == {'n': 1}
 
 
 # ------------------------------------------------------- Userbot core flow

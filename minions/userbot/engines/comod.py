@@ -19,10 +19,11 @@ constants JSON, so this source stays ASCII.
 
 from __future__ import annotations
 
-import json
 import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from minions.userbot.core import statefile
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -88,14 +89,8 @@ class CabinetRoster:
 
     def _load(self) -> dict[str, dict[str, object]]:
         """Reload the roster, tolerating a missing or corrupt file."""
-        try:
-            data = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            return {}
-        if not isinstance(data, dict):
-            return {}
         out: dict[str, dict[str, object]] = {}
-        for key, value in data.items():
+        for key, value in statefile.read_state(self.path).items():
             if isinstance(key, str) and isinstance(value, dict):
                 out[key] = {
                     'at': float(value.get('at', 0.0) or 0.0),
@@ -106,11 +101,7 @@ class CabinetRoster:
     def _write(self, roster: dict[str, dict[str, object]]) -> None:
         """Persist the roster atomically as readable JSON."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(roster, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.path)
+        statefile.write_state(self.path, roster)
 
     def add(self, nick: str, amount: str, now: float) -> None:
         """Move a nick into the cabinet, pruning anyone whose timer expired."""

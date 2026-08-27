@@ -29,6 +29,7 @@ from minions.userbot.core.statefile import pending_dict
 from minions.userbot.core.statefile import pending_from_dict
 from minions.userbot.core.statefile import posted_dict
 from minions.userbot.core.statefile import posted_from_dict
+from minions.userbot.core.statefile import write_state
 
 if TYPE_CHECKING:
     from minions.userbot.engines.premium_emoji import PremiumMessage
@@ -421,14 +422,15 @@ class _AggregatorMixin(UserbotProtocol):
             ],
             'rejected': sorted(self.rejected),
         }
-        tmp = self.state_path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.state_path)
+        write_state(self.state_path, data)
 
     def restore(self) -> None:
-        """Reload saved state and re-arm timers (call once at startup)."""
+        """Reload saved state and re-arm timers (call once at startup).
+
+        Reads strictly, NOT via ``read_state``: an unreadable file coming
+        back empty would read as "nothing was ever posted", disarm the
+        re-post guard and re-post the backlog. A parse error propagates.
+        """
         if not self.state_path.exists():
             return
         data = json.loads(self.state_path.read_text(encoding='utf-8'))
