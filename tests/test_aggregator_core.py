@@ -20,7 +20,6 @@ from tests.conftest import install_telethon_stub
 
 install_telethon_stub()
 
-from minions.userbot import main  # noqa: E402
 from minions.userbot.core import config  # noqa: E402
 from minions.userbot.core import matching  # noqa: E402
 from minions.userbot.core import render  # noqa: E402
@@ -30,6 +29,8 @@ from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Item  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
 from minions.userbot.glue import aggregator  # noqa: E402
+from minions.userbot.glue.commands import CommandRouter  # noqa: E402
+from minions.userbot.glue.profiles import ServiceModes  # noqa: E402
 
 CONSTS = config.load_constants(config.CONSTANTS_PATH)
 
@@ -298,23 +299,28 @@ def test_short_or_reject_drops_long_video() -> None:
 # ------------------------------------------------------ per-service modes
 
 
-def test_default_mode_follows_json_enabled() -> None:
-    """Userbot defaults live; a feature is live only if its JSON is on."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {'reactions': {'enabled': True}, 'stories': {'enabled': False}}
-    assert agg._default_mode('aggregator') == 'live'
-    assert agg._default_mode('reactions') == 'live'
-    assert agg._default_mode('stories') == 'off'
+def _modes(tmp_path: Path, settings: dict[str, object]) -> ServiceModes:
+    """Build a ServiceModes over a stub bot carrying only its settings."""
+    bot = SimpleNamespace(settings=settings)
+    return ServiceModes(bot, tmp_path)
 
 
-def test_load_service_modes_reads_and_cleans_the_block(
+def test_default_mode_follows_json_enabled(tmp_path: Path) -> None:
+    """The poster defaults live; a feature only if its JSON says enabled."""
+    modes = _modes(
+        tmp_path,
+        {'reactions': {'enabled': True}, 'stories': {'enabled': False}},
+    )
+    assert modes.mode_of('aggregator') == 'live'
+    assert modes.mode_of('reactions') == 'live'
+    assert modes.mode_of('stories') == 'off'
+
+
+def test_stored_modes_are_read_and_junk_falls_to_the_default(
     tmp_path: Path,
 ) -> None:
     """The stored services block is read; a junk value falls to the default."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {'reactions': {'enabled': True}}
-    agg._mode_path = tmp_path / 'mode.json'
-    agg._mode_path.write_text(
+    (tmp_path / 'aggregator_mode.json').write_text(
         json.dumps(
             {
                 'services': {
@@ -327,57 +333,58 @@ def test_load_service_modes_reads_and_cleans_the_block(
             }
         )
     )
-    modes = agg._load_service_modes()
-    assert modes['aggregator'] == 'test'
-    assert modes['reactions'] == 'off'
-    assert modes['users'] == 'off'  # 'bogus' -> users default (JSON off)
+    modes = _modes(tmp_path, {'reactions': {'enabled': True}})
+    assert modes.mode_of('aggregator') == 'test'
+    assert modes.mode_of('reactions') == 'off'
+    assert modes.mode_of('users') == 'off'  # 'bogus' -> the users default
 
 
-def test_load_service_modes_falls_back_when_the_file_is_absent(
-    tmp_path: Path,
-) -> None:
+def test_modes_fall_back_when_the_file_is_absent(tmp_path: Path) -> None:
     """No modes file (a fresh install) -> every service on its own default."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {'reactions': {'enabled': True}, 'users': {'enabled': False}}
-    agg._mode_path = tmp_path / 'absent.json'
-    modes = agg._load_service_modes()
-    assert modes['aggregator'] == 'live'  # the poster is always live
-    assert modes['reactions'] == 'live'  # JSON-enabled -> live
-    assert modes['users'] == 'off'  # JSON-disabled -> off
+    modes = _modes(
+        tmp_path,
+        {'reactions': {'enabled': True}, 'users': {'enabled': False}},
+    )
+    assert modes.mode_of('aggregator') == 'live'  # the poster is always live
+    assert modes.mode_of('reactions') == 'live'  # JSON-enabled -> live
+    assert modes.mode_of('users') == 'off'  # JSON-disabled -> off
 
 
-def _agg_with_label(label: str) -> object:
-    """Build a bare Userbot whose reaction engine carries a persona label."""
-    agg = object.__new__(main.Userbot)
-    agg.reactions = SimpleNamespace(params=SimpleNamespace(label=label))
-    return agg
-
-
-def test_reaction_alias_maps_persona_label_to_canonical() -> None:
-    """A label answers /<label>now and /<label>_<action>; none = neutral."""
-    agg = _agg_with_label('cat')
-    assert main.Userbot._reaction_alias(agg, '/catnow') == '/reactnow'
-    assert main.Userbot._reaction_alias(agg, '/cat_on') == '/reactions_on'
-    assert main.Userbot._reaction_alias(agg, '/cat_test') == '/reactions_test'
-    assert main.Userbot._reaction_alias(agg, '/status') == '/status'
-    # no label configured -> friendly names are not recognised, text is as-is
-    plain = _agg_with_label('')
-    assert main.Userbot._reaction_alias(plain, '/catnow') == '/catnow'
-
-
-def test_feature_enabled_is_mode_not_off() -> None:
+def test_enabled_is_mode_not_off(tmp_path: Path) -> None:
     """A service counts as enabled unless its mode is 'off'."""
-    agg = object.__new__(main.Userbot)
-    agg._modes = {'reactions': 'test', 'stories': 'off', 'greeter': 'live'}
-    assert agg._feature_enabled('reactions') is True
-    assert agg._feature_enabled('greeter') is True
-    assert agg._feature_enabled('stories') is False
+    modes = _modes(tmp_path, {})
+    modes.by_service = {
+        'reactions': 'test',
+        'stories': 'off',
+        'greeter': 'live',
+    }
+    assert modes.enabled('reactions') is True
+    assert modes.enabled('greeter') is True
+    assert modes.enabled('stories') is False
 
 
 def test_service_dir_follows_each_services_mode(tmp_path: Path) -> None:
     """A test service lands in base/test; a live one in base."""
-    agg = object.__new__(main.Userbot)
-    agg._state_base = tmp_path
-    agg._modes = {'aggregator': 'live', 'reactions': 'test'}
-    assert agg._service_dir('aggregator') == tmp_path
-    assert agg._service_dir('reactions') == tmp_path / 'test'
+    modes = _modes(tmp_path, {})
+    modes.by_service = {'aggregator': 'live', 'reactions': 'test'}
+    assert modes.service_dir('aggregator') == tmp_path
+    assert modes.service_dir('reactions') == tmp_path / 'test'
+
+
+def _router_with_label(label: str) -> CommandRouter:
+    """Return a router whose reaction engine carries a persona label."""
+    bot = SimpleNamespace(
+        reactions=SimpleNamespace(params=SimpleNamespace(label=label))
+    )
+    return CommandRouter(bot)
+
+
+def test_reaction_alias_maps_persona_label_to_canonical() -> None:
+    """A label answers /<label>now and /<label>_<action>; none = neutral."""
+    router = _router_with_label('cat')
+    assert router._reaction_alias('/catnow') == '/reactnow'
+    assert router._reaction_alias('/cat_on') == '/reactions_on'
+    assert router._reaction_alias('/cat_test') == '/reactions_test'
+    assert router._reaction_alias('/status') == '/status'
+    # no label configured -> friendly names are not recognised, text is as-is
+    assert _router_with_label('')._reaction_alias('/catnow') == '/catnow'

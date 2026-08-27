@@ -1,13 +1,11 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The chat command dispatcher, mixed into Userbot.
+"""The chat command dispatcher: text in, the service that answers it out.
 
-Extracted from ``main``: the /command table and the feature on/off switches,
-plus the small handlers that render straight back to the source chat
-(/help, /emojis, /preview, /features, /test, /live, /greetnow). Handlers that
-live on other mixins (reactions, comod, users, stories) are dispatched through
-``self``. ``_CommandsMixin`` inherits ``UserbotProtocol`` (base.py) so the
-type checker knows that shared surface.
+Holds the /command table, the per-service mode switches, and the few small
+handlers that render straight back to the source chat (/help, /emojis,
+/preview, /test, /live, /greetnow). Everything else is a one-line hand-off,
+so the table doubles as a map of which service owns which command.
 """
 
 from __future__ import annotations
@@ -15,13 +13,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.render import compose
 from minions.userbot.core.render import render_constants
 from minions.userbot.core.render import sample_groups
 
 if TYPE_CHECKING:
     from telethon import events
+
+    from minions.userbot.main import Userbot
 
 log = logging.getLogger('userbot')
 
@@ -101,8 +100,17 @@ def _service_action(word: str) -> tuple[str, str] | None:
     return None
 
 
-class _CommandsMixin(UserbotProtocol):
-    """The /command dispatcher + feature switches, mixed into Userbot."""
+class CommandRouter:
+    """Route a /command to whichever service answers it.
+
+    Holds the bot rather than sharing its ``self``: every handler below
+    names the service it reaches, so the command table doubles as a map of
+    which service owns which command.
+    """
+
+    def __init__(self, bot: Userbot) -> None:
+        """Bind the bot whose services this router dispatches to."""
+        self.bot = bot
 
     def _reaction_alias(self, text: str) -> str:
         """Map a persona label's friendly reaction commands to the canonical.
@@ -113,7 +121,7 @@ class _CommandsMixin(UserbotProtocol):
         speaks its own vocabulary without hard-coding it. No label = neutral
         commands only.
         """
-        label = self.reactions.params.label
+        label = self.bot.reactions.params.label
         if not label:
             return text
         parts = text.split(maxsplit=1)
@@ -125,13 +133,13 @@ class _CommandsMixin(UserbotProtocol):
                 return f'/reactions_{action}'
         return text
 
-    async def _command(self, text: str) -> bool:
+    async def handle(self, text: str) -> bool:
         """Run a matching /command, returning True if one handled the text."""
         text = self._reaction_alias(text)  # persona label -> canonical, if set
         # /comod carries arguments ('/comod <nick> <amount>'), so it is matched
         # by its leading word rather than by the exact-text table below.
         if text.split()[:1] == [COMMAND_COMOD]:
-            await self.cabinet.command(text)
+            await self.bot.cabinet.command(text)
             return True
         # /services, /features and every '/<service>_<action>' tap command.
         # Matched here (before the exact table) because the service name is
@@ -143,13 +151,13 @@ class _CommandsMixin(UserbotProtocol):
             COMMAND_START: self.help_report,
             COMMAND_EMOJIS: self.show_constants,
             COMMAND_PREVIEW: self.preview_posts,
-            COMMAND_STATUS: self.status_report,
-            COMMAND_REQUEUE: self.comment_watch.requeue,
-            COMMAND_REACTNOW: self.comment_watch.answer_now,
+            COMMAND_STATUS: self.bot.status_report,
+            COMMAND_REQUEUE: self.bot.comment_watch.requeue,
+            COMMAND_REACTNOW: self.bot.comment_watch.answer_now,
             COMMAND_GREETNOW: self.greet_now,
-            COMMAND_USERS: self.audience.report,
-            COMMAND_STORIES: self.story_watch.report,
-            COMMAND_PROPISKA: self.cabinet.propiska,
+            COMMAND_USERS: self.bot.audience.report,
+            COMMAND_STORIES: self.bot.story_watch.report,
+            COMMAND_PROPISKA: self.bot.cabinet.propiska,
             COMMAND_TEST: self.enter_test,
             COMMAND_LIVE: self.enter_live,
         }
@@ -170,89 +178,77 @@ class _CommandsMixin(UserbotProtocol):
         if word in (COMMAND_SERVICES, COMMAND_FEATURES):
             # The service table lives inside /status now, so both shortcuts
             # render the full status (which carries the tap-command table).
-            await self.status_report()
+            await self.bot.status_report()
             return True
         parsed = _service_action(word)
         if parsed is None:
             return False
-        await self.set_service_mode(*parsed)
+        await self.bot.modes.set(*parsed)
         return True
 
-    async def set_service_mode(self, name: str, mode: str) -> None:
-        """Set one service's mode (off/test/live), persist, restart its loops.
-
-        No-op-reports when already there; otherwise records the mode, tears the
-        profile down and rebuilds it so this service's dir/enabled/destination
-        take effect while the others keep their own modes.
-        """
-        if self._modes.get(name) == mode:
-            await self.client.send_message(
-                self.config.source, f'{name}: already {mode}'
-            )
-            return
-        self._modes[name] = mode
-        self._save_service_modes()
-        await self.stop_profile()
-        self._build_profile()
-        await self.start_profile(source_backfill=False)
-        log.info('service %s -> %s', name, mode)
-        await self.client.send_message(self.config.source, f'{name}: {mode}')
-
-    async def _unknown_command(
+    async def nudge_unknown(
         self, event: events.NewMessage.Event, text: str
     ) -> bool:
         """In the source chat, nudge a lone unknown /command toward /help."""
-        if event.chat_id != self.config.source:
+        if event.chat_id != self.bot.config.source:
             return False
         if not text.startswith('/') or ' ' in text or not text[1:].isalpha():
             return False
-        await self.client.send_message(
-            self.config.source, self.consts.help_hint
+        await self.bot.client.send_message(
+            self.bot.config.source, self.bot.consts.help_hint
         )
         return True
 
     async def help_report(self) -> None:
         """Send the plain-language command menu (/help and /start)."""
-        await self.client.send_message(
-            self.config.source, self.consts.help_text, link_preview=False
+        await self.bot.client.send_message(
+            self.bot.config.source,
+            self.bot.consts.help_text,
+            link_preview=False,
         )
-        log.info('sent help menu to %s', self.config.source)
+        log.info('sent help menu to %s', self.bot.config.source)
 
     async def show_constants(self) -> None:
         """Post a preview of the whole unified emoji array to the watcher."""
-        message = render_constants(self.consts)
-        await self.client.send_message(
-            self.config.source,
+        message = render_constants(self.bot.consts)
+        await self.bot.client.send_message(
+            self.bot.config.source,
             message.text,
             formatting_entities=message.entities,
         )
-        log.info('sent premium constants preview to %s', self.config.source)
+        log.info(
+            'sent premium constants preview to %s', self.bot.config.source
+        )
 
     async def preview_posts(self) -> None:
         """Render QC sample posts (partial + full coverage) to the source."""
-        groups = sample_groups(self.consts)
+        groups = sample_groups(self.bot.consts)
         for group in groups:
-            message = compose(group, self.config.platforms, self.consts)
-            await self.client.send_message(
-                self.config.source,
+            message = compose(
+                group, self.bot.config.platforms, self.bot.consts
+            )
+            await self.bot.client.send_message(
+                self.bot.config.source,
                 message.text,
                 formatting_entities=message.entities,
                 link_preview=False,
             )
         log.info(
-            'sent %d QC preview posts to %s', len(groups), self.config.source
+            'sent %d QC preview posts to %s',
+            len(groups),
+            self.bot.config.source,
         )
 
     async def enter_test(self) -> None:
         """Switch the whole bot to the TEST profile (the /test command)."""
-        await self.switch_mode('test')
+        await self.bot.modes.switch_all('test')
 
     async def enter_live(self) -> None:
         """Switch the whole bot to the LIVE profile (the /live command)."""
-        await self.switch_mode('live')
+        await self.bot.modes.switch_all('live')
 
     async def greet_now(self) -> None:
         """Force the greeter to poll+process now (the /greetnow command)."""
-        summary = await self.greeter.sync_now()
-        await self.client.send_message(self.config.source, summary)
+        summary = await self.bot.greeter.sync_now()
+        await self.bot.client.send_message(self.bot.config.source, summary)
         log.info('greetnow: %s', summary)

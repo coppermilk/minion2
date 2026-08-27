@@ -37,7 +37,7 @@ minions/userbot/
     humanize, profiles, attachment, relationship, base (the shared-state contract)
   engines/                # domain brains (Telethon-free, unit-tested)
     reactions, stories, greeter, comod, users, premium_emoji
-  glue/                   # the Userbot mixins that DO touch Telethon
+  glue/                   # the collaborators that DO touch Telethon
     aggregator (grouping + posting), reactions, stories, comod, users,
     commands, status, profiles (live/test modes)
   dev/                    # developer tools, not the running bot

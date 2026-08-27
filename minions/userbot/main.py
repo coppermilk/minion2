@@ -49,7 +49,6 @@ from telethon import events
 from minions.userbot.core import codec
 from minions.userbot.core.client import build_client
 from minions.userbot.core.config import CONSTANTS_FILE
-from minions.userbot.core.config import MODE_FILE
 from minions.userbot.core.config import STATE_FILE
 from minions.userbot.core.config import apply_persona
 from minions.userbot.core.config import load_config
@@ -74,14 +73,14 @@ from minions.userbot.engines import users
 from minions.userbot.engines.premium_emoji import build_premium_message
 from minions.userbot.glue.aggregator import AggregatorDeps
 from minions.userbot.glue.aggregator import LinkAggregator
-from minions.userbot.glue.commands import _CommandsMixin
+from minions.userbot.glue.commands import CommandRouter
 from minions.userbot.glue.comod import Cabinet
 from minions.userbot.glue.comod import CabinetDeps
-from minions.userbot.glue.profiles import _ProfilesMixin
+from minions.userbot.glue.profiles import ServiceModes
 from minions.userbot.glue.reactions import CommentDeps
 from minions.userbot.glue.reactions import CommentWatch
 from minions.userbot.glue.status import STATUS_WARM_PEERS
-from minions.userbot.glue.status import _StatusMixin
+from minions.userbot.glue.status import StatusReport
 from minions.userbot.glue.stories import StoryDeps
 from minions.userbot.glue.stories import StoryWatch
 from minions.userbot.glue.users import AudienceDeps
@@ -99,28 +98,25 @@ log = logging.getLogger('userbot')
 STATUS_INTERVAL = 60
 
 
-class Userbot(
-    _ProfilesMixin,
-    _StatusMixin,
-    _CommandsMixin,
-):
-    """The Telethon userbot host: wires the engines and runs the loops.
+class Userbot:
+    """The Telethon userbot host: wires the services and runs the loops.
 
-    A thin assembly -- the aggregation/posting logic lives in
-    ``_AggregatorMixin`` (glue/aggregator.py), the live/test profile and
-    per-service modes in ``_ProfilesMixin`` (glue/profiles.py), and each other
-    engine in its own glue mixin. This class only builds the profile,
-    dispatches incoming events, and runs the status/heartbeat loop.
+    A thin assembly. Every behaviour lives in an object this class holds --
+    ``aggregator`` posts, ``comment_watch`` reacts, ``story_watch`` views,
+    ``greeter`` DMs, ``audience`` records, ``cabinet`` runs /comod, ``modes``
+    owns the live/test lifecycle and ``report`` renders /status. The host
+    itself only builds them, routes each incoming event, and runs the
+    status/heartbeat loop.
     """
 
     def __init__(self, client: TelegramClient, config: Config) -> None:
-        """Load the constants and wire the aggregator's state."""
+        """Load the constants and assemble every service."""
         here = Path(__file__)
         self.client = client
         self.config = config
         self.consts = load_constants(here.with_name(CONSTANTS_FILE))
-        self._raw = read_json(here.with_name(CONSTANTS_FILE))
-        apply_persona(self._raw)  # one persona clock shared by all engines
+        self.settings = read_json(here.with_name(CONSTANTS_FILE))
+        apply_persona(self.settings)  # one persona clock, shared by all
         keys = [*self.consts.fields.values(), *THUMB_ALIASES]
         self._field_keys = tuple(dict.fromkeys(keys))
         # Post-decoration picker: keeps the announce line and love/lead/arrow
@@ -133,14 +129,13 @@ class Userbot(
         # for free. The active mode is a marker in the base state dir; live
         # uses that dir (unchanged), test a 'test/' subdir under it.
         base_state = resolve_state_path(here.with_name(STATE_FILE))
-        self._state_base = base_state.parent
-        self._mode_path = self._state_base / MODE_FILE
-        self._modes = self._load_service_modes()
-        self._greeter_task: asyncio.Task[None] | None = None
-        self._react_rescan_task: asyncio.Task[None] | None = None
-        self._stories_task: asyncio.Task[None] | None = None
-        rt = self._raw.get('runtime')
-        rt = rt if isinstance(rt, dict) else {}
+        self.modes = ServiceModes(self, base_state.parent)
+        self.report = StatusReport(self)
+        self.router = CommandRouter(self)
+        self.greeter_task: asyncio.Task[None] | None = None
+        self.rescan_task: asyncio.Task[None] | None = None
+        self.stories_task: asyncio.Task[None] | None = None
+        rt = codec.section(self.settings, 'runtime')
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
         # The liveness probe (get_me) is the only ALWAYS-ON Telegram request;
         # firing it every 60s status tick hammered the server for no reason.
@@ -149,27 +144,27 @@ class Userbot(
         # (uptime learning, pending log) at full resolution.
         self._probe_interval = float(rt.get('probe_interval_sec', 300.0))
         self._last_probe = 0.0
-        self._build_profile()
+        self.build_profile()
 
-    def _build_profile(self) -> None:
+    def build_profile(self) -> None:
         """(Re)bind every service to ITS OWN mode -- dir, enabled, channel.
 
-        Each service is off/test/live independently (``self._modes``): test
+        Each service is off/test/live independently (``self.modes``): test
         state lives in ``base/test``, live in ``base``, off builds it inert
         (``enabled=False``, the loop still runs but no-ops). The poster's
         containers and ``live_targets`` follow the aggregator's mode; the
         greeter's channel follows the greeter's. ``start_profile`` then
         hydrates each from its own files.
         """
-        self.mode = self._modes['aggregator']
-        pdir = self._service_dir('aggregator')
-        # A service is enabled when its mode != 'off' (``_feature_enabled``).
+        self.mode = self.modes.mode_of('aggregator')
+        pdir = self.modes.service_dir('aggregator')
+        # A service is enabled when its mode is not 'off'.
         # The params are frozen, so the flag is swapped via replace.
         reaction_params = replace(
-            reactions.load_reaction_params(self._raw),
-            enabled=self._feature_enabled('reactions'),
+            reactions.load_reaction_params(self.settings),
+            enabled=self.modes.enabled('reactions'),
         )
-        react_dir = self._service_dir('reactions')
+        react_dir = self.modes.service_dir('reactions')
         self.reactions = reactions.ReactionBrain(
             reaction_params,
             react_dir / 'reactions_state.json',
@@ -180,21 +175,26 @@ class Userbot(
                 brain=self.reactions,
                 targets=self.live_targets,
                 announce=self._send_status,
-                glyphs=Glyphs(self._bullet(), self._arrow()),
+                glyphs=Glyphs(self.report.bullet(), self.report.arrow()),
                 human_words=self.consts.human_words,
                 discussion_gap=self.config.discussion_gap,
-                rescan_sec=self._rescan_interval(self._modes['reactions']),
+                rescan_sec=self.modes.rescan_interval(
+                    self.modes.mode_of('reactions')
+                ),
             )
         )
         # Story viewer: watches friends'/contacts' stories the way a person
         # does -- a glance now and then, no reactions -- with its own
         # per-service seen set and view log. Poll cadence follows its mode.
         story_params = replace(
-            stories.load_story_params(self._raw, self._modes['stories']),
-            enabled=self._feature_enabled('stories'),
+            stories.load_story_params(
+                self.settings, self.modes.mode_of('stories')
+            ),
+            enabled=self.modes.enabled('stories'),
         )
         self.stories = stories.StoryBrain(
-            story_params, self._service_dir('stories') / 'stories_state.json'
+            story_params,
+            self.modes.service_dir('stories') / 'stories_state.json',
         )
         self.story_watch = StoryWatch(
             StoryDeps(
@@ -206,30 +206,32 @@ class Userbot(
         )
         # Audience log: its own SQLite file per mode, so live and test
         # audiences never mix. Config lives in the 'users' JSON section.
-        ucfg = codec.section(self._raw, 'users')
+        ucfg = codec.section(self.settings, 'users')
         self.audience = AudienceLog(
             AudienceDeps(
                 client=self.client,
                 source=self.config.source,
-                store=users.UserStore(self._service_dir('users') / 'users.db'),
+                store=users.UserStore(
+                    self.modes.service_dir('users') / 'users.db'
+                ),
                 watched=lambda: {c for c, _ in self.reactions.posts},
-                enabled=self._feature_enabled('users'),
+                enabled=self.modes.enabled('users'),
                 store_text=bool(ucfg.get('store_message_text', True)),
                 enrich=bool(ucfg.get('enrich', True)),
             )
         )
-        gchannel = self._profile_channel(self._modes['greeter'])
+        gchannel = self.modes.channel_for(self.modes.mode_of('greeter'))
         greeter_params = replace(
             greeter.load_greeter_params(
-                self._raw, gchannel, self._modes['greeter']
+                self.settings, gchannel, self.modes.mode_of('greeter')
             ),
-            enabled=self._feature_enabled('greeter'),
+            enabled=self.modes.enabled('greeter'),
         )
         self.greeter = greeter.Greeter(
             self.client,
             greeter_params,
             greeter.GreeterIO(
-                self._service_dir('greeter') / 'greeter_state.json',
+                self.modes.service_dir('greeter') / 'greeter_state.json',
                 self.audience.note_membership,
             ),
         )
@@ -252,7 +254,7 @@ class Userbot(
                 client=self.client,
                 chat=self.config.source,
                 roster=comod.CabinetRoster(pdir / 'comod.json'),
-                params=comod.load_comod_params(self._raw),
+                params=comod.load_comod_params(self.settings),
                 work_dir=pdir,
             )
         )
@@ -266,9 +268,9 @@ class Userbot(
         replies to our own posts (any chat); aggregation stays source-scoped.
         """
         text = (event.raw_text or '').strip().lower()
-        if await self._command(text):
+        if await self.router.handle(text):
             return
-        if await self._unknown_command(event, text):
+        if await self.router.nudge_unknown(event, text):
             return
         self.audience.record_message(event)
         if self.reactions.params.enabled:
@@ -278,8 +280,8 @@ class Userbot(
 
     async def status_report(self) -> None:
         """Post the pending/posted/reaction diagnostics to the source chat."""
-        labels = await self._chat_labels()
-        await self._send_status(self._status_text(labels))
+        labels = await self.chat_labels()
+        await self._send_status(self.report.text(labels))
         log.info('sent status report to %s', self.config.source)
 
     async def _send_status(self, text: str) -> None:
@@ -299,7 +301,7 @@ class Userbot(
             link_preview=False,
         )
 
-    async def _chat_labels(self) -> dict[int, str]:
+    async def chat_labels(self) -> dict[int, str]:
         """Resolve every chat shown in /status to a readable @name or title."""
         await self._resolve_attach_labels()
         ids = {self.config.source, *self.config.targets}
@@ -431,12 +433,12 @@ async def main() -> None:
     session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
     client = build_client(session_path, int(api_id), api_hash)
-    agg = Userbot(client, config)
+    bot = Userbot(client, config)
 
     # Listen everywhere the account can see: the /emojis preview command works
     # from ANY chat and for ANYONE (it renders back into the source chat);
-    # aggregation itself stays scoped to the source chat inside agg.handle.
-    client.add_event_handler(agg.handle, events.NewMessage())
+    # aggregation itself stays scoped to the source chat inside bot.handle.
+    client.add_event_handler(bot.handle, events.NewMessage())
 
     # TELEGRAM_PASSWORD supplies the 2FA/cloud password non-interactively;
     # unset, Telethon prompts for it (getpass) only if the account has 2FA.
@@ -449,15 +451,15 @@ async def main() -> None:
     # Hydrate the active profile (live or test) and start its loops. The
     # reaction
     # startup inside can fail without stopping the bot from listening.
-    await agg.start_profile()
+    await bot.modes.start_profile()
     log.info(
         'Listening on %s; mode=%s posting to %s; platforms=%s',
         config.source,
-        agg.mode,
-        ','.join(str(t) for t in agg.live_targets()),
+        bot.mode,
+        ','.join(str(t) for t in bot.live_targets()),
         ','.join(config.platforms),
     )
-    status_task = asyncio.create_task(agg.status_loop())
+    status_task = asyncio.create_task(bot.status_loop())
     # Self-healing watchdog: seed the heartbeat now (so a cold start is not
     # instantly "stale"), then a daemon thread exits the process if the
     # heartbeat later goes stale -- a hang no restart: policy could catch --
@@ -469,7 +471,7 @@ async def main() -> None:
     ).start()
     await client.run_until_disconnected()
     status_task.cancel()
-    await agg.stop_profile()
+    await bot.modes.stop_profile()
 
 
 if __name__ == '__main__':

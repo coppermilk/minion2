@@ -37,6 +37,7 @@ from minions.userbot.glue import aggregator as aggregator_glue  # noqa: E402
 from minions.userbot.glue import reactions as reactions_glue  # noqa: E402
 from minions.userbot.glue import stories as stories_glue  # noqa: E402
 from minions.userbot.glue import users as users_glue  # noqa: E402
+from minions.userbot.glue.status import StatusReport  # noqa: E402
 
 NOW = 1_760_000_000.0  # a fixed clock, so every eta in the text is stable
 SOURCE = -1001
@@ -113,13 +114,14 @@ def _bot(tmp_path: Path) -> main.Userbot:
         discussion_gap=2.0,
     )
     bot.mode = 'live'
-    bot._modes = {
+    service_modes = {
         'aggregator': 'live',
         'reactions': 'live',
         'stories': 'off',
         'users': 'off',
         'greeter': 'live',
     }
+    bot.modes = SimpleNamespace(mode_of=service_modes.__getitem__)
     bot.aggregator = aggregator_glue.LinkAggregator(
         aggregator_glue.AggregatorDeps(
             client=SimpleNamespace(),
@@ -223,6 +225,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
             watched=set,
         )
     )
+    bot.report = StatusReport(bot)
     return bot
 
 
@@ -283,4 +286,4 @@ def test_status_text_is_unchanged(
     monkeypatch.setattr(time, 'time', lambda: NOW)
     bot = _bot(tmp_path)
     labels = {SOURCE: '@src (-1001)', TARGET: '@dst (-1002)'}
-    assert bot._status_text(labels) == GOLDEN
+    assert bot.report.text(labels) == GOLDEN
