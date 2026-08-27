@@ -26,8 +26,7 @@ from __future__ import annotations
 
 import os
 
-from telethon import TelegramClient
-
+from minions.aggregator.core.client import build_client
 from minions.aggregator.core.config import _resolve_session_path
 from minions.aggregator.core.config import load_env
 
@@ -55,8 +54,9 @@ def main() -> None:
     if password:
         start_kwargs['password'] = password
 
-    # start() runs the login and writes the .session file on disk.
-    with TelegramClient(str(session_path), int(api_id), api_hash) as client:
+    # start() runs the login and writes the .session file on disk. The client
+    # is built with the same gentle-flood + WAL session hardening as main.
+    with build_client(session_path, int(api_id), api_hash) as client:
         client.start(**start_kwargs)
         me = client.get_me()
 

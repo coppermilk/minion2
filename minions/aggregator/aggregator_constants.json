@@ -339,9 +339,11 @@
     "react_max_per_day": 70
   },
   "runtime": {
-    "_note": "Self-healing watchdog. status_loop touches a health file only after a successful Telegram probe; a daemon thread os._exit(1)s if it goes stale (a hang), so Docker restart:always recreates the container. watchdog_sec=0 disables it.",
+    "_note": "Self-healing watchdog. status_loop touches a health file только после успешной Telegram-пробы; демон-тред делает os._exit(1) если она устарела (завис), и Docker restart:always поднимает контейнер. watchdog_sec=0 отключает. probe_timeout_sec -- таймаут одной пробы get_me. probe_interval_sec -- КАК ЧАСТО вообще стучимся пробой в Telegram: раньше get_me летел КАЖДЫЙ 60с тик (1440 запросов/сутки фонового шума), теперь раз в 300с -- единственный постоянный запрос перестаёт долбить сервер, а штамп всё равно внутри окна вачдога (probe_interval + probe_timeout << watchdog_sec). Локальные дела (обучение uptime, лог pending) остаются на 60с. flood_sleep_threshold_sec -- ЩАДЯЩИЕ ЗАПРОСЫ / устойчивость к флуду: при FloodWait клиент САМ терпеливо ждёт до этого числа секунд и повторяет запрос, а не падает и долбит дальше (дефолт Telethon -- всего 60с). Час поглощает любой обычный лимит от лайков/сторис/ЛС; флуд длиннее (редкость) всё ещё бросается и ловится на месте. Сама сессия -- SQLite-файл -- открывается в WAL (core/client.py), так что жёсткий os._exit(1) больше НЕ бьёт файл сессии ('database disk image is malformed' и перелогин раз в пару недель ушли).",
     "watchdog_sec": 600,
-    "probe_timeout_sec": 30
+    "probe_timeout_sec": 30,
+    "probe_interval_sec": 300,
+    "flood_sleep_threshold_sec": 3600
   },
   "cats": {
     "enabled": true,

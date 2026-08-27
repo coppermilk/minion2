@@ -73,6 +73,7 @@ from telethon import TelegramClient
 from telethon import events
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
+from minions.aggregator.core.client import build_client
 from minions.aggregator.core.config import CONSTANTS_FILE
 from minions.aggregator.core.config import FEATURE_OVERRIDES_FILE
 from minions.aggregator.core.config import MODE_FILE
@@ -193,6 +194,13 @@ class Aggregator(
         rt = self._raw.get('runtime')
         rt = rt if isinstance(rt, dict) else {}
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
+        # The liveness probe (get_me) is the only ALWAYS-ON Telegram request;
+        # firing it every 60s status tick hammered the server for no reason.
+        # Space it to its own gentler cadence -- still well inside the watchdog
+        # window -- while the 60s tick keeps doing its LOCAL bookkeeping
+        # (uptime learning, pending log) at full resolution.
+        self._probe_interval = float(rt.get('probe_interval_sec', 300.0))
+        self._last_probe = 0.0
         self._build_profile()
 
     def _service_dir(self, name: str) -> Path:
@@ -740,21 +748,36 @@ class Aggregator(
         """Periodically log pending videos, learn uptime, beat the watchdog."""
         while True:
             await asyncio.sleep(STATUS_INTERVAL)
-            await self._heartbeat()
+            now = time.time()
+            await self._maybe_probe(now)
             if self.cats.params.enabled:
-                self.cats.mark_alive(time.time())  # learn actual on-hours
-            if not self.groups:
-                continue
-            for group in self.groups:
-                missing = [
-                    p for p in self.config.platforms if p not in group.items
-                ]
-                log.info(
-                    'pending %r: have [%s], still waiting for [%s]',
-                    group.title,
-                    ', '.join(sorted(group.items)),
-                    ', '.join(missing),
-                )
+                self.cats.mark_alive(now)  # learn actual on-hours
+            self._log_pending()
+
+    async def _maybe_probe(self, now: float) -> None:
+        """Probe Telegram only every _probe_interval, not every 60s tick.
+
+        The liveness check is the sole always-on request, so spacing it stops
+        it hammering the server while the stamp still lands well inside the
+        watchdog window. The marker advances even on failure, so a wedged link
+        is retried gently on the next interval, never in a tight loop.
+        """
+        if now - self._last_probe >= self._probe_interval:
+            self._last_probe = now
+            await self._heartbeat()
+
+    def _log_pending(self) -> None:
+        """Log each still-collecting group and which platforms it awaits."""
+        for group in self.groups:
+            missing = [
+                p for p in self.config.platforms if p not in group.items
+            ]
+            log.info(
+                'pending %r: have [%s], still waiting for [%s]',
+                group.title,
+                ', '.join(sorted(group.items)),
+                ', '.join(missing),
+            )
 
     async def _heartbeat(self) -> None:
         """Prove end-to-end liveness, then refresh the watchdog heartbeat.
@@ -993,7 +1016,7 @@ async def main() -> None:
 
     session_path = _resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
-    client = TelegramClient(str(session_path), int(api_id), api_hash)
+    client = build_client(session_path, int(api_id), api_hash)
     agg = Aggregator(client, config)
 
     # Listen everywhere the account can see: the /emojis preview command works
