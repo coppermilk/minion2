@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from minions.userbot.core import humanize
 from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.render import emoji_markup
+from minions.userbot.core.render import trim
 from minions.userbot.core.runtime import fmt_eta
 from minions.userbot.glue.commands import SERVICE_ACTIONS
 from minions.userbot.glue.commands import SERVICE_NAMES
@@ -48,33 +49,6 @@ def _clock_eta(at: float, tz_offset: float) -> str:
     clock = datetime.fromtimestamp(at, tz=zone).strftime('%H:%M')
     eta = at - time.time()
     return f'{clock} (in {"now" if eta <= 0 else fmt_eta(eta)})'
-
-
-def _trim(title: str, width: int = 40) -> str:
-    """Return a one-line, length-capped title for the /status report."""
-    flat = ' '.join(title.split())
-    return flat if len(flat) <= width else flat[: width - 1] + '~'
-
-
-_EMOJI_ROW_LEN = 2
-"""A persisted emoji row is an [id, fallback] pair."""
-
-
-def _pending_markup(entry: dict[str, object]) -> str:
-    """Render a pending entry's chosen reaction(s) as premium markup, or '?'.
-
-    Reactions scheduled before the emoji were stored show '?' -- a /requeue
-    does not re-pick them (the choice is made at schedule time), it only
-    re-times what is already there.
-    """
-    raw = entry.get('emojis')
-    rows = raw if isinstance(raw, list) else []
-    markup = ''.join(
-        emoji_markup(str(row[0]), str(row[1]))
-        for row in rows
-        if len(row) == _EMOJI_ROW_LEN
-    )
-    return markup or '?'
 
 
 def _pool_markup(pool: tuple[reactions.ReactionEmoji, ...]) -> str:
@@ -224,13 +198,13 @@ class _StatusMixin(UserbotProtocol):
             self._header(
                 'videos',
                 'Videos',
-                f'pending {len(self.groups)} (timeout {window})',
-                f'posted {len(self.posted)}',
-                f'rejected {len(self.rejected)}',
+                f'pending {len(self.aggregator.groups)} (timeout {window})',
+                f'posted {len(self.aggregator.posted)}',
+                f'rejected {len(self.aggregator.rejected)}',
                 f'guard {self._guard_desc()}',
             )
         ]
-        for group in self.groups:
+        for group in self.aggregator.groups:
             have = ', '.join(sorted(group.items)) or '-'
             missing = (
                 ', '.join(
@@ -240,13 +214,13 @@ class _StatusMixin(UserbotProtocol):
             )
             left = self.config.timeout - (time.time() - group.created_at)
             lines.append(
-                f'{b} "{_trim(group.title)}" have [{have}] wait [{missing}]'
+                f'{b} "{trim(group.title)}" have [{have}] wait [{missing}]'
                 f' {self._arrow()} ~{fmt_eta(left)}'
             )
         lines.extend(
-            f'{b} "{_trim(post.title)}" {b} {post.at[:10]}'
+            f'{b} "{trim(post.title)}" {b} {post.at[:10]}'
             f' {b} {len(post.links)} links'
-            for post in self.posted[-5:]
+            for post in self.aggregator.posted[-5:]
         )
         return lines
 
@@ -338,36 +312,10 @@ class _StatusMixin(UserbotProtocol):
             f'{b} rescan {period}s {self._arrow()} next {_clock_eta(nxt, tz)}'
         )
 
-    def queued_react_rows(self) -> list[str]:
-        """One capped row per queued reaction; shared by /status, /requeue."""
-        now = time.time()
-        return _capped(
-            [
-                self._pending_react_line(entry, now)
-                for entry in self.reactions.state.pending
-            ]
-        )
-
     def _pending_react_lines(self) -> list[str]:
         """Return queued reactions: which lands on which comment, when."""
         rows = self.comment_watch.queued_rows()
         return [f'{self._bullet()} queued:', *rows] if rows else []
-
-    def _pending_react_line(self, entry: dict[str, object], now: float) -> str:
-        """One queued line: reaction, verb, comment, post, eta."""
-        b = self._bullet()
-        msg = int(entry.get('reply_to', 0))
-        root = int(entry.get('root', msg))
-        body = str(entry.get('text', ''))
-        what = f'"{body}"' if body else f'comment {msg}'
-        glyphs = _pending_markup(entry)
-        verb = 'sticker' if entry.get('kind') == 'reply' else 'like'
-        eta = float(entry.get('when', now)) - now
-        when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
-        return (
-            f'    {glyphs} {verb} {self._arrow()} {what}'
-            f' {b} post {root} {b} {when}'
-        )
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
         """Return the watched comment threads, grouped one line per chat."""

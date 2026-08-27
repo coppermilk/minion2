@@ -62,8 +62,6 @@ from minions.userbot.core.config import resolve_state_path
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Config
-from minions.userbot.core.models import Group
-from minions.userbot.core.models import Posted
 from minions.userbot.core.render import Glyphs
 from minions.userbot.core.runtime import configure_logging
 from minions.userbot.core.runtime import touch_health
@@ -74,7 +72,8 @@ from minions.userbot.engines import reactions
 from minions.userbot.engines import stories
 from minions.userbot.engines import users
 from minions.userbot.engines.premium_emoji import build_premium_message
-from minions.userbot.glue.aggregator import _AggregatorMixin
+from minions.userbot.glue.aggregator import AggregatorDeps
+from minions.userbot.glue.aggregator import LinkAggregator
 from minions.userbot.glue.commands import _CommandsMixin
 from minions.userbot.glue.comod import Cabinet
 from minions.userbot.glue.comod import CabinetDeps
@@ -101,7 +100,6 @@ STATUS_INTERVAL = 60
 
 
 class Userbot(
-    _AggregatorMixin,
     _ProfilesMixin,
     _StatusMixin,
     _CommandsMixin,
@@ -124,7 +122,7 @@ class Userbot(
         self._raw = read_json(here.with_name(CONSTANTS_FILE))
         apply_persona(self._raw)  # one persona clock shared by all engines
         keys = [*self.consts.fields.values(), *THUMB_ALIASES]
-        self._keys = tuple(dict.fromkeys(keys))
+        self._field_keys = tuple(dict.fromkeys(keys))
         # Post-decoration picker: keeps the announce line and love/lead/arrow
         # emoji from repeating on consecutive posts (in-memory; cosmetic).
         self._variety = Variety()
@@ -165,11 +163,6 @@ class Userbot(
         """
         self.mode = self._modes['aggregator']
         pdir = self._service_dir('aggregator')
-        self.state_path = pdir / STATE_FILE
-        self.groups: list[Group] = []
-        self.rejected: set[str] = set()
-        self.posted: list[Posted] = []
-        self.processed_ids: set[int] = set()
         # A service is enabled when its mode != 'off' (``_feature_enabled``).
         # The params are frozen, so the flag is swapped via replace.
         reaction_params = replace(
@@ -240,6 +233,19 @@ class Userbot(
                 self.audience.note_membership,
             ),
         )
+        self.aggregator = LinkAggregator(
+            AggregatorDeps(
+                client=self.client,
+                config=self.config,
+                consts=self.consts,
+                state_path=pdir / STATE_FILE,
+                targets=self.live_targets,
+                on_posted=self.comment_watch.on_posted,
+                field_keys=self._field_keys,
+                variety=self._variety,
+                mode=self.mode,
+            )
+        )
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
         self.cabinet = Cabinet(
             CabinetDeps(
@@ -268,7 +274,7 @@ class Userbot(
         if self.reactions.params.enabled:
             self.comment_watch.on_message(event)
         if event.chat_id == self.config.source:
-            await self.on_message(event.message)
+            await self.aggregator.on_message(event.message)
 
     async def status_report(self) -> None:
         """Post the pending/posted/reaction diagnostics to the source chat."""
@@ -367,9 +373,20 @@ class Userbot(
             self._last_probe = now
             await self._heartbeat()
 
+    def live_targets(self) -> tuple[int, ...]:
+        """Post destination for the active profile.
+
+        Test: TEST_CHAT_ID, or the source control chat if it is unset. Live:
+        the configured targets. Every channel-touching part reads this, so
+        the whole bot follows the profile.
+        """
+        if self.mode == 'test':
+            return (self.config.test_target or self.config.source,)
+        return self.config.targets
+
     def _log_pending(self) -> None:
         """Log each still-collecting group and which platforms it awaits."""
-        for group in self.groups:
+        for group in self.aggregator.groups:
             missing = [
                 p for p in self.config.platforms if p not in group.items
             ]

@@ -44,6 +44,12 @@ class Glyphs:
     arrow: str = '->'
 
 
+def trim(title: str, width: int = 40) -> str:
+    """Return a one-line, length-capped title for a report row."""
+    flat = ' '.join(title.split())
+    return flat if len(flat) <= width else flat[: width - 1] + '~'
+
+
 def youtube_thumb(group: Group) -> str:
     """Return the thumbnail URL from the YouTube item only, or ''."""
     item = group.items.get('youtube')

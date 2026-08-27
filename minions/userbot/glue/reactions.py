@@ -31,6 +31,7 @@ from minions.userbot.core.matching import thread_top
 from minions.userbot.core.models import Comment
 from minions.userbot.core.render import Glyphs
 from minions.userbot.core.render import emoji_markup
+from minions.userbot.core.render import trim
 from minions.userbot.core.runtime import fmt_eta
 from minions.userbot.engines import reactions
 from minions.userbot.engines.premium_emoji import RichText
@@ -60,12 +61,6 @@ PRE_FIRE_REFRESH_SEC = 45.0
 QUEUED_ROWS = 12
 # A persisted emoji row is an [id, fallback] pair.
 _EMOJI_ROW_LEN = 2
-
-
-def _trim(title: str, width: int = 40) -> str:
-    """Return a one-line, length-capped title for the /status report."""
-    flat = ' '.join(title.split())
-    return flat if len(flat) <= width else flat[: width - 1] + '~'
 
 
 def _queued_markup(entry: dict[str, object]) -> str:
@@ -166,7 +161,7 @@ class CommentWatch:
             chat,
             top,
         )
-        text = _trim(str(getattr(event.message, 'message', '') or ''))
+        text = trim(str(getattr(event.message, 'message', '') or ''))
         ref = Comment(
             chat=chat, root=top, msg_id=int(event.message.id), text=text
         )
@@ -368,7 +363,7 @@ class CommentWatch:
         person = str(getattr(message, 'sender_id', None) or '')
         comment_id = int(getattr(message, 'id', 0) or 0)
         if person and comment_id:
-            text = _trim(str(getattr(message, 'message', '') or ''))
+            text = trim(str(getattr(message, 'message', '') or ''))
             ref = Comment(chat=chat, root=root, msg_id=comment_id, text=text)
             self._schedule_comment(ref, person, engaged=False)
 

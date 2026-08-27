@@ -29,6 +29,7 @@ from minions.userbot.core.models import Config  # noqa: E402
 from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Item  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
+from minions.userbot.glue import aggregator  # noqa: E402
 
 CONSTS = config.load_constants(config.CONSTANTS_PATH)
 
@@ -237,16 +238,25 @@ def test_write_state_keeps_the_old_file_when_the_move_fails(
 # ------------------------------------------------------- Userbot core flow
 
 
-def _bare_core() -> main.Userbot:
-    """Return an Userbot with just the core-flow collaborators wired."""
-    agg = object.__new__(main.Userbot)
-    agg.config = _config()
-    agg.consts = CONSTS
-    agg.groups = []
-    agg.posted = []
-    agg.rejected = set()
-    agg.processed_ids = set()
-    agg._keys = tuple(CONSTS.fields.values())
+def _bare_core() -> aggregator.LinkAggregator:
+    """Return a poster with just the core-flow collaborators wired.
+
+    A plain constructor call: the poster no longer needs a Telethon client
+    to exist. Only the two side effects the flow would run -- persisting and
+    arming a timeout -- are stubbed out.
+    """
+    agg = aggregator.LinkAggregator(
+        aggregator.AggregatorDeps(
+            client=None,
+            config=_config(),
+            consts=CONSTS,
+            state_path=None,
+            targets=tuple,
+            on_posted=None,
+            field_keys=tuple(CONSTS.fields.values()),
+            variety=None,
+        )
+    )
     agg._save = lambda: None
     agg._arm = lambda _group: None
     return agg

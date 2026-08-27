@@ -107,7 +107,7 @@ class _ProfilesMixin(UserbotProtocol):
         boot, but skipped on a live<->test switch so entering test never dumps
         a burst of recent videos into the test channel.
         """
-        self.restore()
+        self.aggregator.restore()
         try:
             self.comment_watch.rearm()
             await self.comment_watch.seed_posts()
@@ -117,7 +117,7 @@ class _ProfilesMixin(UserbotProtocol):
         except Exception:
             log.exception('reactions: startup step failed; listening anyway')
         if source_backfill:
-            await self.backfill()
+            await self.aggregator.backfill()
         self._greeter_task = asyncio.create_task(self.greeter.loop())
         self._react_rescan_task = asyncio.create_task(
             self.comment_watch.rescan_loop()
@@ -129,8 +129,7 @@ class _ProfilesMixin(UserbotProtocol):
         self.comment_watch.cancel()
         self.story_watch.cancel()
         self.audience.close()
-        for group in self.groups:
-            cancel(getattr(group, 'task', None))
+        self.aggregator.cancel()
         cancel(self._greeter_task)
         cancel(self._react_rescan_task)
         cancel(self._stories_task)

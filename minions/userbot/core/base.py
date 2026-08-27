@@ -22,14 +22,12 @@ if TYPE_CHECKING:
 
     from telethon import TelegramClient
 
-    from minions.userbot.core.humanize import Variety
     from minions.userbot.core.models import Config
     from minions.userbot.core.models import Consts
-    from minions.userbot.core.models import Group
-    from minions.userbot.core.models import Posted
     from minions.userbot.engines import greeter
     from minions.userbot.engines import reactions
     from minions.userbot.engines import stories
+    from minions.userbot.glue.aggregator import LinkAggregator
     from minions.userbot.glue.comod import Cabinet
     from minions.userbot.glue.reactions import CommentWatch
     from minions.userbot.glue.stories import StoryWatch
@@ -47,26 +45,18 @@ if TYPE_CHECKING:
         client: TelegramClient
         config: Config
         consts: Consts
-        state_path: Path
         reactions: reactions.ReactionBrain
         stories: stories.StoryBrain
         story_watch: StoryWatch
         comment_watch: CommentWatch
+        aggregator: LinkAggregator
         greeter: greeter.Greeter
         audience: AudienceLog
         cabinet: Cabinet
 
         # --- live state ---
         mode: str
-        groups: list[Group]
-        posted: list[Posted]
-        rejected: set[str]
         _modes: dict[str, str]  # service -> 'off' | 'test' | 'live'
-
-        # --- aggregation state (the _AggregatorMixin) ---
-        processed_ids: set[int]  # source ids already posted (backfill dedup)
-        _keys: tuple[str, ...]  # incoming JSON field names to read
-        _variety: Variety  # non-repeating picker for the post decoration
 
         # --- profile/mode plumbing (the _ProfilesMixin) ---
         _raw: dict[str, object]  # the parsed constants JSON

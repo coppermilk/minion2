@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 install_telethon_stub()
 
-from minions.userbot import main  # noqa: E402
 from minions.userbot.core.matching import is_recent_repost  # noqa: E402
 from minions.userbot.core.models import Config  # noqa: E402
 from minions.userbot.core.models import Group  # noqa: E402
@@ -171,39 +170,43 @@ class _FakeFlush:
         self.order.append('arm')
 
 
-def _bare_aggregator(fake: _FakeFlush) -> main.Userbot:
-    """Build an Userbot with only what the flush path touches (no __init__).
+def _bare_aggregator(fake: _FakeFlush) -> aggregator.LinkAggregator:
+    """Build a poster with only what the flush path touches.
 
-    ``__init__`` opens a Telethon client and loads real state, so we make the
-    instance directly and wire in the fake collaborators.
+    No object.__new__ and no Telethon: the poster is an object now, so the
+    test constructs one and swaps in the fakes it wants to observe.
     """
-    agg = object.__new__(main.Userbot)
-    agg.groups = []
-    agg.posted = []
-    agg.processed_ids = set()
-    agg.consts = None  # only compose reads it, and we patch compose
-    agg._variety = None  # passed to the patched compose, which ignores it
-    agg.config = Config(
-        source=0,
-        targets=(),
-        test_target=0,
-        platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
-        threshold=0.9,
-        timeout=10800.0,
-        backfill=100,
-        max_duration=180,
-        repost_guard=604800.0,
-        repost_guard_count=5,
-        discussion_gap=0.0,
+    agg = aggregator.LinkAggregator(
+        aggregator.AggregatorDeps(
+            client=None,
+            config=Config(
+                source=0,
+                targets=(),
+                test_target=0,
+                platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
+                threshold=0.9,
+                timeout=10800.0,
+                backfill=100,
+                max_duration=180,
+                repost_guard=604800.0,
+                repost_guard_count=5,
+                discussion_gap=0.0,
+            ),
+            consts=None,  # only compose reads it, and we patch compose
+            state_path=None,  # _save is faked
+            targets=tuple,
+            on_posted=fake.on_posted,
+            field_keys=(),
+            variety=None,  # the patched compose ignores it
+        )
     )
     agg._deliver_post = fake.deliver
-    agg.comment_watch = fake
     agg._save = fake.save
     agg._arm = fake.arm
 
     def _record_posted(group: Group) -> None:
         fake.order.append('record')
-        main.Userbot._record_posted(agg, group)
+        aggregator.LinkAggregator._record_posted(agg, group)
 
     agg._record_posted = _record_posted
     return agg
@@ -255,7 +258,7 @@ def test_flush_records_and_saves_before_react_watch(
     group = _sample_group()
     agg.groups.append(group)
 
-    asyncio.run(main.Userbot._flush(agg, group))
+    asyncio.run(agg._flush(group))
 
     assert fake.order.index('record') < fake.order.index('watch')
     assert fake.order.index('save') < fake.order.index('watch')
@@ -276,7 +279,7 @@ def test_flush_requeues_when_nothing_delivered(
     group = _sample_group()
     agg.groups.append(group)
 
-    asyncio.run(main.Userbot._flush(agg, group))
+    asyncio.run(agg._flush(group))
 
     assert group in agg.groups  # kept for a later retry
     assert agg.posted == []  # not recorded

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 install_telethon_stub()
 
 from minions.userbot import main  # noqa: E402
+from minions.userbot.core.humanize import Variety  # noqa: E402
 from minions.userbot.core.models import Config  # noqa: E402
 from minions.userbot.core.models import Consts  # noqa: E402
 from minions.userbot.core.models import Group  # noqa: E402
@@ -32,6 +33,7 @@ from minions.userbot.core.render import Glyphs  # noqa: E402
 from minions.userbot.engines import greeter  # noqa: E402
 from minions.userbot.engines import reactions  # noqa: E402
 from minions.userbot.engines import stories  # noqa: E402
+from minions.userbot.glue import aggregator as aggregator_glue  # noqa: E402
 from minions.userbot.glue import reactions as reactions_glue  # noqa: E402
 from minions.userbot.glue import stories as stories_glue  # noqa: E402
 from minions.userbot.glue import users as users_glue  # noqa: E402
@@ -39,6 +41,10 @@ from minions.userbot.glue import users as users_glue  # noqa: E402
 NOW = 1_760_000_000.0  # a fixed clock, so every eta in the text is stable
 SOURCE = -1001
 TARGET = -1002
+
+
+async def _unused_posted(target: int, post_id: int) -> None:
+    """Post hand-off the render never reaches."""
 
 
 async def _unused_announce(text: str) -> None:
@@ -114,16 +120,28 @@ def _bot(tmp_path: Path) -> main.Userbot:
         'users': 'off',
         'greeter': 'live',
     }
-    bot.groups = [Group(title='Waiting one', created_at=NOW - 600)]
-    bot.posted = [
-        Posted(
-            title='Posted one',
-            at='2026-08-01T10:00:00Z',
-            links={'a': 'u'},
-            msg_ids=[1],
-        )
-    ]
-    bot.rejected = {'long video'}
+    bot.aggregator = aggregator_glue.LinkAggregator(
+        aggregator_glue.AggregatorDeps(
+            client=SimpleNamespace(),
+            config=bot.config,
+            consts=bot.consts,
+            state_path=tmp_path / 'agg.json',
+            targets=lambda: (TARGET,),
+            on_posted=_unused_posted,
+            field_keys=(),
+            variety=Variety(),
+        ),
+        groups=[Group(title='Waiting one', created_at=NOW - 600)],
+        posted=[
+            Posted(
+                title='Posted one',
+                at='2026-08-01T10:00:00Z',
+                links={'a': 'u'},
+                msg_ids=[1],
+            )
+        ],
+        rejected={'long video'},
+    )
 
     params = reactions.ReactionParams(
         enabled=True,
