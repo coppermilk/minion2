@@ -81,7 +81,6 @@ if TYPE_CHECKING:
         _raw: dict[str, object]  # the parsed constants JSON
         _state_base: Path  # base state dir (live); test lives under base/test
         _mode_path: Path  # the persisted per-service modes file
-        _overrides_path: Path  # the legacy feature-overrides file
         _greeter_task: asyncio.Task[None] | None
         _react_rescan_task: asyncio.Task[None] | None
         _stories_task: asyncio.Task[None] | None

@@ -33,13 +33,12 @@ reaction in
    the morning, a festive one in December.
 6. Jitter defeats the ":00 scheduler fingerprint": the fire time gets a random
    sub-minutes offset.
-7. Built-in imperfection: a comment is sometimes ignored, a day is sometimes
-   silent, and once in a while a second reaction follows the first.
+7. Built-in imperfection: a comment is sometimes ignored and a whole day is
+   sometimes silent.
 8. Feedback reactivity: a commenter who is themselves replying to us gets a
    faster reaction.
-9. State is persisted (mood, last-send cursor, per-reaction recency, who was
-already
-   reacted), because principles 2-4 need memory across restarts.
+9. State is persisted (mood, the session cursors, per-reaction recency, who
+   was already reacted), because principles 2-4 need memory across restarts.
 
 All texts/ids live in the constants JSON, so this source stays ASCII.
 """
@@ -203,8 +202,6 @@ class ReactionParams:
     spacing_log_sigma: float
     jitter_sec: float
     skip_prob: float
-    double_prob: float
-    double_gap_sec: float
     silent_day_prob: float
     recency_half_life_sec: float
     mood_phi: float
@@ -276,7 +273,6 @@ class ReactionState:
 
     mood: float = 0.0
     mood_day: str = ''  # ISO date of the last mood step (drift once a day)
-    last_send: float = 0.0  # unix ts of the most recent reaction sent
     next_session_at: float = (
         0.0  # earliest the NEXT session may open (spacing)
     )
@@ -725,13 +721,11 @@ class ReactionBrain:
         """Weighted, reproducible-in-key draw of one emoji; records recency.
 
         Shared by ``pick_like`` and ``pick_reaction``. Weights come from
-        ``_weight``
-        (base * recency * mood * context), so the emoji people actually SEE
-        inherits the same human machinery that the (otherwise unused) ``emit``
-        path had. Seeded by ``key`` for per-target reproducibility, then the
-        pick is written to ``reaction_last`` so the next draw suppresses it --
-        no
-        back-to-back repeats across a burst of reactions.
+        ``_weight`` (base * recency * mood * context), so every emoji people
+        actually see carries the full human machinery. Seeded by ``key`` for
+        per-target reproducibility, then the pick is written to
+        ``reaction_last`` so the next draw suppresses it -- no back-to-back
+        repeats across a burst of reactions.
         """
         if not pool:
             return []
@@ -833,32 +827,6 @@ class ReactionBrain:
         """Return the persona timezone offset (for the daily counters)."""
         return self.params.tz_offset_hours
 
-    def emit(self) -> list[ReactionEmoji]:
-        """Pick the reaction(s) to send now and record the send.
-
-        Returns one reaction, or two when the rare "second reaction" fires. An
-        empty pool
-        yields an empty list (the caller then sends nothing).
-        """
-        now = self.clock()
-        self._step_mood(now)
-        if not self.params.pool:
-            return []
-        reactions = [self._pick(now)]
-        if self.rng.random() < self.params.double_prob:  # principle 7
-            reactions.append(self._pick(now))
-        for reaction in reactions:
-            self.state.reaction_last[reaction.emoji_id] = now
-        self.state.last_send = now
-        self._save()
-        return reactions
-
-    def _pick(self, now: float) -> ReactionEmoji:
-        """One weighted reaction draw at ``now``."""
-        pool = self.params.pool
-        weights = [self._weight(c, now) for c in pool]
-        return weighted_choice(self.rng, pool, weights)
-
     def _weight(self, reaction: ReactionEmoji, now: float) -> float:
         """Return the selection weight: base*recency*mood*context (3,4,5)."""
         dt = now - self.state.reaction_last.get(reaction.emoji_id, 0.0)
@@ -908,7 +876,6 @@ class ReactionBrain:
         state = ReactionState(
             mood=float(raw.get('mood', 0.0)),
             mood_day=str(raw.get('mood_day', '')),
-            last_send=float(raw.get('last_send', 0.0)),
             next_session_at=float(
                 raw.get('next_session_at', raw.get('next_earliest', 0.0))
             ),
@@ -946,7 +913,6 @@ class ReactionBrain:
         data = {
             'mood': self.state.mood,
             'mood_day': self.state.mood_day,
-            'last_send': self.state.last_send,
             'next_session_at': self.state.next_session_at,
             'session_start_at': self.state.session_start_at,
             'session_last_at': self.state.session_last_at,
@@ -1044,8 +1010,6 @@ def load_reaction_params(data: dict[str, object]) -> ReactionParams:
         spacing_log_sigma=float(reactions.get('spacing_log_sigma', 1.3)),
         jitter_sec=float(reactions.get('jitter_sec', 90.0)),
         skip_prob=float(reactions.get('skip_prob', 0.12)),
-        double_prob=float(reactions.get('double_prob', 0.06)),
-        double_gap_sec=float(reactions.get('double_gap_sec', 40.0)),
         silent_day_prob=float(reactions.get('silent_day_prob', 0.08)),
         recency_half_life_sec=float(
             reactions.get('recency_half_life_sec', 172800.0)

@@ -31,7 +31,6 @@ from minions.userbot.core.statefile import posted_dict
 from minions.userbot.core.statefile import posted_from_dict
 
 if TYPE_CHECKING:
-
     from minions.userbot.engines.premium_emoji import PremiumMessage
 
 from minions.userbot.core.base import UserbotProtocol
@@ -40,6 +39,7 @@ log = logging.getLogger('userbot')
 
 # Posted videos kept in the readable log; doubles as the restart-dedup window.
 POSTED_CAP = 300
+
 
 class _AggregatorMixin(UserbotProtocol):
     """Link aggregation + posting, mixed into Userbot."""

@@ -22,7 +22,6 @@ _MIGRATED_AT = 555.0
 _NEAR_ONE = 0.99
 _SESSION_AT = 999.0
 _THREAD_ROOT = 800
-_TWO_CATS = 2
 _WATCH_POSTS = 4
 
 if TYPE_CHECKING:
@@ -57,8 +56,6 @@ def _params(**over: object) -> object:
         'spacing_log_sigma': 0.5,
         'jitter_sec': 30.0,
         'skip_prob': 0.0,
-        'double_prob': 0.0,
-        'double_gap_sec': 40.0,
         'silent_day_prob': 0.0,
         'recency_half_life_sec': 1000.0,
         'mood_phi': 0.8,
@@ -149,8 +146,8 @@ def test_just_used_reaction_is_avoided(tmp_path: Path) -> None:
     )
     now = _ts()
     brain.state.reaction_last = {'used': now}  # just sent -> suppressed
-    picks = [brain._pick(now).emoji_id for _ in range(200)]
-    assert picks.count('fresh') > picks.count('used') * 5
+    fresh, used = brain.params.pool
+    assert brain._weight(fresh, now) > brain._weight(used, now) * 5
 
 
 def test_favourite_base_is_chosen_more(tmp_path: Path) -> None:
@@ -162,8 +159,8 @@ def test_favourite_base_is_chosen_more(tmp_path: Path) -> None:
             reactions.ReactionEmoji('rare', 'r', 1.0, ('x',)),
         ),
     )
-    picks = [brain._pick(_ts()).emoji_id for _ in range(300)]
-    assert picks.count('fav') > picks.count('rare')
+    fav, rare = brain.params.pool
+    assert brain._weight(fav, _ts()) > brain._weight(rare, _ts())
 
 
 # --- principle 4: latent mood, AR(1), drifts once a day
@@ -228,12 +225,6 @@ def test_engaged_commenter_gets_a_faster_reaction(tmp_path: Path) -> None:
 
 
 # --- principle 7: built-in imperfection
-
-
-def test_double_sends_a_second_reaction(tmp_path: Path) -> None:
-    """Check double sends a second reaction."""
-    brain = _brain(tmp_path, double_prob=1.0)
-    assert len(brain.emit()) == _TWO_CATS
 
 
 def test_skip_probability_drops_a_comment(tmp_path: Path) -> None:
@@ -441,25 +432,6 @@ def test_due_now_sets_all_pending_to_now(tmp_path: Path) -> None:
     assert len(due) == 1
     assert due[0].when == _ts()  # pulled back to now
     assert due[0].root == _THREAD_ROOT  # thread root preserved
-
-
-# --- emit records the send
-
-
-def test_emit_records_last_send_and_recency(tmp_path: Path) -> None:
-    """Check emit records last send and recency."""
-    brain = _brain(tmp_path)
-    now = brain.clock()
-    sent = brain.emit()
-    assert len(sent) == 1
-    assert brain.state.last_send == now
-    assert brain.state.reaction_last[sent[0].emoji_id] == now
-
-
-def test_emit_with_empty_pool_sends_nothing(tmp_path: Path) -> None:
-    """Check emit with empty pool sends nothing."""
-    brain = _brain(tmp_path, pool=())
-    assert brain.emit() == []
 
 
 # --- the like/reaction pools: weighted draw, seeded by the target key

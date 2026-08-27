@@ -361,9 +361,7 @@ def main() -> None:
     )
     print()
 
-    print(
-        'STEP 8  the queue that survives a restart (persisted pending)'
-    )
+    print('STEP 8  the queue that survives a restart (persisted pending)')
     for entry in brain.state.pending:
         print(
             f'  pending: {entry.get("kind", "react")} on comment '

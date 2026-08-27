@@ -46,8 +46,12 @@ def test_time_window_blocks_recent_repost() -> None:
     """A title posted inside the time window is a re-post (count off)."""
     posted = [_post('Salsa dance', 1)]
     assert is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=0,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=0,
     )
 
 
@@ -64,12 +68,20 @@ def test_count_window_catches_what_time_misses() -> None:
         _post('Gym fail', 1),
     ]
     assert not is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=0,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=0,
     )
     assert is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=3,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=3,
     )
 
 
@@ -77,11 +89,17 @@ def test_eligible_again_beyond_both_windows() -> None:
     """Once past the time AND the count window, the title may post again."""
     posted = [
         _post('Salsa dance', 10),
-        _post('a', 9), _post('b', 8), _post('c', 7),  # push it beyond count 3
+        _post('a', 9),
+        _post('b', 8),
+        _post('c', 7),  # push it beyond count 3
     ]
     assert not is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=3,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=3,
     )
 
 
@@ -89,11 +107,18 @@ def test_time_still_blocks_beyond_count() -> None:
     """A recent title beyond the count window is still caught by time."""
     posted = [
         _post('X recent', 0.04),  # ~1h old: inside the week
-        _post('a', 0), _post('b', 0), _post('c', 0), _post('d', 0),
+        _post('a', 0),
+        _post('b', 0),
+        _post('c', 0),
+        _post('d', 0),
     ]
     assert is_recent_repost(
-        posted, 'X recent', time.time(),
-        threshold=0.9, window=WEEK, count=3,
+        posted,
+        'X recent',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=3,
     )
 
 
@@ -101,8 +126,12 @@ def test_both_windows_off_disables_guard() -> None:
     """With both knobs at 0 the guard never fires."""
     posted = [_post('Salsa dance', 0)]
     assert not is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=0, count=0,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=0,
+        count=0,
     )
 
 
@@ -111,11 +140,13 @@ def test_fuzzy_match_ignores_hashtag_and_emoji_tail() -> None:
     posted = [_post('Three days editing this number and finally done', 0)]
     variant = 'Three days editing this number and finally done #banger #fun'
     assert is_recent_repost(
-        posted, variant, time.time(),
-        threshold=0.9, window=0, count=3,
+        posted,
+        variant,
+        time.time(),
+        threshold=0.9,
+        window=0,
+        count=3,
     )
-
-
 
 
 class _FakeFlush:
@@ -155,10 +186,17 @@ def _bare_aggregator(fake: _FakeFlush) -> main.Userbot:
     agg.consts = None  # only compose reads it, and we patch compose
     agg._variety = None  # passed to the patched compose, which ignores it
     agg.config = Config(
-        source=0, targets=(), test_target=0,
+        source=0,
+        targets=(),
+        test_target=0,
         platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
-        threshold=0.9, timeout=10800.0, backfill=100, max_duration=180,
-        repost_guard=604800.0, repost_guard_count=5, discussion_gap=0.0,
+        threshold=0.9,
+        timeout=10800.0,
+        backfill=100,
+        max_duration=180,
+        repost_guard=604800.0,
+        repost_guard_count=5,
+        discussion_gap=0.0,
     )
     agg._deliver_post = fake.deliver
     agg._react_to_post = fake.react
@@ -178,12 +216,22 @@ def _sample_group() -> Group:
     """Return a two-platform group like the one that looped in the wild."""
     items = {
         'pinterest': Item(
-            key='pinterest', platform='pinterest', title='V',
-            url='https://pin/1', thumbnail='', duration='', msg_id=539,
+            key='pinterest',
+            platform='pinterest',
+            title='V',
+            url='https://pin/1',
+            thumbnail='',
+            duration='',
+            msg_id=539,
         ),
         'youtube': Item(
-            key='youtube', platform='youtube', title='V',
-            url='https://yt/1', thumbnail='', duration='', msg_id=546,
+            key='youtube',
+            platform='youtube',
+            title='V',
+            url='https://yt/1',
+            thumbnail='',
+            duration='',
+            msg_id=546,
         ),
     }
     return Group(title='V', items=items, msg_ids={539, 546})
@@ -245,9 +293,17 @@ def _agg_with_gap(gap: float) -> main.Userbot:
     """Build a bare Userbot whose config sets only the discussion gap."""
     agg = object.__new__(main.Userbot)
     agg.config = Config(
-        source=0, targets=(), test_target=0, platforms=('tiktok',),
-        threshold=0.9, timeout=1.0, backfill=0, max_duration=180,
-        repost_guard=0.0, repost_guard_count=0, discussion_gap=gap,
+        source=0,
+        targets=(),
+        test_target=0,
+        platforms=('tiktok',),
+        threshold=0.9,
+        timeout=1.0,
+        backfill=0,
+        max_duration=180,
+        repost_guard=0.0,
+        repost_guard_count=0,
+        discussion_gap=gap,
     )
     agg._last_discussion_ts = 0.0
     return agg

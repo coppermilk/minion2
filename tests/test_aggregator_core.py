@@ -258,22 +258,6 @@ def test_default_mode_follows_json_enabled() -> None:
     assert agg._default_mode('stories') == 'off'
 
 
-def test_migrate_service_modes_from_legacy_global(tmp_path: Path) -> None:
-    """A pre-per-service install seeds from the old global mode + overrides."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {
-        'reactions': {'enabled': True},
-        'stories': {'enabled': True},
-        'users': {'enabled': False},
-        'greeter': {'enabled': False},
-    }
-    agg._overrides_path = tmp_path / 'absent.json'  # no legacy overrides
-    modes = agg._migrate_service_modes({'mode': 'test'})
-    assert modes['aggregator'] == 'test'  # poster always followed the mode
-    assert modes['reactions'] == 'test'  # on -> the legacy mode
-    assert modes['users'] == 'off'  # disabled -> off
-
-
 def test_load_service_modes_reads_and_cleans_the_block(
     tmp_path: Path,
 ) -> None:
@@ -281,7 +265,6 @@ def test_load_service_modes_reads_and_cleans_the_block(
     agg = object.__new__(main.Userbot)
     agg._raw = {'reactions': {'enabled': True}}
     agg._mode_path = tmp_path / 'mode.json'
-    agg._overrides_path = tmp_path / 'ov.json'
     agg._mode_path.write_text(
         json.dumps(
             {
@@ -301,33 +284,17 @@ def test_load_service_modes_reads_and_cleans_the_block(
     assert modes['users'] == 'off'  # 'bogus' -> users default (JSON off)
 
 
-def test_load_service_modes_migrates_the_legacy_cats_key(
+def test_load_service_modes_falls_back_when_the_file_is_absent(
     tmp_path: Path,
 ) -> None:
-    """A pre-rename 'cats' service key is carried over to 'reactions'."""
+    """No modes file (a fresh install) -> every service on its own default."""
     agg = object.__new__(main.Userbot)
-    agg._raw = {'reactions': {'enabled': True}}
-    agg._mode_path = tmp_path / 'mode.json'
-    agg._overrides_path = tmp_path / 'ov.json'
-    agg._mode_path.write_text(
-        json.dumps({'services': {'aggregator': 'live', 'cats': 'test'}})
-    )
+    agg._raw = {'reactions': {'enabled': True}, 'users': {'enabled': False}}
+    agg._mode_path = tmp_path / 'absent.json'
     modes = agg._load_service_modes()
-    assert modes['reactions'] == 'test'  # the old 'cats' mode is preserved
-
-
-def test_migrate_reaction_state_renames_the_legacy_file(
-    tmp_path: Path,
-) -> None:
-    """cats_state.json moves to reactions_state.json once, never clobbered."""
-    (tmp_path / 'cats_state.json').write_text('{"mood": 1}')
-    main.Userbot._migrate_reaction_state(tmp_path)
-    assert not (tmp_path / 'cats_state.json').exists()
-    assert (tmp_path / 'reactions_state.json').read_text() == '{"mood": 1}'
-    # when the new file already exists, a stale old one is left untouched
-    (tmp_path / 'cats_state.json').write_text('{"mood": 9}')
-    main.Userbot._migrate_reaction_state(tmp_path)
-    assert (tmp_path / 'reactions_state.json').read_text() == '{"mood": 1}'
+    assert modes['aggregator'] == 'live'  # the poster is always live
+    assert modes['reactions'] == 'live'  # JSON-enabled -> live
+    assert modes['users'] == 'off'  # JSON-disabled -> off
 
 
 def _agg_with_label(label: str) -> object:

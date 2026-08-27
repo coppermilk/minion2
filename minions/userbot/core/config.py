@@ -41,9 +41,6 @@ STATE_FILE = 'aggregator_state.json'
 # Which profile is active (live/test). Lives in the base state dir, OUTSIDE the
 # per-profile state, so we know which profile to load at startup.
 MODE_FILE = 'aggregator_mode.json'
-# The persisted runtime feature overrides (a name -> bool map) live here, in
-# the base state dir so both profiles share one choice (like the JSON enabled).
-FEATURE_OVERRIDES_FILE = 'feature_overrides.json'
 # The project keeps ONE .env at the repo root (compose's env_file and the
 # Windows launcher both point there): two levels above the package
 # (minions/userbot -> minions -> repo). In Docker the vars are already in

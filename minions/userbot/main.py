@@ -48,7 +48,6 @@ from telethon import events
 
 from minions.userbot.core.client import build_client
 from minions.userbot.core.config import CONSTANTS_FILE
-from minions.userbot.core.config import FEATURE_OVERRIDES_FILE
 from minions.userbot.core.config import MODE_FILE
 from minions.userbot.core.config import STATE_FILE
 from minions.userbot.core.config import apply_persona
@@ -136,7 +135,6 @@ class Userbot(
         base_state = resolve_state_path(here.with_name(STATE_FILE))
         self._state_base = base_state.parent
         self._mode_path = self._state_base / MODE_FILE
-        self._overrides_path = self._state_base / FEATURE_OVERRIDES_FILE
         self._modes = self._load_service_modes()
         self._react_tasks: set[asyncio.Task[None]] = set()
         self._greeter_task: asyncio.Task[None] | None = None
@@ -165,8 +163,6 @@ class Userbot(
         self._last_probe = 0.0
         self._build_profile()
 
-
-
     def _build_profile(self) -> None:
         """(Re)bind every service to ITS OWN mode -- dir, enabled, channel.
 
@@ -194,7 +190,6 @@ class Userbot(
             enabled=self._feature_enabled('reactions'),
         )
         react_dir = self._service_dir('reactions')
-        self._migrate_reaction_state(react_dir)
         self.reactions = reactions.ReactionBrain(
             reaction_params,
             react_dir / 'reactions_state.json',
@@ -237,34 +232,6 @@ class Userbot(
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
         self.comod = comod.CabinetRoster(pdir / 'comod.json')
         self._comod = comod.load_comod_params(self._raw)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     async def handle(self, event: events.NewMessage.Event) -> None:
         """Dispatch one event: a /command, a comment reaction, or aggregation.
@@ -412,18 +379,6 @@ class Userbot(
             log.warning('watchdog: liveness probe failed; heartbeat stale')
             return
         touch_health()
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 async def main() -> None:

@@ -162,5 +162,5 @@ From **any** chat, rendered back into the source chat: `/help` (or `/start`),
 `/stories`, `/users`, `/comod ...`, `/propiska_shkaf_month`, `/test` / `/live`
 (switch the whole bot's profile), `/features`, and per-service toggles
 `/<name>_on|off|test|live` (`name` in `aggregator, reactions, stories, users,
-greeter`). A toggle **persists** to `feature_overrides.json` and takes effect at
+greeter`). A toggle **persists** to `aggregator_mode.json` and takes effect at
 once.
