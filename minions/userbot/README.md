@@ -33,13 +33,14 @@ minions/userbot/
   login.py                # one-time interactive login -> the session file
   aggregator_constants.json, assets/   # editable texts + premium-emoji ids (UTF-8), cabinet template/fonts
   core/                   # pure building blocks, no Telethon
-    models, matching, statefile, render, config, runtime, client,
-    humanize, profiles, attachment, relationship, base (the shared-state contract)
+    models, matching, statefile, render, config, codec, runtime, client,
+    humanize, tasks, attachment, relationship
   engines/                # domain brains (Telethon-free, unit-tested)
     reactions, stories, greeter, comod, users, premium_emoji
   glue/                   # the collaborators that DO touch Telethon
-    aggregator (grouping + posting), reactions, stories, comod, users,
-    commands, status, profiles (live/test modes)
+    aggregator (LinkAggregator), reactions (CommentWatch),
+    stories (StoryWatch), comod (Cabinet), users (AudienceLog),
+    status (StatusReport), commands (CommandRouter), profiles (ServiceModes)
   dev/                    # developer tools, not the running bot
     reactions_proof, dump_emoji_ids
 ```
@@ -48,6 +49,15 @@ The principle: `core/` is pure logic/maths/IO, `engines/` are the domain brains,
 `glue/` is everything that calls Telethon, `dev/` is helpers. The aggregation
 brain (grouping, fuzzy title match, the re-post guard) lives in `core/matching.py`
 + `core/models.py`; its Telethon side is `glue/aggregator.py`.
+
+**How the host is assembled.** `Userbot` is a plain object that HOLDS one
+collaborator per service -- it does not inherit from them. Each service takes a
+frozen `*Deps` naming everything it may reach, so what a service can touch is
+its constructor signature, not "whatever is on `self`". The three host-level
+helpers (`StatusReport`, `CommandRouter`, `ServiceModes`) hold the bot
+explicitly instead. Two consequences worth knowing: a service cannot reach
+another service's state by accident, and every collaborator can be constructed
+in a test without a Telethon client.
 
 ## Configuration
 
