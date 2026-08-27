@@ -148,7 +148,7 @@ class _CommandsMixin(UserbotProtocol):
             COMMAND_REACTNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
             COMMAND_USERS: self.audience.report,
-            COMMAND_STORIES: self.stories_report,
+            COMMAND_STORIES: self.story_watch.report,
             COMMAND_PROPISKA: self.cabinet.propiska,
             COMMAND_TEST: self.enter_test,
             COMMAND_LIVE: self.enter_live,

@@ -31,11 +31,17 @@ from minions.userbot.core.models import Posted  # noqa: E402
 from minions.userbot.engines import greeter  # noqa: E402
 from minions.userbot.engines import reactions  # noqa: E402
 from minions.userbot.engines import stories  # noqa: E402
+from minions.userbot.glue import stories as stories_glue  # noqa: E402
 from minions.userbot.glue import users as users_glue  # noqa: E402
 
 NOW = 1_760_000_000.0  # a fixed clock, so every eta in the text is stable
 SOURCE = -1001
 TARGET = -1002
+
+
+async def _unused_label(peer_id: int) -> str:
+    """Peer resolver the disabled story section never reaches."""
+    return str(peer_id)
 
 
 def _consts() -> Consts:
@@ -149,8 +155,14 @@ def _bot(tmp_path: Path) -> main.Userbot:
     bot.stories = stories.StoryBrain(
         stories.StoryParams(enabled=False), tmp_path / 's.json'
     )
-    bot._pending_views = []
-    bot._story_next_poll = 0.0
+    bot.story_watch = stories_glue.StoryWatch(
+        stories_glue.StoryDeps(
+            client=SimpleNamespace(),
+            brain=bot.stories,
+            source=SOURCE,
+            label=_unused_label,
+        )
+    )
 
     gparams = greeter.GreeterParams(
         enabled=True,

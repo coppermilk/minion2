@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from minions.userbot.engines import reactions
     from minions.userbot.engines import stories
     from minions.userbot.glue.comod import Cabinet
+    from minions.userbot.glue.stories import StoryWatch
     from minions.userbot.glue.users import AudienceLog
 
     class UserbotProtocol:
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
         state_path: Path
         reactions: reactions.ReactionBrain
         stories: stories.StoryBrain
+        story_watch: StoryWatch
         greeter: greeter.Greeter
         audience: AudienceLog
         cabinet: Cabinet
@@ -58,12 +60,9 @@ if TYPE_CHECKING:
         posted: list[Posted]
         rejected: set[str]
         _react_next_rescan: float
-        _story_next_poll: float
         _rescan_sec: float
         _react_tasks: set[asyncio.Task[None]]
-        _story_tasks: set[asyncio.Task[None]]
         _thread_rescan_at: dict[int, float]
-        _pending_views: list[stories.StoryView]
         _modes: dict[str, str]  # service -> 'off' | 'test' | 'live'
 
         # --- aggregation state (the _AggregatorMixin) ---
@@ -96,12 +95,6 @@ if TYPE_CHECKING:
 
         def queued_react_rows(self) -> list[str]:
             """Return the capped queued-reaction rows (/status, /requeue)."""
-
-        def _stories_line(self) -> str: ...
-
-        def _stories_queue_lines(
-            self, labels: dict[int, str]
-        ) -> list[str]: ...
 
         # --- profile + status helpers the command dispatcher calls ---
         def _bullet(self) -> str: ...
@@ -137,9 +130,6 @@ if TYPE_CHECKING:
 
         async def answer_all_now(self) -> None:
             """Answer every pending commenter now (/reactnow)."""
-
-        async def stories_report(self) -> None:
-            """Post the story-viewer log (/stories)."""
 
 
 else:

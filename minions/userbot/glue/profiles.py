@@ -10,7 +10,6 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from minions.userbot.core import tasks
 from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.runtime import cancel
 from minions.userbot.glue.commands import SERVICE_MODES
@@ -121,12 +120,12 @@ class _ProfilesMixin(UserbotProtocol):
             await self.backfill()
         self._greeter_task = asyncio.create_task(self.greeter.loop())
         self._react_rescan_task = asyncio.create_task(self.react_rescan_loop())
-        self._stories_task = asyncio.create_task(self.stories_loop())
+        self._stories_task = asyncio.create_task(self.story_watch.loop())
 
     async def stop_profile(self) -> None:
         """Cancel the active profile's timers and loops (before a switch)."""
         self._cancel_react_tasks()
-        self._cancel_story_tasks()
+        self.story_watch.cancel()
         self.audience.close()
         for group in self.groups:
             cancel(getattr(group, 'task', None))
@@ -136,11 +135,6 @@ class _ProfilesMixin(UserbotProtocol):
         self._greeter_task = None
         self._react_rescan_task = None
         self._stories_task = None
-
-    def _cancel_story_tasks(self) -> None:
-        """Cancel every in-flight story-view timer (before a mode switch)."""
-        tasks.cancel_all(self._story_tasks)
-        self._pending_views.clear()
 
     async def switch_mode(self, mode: str) -> None:
         """Switch every ACTIVE service to MODE (the /test and /live commands).

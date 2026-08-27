@@ -423,9 +423,9 @@ class _StatusMixin(UserbotProtocol):
             f'{self._dot(on=True)} on',
             f'{today} today',
             f'{reacted}/{cap} reacted',
-            f'{len(self._pending_views)} queued',
+            f'{len(self.story_watch.pending)} queued',
         ]
-        whens = [v.when for v in self._pending_views]
+        whens = [v.when for v in self.story_watch.pending]
         if whens:
             eta = min(whens) - now
             when = 'now' if eta <= 0 else f'in {fmt_eta(eta)}'
@@ -436,7 +436,7 @@ class _StatusMixin(UserbotProtocol):
             reason = self.stories.blocked_reason(now)
             if reason:
                 parts.append(f'idle ({reason})')
-        nxt = self._story_next_poll
+        nxt = self.story_watch.next_poll
         poll_eta = nxt - now if nxt else 0.0
         if poll_eta > 0:
             parts.append(f'next poll {self._arrow()} in {fmt_eta(poll_eta)}')
@@ -444,12 +444,12 @@ class _StatusMixin(UserbotProtocol):
 
     def _stories_queue_lines(self, labels: dict[int, str]) -> list[str]:
         """Return the queued story views: whose, how many, and the ETA."""
-        if not self._pending_views:
+        if not self.story_watch.pending:
             return []
         now = time.time()
         b = self._bullet()
         rows = []
-        for view in sorted(self._pending_views, key=lambda v: v.when):
+        for view in sorted(self.story_watch.pending, key=lambda v: v.when):
             who = labels.get(view.peer_id, str(view.peer_id))
             eta = view.when - now
             when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'

@@ -81,7 +81,8 @@ from minions.userbot.glue.profiles import _ProfilesMixin
 from minions.userbot.glue.reactions import _ReactionsMixin
 from minions.userbot.glue.status import STATUS_WARM_PEERS
 from minions.userbot.glue.status import _StatusMixin
-from minions.userbot.glue.stories import _StoriesMixin
+from minions.userbot.glue.stories import StoryDeps
+from minions.userbot.glue.stories import StoryWatch
 from minions.userbot.glue.users import AudienceDeps
 from minions.userbot.glue.users import AudienceLog
 
@@ -101,7 +102,6 @@ class Userbot(
     _AggregatorMixin,
     _ProfilesMixin,
     _StatusMixin,
-    _StoriesMixin,
     _ReactionsMixin,
     _CommandsMixin,
 ):
@@ -142,11 +142,7 @@ class Userbot(
         self._react_rescan_task: asyncio.Task[None] | None = None
         self._react_next_rescan: float = 0.0  # ts of the next auto-rescan
         self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
-        self._story_tasks: set[asyncio.Task[None]] = set()
         self._stories_task: asyncio.Task[None] | None = None
-        self._story_next_poll: float = 0.0  # ts of the next stories re-poll
-        # Planned-but-not-yet-fired story views, for the /status queue readout.
-        self._pending_views: list[stories.StoryView] = []
         # pre-fire thread refresh debounce, keyed by thread root
         self._thread_rescan_at: dict[int, float] = {}
         # ts of the last GetDiscussionMessageRequest, for the flood throttle
@@ -204,8 +200,14 @@ class Userbot(
         self.stories = stories.StoryBrain(
             story_params, self._service_dir('stories') / 'stories_state.json'
         )
-        self._story_next_poll = 0.0
-        self._pending_views = []
+        self.story_watch = StoryWatch(
+            StoryDeps(
+                client=self.client,
+                brain=self.stories,
+                source=self.config.source,
+                label=self._chat_label,
+            )
+        )
         # Audience log: its own SQLite file per mode, so live and test
         # audiences never mix. Config lives in the 'users' JSON section.
         ucfg = codec.section(self._raw, 'users')
@@ -295,7 +297,7 @@ class Userbot(
         if self.config.test_target:
             ids.add(self.config.test_target)
         ids |= {chat for chat, _ in self.reactions.posts}
-        ids |= {v.peer_id for v in self._pending_views}  # story-view queue
+        ids |= {v.peer_id for v in self.story_watch.pending}
         return {cid: await self._chat_label(cid) for cid in ids}
 
     async def _resolve_attach_labels(self) -> None:
