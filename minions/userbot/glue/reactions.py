@@ -23,9 +23,9 @@ from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
 from minions.userbot.core.base import UserbotProtocol
-from minions.userbot.core.matching import _needs_human
-from minions.userbot.core.matching import _thread_top
-from minions.userbot.core.models import _Comment
+from minions.userbot.core.matching import needs_human
+from minions.userbot.core.matching import thread_top
+from minions.userbot.core.models import Comment
 from minions.userbot.engines import reactions
 from minions.userbot.engines.premium_emoji import RichText
 from minions.userbot.glue.status import STATUS_PENDING_CATS
@@ -67,7 +67,7 @@ class _ReactionsMixin(UserbotProtocol):
         if getattr(event.message, 'out', False):
             return  # our own message (a post) -- never reaction it
         reply = getattr(event.message, 'reply_to', None)
-        top = _thread_top(reply)
+        top = thread_top(reply)
         chat = int(event.chat_id or 0)
         if not self.reactions.is_comment(chat, top):
             return
@@ -81,13 +81,13 @@ class _ReactionsMixin(UserbotProtocol):
             top,
         )
         text = _trim(str(getattr(event.message, 'message', '') or ''))
-        ref = _Comment(
+        ref = Comment(
             chat=chat, root=top, msg_id=int(event.message.id), text=text
         )
         self._schedule_comment(ref, person, engaged=engaged)
 
     def _schedule_comment(
-        self, comment: _Comment, person: str, *, engaged: bool
+        self, comment: Comment, person: str, *, engaged: bool
     ) -> None:
         """Schedule (and arm) a reaction for a commenter under a post.
 
@@ -142,7 +142,7 @@ class _ReactionsMixin(UserbotProtocol):
         self._arm_reaction(reaction)
 
     def _choose_reaction(
-        self, person: str, comment: _Comment
+        self, person: str, comment: Comment
     ) -> tuple[list[reactions.ReactionEmoji], str] | None:
         """Pick (emoji specs, kind) for this comment: a like or a sticker.
 
@@ -153,7 +153,7 @@ class _ReactionsMixin(UserbotProtocol):
         is empty (nothing to place).
         """
         seed = f'{comment.chat}:{comment.msg_id}'
-        allow_sticker = not _needs_human(comment.text, self.consts.human_words)
+        allow_sticker = not needs_human(comment.text, self.consts.human_words)
         # The reciprocity control decides sticker vs like at our target rate
         # (no activity-burst gate); a question/link comment stays a plain like.
         if self.reactions.decide_sticker(person, content_ok=allow_sticker):
@@ -285,7 +285,7 @@ class _ReactionsMixin(UserbotProtocol):
         comment_id = int(getattr(message, 'id', 0) or 0)
         if person and comment_id:
             text = _trim(str(getattr(message, 'message', '') or ''))
-            ref = _Comment(chat=chat, root=root, msg_id=comment_id, text=text)
+            ref = Comment(chat=chat, root=root, msg_id=comment_id, text=text)
             self._schedule_comment(ref, person, engaged=False)
 
     async def requeue_reactions(self) -> None:

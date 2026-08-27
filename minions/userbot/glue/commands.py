@@ -16,9 +16,9 @@ import logging
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.base import UserbotProtocol
-from minions.userbot.core.render import _compose
-from minions.userbot.core.render import _render_constants
-from minions.userbot.core.render import _sample_groups
+from minions.userbot.core.render import compose
+from minions.userbot.core.render import render_constants
+from minions.userbot.core.render import sample_groups
 
 if TYPE_CHECKING:
     from telethon import events
@@ -220,7 +220,7 @@ class _CommandsMixin(UserbotProtocol):
 
     async def show_constants(self) -> None:
         """Post a preview of the whole unified emoji array to the watcher."""
-        message = _render_constants(self.consts)
+        message = render_constants(self.consts)
         await self.client.send_message(
             self.config.source,
             message.text,
@@ -230,9 +230,9 @@ class _CommandsMixin(UserbotProtocol):
 
     async def preview_posts(self) -> None:
         """Render QC sample posts (partial + full coverage) to the source."""
-        groups = _sample_groups(self.consts)
+        groups = sample_groups(self.consts)
         for group in groups:
-            message = _compose(group, self.config.platforms, self.consts)
+            message = compose(group, self.config.platforms, self.consts)
             await self.client.send_message(
                 self.config.source,
                 message.text,

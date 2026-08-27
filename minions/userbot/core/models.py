@@ -20,12 +20,12 @@ if TYPE_CHECKING:
     import asyncio
 
 
-def _iso(ts: float) -> str:
+def iso(ts: float) -> str:
     """Return a unix timestamp as an ISO-8601 UTC string (second precision)."""
     return datetime.fromtimestamp(ts, tz=UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def _parse_iso(text: str) -> float:
+def parse_iso(text: str) -> float:
     """Return an ISO-8601 UTC string to a unix timestamp (0 on bad)."""
     try:
         return datetime.fromisoformat(text).timestamp()
@@ -33,7 +33,7 @@ def _parse_iso(text: str) -> float:
         return time.time()
 
 
-def _story_epoch(value: object) -> float:
+def story_epoch(value: object) -> float:
     """Return a story item's date as a unix timestamp, 0 if unknown.
 
     Telethon gives ``StoryItem.date`` as a ``datetime`` (not an epoch int), so
@@ -59,7 +59,7 @@ DEFAULT_FIELDS = {
     'duration': 'duration',
 }
 # Thumbnail key spellings seen in the wild; any is accepted (optional field).
-_THUMB_ALIASES = ('thumbnail', 'thumbnailUrl', 'thumnailUrl')
+THUMB_ALIASES = ('thumbnail', 'thumbnailUrl', 'thumnailUrl')
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ class Posted:
 
 
 @dataclass(frozen=True)
-class _Comment:
+class Comment:
     """A comment to maybe reaction: chat, thread root, message id and text."""
 
     chat: int

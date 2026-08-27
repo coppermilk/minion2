@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 install_telethon_stub()
 
 from minions.userbot import main  # noqa: E402
-from minions.userbot.core.matching import _is_recent_repost  # noqa: E402
+from minions.userbot.core.matching import is_recent_repost  # noqa: E402
 from minions.userbot.core.models import Config  # noqa: E402
 from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Item  # noqa: E402
@@ -45,7 +45,7 @@ WEEK = 604800.0
 def test_time_window_blocks_recent_repost() -> None:
     """A title posted inside the time window is a re-post (count off)."""
     posted = [_post('Salsa dance', 1)]
-    assert _is_recent_repost(
+    assert is_recent_repost(
         posted, 'Salsa dance', time.time(),
         threshold=0.9, window=WEEK, count=0,
     )
@@ -63,11 +63,11 @@ def test_count_window_catches_what_time_misses() -> None:
         _post('Cooking pasta', 2),
         _post('Gym fail', 1),
     ]
-    assert not _is_recent_repost(
+    assert not is_recent_repost(
         posted, 'Salsa dance', time.time(),
         threshold=0.9, window=WEEK, count=0,
     )
-    assert _is_recent_repost(
+    assert is_recent_repost(
         posted, 'Salsa dance', time.time(),
         threshold=0.9, window=WEEK, count=3,
     )
@@ -79,7 +79,7 @@ def test_eligible_again_beyond_both_windows() -> None:
         _post('Salsa dance', 10),
         _post('a', 9), _post('b', 8), _post('c', 7),  # push it beyond count 3
     ]
-    assert not _is_recent_repost(
+    assert not is_recent_repost(
         posted, 'Salsa dance', time.time(),
         threshold=0.9, window=WEEK, count=3,
     )
@@ -91,7 +91,7 @@ def test_time_still_blocks_beyond_count() -> None:
         _post('X recent', 0.04),  # ~1h old: inside the week
         _post('a', 0), _post('b', 0), _post('c', 0), _post('d', 0),
     ]
-    assert _is_recent_repost(
+    assert is_recent_repost(
         posted, 'X recent', time.time(),
         threshold=0.9, window=WEEK, count=3,
     )
@@ -100,7 +100,7 @@ def test_time_still_blocks_beyond_count() -> None:
 def test_both_windows_off_disables_guard() -> None:
     """With both knobs at 0 the guard never fires."""
     posted = [_post('Salsa dance', 0)]
-    assert not _is_recent_repost(
+    assert not is_recent_repost(
         posted, 'Salsa dance', time.time(),
         threshold=0.9, window=0, count=0,
     )
@@ -110,7 +110,7 @@ def test_fuzzy_match_ignores_hashtag_and_emoji_tail() -> None:
     """Same wording, different hashtag/emoji tail, still a re-post."""
     posted = [_post('Three days editing this number and finally done', 0)]
     variant = 'Three days editing this number and finally done #banger #fun'
-    assert _is_recent_repost(
+    assert is_recent_repost(
         posted, variant, time.time(),
         threshold=0.9, window=0, count=3,
     )
@@ -152,8 +152,8 @@ def _bare_aggregator(fake: _FakeFlush) -> main.Userbot:
     agg.groups = []
     agg.posted = []
     agg.processed_ids = set()
-    agg.consts = None  # only _compose reads it, and we patch _compose
-    agg._variety = None  # passed to the patched _compose, which ignores it
+    agg.consts = None  # only compose reads it, and we patch compose
+    agg._variety = None  # passed to the patched compose, which ignores it
     agg.config = Config(
         source=0, targets=(), test_target=0,
         platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
@@ -191,8 +191,8 @@ def _sample_group() -> Group:
 
 def _patch_compose(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub message composition so no Telethon types are needed."""
-    monkeypatch.setattr(aggregator, '_compose', lambda *a, **k: object())
-    monkeypatch.setattr(aggregator, '_youtube_thumb', lambda group: '')
+    monkeypatch.setattr(aggregator, 'compose', lambda *a, **k: object())
+    monkeypatch.setattr(aggregator, 'youtube_thumb', lambda group: '')
 
 
 def test_flush_records_and_saves_before_react_watch(

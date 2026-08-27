@@ -14,8 +14,8 @@ import random
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.humanize import Variety
-from minions.userbot.core.matching import _HASHTAG_RE
-from minions.userbot.core.matching import _primary
+from minions.userbot.core.matching import HASHTAG_RE
+from minions.userbot.core.matching import primary
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.engines.premium_emoji import RichText
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 _EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'reaction', 'like')
 
 
-def _youtube_thumb(group: Group) -> str:
+def youtube_thumb(group: Group) -> str:
     """Return the thumbnail URL from the YouTube item only, or ''."""
     item = group.items.get('youtube')
     return item.thumbnail if item else ''
@@ -38,10 +38,10 @@ def _youtube_thumb(group: Group) -> str:
 
 def _strip_tags(caption: str) -> str:
     """Caption without its trailing hashtags, for display."""
-    return ' '.join(_HASHTAG_RE.sub(' ', caption).split())
+    return ' '.join(HASHTAG_RE.sub(' ', caption).split())
 
 
-def _emoji_markup(emoji_id: str, fallback: str) -> str:
+def emoji_markup(emoji_id: str, fallback: str) -> str:
     """One `<tg-emoji>` tag so /status renders the real premium emoji.
 
     ``build_premium_message`` turns this into the custom-emoji entity (the
@@ -107,7 +107,7 @@ def _catalog_suffix(entry: dict[str, object]) -> str:
     return ' '.join(parts)
 
 
-def _render_constants(consts: Consts) -> PremiumMessage:
+def render_constants(consts: Consts) -> PremiumMessage:
     """Render the whole unified emoji array for /emojis, grouped by type."""
     rich = RichText()
     rich.text(f'Premium emoji ({len(consts.emoji_all)})\n\n')
@@ -126,7 +126,7 @@ def _render_constants(consts: Consts) -> PremiumMessage:
     return rich.build()
 
 
-def _compose(  # noqa: PLR0913 -- variety is an optional post-decoration picker
+def compose(  # noqa: PLR0913 -- variety is an optional post-decoration picker
     group: Group,
     order: tuple[str, ...],
     consts: Consts,
@@ -140,7 +140,7 @@ def _compose(  # noqa: PLR0913 -- variety is an optional post-decoration picker
     persistent one; previews and tests get plain, independent variety.
     """
     pick = (variety or Variety()).pick
-    caption = _strip_tags(_primary(group, order).title)
+    caption = _strip_tags(primary(group, order).title)
     rich = RichText()
     rich.text(consts.author).text(' ')
     rich.text(pick('announce', consts.announce)).text(' ')
@@ -154,7 +154,7 @@ def _compose(  # noqa: PLR0913 -- variety is an optional post-decoration picker
 
 # QC preview (/preview): fake titles + dummy links, one video per scenario.
 # The two sample captions live in the constants JSON (so this source stays
-# ASCII, BLUEPRINT 4); _sample_groups reads them off the loaded Consts.
+# ASCII, BLUEPRINT 4); sample_groups reads them off the loaded Consts.
 
 
 def _sample_item(key: str, msg_id: int, title: str) -> Item:
@@ -179,7 +179,7 @@ def _sample_group(platforms: Iterable[str], title: str) -> Group:
     return group
 
 
-def _sample_groups(consts: Consts) -> list[Group]:
+def sample_groups(consts: Consts) -> list[Group]:
     """Five sample videos for QC: from one platform arrived up to all four."""
     short = consts.sample_short
     long = consts.sample_long

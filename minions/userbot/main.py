@@ -76,22 +76,22 @@ from minions.userbot.core.config import CONSTANTS_FILE
 from minions.userbot.core.config import FEATURE_OVERRIDES_FILE
 from minions.userbot.core.config import MODE_FILE
 from minions.userbot.core.config import STATE_FILE
-from minions.userbot.core.config import _load_config
-from minions.userbot.core.config import _load_constants
-from minions.userbot.core.config import _load_runtime
-from minions.userbot.core.config import _read_json
-from minions.userbot.core.config import _resolve_session_path
-from minions.userbot.core.config import _resolve_state_path
 from minions.userbot.core.config import apply_persona
+from minions.userbot.core.config import load_config
+from minions.userbot.core.config import load_constants
 from minions.userbot.core.config import load_env
+from minions.userbot.core.config import load_runtime
+from minions.userbot.core.config import read_json
+from minions.userbot.core.config import resolve_session_path
+from minions.userbot.core.config import resolve_state_path
 from minions.userbot.core.humanize import Variety
-from minions.userbot.core.models import _THUMB_ALIASES
+from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
-from minions.userbot.core.runtime import _touch_health
-from minions.userbot.core.runtime import _watchdog
 from minions.userbot.core.runtime import configure_logging
+from minions.userbot.core.runtime import touch_health
+from minions.userbot.core.runtime import watchdog
 from minions.userbot.engines import comod
 from minions.userbot.engines import greeter
 from minions.userbot.engines import reactions
@@ -144,10 +144,10 @@ class Userbot(
         here = Path(__file__)
         self.client = client
         self.config = config
-        self.consts = _load_constants(here.with_name(CONSTANTS_FILE))
-        self._raw = _read_json(here.with_name(CONSTANTS_FILE))
+        self.consts = load_constants(here.with_name(CONSTANTS_FILE))
+        self._raw = read_json(here.with_name(CONSTANTS_FILE))
         apply_persona(self._raw)  # one persona clock shared by all engines
-        keys = [*self.consts.fields.values(), *_THUMB_ALIASES]
+        keys = [*self.consts.fields.values(), *THUMB_ALIASES]
         self._keys = tuple(dict.fromkeys(keys))
         # Post-decoration picker: keeps the announce line and love/lead/arrow
         # emoji from repeating on consecutive posts (in-memory; cosmetic).
@@ -158,7 +158,7 @@ class Userbot(
         # never touches live state and any future stateful feature is isolated
         # for free. The active mode is a marker in the base state dir; live
         # uses that dir (unchanged), test a 'test/' subdir under it.
-        base_state = _resolve_state_path(here.with_name(STATE_FILE))
+        base_state = resolve_state_path(here.with_name(STATE_FILE))
         self._state_base = base_state.parent
         self._mode_path = self._state_base / MODE_FILE
         self._overrides_path = self._state_base / FEATURE_OVERRIDES_FILE
@@ -436,7 +436,7 @@ class Userbot(
         except Exception:  # noqa: BLE001 -- wedged/unreachable: let it go stale
             log.warning('watchdog: liveness probe failed; heartbeat stale')
             return
-        _touch_health()
+        touch_health()
 
 
 
@@ -461,9 +461,9 @@ async def main() -> None:
     if not api_id or not api_hash:
         msg = 'Set TELEGRAM_API_ID and TELEGRAM_API_HASH.'
         raise SystemExit(msg)
-    config = _load_config()
+    config = load_config()
 
-    session_path = _resolve_session_path()
+    session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
     client = build_client(session_path, int(api_id), api_hash)
     agg = Userbot(client, config)
@@ -497,10 +497,10 @@ async def main() -> None:
     # instantly "stale"), then a daemon thread exits the process if the
     # heartbeat later goes stale -- a hang no restart: policy could catch --
     # so Docker's restart: always recreates the container.
-    _touch_health()
-    watchdog_sec = float(_load_runtime().get('watchdog_sec', 600.0))
+    touch_health()
+    watchdog_sec = float(load_runtime().get('watchdog_sec', 600.0))
     threading.Thread(
-        target=_watchdog, args=(watchdog_sec,), daemon=True
+        target=watchdog, args=(watchdog_sec,), daemon=True
     ).start()
     await client.run_until_disconnected()
     status_task.cancel()

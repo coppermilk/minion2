@@ -12,23 +12,23 @@ from typing import TYPE_CHECKING
 
 from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
-from minions.userbot.core.matching import _action_ok
-from minions.userbot.core.matching import _duration_seconds
-from minions.userbot.core.matching import _extract_fields
-from minions.userbot.core.matching import _is_recent_repost
-from minions.userbot.core.matching import _norm
-from minions.userbot.core.matching import _parse_item
-from minions.userbot.core.matching import _similar
+from minions.userbot.core.matching import action_ok
+from minions.userbot.core.matching import duration_seconds
+from minions.userbot.core.matching import extract_fields
+from minions.userbot.core.matching import is_recent_repost
+from minions.userbot.core.matching import norm
+from minions.userbot.core.matching import parse_item
+from minions.userbot.core.matching import similar
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.core.models import Posted
-from minions.userbot.core.models import _iso
-from minions.userbot.core.render import _compose
-from minions.userbot.core.render import _youtube_thumb
-from minions.userbot.core.statefile import _pending_dict
-from minions.userbot.core.statefile import _pending_from_dict
-from minions.userbot.core.statefile import _posted_dict
-from minions.userbot.core.statefile import _posted_from_dict
+from minions.userbot.core.models import iso
+from minions.userbot.core.render import compose
+from minions.userbot.core.render import youtube_thumb
+from minions.userbot.core.statefile import pending_dict
+from minions.userbot.core.statefile import pending_from_dict
+from minions.userbot.core.statefile import posted_dict
+from minions.userbot.core.statefile import posted_from_dict
 
 if TYPE_CHECKING:
 
@@ -78,19 +78,19 @@ class _AggregatorMixin(UserbotProtocol):
         """Parse a message into a Short's item, or None to ignore it."""
         msg_id = int(getattr(message, 'id', 0) or 0)
         text = getattr(message, 'message', '') or ''
-        data = _extract_fields(text, self._keys)
+        data = extract_fields(text, self._keys)
         if not data:
             log.info('msg %s: no recognizable fields, ignoring', msg_id)
             return None
-        if not _action_ok(data, self.consts):
+        if not action_ok(data, self.consts):
             log.info(
                 'msg %s: action is not %r, skipping',
                 msg_id,
                 self.consts.action_value,
             )
             return None
-        item = _parse_item(data, msg_id, self.consts.fields)
-        if item is None or _norm(item.title) in self.rejected:
+        item = parse_item(data, msg_id, self.consts.fields)
+        if item is None or norm(item.title) in self.rejected:
             log.info('msg %s: no platform/caption or already rejected', msg_id)
             return None
         return self._short_or_reject(item, msg_id)
@@ -100,7 +100,7 @@ class _AggregatorMixin(UserbotProtocol):
 
         An empty/absent duration means unknown -- treated as a Short (kept).
         """
-        seconds = _duration_seconds(item.duration)
+        seconds = duration_seconds(item.duration)
         if seconds >= self.config.max_duration:
             log.info(
                 'msg %s: %s is %ss (>= %ss) -- not a Short, dropping %r',
@@ -116,7 +116,7 @@ class _AggregatorMixin(UserbotProtocol):
 
     def _reject(self, title: str) -> None:
         """Remember a non-Short video and drop any group open for it."""
-        self.rejected.add(_norm(title))
+        self.rejected.add(norm(title))
         group = self._match(title)
         if group is not None and group in self.groups:
             self.groups.remove(group)
@@ -126,9 +126,9 @@ class _AggregatorMixin(UserbotProtocol):
 
     def _match(self, title: str) -> Group | None:
         """Return a group whose title is >= threshold similar, or None."""
-        norm = _norm(title)
+        norm_title = norm(title)
         for group in self.groups:
-            if _similar(norm, _norm(group.title)) >= self.config.threshold:
+            if similar(norm_title, norm(group.title)) >= self.config.threshold:
                 return group
         return None
 
@@ -162,7 +162,7 @@ class _AggregatorMixin(UserbotProtocol):
         group matches, so platforms of a video still being collected are never
         blocked.
         """
-        return _is_recent_repost(
+        return is_recent_repost(
             self.posted,
             title,
             time.time(),
@@ -214,10 +214,10 @@ class _AggregatorMixin(UserbotProtocol):
             len(group.items),
             ', '.join(sorted(group.items)),
         )
-        message = _compose(
+        message = compose(
             group, self.config.platforms, self.consts, self._variety
         )
-        posts = await self._deliver_post(message, _youtube_thumb(group))
+        posts = await self._deliver_post(message, youtube_thumb(group))
         if not posts:
             log.warning('post for %r did not go out; re-queueing', group.title)
             group.created_at = time.time()  # a fresh timeout, not a tight loop
@@ -240,7 +240,7 @@ class _AggregatorMixin(UserbotProtocol):
         self.posted.append(
             Posted(
                 title=group.title,
-                at=_iso(time.time()),
+                at=iso(time.time()),
                 links=links,
                 msg_ids=sorted(group.msg_ids),
             )
@@ -415,9 +415,9 @@ class _AggregatorMixin(UserbotProtocol):
     def _save(self) -> None:
         """Persist state to disk as readable, indented JSON (atomic)."""
         data = {
-            'posted': [_posted_dict(p) for p in self.posted],
+            'posted': [posted_dict(p) for p in self.posted],
             'pending': [
-                _pending_dict(g, self.config.platforms) for g in self.groups
+                pending_dict(g, self.config.platforms) for g in self.groups
             ],
             'rejected': sorted(self.rejected),
         }
@@ -445,7 +445,7 @@ class _AggregatorMixin(UserbotProtocol):
 
     def _restore_posted(self, data: dict[str, object]) -> None:
         """Load the posted log; migrate an old processed_ids-only file."""
-        self.posted = [_posted_from_dict(p) for p in data.get('posted') or []]
+        self.posted = [posted_from_dict(p) for p in data.get('posted') or []]
         self.processed_ids = {i for p in self.posted for i in p.msg_ids}
         # Back-compat: an old file has no posted log, only raw processed_ids --
         # seed the dedup set from it so a restart still never re-posts.
@@ -455,6 +455,6 @@ class _AggregatorMixin(UserbotProtocol):
         """Load pending groups (new 'pending' key or old 'groups') + re-arm."""
         raw_groups = data.get('pending') or data.get('groups') or []
         for raw in raw_groups:
-            group = _pending_from_dict(raw)
+            group = pending_from_dict(raw)
             self.groups.append(group)
             self._arm(group)

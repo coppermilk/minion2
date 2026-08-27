@@ -144,7 +144,7 @@ def _post_reaction(
 
 
 @dataclasses.dataclass(frozen=True)
-class _Comment:
+class Comment:
     """One comment fed to the engine: where, from whom, and the text."""
 
     root: int
@@ -155,7 +155,7 @@ class _Comment:
 
 
 def _comment(
-    brain: reactions.ReactionBrain, c: _Comment
+    brain: reactions.ReactionBrain, c: Comment
 ) -> reactions.Reaction | None:
     """Run one comment through the real engine, exactly as main.py does.
 
@@ -299,7 +299,7 @@ def main() -> None:
     print('STEP 3  a person comments under the freshest post -> react on it')
     _comment(
         brain,
-        _Comment(
+        Comment(
             root=_POST_NEW,
             msg_id=5001,
             person='alice',
@@ -312,7 +312,7 @@ def main() -> None:
     print('STEP 4  once per (post, person): the same person, same post again')
     _comment(
         brain,
-        _Comment(
+        Comment(
             root=_POST_NEW,
             msg_id=5002,
             person='alice',
@@ -325,7 +325,7 @@ def main() -> None:
     print('STEP 5  a DIFFERENT person, same post -> eligible again')
     _comment(
         brain,
-        _Comment(
+        Comment(
             root=_POST_NEW,
             msg_id=5003,
             person='bob',
@@ -338,7 +338,7 @@ def main() -> None:
     print('STEP 6  the SAME person under a DIFFERENT post -> eligible again')
     _comment(
         brain,
-        _Comment(
+        Comment(
             root=_POST_OLD,
             msg_id=5004,
             person='alice',
@@ -351,7 +351,7 @@ def main() -> None:
     print('STEP 7  a message that is not a comment on a watched post')
     _comment(
         brain,
-        _Comment(
+        Comment(
             root=7777,
             msg_id=5005,
             person='carol',

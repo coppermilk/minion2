@@ -27,8 +27,8 @@ from __future__ import annotations
 import os
 
 from minions.userbot.core.client import build_client
-from minions.userbot.core.config import _resolve_session_path
 from minions.userbot.core.config import load_env
+from minions.userbot.core.config import resolve_session_path
 
 
 def main() -> None:
@@ -44,7 +44,7 @@ def main() -> None:
         )
         raise SystemExit(msg)
 
-    session_path = _resolve_session_path()
+    session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
 
     # TELEGRAM_PASSWORD supplies the 2FA password non-interactively; unset,

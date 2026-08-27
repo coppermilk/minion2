@@ -59,7 +59,7 @@ def _health_file() -> Path | None:
     return base / 'health' if base is not None else None
 
 
-def _touch_health() -> None:
+def touch_health() -> None:
     """Stamp the heartbeat file with 'now' -- called only when proven alive."""
     path = _health_file()
     if path is None:
@@ -70,7 +70,7 @@ def _touch_health() -> None:
         log.warning('watchdog: could not write the heartbeat file')
 
 
-def _watchdog(timeout: float) -> None:
+def watchdog(timeout: float) -> None:
     """Daemon thread: exit the process if the heartbeat goes stale (a hang).
 
     ``status_loop`` refreshes the heartbeat only after a successful Telegram
@@ -131,7 +131,7 @@ def configure_logging() -> None:
     )
 
 
-def _fmt_eta(seconds: float) -> str:
+def fmt_eta(seconds: float) -> str:
     """Return a short countdown like '45s', '8m 12s' or '2h 15m'."""
     total = max(0, int(seconds))
     if total < _SECS_PER_MIN:
@@ -142,7 +142,7 @@ def _fmt_eta(seconds: float) -> str:
     return f'{mins // _MINS_PER_HOUR}h {mins % _MINS_PER_HOUR}m'
 
 
-def _cancel(task: asyncio.Task[object] | None) -> None:
+def cancel(task: asyncio.Task[object] | None) -> None:
     """Cancel a background task if it exists (a no-op when None)."""
     if task is not None:
         task.cancel()

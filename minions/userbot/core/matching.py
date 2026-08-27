@@ -13,9 +13,9 @@ import re
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
-from minions.userbot.core.models import _THUMB_ALIASES
+from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Item
-from minions.userbot.core.models import _parse_iso
+from minions.userbot.core.models import parse_iso
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -24,25 +24,25 @@ if TYPE_CHECKING:
     from minions.userbot.core.models import Group
     from minions.userbot.core.models import Posted
 
-_HASHTAG_RE = re.compile(r'#\S+')
+HASHTAG_RE = re.compile(r'#\S+')
 _NONWORD_RE = re.compile(r'[^\w\s]')  # drops emoji and punctuation; keeps text
 # A prefix shorter than this is too generic to trust as a same-video signal.
 _MIN_PREFIX_CHARS = 12
 
 
-def _norm(title: str) -> str:
+def norm(title: str) -> str:
     """Caption core for fuzzy matching: no hashtags, emoji, or punctuation.
 
     The same video carries different hashtag/emoji tails per platform, so we
     compare only the wording. Falls back to the raw text if stripping empties
     it (a caption that is nothing but hashtags/emoji).
     """
-    text = _NONWORD_RE.sub(' ', _HASHTAG_RE.sub(' ', title))
+    text = _NONWORD_RE.sub(' ', HASHTAG_RE.sub(' ', title))
     core = ' '.join(text.lower().split())
     return core or ' '.join(title.lower().split())
 
 
-def _similar(a: str, b: str) -> float:
+def similar(a: str, b: str) -> float:
     """Similarity of two normalized titles, in [0, 1] (prefix-aware).
 
     The same video often carries a longer caption on one platform -- a second
@@ -59,7 +59,7 @@ def _similar(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def _is_recent_repost(  # noqa: PLR0913 -- a small pure predicate, flat reads best
+def is_recent_repost(  # noqa: PLR0913 -- a small pure predicate, flat reads best
     posted: list[Posted],
     title: str,
     now: float,
@@ -81,18 +81,18 @@ def _is_recent_repost(  # noqa: PLR0913 -- a small pure predicate, flat reads be
     """
     if window <= 0 and count <= 0:
         return False
-    norm = _norm(title)
+    norm_title = norm(title)
     for idx, post in enumerate(reversed(posted)):  # newest first
         within_count = idx < count
-        within_window = window > 0 and now - _parse_iso(post.at) <= window
+        within_window = window > 0 and now - parse_iso(post.at) <= window
         if not within_count and not within_window:
             break  # beyond both guards; the rest are older and further back
-        if _similar(norm, _norm(post.title)) >= threshold:
+        if similar(norm_title, norm(post.title)) >= threshold:
             return True
     return False
 
 
-def _duration_seconds(text: str) -> int:
+def duration_seconds(text: str) -> int:
     """Parse 'H:M:S' / 'M:S' / 'S' to seconds; -1 if unknown or unparseable."""
     text = text.strip()
     if not text:
@@ -107,7 +107,7 @@ def _duration_seconds(text: str) -> int:
     return seconds
 
 
-def _action_ok(data: dict[str, object], consts: Consts) -> bool:
+def action_ok(data: dict[str, object], consts: Consts) -> bool:
     """Whether the message's action is the one we act on (or no filter set)."""
     if not consts.action_value:
         return True
@@ -115,7 +115,7 @@ def _action_ok(data: dict[str, object], consts: Consts) -> bool:
     return value == consts.action_value
 
 
-def _extract_fields(text: str, keys: Iterable[str]) -> dict[str, str]:
+def extract_fields(text: str, keys: Iterable[str]) -> dict[str, str]:
     """Pull "key": value pairs from possibly-invalid JSON-ish text.
 
     The source API is not strict JSON (trailing commas, unquoted or unclosed
@@ -133,7 +133,7 @@ def _extract_fields(text: str, keys: Iterable[str]) -> dict[str, str]:
     return found
 
 
-def _parse_item(
+def parse_item(
     data: dict[str, object], msg_id: int, fields: dict[str, str]
 ) -> Item | None:
     """Build an Item from a parsed JSON object, or None if incomplete.
@@ -150,7 +150,7 @@ def _parse_item(
         platform=platform,
         title=title,
         url=str(data.get(fields['link']) or '').strip(),
-        thumbnail=_pick(data, fields['thumbnail'], *_THUMB_ALIASES),
+        thumbnail=_pick(data, fields['thumbnail'], *THUMB_ALIASES),
         duration=str(data.get(fields['duration']) or '').strip(),
         msg_id=msg_id,
     )
@@ -165,7 +165,7 @@ def _pick(data: dict[str, object], *keys: str) -> str:
     return ''
 
 
-def _primary(group: Group, order: Iterable[str]) -> Item:
+def primary(group: Group, order: Iterable[str]) -> Item:
     """Return the highest-priority item present; its caption/thumbnail lead."""
     for key in order:
         item = group.items.get(key)
@@ -180,7 +180,7 @@ def _primary(group: Group, order: Iterable[str]) -> Item:
 _LINK_MARKERS = ('http://', 'https://', 't.me/', 'www.')
 
 
-def _needs_human(text: str, words: tuple[str, ...]) -> bool:
+def needs_human(text: str, words: tuple[str, ...]) -> bool:
     """Whether a comment wants a real reply, not an auto sticker.
 
     A question, a link, or business/outreach wording is exactly where a canned
@@ -200,7 +200,7 @@ def _needs_human(text: str, words: tuple[str, ...]) -> bool:
     return any(w in low for w in words)
 
 
-def _thread_top(reply: object) -> int | None:
+def thread_top(reply: object) -> int | None:
     """Return the thread-root id a reply belongs to (comment target), or None.
 
     A comment on a channel post is a reply in the discussion group: its

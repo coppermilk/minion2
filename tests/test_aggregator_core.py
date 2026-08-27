@@ -33,7 +33,7 @@ from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Item  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
 
-CONSTS = config._load_constants(config.CONSTANTS_PATH)
+CONSTS = config.load_constants(config.CONSTANTS_PATH)
 
 
 def _config(**over: object) -> Config:
@@ -89,8 +89,8 @@ def test_parse_item_reads_fields() -> None:
         '"caption":"Hi #x","link":"https://y/1","duration":"0:30"}'
     )
     msg_id = 7
-    data = matching._extract_fields(text, CONSTS.fields.values())
-    item = matching._parse_item(data, msg_id, CONSTS.fields)
+    data = matching.extract_fields(text, CONSTS.fields.values())
+    item = matching.parse_item(data, msg_id, CONSTS.fields)
     assert item is not None
     assert item.key == 'youtube'
     assert item.url == 'https://y/1'
@@ -99,8 +99,8 @@ def test_parse_item_reads_fields() -> None:
 
 def test_parse_item_incomplete_is_none() -> None:
     """Missing platform/caption yields None (ignored, not a crash)."""
-    data = matching._extract_fields('{"link":"https://y/1"}', ('link',))
-    assert matching._parse_item(data, 1, CONSTS.fields) is None
+    data = matching.extract_fields('{"link":"https://y/1"}', ('link',))
+    assert matching.parse_item(data, 1, CONSTS.fields) is None
 
 
 @pytest.mark.parametrize(
@@ -109,14 +109,14 @@ def test_parse_item_incomplete_is_none() -> None:
 )
 def test_duration_seconds(text: str, seconds: int) -> None:
     """H:M:S / M:S / S parse; unknown or garbage is -1."""
-    assert matching._duration_seconds(text) == seconds
+    assert matching.duration_seconds(text) == seconds
 
 
 def test_needs_human_flags_questions_and_links() -> None:
     """A question or a link wants a real reply, plain wording does not."""
-    assert matching._needs_human('is this ok?', ())
-    assert matching._needs_human('see https://x', ())
-    assert not matching._needs_human('nice one', ())
+    assert matching.needs_human('is this ok?', ())
+    assert matching.needs_human('see https://x', ())
+    assert not matching.needs_human('nice one', ())
 
 
 def test_similar_merges_a_longer_caption_of_the_same_video() -> None:
@@ -127,25 +127,25 @@ def test_similar_merges_a_longer_caption_of_the_same_video() -> None:
     split into two half-collected groups. (ASCII stand-in for a real caption,
     per the repo-wide ASCII source gate.)
     """
-    short = matching._norm('you can choose not to believe in yourself')
-    long = matching._norm(
+    short = matching.norm('you can choose not to believe in yourself')
+    long = matching.norm(
         'you can choose not to believe in yourself, neville will be proud'
     )
-    assert matching._similar(short, long) == 1.0  # prefix -> same video
-    assert matching._similar(long, short) == 1.0  # order-independent
+    assert matching.similar(short, long) == 1.0  # prefix -> same video
+    assert matching.similar(long, short) == 1.0  # order-independent
 
 
 def test_similar_does_not_merge_a_short_generic_prefix() -> None:
     """A prefix under the min length is too generic to force a match."""
-    assert matching._similar('no', 'no way that cannot be true') < 0.9  # noqa: PLR2004
+    assert matching.similar('no', 'no way that cannot be true') < 0.9  # noqa: PLR2004
 
 
 def test_similar_keeps_ratio_for_unrelated_titles() -> None:
     """Unrelated captions stay well below the match threshold."""
     assert (
-        matching._similar(
-            matching._norm('you can choose not to believe in yourself'),
-            matching._norm('a completely different video about cats'),
+        matching.similar(
+            matching.norm('you can choose not to believe in yourself'),
+            matching.norm('a completely different video about cats'),
         )
         < 0.9  # noqa: PLR2004
     )
@@ -168,8 +168,8 @@ def test_strip_tags_drops_hashtags() -> None:
 def test_youtube_thumb_only_from_youtube() -> None:
     """The thumbnail is taken from the YouTube item only."""
     yt = Item('youtube', 'youtube', 't', 'u', 'thumb.jpg', '', 1)
-    assert render._youtube_thumb(Group('t', {'youtube': yt})) == 'thumb.jpg'
-    assert render._youtube_thumb(Group('t', {})) == ''
+    assert render.youtube_thumb(Group('t', {'youtube': yt})) == 'thumb.jpg'
+    assert render.youtube_thumb(Group('t', {})) == ''
 
 
 # --------------------------------------------------------------- statefile
@@ -178,7 +178,7 @@ def test_youtube_thumb_only_from_youtube() -> None:
 def test_posted_round_trip() -> None:
     """A Posted record survives dict serialization unchanged."""
     post = Posted('T', '2026-08-20T15:05:21Z', {'yt': 'u'}, [1, 2])
-    back = statefile._posted_from_dict(statefile._posted_dict(post))
+    back = statefile.posted_from_dict(statefile.posted_dict(post))
     assert back == post
 
 
@@ -186,8 +186,8 @@ def test_pending_round_trip_keeps_items_and_time() -> None:
     """A pending Group survives dict serialization (items, ids, created_at)."""
     item = Item('tiktok', 'tiktok', 'T', 'u', '', '30', 9)
     group = Group('T', {'tiktok': item}, {9}, created_at=1_700_000_000.0)
-    back = statefile._pending_from_dict(
-        statefile._pending_dict(group, ('tiktok', 'youtube'))
+    back = statefile.pending_from_dict(
+        statefile.pending_dict(group, ('tiktok', 'youtube'))
     )
     assert back.title == 'T'
     assert back.msg_ids == {9}
@@ -243,7 +243,7 @@ def test_short_or_reject_drops_long_video() -> None:
     agg = _bare_core()
     item = Item('tiktok', 'tiktok', 'Long one', 'u', '', '5:00', 5)
     assert agg._short_or_reject(item, 5) is None
-    assert matching._norm('Long one') in agg.rejected
+    assert matching.norm('Long one') in agg.rejected
 
 
 # ------------------------------------------------------ per-service modes

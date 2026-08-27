@@ -15,8 +15,8 @@ import logging
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.base import UserbotProtocol
-from minions.userbot.core.matching import _thread_top
-from minions.userbot.core.models import _iso
+from minions.userbot.core.matching import thread_top
+from minions.userbot.core.models import iso
 from minions.userbot.engines import users
 from minions.userbot.glue.status import _user_label
 
@@ -45,7 +45,7 @@ class _UsersMixin(UserbotProtocol):
         disc_chats = {c for c, _ in self.reactions.posts}
         if uid <= 0 or (chat != self.config.source and chat not in disc_chats):
             return
-        root = _thread_top(getattr(message, 'reply_to', None)) or 0
+        root = thread_top(getattr(message, 'reply_to', None)) or 0
         body = str(getattr(message, 'message', '') or '')
         self.users.record_message(
             users.SeenMessage(
@@ -126,7 +126,7 @@ class _UsersMixin(UserbotProtocol):
             lines.append('  recent join/leave:')
             lines += [
                 f'    - {r["event"]}: {_user_label(r)}'
-                f' {_iso(float(str(r["ts"])))}'
+                f' {iso(float(str(r["ts"])))}'
                 for r in recent
             ]
         return '\n'.join(lines)

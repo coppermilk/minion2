@@ -23,8 +23,8 @@ from telethon import TelegramClient
 from telethon import events
 from telethon.tl.types import MessageEntityCustomEmoji
 
-from minions.userbot.core.config import _resolve_session_path
 from minions.userbot.core.config import load_env
+from minions.userbot.core.config import resolve_session_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +65,7 @@ async def main() -> None:
         msg = 'Set TELEGRAM_API_ID and TELEGRAM_API_HASH.'
         raise SystemExit(msg)
 
-    session_path = _resolve_session_path()
+    session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
     client = TelegramClient(str(session_path), int(api_id), api_hash)
     client.add_event_handler(_report, events.NewMessage(outgoing=True))

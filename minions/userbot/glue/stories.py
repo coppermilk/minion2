@@ -25,8 +25,8 @@ from telethon.tl.functions.stories import SendReactionRequest
 from telethon.tl.types import ReactionEmoji
 
 from minions.userbot.core.base import UserbotProtocol
-from minions.userbot.core.models import _iso
-from minions.userbot.core.models import _story_epoch
+from minions.userbot.core.models import iso
+from minions.userbot.core.models import story_epoch
 from minions.userbot.engines import stories
 
 log = logging.getLogger('userbot')
@@ -144,7 +144,7 @@ class _StoriesMixin(UserbotProtocol):
         ids = [sid for sid in ids if sid > 0]
         if not ids:
             return None
-        dates = [_story_epoch(getattr(s, 'date', None)) for s in items]
+        dates = [story_epoch(getattr(s, 'date', None)) for s in items]
         return stories.StoryCandidate(
             peer_id=int(utils.get_peer_id(peer)),
             story_ids=tuple(ids),
@@ -247,7 +247,7 @@ class _StoriesMixin(UserbotProtocol):
             lines += [
                 f'    - {e.get("label") or e.get("peer_id")}:'
                 f' {e.get("count")} story(s)'
-                f' {_iso(float(str(e.get("ts", 0))))}'
+                f' {iso(float(str(e.get("ts", 0))))}'
                 for e in recent
             ]
         else:

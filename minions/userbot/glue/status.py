@@ -18,8 +18,8 @@ from datetime import timezone
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.base import UserbotProtocol
-from minions.userbot.core.render import _emoji_markup
-from minions.userbot.core.runtime import _fmt_eta
+from minions.userbot.core.render import emoji_markup
+from minions.userbot.core.runtime import fmt_eta
 from minions.userbot.glue.commands import SERVICE_ACTIONS
 from minions.userbot.glue.commands import SERVICE_NAMES
 
@@ -53,7 +53,7 @@ def _pending_markup(entry: dict[str, object]) -> str:
     raw = entry.get('emojis')
     rows = raw if isinstance(raw, list) else []
     markup = ''.join(
-        _emoji_markup(str(row[0]), str(row[1]))
+        emoji_markup(str(row[0]), str(row[1]))
         for row in rows
         if len(row) == _EMOJI_ROW_LEN
     )
@@ -62,7 +62,7 @@ def _pending_markup(entry: dict[str, object]) -> str:
 
 def _pool_markup(pool: tuple[reactions.ReactionEmoji, ...]) -> str:
     """Render a whole emoji pool as premium markup (a preview strip)."""
-    return ''.join(_emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
+    return ''.join(emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
 
 
 def _user_label(row: dict[str, object]) -> str:
@@ -167,7 +167,7 @@ class _StatusMixin(UserbotProtocol):
         tz = timezone(timedelta(hours=gp.tz_offset_hours))
         clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
         eta = nxt - now
-        when = 'now' if eta <= 0 else _fmt_eta(eta)
+        when = 'now' if eta <= 0 else fmt_eta(eta)
         return f'{b} check {period}s {self._arr()} next {clock} (in {when})'
 
     def _greeter_wake_eta(self, now: float) -> str:
@@ -180,7 +180,7 @@ class _StatusMixin(UserbotProtocol):
         )
         if wake <= local:
             wake += timedelta(days=1)
-        eta = _fmt_eta(wake.timestamp() - now)
+        eta = fmt_eta(wake.timestamp() - now)
         return f'{wake.strftime("%H:%M")} (in {eta})'
 
     def _routing_lines(self, labels: dict[int, str]) -> list[str]:
@@ -205,7 +205,7 @@ class _StatusMixin(UserbotProtocol):
         """
         secs = self.config.repost_guard
         count = self.config.repost_guard_count
-        time_part = _fmt_eta(secs) if secs > 0 else 'off'
+        time_part = fmt_eta(secs) if secs > 0 else 'off'
         count_part = f'last {count}' if count > 0 else 'off'
         if secs <= 0 and count <= 0:
             return 'off'
@@ -214,7 +214,7 @@ class _StatusMixin(UserbotProtocol):
     def _videos_lines(self) -> list[str]:
         """Videos: counts on the header, then pending + recent posts."""
         b = self._bul()
-        window = _fmt_eta(self.config.timeout)
+        window = fmt_eta(self.config.timeout)
         lines = [
             self._head(
                 'videos',
@@ -236,7 +236,7 @@ class _StatusMixin(UserbotProtocol):
             left = self.config.timeout - (time.time() - group.created_at)
             lines.append(
                 f'{b} "{_trim(group.title)}" have [{have}] wait [{missing}]'
-                f' {self._arr()} ~{_fmt_eta(left)}'
+                f' {self._arr()} ~{fmt_eta(left)}'
             )
         lines.extend(
             f'{b} "{_trim(post.title)}" {b} {post.at[:10]}'
@@ -328,7 +328,7 @@ class _StatusMixin(UserbotProtocol):
         tz = timezone(timedelta(hours=self.reactions.params.tz_offset_hours))
         clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
         eta = nxt - time.time()
-        when = 'now' if eta <= 0 else _fmt_eta(eta)
+        when = 'now' if eta <= 0 else fmt_eta(eta)
         return f'{b} rescan {period}s {self._arr()} next {clock} (in {when})'
 
     def _pending_react_lines(self) -> list[str]:
@@ -357,7 +357,7 @@ class _StatusMixin(UserbotProtocol):
         glyphs = _pending_markup(entry)
         verb = 'sticker' if entry.get('kind') == 'reply' else 'like'
         eta = float(entry.get('when', now)) - now
-        when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
+        when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
         return (
             f'    {glyphs} {verb} {self._arr()} {what}'
             f' {b} post {root} {b} {when}'
@@ -447,7 +447,7 @@ class _StatusMixin(UserbotProtocol):
         whens = [v.when for v in self._pending_views]
         if whens:
             eta = min(whens) - now
-            when = 'now' if eta <= 0 else f'in {_fmt_eta(eta)}'
+            when = 'now' if eta <= 0 else f'in {fmt_eta(eta)}'
             parts.append(f'next view {self._arr()} {when}')
         else:
             # Empty queue: say WHY (asleep, cooldown, silent day) so it is not
@@ -458,7 +458,7 @@ class _StatusMixin(UserbotProtocol):
         nxt = self._story_next_poll
         poll_eta = nxt - now if nxt else 0.0
         if poll_eta > 0:
-            parts.append(f'next poll {self._arr()} in {_fmt_eta(poll_eta)}')
+            parts.append(f'next poll {self._arr()} in {fmt_eta(poll_eta)}')
         return self._head('stories', 'Stories', *parts)
 
     def _stories_queue_lines(self, labels: dict[int, str]) -> list[str]:
@@ -472,7 +472,7 @@ class _StatusMixin(UserbotProtocol):
         for view in views[:STATUS_PENDING_CATS]:
             who = labels.get(view.peer_id, str(view.peer_id))
             eta = view.when - now
-            when = 'due now' if eta <= 0 else f'in ~{_fmt_eta(eta)}'
+            when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
             lines.append(
                 f'    {who} {b} {len(view.story_ids)} story(s) {b} {when}'
             )

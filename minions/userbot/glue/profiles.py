@@ -11,7 +11,7 @@ import time
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.base import UserbotProtocol
-from minions.userbot.core.runtime import _cancel
+from minions.userbot.core.runtime import cancel
 from minions.userbot.glue.commands import FEATURE_NAMES
 from minions.userbot.glue.commands import SERVICE_MODES
 from minions.userbot.glue.commands import SERVICE_NAMES
@@ -171,10 +171,10 @@ class _ProfilesMixin(UserbotProtocol):
         self._cancel_story_tasks()
         self._cancel_enrich_tasks()
         for group in self.groups:
-            _cancel(getattr(group, 'task', None))
-        _cancel(self._greeter_task)
-        _cancel(self._react_rescan_task)
-        _cancel(self._stories_task)
+            cancel(getattr(group, 'task', None))
+        cancel(self._greeter_task)
+        cancel(self._react_rescan_task)
+        cancel(self._stories_task)
         self._greeter_task = None
         self._react_rescan_task = None
         self._stories_task = None

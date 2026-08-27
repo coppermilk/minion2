@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 
 from telethon import TelegramClient
 
-from minions.userbot.core.config import _load_runtime
+from minions.userbot.core.config import load_runtime
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -49,7 +49,7 @@ def build_client(
     session_path: Path, api_id: int, api_hash: str
 ) -> TelegramClient:
     """Create the aggregator's client: gentle floods + a crash-safe session."""
-    rt = _load_runtime()
+    rt = load_runtime()
     threshold = float(
         rt.get('flood_sleep_threshold_sec', DEFAULT_FLOOD_SLEEP_THRESHOLD)
     )

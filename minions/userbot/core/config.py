@@ -56,7 +56,7 @@ PROJECT_ENV = PACKAGE_DIR.parent.parent / '.env'
 DEFAULT_SESSION_PATH = PACKAGE_DIR / 'telethon'
 
 
-def _read_json(path: Path) -> dict[str, object]:
+def read_json(path: Path) -> dict[str, object]:
     """Parse the constants JSON; on a bad/missing file, log and use defaults.
 
     A typo in aggregator_constants.json (e.g. a trailing comma) must not take
@@ -200,9 +200,9 @@ def apply_persona(data: dict[str, object]) -> dict[str, object]:
     return data
 
 
-def _load_constants(path: Path) -> Consts:
+def load_constants(path: Path) -> Consts:
     """Load the post constants from JSON, ignoring unknown keys."""
-    data = _read_json(path)
+    data = read_json(path)
     samples = dict(data.get('sample_titles') or {})
     catalog = emoji_catalog(data)
     platforms = emoji_of(catalog, 'platform')
@@ -235,9 +235,9 @@ def _load_constants(path: Path) -> Consts:
     )
 
 
-def _load_runtime() -> dict[str, object]:
+def load_runtime() -> dict[str, object]:
     """Return the 'runtime' section of the constants JSON, or {}."""
-    data = _read_json(CONSTANTS_PATH)
+    data = read_json(CONSTANTS_PATH)
     rt = data.get('runtime')
     return rt if isinstance(rt, dict) else {}
 
@@ -273,7 +273,7 @@ def _drive_dir() -> Path | None:
     return Path(drive).expanduser() / 'bots' / 'aggregator'
 
 
-def _resolve_session_path() -> Path:
+def resolve_session_path() -> Path:
     """Return the file-session base (override, else <DRIVE>, else package).
 
     A trailing '.session' is stripped so an override works whether you point at
@@ -289,7 +289,7 @@ def _resolve_session_path() -> Path:
     return drive / 'telethon' if drive is not None else DEFAULT_SESSION_PATH
 
 
-def _resolve_state_path(default: Path) -> Path:
+def resolve_state_path(default: Path) -> Path:
     """Where the state file lives (override, else <DRIVE>, else the package).
 
     Same rule as the session: an explicit AGGREGATOR_STATE_DIR wins, else it
@@ -330,14 +330,14 @@ def _test_target() -> int:
     return int(os.environ.get('TEST_CHAT_ID') or 0)
 
 
-def _load_config() -> Config:
+def load_config() -> Config:
     """Chats from the env; behaviour from the constants JSON, validated.
 
     A bad constants file (a non-numeric knob, an out-of-range threshold, no
     platforms) fails fast here with a message naming the problem, instead of
     a confusing crash later or a bot that silently never completes a group.
     """
-    data = _read_json(CONSTANTS_PATH)
+    data = read_json(CONSTANTS_PATH)
     csv = str(data.get('platforms') or DEFAULT_PLATFORMS)
     platforms = tuple(p.strip().lower() for p in csv.split(',') if p.strip())
     try:
