@@ -10,6 +10,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import tasks
 from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.runtime import cancel
 from minions.userbot.glue.commands import SERVICE_MODES
@@ -126,7 +127,7 @@ class _ProfilesMixin(UserbotProtocol):
         """Cancel the active profile's timers and loops (before a switch)."""
         self._cancel_react_tasks()
         self._cancel_story_tasks()
-        self._cancel_enrich_tasks()
+        tasks.cancel_all(self._enrich_tasks)
         for group in self.groups:
             cancel(getattr(group, 'task', None))
         cancel(self._greeter_task)
@@ -137,17 +138,9 @@ class _ProfilesMixin(UserbotProtocol):
         self._stories_task = None
         self.users.close()  # release the SQLite handle before a rebind
 
-    def _cancel_enrich_tasks(self) -> None:
-        """Cancel any in-flight identity-enrichment lookups."""
-        for task in list(self._enrich_tasks):
-            task.cancel()
-        self._enrich_tasks.clear()
-
     def _cancel_story_tasks(self) -> None:
         """Cancel every in-flight story-view timer (before a mode switch)."""
-        for task in list(self._story_tasks):
-            task.cancel()
-        self._story_tasks.clear()
+        tasks.cancel_all(self._story_tasks)
         self._pending_views.clear()
 
     async def switch_mode(self, mode: str) -> None:

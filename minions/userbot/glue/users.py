@@ -10,10 +10,10 @@ is mixed into ``Userbot`` with method bodies unchanged; it inherits
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import tasks
 from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.matching import thread_top
 from minions.userbot.core.models import iso
@@ -78,9 +78,7 @@ class _UsersMixin(UserbotProtocol):
             or self.users.has_identity(user_id)
         ):
             return
-        task = asyncio.create_task(self._enrich_user(user_id))
-        self._enrich_tasks.add(task)
-        task.add_done_callback(self._enrich_tasks.discard)
+        tasks.spawn(self._enrich_tasks, self._enrich_user(user_id))
 
     async def _enrich_user(self, user_id: int) -> None:
         """Resolve a user's username/name (phone is almost always absent)."""

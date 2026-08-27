@@ -24,6 +24,7 @@ from telethon.tl.functions.stories import ReadStoriesRequest
 from telethon.tl.functions.stories import SendReactionRequest
 from telethon.tl.types import ReactionEmoji
 
+from minions.userbot.core import tasks
 from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.models import iso
 from minions.userbot.core.models import story_epoch
@@ -75,9 +76,7 @@ class _StoriesMixin(UserbotProtocol):
             return
         for view in views:
             self._pending_views.append(view)  # shown as the /status queue
-            task = asyncio.create_task(self._view_later(view))
-            self._story_tasks.add(task)
-            task.add_done_callback(self._story_tasks.discard)
+            tasks.spawn(self._story_tasks, self._view_later(view))
         log.info(
             'stories: %d peer(s) with unseen stories, queued %d',
             len(candidates),

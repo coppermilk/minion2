@@ -22,6 +22,7 @@ from telethon.tl.types import InputReplyToMessage
 from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
+from minions.userbot.core import tasks
 from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.matching import needs_human
 from minions.userbot.core.matching import thread_top
@@ -163,9 +164,7 @@ class _ReactionsMixin(UserbotProtocol):
 
     def _arm_reaction(self, reaction: reactions.Reaction) -> None:
         """Create the fire-later task for a scheduled (persisted) reaction."""
-        task = asyncio.create_task(self._reaction_later(reaction))
-        self._react_tasks.add(task)
-        task.add_done_callback(self._react_tasks.discard)
+        tasks.spawn(self._react_tasks, self._reaction_later(reaction))
 
     def rearm_reactions(self) -> None:
         """Re-arm reactions scheduled before a restart (survive downtime).
@@ -343,9 +342,7 @@ class _ReactionsMixin(UserbotProtocol):
 
     def _cancel_react_tasks(self) -> None:
         """Cancel every in-flight fire-later reaction task."""
-        for task in list(self._react_tasks):
-            task.cancel()
-        self._react_tasks.clear()
+        tasks.cancel_all(self._react_tasks)
 
     async def _refresh_before_fire(self, reaction: reactions.Reaction) -> None:
         """Pull new comments in this post's thread just before we like it.
