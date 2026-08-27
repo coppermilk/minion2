@@ -2,14 +2,14 @@
 # Proprietary -- no use without the author's prior approval.
 """The shared state contract for the Userbot mixins.
 
-Each glue mixin (status, reactions, stories, comod, users, commands) reads
-state
-and calls peer methods off ``self`` that ``Userbot`` provides. Rather than
-each mixin re-declaring those names in its own ``TYPE_CHECKING`` block (four
-hand-kept copies that can silently drift), they all inherit
-``UserbotProtocol``: one place that tells the type checker what ``self``
-carries. At runtime it is an empty marker base, so it adds no behaviour and
-no import of Telethon.
+Each glue mixin (aggregator, profiles, status, reactions, stories, comod,
+users, commands) reads state and calls peer methods off ``self`` that the
+assembled ``Userbot`` provides. Rather than each mixin re-declaring those
+names in its own ``TYPE_CHECKING`` block, they inherit ``UserbotProtocol``:
+one place that documents what ``self`` carries. At runtime it is an empty
+marker base -- no behaviour, no Telethon import. (mypy skips this Telethon app,
+so this is a human-facing contract, not an enforced one -- keep it in step
+with the real attributes on ``Userbot.__init__`` / ``_build_profile``.)
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from telethon import TelegramClient
 
+    from minions.userbot.core.humanize import Variety
     from minions.userbot.core.models import Config
     from minions.userbot.core.models import Consts
     from minions.userbot.core.models import Group
@@ -69,6 +70,21 @@ if TYPE_CHECKING:
         _thread_rescan_at: dict[int, float]
         _pending_views: list[stories.StoryView]
         _modes: dict[str, str]  # service -> 'off' | 'test' | 'live'
+
+        # --- aggregation state (the _AggregatorMixin) ---
+        processed_ids: set[int]  # source ids already posted (backfill dedup)
+        _keys: tuple[str, ...]  # incoming JSON field names to read
+        _variety: Variety  # non-repeating picker for the post decoration
+        _last_discussion_ts: float  # last discussion lookup, for the throttle
+
+        # --- profile/mode plumbing (the _ProfilesMixin) ---
+        _raw: dict[str, object]  # the parsed constants JSON
+        _state_base: Path  # base state dir (live); test lives under base/test
+        _mode_path: Path  # the persisted per-service modes file
+        _overrides_path: Path  # the legacy feature-overrides file
+        _greeter_task: asyncio.Task[None] | None
+        _react_rescan_task: asyncio.Task[None] | None
+        _stories_task: asyncio.Task[None] | None
 
         # --- peer methods implemented on Userbot or a sibling mixin ---
         def live_targets(self) -> tuple[int, ...]:
