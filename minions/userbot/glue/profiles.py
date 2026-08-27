@@ -109,9 +109,9 @@ class _ProfilesMixin(UserbotProtocol):
         """
         self.restore()
         try:
-            self.rearm_reactions()
-            await self.backfill_react_posts()
-            await self.backfill_react_comments()
+            self.comment_watch.rearm()
+            await self.comment_watch.seed_posts()
+            await self.comment_watch.seed_comments()
             if self.reactions.params.enabled:
                 self.reactions.mark_alive(time.time())
         except Exception:
@@ -119,12 +119,14 @@ class _ProfilesMixin(UserbotProtocol):
         if source_backfill:
             await self.backfill()
         self._greeter_task = asyncio.create_task(self.greeter.loop())
-        self._react_rescan_task = asyncio.create_task(self.react_rescan_loop())
+        self._react_rescan_task = asyncio.create_task(
+            self.comment_watch.rescan_loop()
+        )
         self._stories_task = asyncio.create_task(self.story_watch.loop())
 
     async def stop_profile(self) -> None:
         """Cancel the active profile's timers and loops (before a switch)."""
-        self._cancel_react_tasks()
+        self.comment_watch.cancel()
         self.story_watch.cancel()
         self.audience.close()
         for group in self.groups:

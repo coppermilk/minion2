@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from minions.userbot.engines import reactions
     from minions.userbot.engines import stories
     from minions.userbot.glue.comod import Cabinet
+    from minions.userbot.glue.reactions import CommentWatch
     from minions.userbot.glue.stories import StoryWatch
     from minions.userbot.glue.users import AudienceLog
 
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
         reactions: reactions.ReactionBrain
         stories: stories.StoryBrain
         story_watch: StoryWatch
+        comment_watch: CommentWatch
         greeter: greeter.Greeter
         audience: AudienceLog
         cabinet: Cabinet
@@ -59,17 +61,12 @@ if TYPE_CHECKING:
         groups: list[Group]
         posted: list[Posted]
         rejected: set[str]
-        _react_next_rescan: float
-        _rescan_sec: float
-        _react_tasks: set[asyncio.Task[None]]
-        _thread_rescan_at: dict[int, float]
         _modes: dict[str, str]  # service -> 'off' | 'test' | 'live'
 
         # --- aggregation state (the _AggregatorMixin) ---
         processed_ids: set[int]  # source ids already posted (backfill dedup)
         _keys: tuple[str, ...]  # incoming JSON field names to read
         _variety: Variety  # non-repeating picker for the post decoration
-        _last_discussion_ts: float  # last discussion lookup, for the throttle
 
         # --- profile/mode plumbing (the _ProfilesMixin) ---
         _raw: dict[str, object]  # the parsed constants JSON
@@ -83,18 +80,9 @@ if TYPE_CHECKING:
         def live_targets(self) -> tuple[int, ...]:
             """Return the active profile's post destinations."""
 
-        async def _watch_post(self, target: int, post_id: int) -> None: ...
-
         async def _send_status(self, text: str) -> None: ...
 
         async def _chat_label(self, chat_id: int) -> str: ...
-
-        def _pending_react_line(
-            self, entry: dict[str, object], now: float
-        ) -> str: ...
-
-        def queued_react_rows(self) -> list[str]:
-            """Return the capped queued-reaction rows (/status, /requeue)."""
 
         # --- profile + status helpers the command dispatcher calls ---
         def _bullet(self) -> str: ...
@@ -104,8 +92,6 @@ if TYPE_CHECKING:
         def _build_profile(self) -> None: ...
 
         def _feature_enabled(self, name: str) -> bool: ...
-
-        def _cancel_react_tasks(self) -> None: ...
 
         def _save_service_modes(self) -> None: ...
 
@@ -125,12 +111,6 @@ if TYPE_CHECKING:
             """Post the /status report."""
 
         # --- command handlers implemented on sibling mixins ---
-        async def requeue_reactions(self) -> None:
-            """Rebuild the pending-reaction queue (/requeue)."""
-
-        async def answer_all_now(self) -> None:
-            """Answer every pending commenter now (/reactnow)."""
-
 
 else:
 

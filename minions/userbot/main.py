@@ -64,6 +64,7 @@ from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
+from minions.userbot.core.render import Glyphs
 from minions.userbot.core.runtime import configure_logging
 from minions.userbot.core.runtime import touch_health
 from minions.userbot.core.runtime import watchdog
@@ -78,7 +79,8 @@ from minions.userbot.glue.commands import _CommandsMixin
 from minions.userbot.glue.comod import Cabinet
 from minions.userbot.glue.comod import CabinetDeps
 from minions.userbot.glue.profiles import _ProfilesMixin
-from minions.userbot.glue.reactions import _ReactionsMixin
+from minions.userbot.glue.reactions import CommentDeps
+from minions.userbot.glue.reactions import CommentWatch
 from minions.userbot.glue.status import STATUS_WARM_PEERS
 from minions.userbot.glue.status import _StatusMixin
 from minions.userbot.glue.stories import StoryDeps
@@ -102,7 +104,6 @@ class Userbot(
     _AggregatorMixin,
     _ProfilesMixin,
     _StatusMixin,
-    _ReactionsMixin,
     _CommandsMixin,
 ):
     """The Telethon userbot host: wires the engines and runs the loops.
@@ -137,16 +138,9 @@ class Userbot(
         self._state_base = base_state.parent
         self._mode_path = self._state_base / MODE_FILE
         self._modes = self._load_service_modes()
-        self._react_tasks: set[asyncio.Task[None]] = set()
         self._greeter_task: asyncio.Task[None] | None = None
         self._react_rescan_task: asyncio.Task[None] | None = None
-        self._react_next_rescan: float = 0.0  # ts of the next auto-rescan
-        self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
         self._stories_task: asyncio.Task[None] | None = None
-        # pre-fire thread refresh debounce, keyed by thread root
-        self._thread_rescan_at: dict[int, float] = {}
-        # ts of the last GetDiscussionMessageRequest, for the flood throttle
-        self._last_discussion_ts: float = 0.0
         rt = self._raw.get('runtime')
         rt = rt if isinstance(rt, dict) else {}
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
@@ -176,9 +170,6 @@ class Userbot(
         self.rejected: set[str] = set()
         self.posted: list[Posted] = []
         self.processed_ids: set[int] = set()
-        self._react_tasks = set()
-        self._react_next_rescan = 0.0
-        self._rescan_sec = self._rescan_interval(self._modes['reactions'])
         # A service is enabled when its mode != 'off' (``_feature_enabled``).
         # The params are frozen, so the flag is swapped via replace.
         reaction_params = replace(
@@ -189,6 +180,18 @@ class Userbot(
         self.reactions = reactions.ReactionBrain(
             reaction_params,
             react_dir / 'reactions_state.json',
+        )
+        self.comment_watch = CommentWatch(
+            CommentDeps(
+                client=self.client,
+                brain=self.reactions,
+                targets=self.live_targets,
+                announce=self._send_status,
+                glyphs=Glyphs(self._bullet(), self._arrow()),
+                human_words=self.consts.human_words,
+                discussion_gap=self.config.discussion_gap,
+                rescan_sec=self._rescan_interval(self._modes['reactions']),
+            )
         )
         # Story viewer: watches friends'/contacts' stories the way a person
         # does -- a glance now and then, no reactions -- with its own
@@ -263,7 +266,7 @@ class Userbot(
             return
         self.audience.record_message(event)
         if self.reactions.params.enabled:
-            self._maybe_react(event)
+            self.comment_watch.on_message(event)
         if event.chat_id == self.config.source:
             await self.on_message(event.message)
 

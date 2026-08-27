@@ -28,15 +28,21 @@ from minions.userbot.core.models import Config  # noqa: E402
 from minions.userbot.core.models import Consts  # noqa: E402
 from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
+from minions.userbot.core.render import Glyphs  # noqa: E402
 from minions.userbot.engines import greeter  # noqa: E402
 from minions.userbot.engines import reactions  # noqa: E402
 from minions.userbot.engines import stories  # noqa: E402
+from minions.userbot.glue import reactions as reactions_glue  # noqa: E402
 from minions.userbot.glue import stories as stories_glue  # noqa: E402
 from minions.userbot.glue import users as users_glue  # noqa: E402
 
 NOW = 1_760_000_000.0  # a fixed clock, so every eta in the text is stable
 SOURCE = -1001
 TARGET = -1002
+
+
+async def _unused_announce(text: str) -> None:
+    """Operator channel the render never uses."""
 
 
 async def _unused_label(peer_id: int) -> str:
@@ -149,8 +155,17 @@ def _bot(tmp_path: Path) -> main.Userbot:
     brain.state.ledger.add_offer('alice', 1)
     brain.state.ledger.remember('alice', '@alice')
     bot.reactions = brain
-    bot._rescan_sec = 300.0
-    bot._react_next_rescan = NOW + 120
+    bot.comment_watch = reactions_glue.CommentWatch(
+        reactions_glue.CommentDeps(
+            client=SimpleNamespace(),
+            brain=brain,
+            targets=lambda: (TARGET,),
+            announce=_unused_announce,
+            glyphs=Glyphs('.', '->'),
+            rescan_sec=300.0,
+        ),
+        next_rescan=NOW + 120,
+    )
 
     bot.stories = stories.StoryBrain(
         stories.StoryParams(enabled=False), tmp_path / 's.json'

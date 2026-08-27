@@ -29,6 +29,7 @@ from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Item  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
 from minions.userbot.glue import aggregator  # noqa: E402
+from minions.userbot.glue import reactions as reactions_glue  # noqa: E402
 
 
 def _post(title: str, age_days: float) -> Posted:
@@ -160,10 +161,7 @@ class _FakeFlush:
         self.order.append('deliver')
         return list(self._delivered)
 
-    async def react(self, *_: object) -> None:
-        self.order.append('react')
-
-    async def watch(self, *_: object) -> None:
+    async def on_posted(self, *_: object) -> None:
         self.order.append('watch')
 
     def save(self) -> None:
@@ -199,8 +197,7 @@ def _bare_aggregator(fake: _FakeFlush) -> main.Userbot:
         discussion_gap=0.0,
     )
     agg._deliver_post = fake.deliver
-    agg._react_to_post = fake.react
-    agg._watch_post = fake.watch
+    agg.comment_watch = fake
     agg._save = fake.save
     agg._arm = fake.arm
 
@@ -260,8 +257,7 @@ def test_flush_records_and_saves_before_react_watch(
 
     asyncio.run(main.Userbot._flush(agg, group))
 
-    assert fake.order.index('record') < fake.order.index('react')
-    assert fake.order.index('save') < fake.order.index('react')
+    assert fake.order.index('record') < fake.order.index('watch')
     assert fake.order.index('save') < fake.order.index('watch')
     assert group not in agg.groups
     assert len(agg.posted) == 1
@@ -289,24 +285,17 @@ def test_flush_requeues_when_nothing_delivered(
     assert 'save' in fake.order  # the re-queue is persisted
 
 
-def _agg_with_gap(gap: float) -> main.Userbot:
-    """Build a bare Userbot whose config sets only the discussion gap."""
-    agg = object.__new__(main.Userbot)
-    agg.config = Config(
-        source=0,
-        targets=(),
-        test_target=0,
-        platforms=('tiktok',),
-        threshold=0.9,
-        timeout=1.0,
-        backfill=0,
-        max_duration=180,
-        repost_guard=0.0,
-        repost_guard_count=0,
-        discussion_gap=gap,
+def _watch_with_gap(gap: float) -> reactions_glue.CommentWatch:
+    """Build a comment watcher whose only live setting is the flood gap."""
+    return reactions_glue.CommentWatch(
+        reactions_glue.CommentDeps(
+            client=None,
+            brain=None,
+            targets=tuple,
+            announce=None,
+            discussion_gap=gap,
+        )
     )
-    agg._last_discussion_ts = 0.0
-    return agg
 
 
 def test_discussion_throttle_spaces_calls(
@@ -318,12 +307,12 @@ def test_discussion_throttle_spaces_calls(
     async def _fake_sleep(sec: float) -> None:
         slept.append(sec)
 
-    monkeypatch.setattr(main.asyncio, 'sleep', _fake_sleep)
+    monkeypatch.setattr(reactions_glue.asyncio, 'sleep', _fake_sleep)
     gap = 2.0
-    agg = _agg_with_gap(gap)
-    agg._last_discussion_ts = time.time()  # a call just happened
+    watch = _watch_with_gap(gap)
+    watch._last_discussion = time.time()  # a call just happened
 
-    asyncio.run(main.Userbot._throttle_discussion(agg))
+    asyncio.run(watch._throttle_discussion())
 
     assert slept
     assert 0 < slept[0] <= gap
@@ -338,9 +327,8 @@ def test_discussion_throttle_disabled_when_zero(
     async def _fake_sleep(sec: float) -> None:
         slept.append(sec)
 
-    monkeypatch.setattr(main.asyncio, 'sleep', _fake_sleep)
-    agg = _agg_with_gap(0.0)
+    monkeypatch.setattr(reactions_glue.asyncio, 'sleep', _fake_sleep)
 
-    asyncio.run(main.Userbot._throttle_discussion(agg))
+    asyncio.run(_watch_with_gap(0.0)._throttle_discussion())
 
     assert slept == []

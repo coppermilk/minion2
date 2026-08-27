@@ -10,8 +10,6 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from telethon.tl.functions.messages import GetDiscussionMessageRequest
-
 from minions.userbot.core.matching import action_ok
 from minions.userbot.core.matching import duration_seconds
 from minions.userbot.core.matching import extract_fields
@@ -230,8 +228,7 @@ class _AggregatorMixin(UserbotProtocol):
         log.info('posted %r', group.title)
         self._save()
         for target, post_id in posts:
-            await self._react_to_post(target, post_id)
-            await self._watch_post(target, post_id)
+            await self.comment_watch.on_posted(target, post_id)
 
     def _record_posted(self, group: Group) -> None:
         """Append a readable posted record; rebuild the dedup id set."""
@@ -301,96 +298,6 @@ class _AggregatorMixin(UserbotProtocol):
                 continue
             posts.append((target, int(getattr(sent, 'id', 0) or 0)))
         return posts
-
-    async def _react_to_post(self, target: int, post_id: int) -> None:
-        """Immediately place a reaction ON a freshly-posted message.
-
-        Optional (``react_to_posts``, default off): reacting to our own posts
-        is an extra, separate from the engine's real job of reacting to
-        commenters. When on, there is no human-like wait -- the post is ours,
-        so the reaction goes on straight away. A failure never blocks the post
-        -- it
-        is logged and swallowed, unlike the comment path which owns its own
-        retry/skip machinery.
-        """
-        if not self.reactions.params.enabled or not post_id:
-            return
-        if not self.reactions.params.react_to_posts:
-            return
-        specs = self.reactions.pick_like(f'{target}:{post_id}')
-        emojis = tuple((s.emoji_id, s.fallback) for s in specs)
-        try:
-            placed = await self._react(target, post_id, emojis)
-        except Exception:  # noqa: BLE001 -- reacting must never break posting
-            log.warning(
-                'reaction: could not react to new post %s in %s',
-                post_id,
-                target,
-            )
-            return
-        if placed:
-            glyphs = ''.join(fb for _, fb in emojis)
-            log.info(
-                'reaction: reacted %s to new post %s in %s',
-                glyphs,
-                post_id,
-                target,
-            )
-
-    async def _watch_post(self, target: int, post_id: int) -> None:
-        """Register where this post's comments appear (the react target).
-
-        For a channel with a linked discussion (comments_in_discussion), the
-        comments live in the discussion group: resolve the post's thread root
-        and watch THAT, so reactions land only in the channel post's comments.
-        For a
-        plain group target, the post message id itself is the comment target.
-        """
-        if self.reactions.params.comments_in_discussion:
-            # Channel: only watch a post whose discussion thread resolves; a
-            # post with comments off (or deleted) adds nothing rather than a
-            # useless channel-id entry that could evict a real one.
-            thread = await self._discussion_thread(target, post_id)
-            if thread is not None:
-                self.reactions.note_post(*thread)
-            return
-        self.reactions.note_post(target, post_id)
-
-    async def _throttle_discussion(self) -> None:
-        """Space out GetDiscussionMessageRequest calls (Telegram flood guard).
-
-        These resolve a post's comment thread and are fired in bursts -- the
-        last ``watch_posts`` posts per target on every startup and rescan --
-        which trips Telegram's flood wait. Keep at least ``discussion_gap``
-        seconds between consecutive calls, process-wide. 0 disables it.
-        """
-        gap = self.config.discussion_gap
-        if gap <= 0:
-            return
-        wait = gap - (time.time() - self._last_discussion_ts)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._last_discussion_ts = time.time()
-
-    async def _discussion_thread(
-        self, channel: int, post_id: int
-    ) -> tuple[int, int] | None:
-        """(discussion_chat_id, thread_root_id) for a channel post, or None."""
-        await self._throttle_discussion()
-        try:
-            disc = await self.client(
-                GetDiscussionMessageRequest(peer=channel, msg_id=post_id)
-            )
-        except Exception:  # noqa: BLE001 -- not a channel / no linked group
-            log.warning('reactions: no discussion thread for post %s', post_id)
-            return None
-        messages = getattr(disc, 'messages', None) or []
-        if not messages:
-            return None
-        root = messages[0]
-        chat_id = int(getattr(root, 'chat_id', 0) or 0)
-        root_id = int(getattr(root, 'id', 0) or 0)
-        return (chat_id, root_id) if chat_id and root_id else None
 
     async def _send_post(
         self, target: int, message: PremiumMessage, thumb: str

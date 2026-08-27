@@ -11,6 +11,7 @@ over the models and ``premium_emoji``; no client, no state.
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.humanize import Variety
@@ -28,6 +29,19 @@ if TYPE_CHECKING:
 
 # The order emoji types are grouped in for the /emojis catalog message.
 _EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'reaction', 'like')
+
+
+@dataclass(frozen=True)
+class Glyphs:
+    """The two /status glyphs a service needs to render its own rows.
+
+    The report's icons live in the constants JSON, so a service that renders
+    a row of it (the queued reactions) is handed just these rather than the
+    whole Consts -- it has no other business with the report's wording.
+    """
+
+    bullet: str = '-'
+    arrow: str = '->'
 
 
 def youtube_thumb(group: Group) -> str:

@@ -327,10 +327,10 @@ class _StatusMixin(UserbotProtocol):
     def _react_rescan_line(self) -> str:
         """Return the auto-rescan period and the countdown to the next one."""
         b = self._bullet()
-        period = int(self._rescan_sec)
+        period = int(self.comment_watch.deps.rescan_sec)
         if period <= 0:
             return f'{b} rescan: off (use /requeue)'
-        nxt = self._react_next_rescan
+        nxt = self.comment_watch.next_rescan
         if nxt <= 0:
             return f'{b} rescan {period}s {b} next: first run'
         tz = self.reactions.params.tz_offset_hours
@@ -350,7 +350,7 @@ class _StatusMixin(UserbotProtocol):
 
     def _pending_react_lines(self) -> list[str]:
         """Return queued reactions: which lands on which comment, when."""
-        rows = self.queued_react_rows()
+        rows = self.comment_watch.queued_rows()
         return [f'{self._bullet()} queued:', *rows] if rows else []
 
     def _pending_react_line(self, entry: dict[str, object], now: float) -> str:
