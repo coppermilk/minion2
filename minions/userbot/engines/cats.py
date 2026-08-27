@@ -49,11 +49,11 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.userbot.core import humanize_time
-from minions.userbot.core.humanize_choice import recency_penalty
-from minions.userbot.core.humanize_choice import weighted_choice
-from minions.userbot.engines import attachment
-from minions.userbot.engines import relationship
+from minions.userbot.core import attachment
+from minions.userbot.core import humanize
+from minions.userbot.core import relationship
+from minions.userbot.core.humanize import recency_penalty
+from minions.userbot.core.humanize import weighted_choice
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -278,7 +278,7 @@ class CatState:
 
 def _local(ts: float, params: CatParams) -> datetime:
     """``ts`` as a datetime in the persona's timezone (principle 9)."""
-    return humanize_time.local(ts, params.tz_offset_hours)
+    return humanize.local(ts, params.tz_offset_hours)
 
 
 def _mixture(
@@ -315,7 +315,7 @@ def _density_weight(ts: float, params: CatParams) -> float:
 
 def _lognormal(rng: random.Random, mu: float, sigma: float) -> float:
     """Return a heavy-tailed positive draw (principle 2): exp of a normal."""
-    return humanize_time.lognormal(rng, mu, sigma)
+    return humanize.lognormal(rng, mu, sigma)
 
 
 def _jitter(ts: float, params: CatParams, rng: random.Random) -> float:
@@ -332,7 +332,7 @@ def _is_silent_day(ts: float, params: CatParams) -> bool:
     Deterministic per date (seeded by the date) so a restart does not flip a
     day that was already decided.
     """
-    return humanize_time.is_silent_day(
+    return humanize.is_silent_day(
         ts, params.tz_offset_hours, params.silent_day_prob
     )
 

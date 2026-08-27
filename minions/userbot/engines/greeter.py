@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.userbot.core import humanize_time
+from minions.userbot.core import humanize
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -184,7 +184,7 @@ class Greeter:
         start, end = self.params.wake_start_hour, self.params.wake_end_hour
         if start >= end:
             return True
-        hour = humanize_time.local(now, self.params.tz_offset_hours).hour
+        hour = humanize.local(now, self.params.tz_offset_hours).hour
         return start <= hour < end
 
     async def sync(self) -> None:

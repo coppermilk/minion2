@@ -26,8 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 
-from minions.userbot.core import humanize_time
-from minions.userbot.engines import attachment
+from minions.userbot.core import attachment
+from minions.userbot.core import humanize
 
 
 def int_map(raw: object) -> dict[str, int]:
@@ -168,7 +168,7 @@ class Ledger:
         self, peer: str, n: int, now: float, tz: float
     ) -> None:
         """Record ``n`` reciprocations to ``peer`` and the daily counter."""
-        stamp = humanize_time.local(now, tz).date().isoformat()
+        stamp = humanize.local(now, tz).date().isoformat()
         self.recip_day, self.recip_today = _rolled(
             self.recip_day, self.recip_today, stamp
         )
@@ -177,7 +177,7 @@ class Ledger:
 
     def spend_take(self, control: Control, now: float, tz: float) -> bool:
         """Consume one take slot from today's budget; False when capped."""
-        stamp = humanize_time.local(now, tz).date().isoformat()
+        stamp = humanize.local(now, tz).date().isoformat()
         self.take_day, self.take_today = _rolled(
             self.take_day, self.take_today, stamp
         )
@@ -188,7 +188,7 @@ class Ledger:
 
     def spend_recip(self, control: Control, now: float, tz: float) -> bool:
         """Consume one recip slot from today's budget; False when capped."""
-        stamp = humanize_time.local(now, tz).date().isoformat()
+        stamp = humanize.local(now, tz).date().isoformat()
         self.recip_day, self.recip_today = _rolled(
             self.recip_day, self.recip_today, stamp
         )
@@ -206,18 +206,18 @@ class Ledger:
         """
         if control.recip_cap <= 0:
             return 0
-        stamp = humanize_time.local(now, tz).date().isoformat()
+        stamp = humanize.local(now, tz).date().isoformat()
         used = self.recip_today if self.recip_day == stamp else 0
         return max(0, control.recip_cap - used)
 
     def takes_today(self, now: float, tz: float) -> int:
         """Exposures taken on the local date of ``now`` (else 0)."""
-        stamp = humanize_time.local(now, tz).date().isoformat()
+        stamp = humanize.local(now, tz).date().isoformat()
         return self.take_today if self.take_day == stamp else 0
 
     def recips_today(self, now: float, tz: float) -> int:
         """Reciprocations made on the local date of ``now`` (else 0)."""
-        stamp = humanize_time.local(now, tz).date().isoformat()
+        stamp = humanize.local(now, tz).date().isoformat()
         return self.recip_today if self.recip_day == stamp else 0
 
     def remember(self, peer: str, label: str) -> None:

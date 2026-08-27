@@ -9,7 +9,7 @@ response, and the qualitative scenario ranking the model is meant to produce.
 
 from __future__ import annotations
 
-from minions.userbot.engines import attachment
+from minions.userbot.core import attachment
 
 _PEAK = 0.675
 _PEAK_TOL = 0.02

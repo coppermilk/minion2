@@ -86,7 +86,7 @@ from minions.userbot.core.config import _resolve_session_path
 from minions.userbot.core.config import _resolve_state_path
 from minions.userbot.core.config import apply_persona
 from minions.userbot.core.config import load_env
-from minions.userbot.core.humanize_choice import Variety
+from minions.userbot.core.humanize import Variety
 from minions.userbot.core.matching import _action_ok
 from minions.userbot.core.matching import _duration_seconds
 from minions.userbot.core.matching import _extract_fields
@@ -113,7 +113,6 @@ from minions.userbot.core.statefile import _posted_from_dict
 from minions.userbot.engines import cats
 from minions.userbot.engines import comod
 from minions.userbot.engines import greeter
-from minions.userbot.engines import relationship
 from minions.userbot.engines import stories
 from minions.userbot.engines import users
 from minions.userbot.engines.premium_emoji import build_premium_message
@@ -131,6 +130,7 @@ from minions.userbot.glue.users import _UsersMixin
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from minions.userbot.core import relationship
     from minions.userbot.engines.premium_emoji import PremiumMessage
 
 

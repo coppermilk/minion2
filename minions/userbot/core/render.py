@@ -13,7 +13,7 @@ from __future__ import annotations
 import random
 from typing import TYPE_CHECKING
 
-from minions.userbot.core.humanize_choice import Variety
+from minions.userbot.core.humanize import Variety
 from minions.userbot.core.matching import _HASHTAG_RE
 from minions.userbot.core.matching import _primary
 from minions.userbot.core.models import Group
@@ -135,7 +135,7 @@ def _compose(  # noqa: PLR0913 -- variety is an optional post-decoration picker
     """Build the full post: author line, description line, and link grid.
 
     ``variety`` picks the announce line and the love/lead/arrow emoji so a
-    post does not repeat what the previous one used (see ``humanize_choice``).
+    post does not repeat what the previous one used (see ``humanize``).
     Default is a fresh, memory-less picker -- the real post path passes a
     persistent one; previews and tests get plain, independent variety.
     """

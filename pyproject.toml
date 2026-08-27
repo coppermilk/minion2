@@ -141,8 +141,8 @@ convention = 'pep257'
 # cats_proof.py's printed narration is the deliverable. T201 (no print)
 # targets stray debug prints in library code, not a tool's own output.
 'minions/userbot/login.py' = ['T201']
-'minions/userbot/dump_emoji_ids.py' = ['T201']
-'minions/userbot/cats_proof.py' = ['T201']
+'minions/userbot/dev/dump_emoji_ids.py' = ['T201']
+'minions/userbot/dev/cats_proof.py' = ['T201']
 'minions/donate/login.py' = ['T201']
 
 # ---------------------------------------------------------------- mypy

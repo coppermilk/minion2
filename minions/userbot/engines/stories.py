@@ -45,9 +45,9 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minions.userbot.core import humanize_time
-from minions.userbot.engines import attachment
-from minions.userbot.engines import relationship
+from minions.userbot.core import attachment
+from minions.userbot.core import humanize
+from minions.userbot.core import relationship
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -260,9 +260,9 @@ class StoryBrain:
         tz = self.params.tz_offset_hours
         if not self.params.enabled:
             return 'disabled'
-        if humanize_time.in_quiet_hours(now, tz, self.params.quiet_hours):
+        if humanize.in_quiet_hours(now, tz, self.params.quiet_hours):
             return 'quiet-hours'
-        if humanize_time.is_silent_day(now, tz, self.params.silent_day_prob):
+        if humanize.is_silent_day(now, tz, self.params.silent_day_prob):
             return 'silent-day'
         wait = self.state.next_session_at - now
         if wait > 0:
@@ -430,7 +430,7 @@ class StoryBrain:
         """
         p_star = self._view_target()
         budget = self._react_budget(now)
-        when = now + humanize_time.lognormal(
+        when = now + humanize.lognormal(
             self.rng, self.params.latency_log_mu, self.params.latency_log_sigma
         )
         self.state.session_start_at = when
@@ -456,7 +456,7 @@ class StoryBrain:
                     react_emoji=emoji,
                 )
             )
-            when += humanize_time.lognormal(
+            when += humanize.lognormal(
                 self.rng, self.params.gap_log_mu, self.params.gap_log_sigma
             )
         self.state.session_last_at = when
@@ -464,7 +464,7 @@ class StoryBrain:
         # last view -- for catch-up (view_all) TOO, so a backlog is cleared a
         # session's worth at a time at the human rhythm rather than swept every
         # poll (which dumped a whole night's stories in one morning burst).
-        spacing = humanize_time.lognormal(
+        spacing = humanize.lognormal(
             self.rng,
             self.params.spacing_log_mu,
             self.params.spacing_log_sigma,
@@ -571,12 +571,12 @@ class StoryBrain:
         so it resets naturally at local midnight -- what /status shows instead
         of the all-time odometer.
         """
-        today = humanize_time.local(now, tz).date()
+        today = humanize.local(now, tz).date()
         total = 0
         for entry in self.state.log:
             ts = entry.get('ts')
             if isinstance(ts, int | float) and (
-                humanize_time.local(ts, tz).date() == today
+                humanize.local(ts, tz).date() == today
             ):
                 total += int(entry.get('count', 0) or 0)
         return total

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import random
 
-from minions.userbot.engines import attachment
-from minions.userbot.engines import relationship
+from minions.userbot.core import attachment
+from minions.userbot.core import relationship
 
 _TZ = 0.0
 _NOON = 12 * 3600.0  # a fixed local timestamp (tz 0)
