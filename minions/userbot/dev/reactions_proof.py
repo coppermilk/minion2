@@ -37,7 +37,6 @@ the reaction glyphs are read from the JSON at runtime (BLUEPRINT 4).
 from __future__ import annotations
 
 import dataclasses
-import json
 import random
 import tempfile
 from datetime import UTC
@@ -46,6 +45,8 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+from minions.userbot.core.config import CONSTANTS_PATH
+from minions.userbot.core.config import read_json
 from minions.userbot.engines import reactions
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
@@ -80,9 +81,7 @@ def _local(ts: float, params: reactions.ReactionParams) -> str:
 
 def _load_params() -> reactions.ReactionParams:
     """Return the REAL reaction params + pool from the constants JSON."""
-    path = Path(__file__).with_name('aggregator_constants.json')
-    data = json.loads(path.read_text(encoding='utf-8'))
-    return reactions.load_reaction_params(data)
+    return reactions.load_reaction_params(read_json(CONSTANTS_PATH))
 
 
 def _payload(
