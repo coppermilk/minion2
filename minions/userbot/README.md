@@ -1,49 +1,60 @@
-# Aggregator (Telethon userbot)
+# Userbot (Telethon persona)
 
-A **Telethon** userbot -- a real user account over MTProto, **not** a Bot API
-bot -- that aggregates one Short's links across platforms and posts the
-collected message (with **premium / custom emoji**) to one or more chats.
+A **Telethon** userbot -- one real Telegram **user account** over MTProto, **not**
+a Bot API bot -- that behaves like a person across several independent engines.
+Link aggregation is just one of them:
 
-It listens to a **source chat** where a bot (IFTTT/Zapier/etc.) drops one JSON
-object per video per platform:
+| Engine | What it does |
+|--------|--------------|
+| **aggregator** | groups one Short's per-platform links and posts the collected message (with **premium / custom emoji**) to the target chat(s) |
+| **reactions** | reacts to / replies to people who comment on the last posts, timed and chosen so it reads as a distracted human |
+| **stories** | watches contacts' stories the way a person idly would (view + a small reaction), never a sweep |
+| **greeter** | welcome / farewell DMs to channel subscribers |
+| **comod** | the supporter "cabinet" (`/comod`): a named shelf per donor for a month |
+| **users** | an opt-in SQLite record of the channel audience over time |
 
-```json
-{"platform": "youtube", "caption": "...", "link": "https://...",
- "thumnailUrl": "https://...jpg", "duration": "0:0:16"}
-```
-
-Messages whose captions match ~90% are treated as the same video. Once every
-expected platform has arrived (or a timeout elapses), **one** message collecting
-each platform's link is posted to the **target chat(s)**.
+`main.py` is only the **host**: it loads config, builds the active profile,
+routes each incoming event to the engines, and runs the status/heartbeat loop.
+Every engine's behaviour lives in its own module.
 
 ## Why a userbot and not a bot
 
 Premium (custom) emoji can only be **sent** by a user account with Telegram
-Premium; the Bot API cannot. So this uses Telethon with a **user session**, not
-a bot token. `premium_emoji.py` turns Bot-API-style `<tg-emoji emoji-id="...">`
-markup into Telethon `MessageEntityCustomEmoji` entities (measured in UTF-16
-code units, as Telegram requires).
+Premium; the Bot API cannot. So this uses Telethon with a **user session**, not a
+bot token. `engines/premium_emoji.py` turns Bot-API-style `<tg-emoji
+emoji-id="...">` markup into Telethon `MessageEntityCustomEmoji` entities
+(measured in UTF-16 code units, as Telegram requires).
 
-## Files
+## Layout
 
-The package root holds the entry point and data; the code is grouped into
-three subpackages.
+```
+minions/userbot/
+  main.py                 # the Userbot host + entry point (python -m minions.userbot.main)
+  login.py                # one-time interactive login -> the session file
+  aggregator_constants.json, assets/   # editable texts + premium-emoji ids (UTF-8), cabinet template/fonts
+  core/                   # pure building blocks, no Telethon
+    models, matching, statefile, render, config, runtime, client,
+    humanize, profiles, attachment, relationship, base (the shared-state contract)
+  engines/                # domain brains (Telethon-free, unit-tested)
+    reactions, stories, greeter, comod, users, premium_emoji
+  glue/                   # the Userbot mixins that DO touch Telethon
+    aggregator (grouping + posting), reactions, stories, comod, users,
+    commands, status, profiles (live/test modes)
+  dev/                    # developer tools, not the running bot
+    reactions_proof, dump_emoji_ids
+```
 
-| Path | What it is |
-|------|-----------|
-| `main.py` | the `Aggregator` class (aggregation + posting core) and the entry point (`python -m minions.aggregator.main`) |
-| `aggregator_constants.json`, `assets/` | editable post texts + premium emoji ids (UTF-8) and the cabinet template/fonts |
-| `login.py`, `dump_emoji_ids.py` | log in once / dev helper to print premium-emoji ids |
-| `core/` | pure, stateless building blocks: `models`, `matching`, `statefile`, `render`, `config`, `runtime`, `base` (the `AggregatorProtocol` shared contract) |
-| `glue/` | the Aggregator mixins: `status`, `commands`, and the per-domain wiring `cats`, `stories`, `comod`, `users` |
-| `engines/` | domain engines: `cats` (cat brain), `stories` (viewer), `greeter`, `comod` (cabinet), `users` (SQLite DB), `premium_emoji`, `humanize` |
+The principle: `core/` is pure logic/maths/IO, `engines/` are the domain brains,
+`glue/` is everything that calls Telethon, `dev/` is helpers. The aggregation
+brain (grouping, fuzzy title match, the re-post guard) lives in `core/matching.py`
++ `core/models.py`; its Telethon side is `glue/aggregator.py`.
 
 ## Configuration
 
-Two sources, no overlap: the **env** carries only the deploy knobs (credentials
-and the chats); **`aggregator_constants.json`** carries all behaviour.
+Two sources, no overlap: the **env** carries only deploy knobs (credentials and
+the chats); **`aggregator_constants.json`** carries all behaviour and content.
 
-**env** (credentials + chats + paths):
+**env**
 
 | Env | Meaning |
 |-----|---------|
@@ -55,269 +66,101 @@ and the chats); **`aggregator_constants.json`** carries all behaviour.
 | `AGGREGATOR_STATE_DIR` | state-dir override |
 | `DRIVE` | library root; session + state default to `<DRIVE>/bots/aggregator/` |
 
-**`aggregator_constants.json`** (behaviour + content):
+> The on-disk data dir keeps its historical name `bots/aggregator/` (and the
+> `AGGREGATOR_STATE_DIR` env) so the live bot finds its session and state exactly
+> where it always did -- only the **code** is now `minions.userbot`.
 
-| Key | Meaning |
-|-----|---------|
-| `platforms` | expected platforms, in priority order (comma-separated) |
-| `title_match` | caption similarity to treat two messages as the same video |
-| `timeout_sec` | how long to wait for the rest before posting a partial |
-| `backfill` | recent source messages scanned at startup |
-| `max_duration_sec` | a video at/above this many seconds is dropped (not a Short) |
-| `repost_guard_sec` | do not re-post a video whose caption matches one posted within this many seconds -- catches the source re-delivering the same video under new ids (an upstream re-emit, common with chat auto-delete); `0` disables this window (default one week) |
-| `repost_guard_count` | also block a caption matching any of the last N posted videos, regardless of time -- a clock-independent floor so a re-delivered video stays out until N distinct videos have gone out; survives restarts and source floods the time window can miss; `0` disables this window (default `5`). A match in EITHER window blocks the re-post |
-| `discussion_gap_sec` | minimum seconds between consecutive discussion-thread lookups (`GetDiscussionMessageRequest`), which cat seeding fires in bursts on startup/rescan; spacing them out avoids Telegram flood waits; `0` disables the throttle (default `2.0`) |
-| `fields`, `action_value`, `author`, `announce`, `love`, `lead_emoji`, `arrow_down`, `view_label`, `rows`, `platform_emoji` | incoming field names + the post's texts and premium emoji (`lead_emoji` leads the caption line) |
+**`aggregator_constants.json`** -- key sections: `platforms`, `title_match`,
+`timeout_sec`, `backfill`, `max_duration_sec`, `repost_guard_sec` /
+`repost_guard_count` / `discussion_gap_sec` (the aggregator's dedup/flood knobs),
+the incoming `fields` names, the post's texts + the unified `emoji` array, and one
+section per engine (`reactions`, `stories`, `greeter`, `comod`, `users`,
+`persona`, `runtime`).
 
 ## Run (without Docker)
 
 ```bash
 pip install -e '.[tg]'            # from the repo root
 cp .env.example .env              # fill in TELEGRAM_API_ID / TELEGRAM_API_HASH
-python -m minions.aggregator.main
+python -m minions.userbot.login   # once, interactive -- writes the session file
+python -m minions.userbot.main    # silent from the saved session, every run after
 ```
-
-The first run logs you in interactively (phone, code, 2FA if enabled) and writes
-the session to `<DRIVE>/bots/aggregator/telethon.session` when `DRIVE` is set
-(on Windows that is your Google Drive), else `telethon.session` next to this
-package. Every run after that is silent, reading from the same place. A session
-kept in the checkout is **git-ignored**, so it survives a repo re-sync
-(`deploy/nas-update.sh`) -- exactly like `.env`.
 
 ## Run in Docker (this project's shared image)
 
-The aggregator rides the **one shared image** (`telethon` is baked in via the
-`tg` extra) -- there is no separate image to build. Compose (`aggregator`
-service) mounts `${DRIVE_NAS}:/data`, sets
+The userbot rides the **one shared image** (`telethon` is baked in via the `tg`
+extra). Compose (the `userbot` service) mounts `${DRIVE_NAS}:/data`, sets
 `TELEGRAM_SESSION_FILE=/data/bots/aggregator/telethon`, and reads `.env`.
 
-From the **repository root**:
-
 ```bash
-cp .env.example .env              # TELEGRAM_API_ID / TELEGRAM_API_HASH (+ DRIVE_NAS)
-docker compose run --rm aggregator    # 1) first login, interactive, once
-docker compose up -d aggregator       # 2) silent from the saved session
-docker compose logs -f aggregator
+docker compose run --rm userbot     # 1) first login, interactive, once
+docker compose up -d userbot        # 2) silent from the saved session
+docker compose logs -f userbot
 ```
 
-## Self-healing (always comes back)
+## Self-healing + gentle on Telegram
 
-The container is `restart: always`, so it returns after any exit, reboot, or
-Docker daemon restart. A crash already exits (and restarts); the hard case is a
-**hang** -- the process staying alive but wedged (Telethon stops talking, or the
-event loop stalls), which no `restart:` policy can catch because nothing exits.
-So the app runs an **in-process watchdog**: the status loop stamps a heartbeat
-file (`<state>/health`) each minute, but only after a successful Telegram probe
-(`get_me`); a daemon thread `os._exit(1)`s if that heartbeat goes stale past
-`runtime.watchdog_sec` (default 600s), turning the hang into an exit that
-`restart: always` recovers. State is committed per operation, so the abrupt exit
-loses nothing. The compose `healthcheck` reads the same file so Container
-Manager shows healthy/unhealthy (it does not itself restart -- the watchdog
-does). Tune or disable via the `runtime` section of the constants JSON
-(`watchdog_sec: 0` turns it off).
+`restart: always` brings the container back after any exit. A **hang** (process
+alive but wedged) is caught by an in-process **watchdog**: the status loop stamps
+a heartbeat file only after a successful Telegram probe (`get_me`); a daemon
+thread `os._exit(1)`s if that heartbeat goes stale past `runtime.watchdog_sec`
+(default 600s), turning the hang into an exit the policy recovers.
 
-## Log in once -- reboots don't ask again
+The client is built to respect Telegram rather than hammer it (`core/client.py`):
 
-After the first login the auth key is saved in the session **file**; later
-starts are silent across reboots and shutdowns because the file persists (on
-`/data` in Docker, or in the checkout when run bare).
+- **`runtime.flood_sleep_threshold_sec`** (default 3600) -- on a FloodWait the
+  client patiently sleeps it off and retries instead of erroring, the single most
+  account-friendly behaviour under sustained automation.
+- **`runtime.probe_interval_sec`** (default 300) -- the always-on liveness probe
+  fires every 5 min, not every 60s status tick, so it stops adding constant
+  background load.
+- The SQLite **session runs in WAL mode**, so the watchdog's hard exit can no
+  longer corrupt the `.session` file (the crash that forced a re-login every
+  couple of weeks).
 
-**Generate the session on another machine (e.g. Windows) and point at it.**
-Run `python -m minions.aggregator.login` there once; it writes and locates the
-`telethon.session` file. Copy that file to where the aggregator runs -- for
-Docker, `<DRIVE_NAS>/bots/aggregator/telethon.session` (the host path behind
-`/data`); same base name, so no rename -- **no rebuild**. See
-`deploy/windows/README.md`.
+## Reactions engine (was "cats")
 
-> The `.session` file is full account access. It is git-ignored; don't share it,
-> and revoke it from **Telegram -> Settings -> Devices** if it leaks.
+The account **reacts** to people who **comment on the last posts** with a chosen
+premium emoji -- the glyph shows as a **reaction pill on the comment itself**,
+**once per (post, commenter)** -- timed and chosen so it reads as a distracted
+human. The engine is Telethon-free (`engines/reactions.py`, unit-tested in
+`tests/test_reactions.py`) and driven from the `reactions` section of the JSON.
+The reaction glyphs are simply the `type: "reaction"` entries of the unified
+`emoji` array -- put cats there, or daisies; the code is content-neutral.
 
-## Human-like cat reactions (`cats` engine)
+A runnable, network-free proof of the whole path is
+`python -m minions.userbot.dev.reactions_proof`.
 
-The same account **reacts** to people who **comment on the last posts** with a
-**premium cat emoji** -- the cat shows as a **reaction pill on the comment
-itself**, not a reply in the thread -- **once per (post, commenter)**, timed and
-chosen so it reads as a distracted human rather than a scheduler. The logic
-lives in `cats.py` (Telethon-free and unit-tested in `tests/test_cats.py`) and
-is driven entirely from the `cats` section of `aggregator_constants.json`.
+**Persona label (optional).** The commands are neutral: `/reactnow` fires the
+queue now, `/reactions_on` / `/reactions_off` toggle the engine. Set
+`reactions.label` (e.g. `"cat"`) and the engine ALSO answers under a friendly
+name -- `/catnow`, `/cat_on|off|test|live` -- so a persona keeps its own
+vocabulary without hard-coding it. Empty (the default) = neutral commands only.
 
-**New posts are reacted to immediately.** As soon as the aggregator posts, it
-drops a cat reaction on its own fresh post right away (no human-like wait) --
-the comment reactions keep the distracted-human timing.
+> Custom-emoji reactions need a **Premium** account and a chat that **allows
+> custom-emoji reactions**. If off, the send is logged and skipped -- nothing
+> crashes.
 
-> Custom-emoji reactions need a **Premium** account (already required for the
-> premium emoji in posts) and a chat that **allows custom-emoji reactions**
-> (the channel/discussion admins enable them in the chat's Reactions setting).
-> If they are off, the send is logged and skipped -- nothing crashes.
+## Human-like story viewing (`stories`, opt-in)
 
-A runnable, network-free proof of the whole path (new post reaction -> comment
-reactions, with the dedup and timing) is `cats_proof.py`:
-`python -m minions.aggregator.cats_proof`.
+Reads Telegram's own active-stories feed (contacts / followed peers), views only
+**unseen** stories past a persisted per-peer seen set, in small sessions with
+human dwell/gaps, quiet hours and the odd silent day. It shares the timing kit
+(`core/humanize.py`) with the reactions engine. Read the log with `/stories`;
+turn it off with `/stories_off`.
 
-**Once per (post, commenter):** a person's *second* comment under the *same*
-post gets **no** reply; the *same* person commenting under a *different* post
-is eligible for a new cat. (Dedup keys for posts that roll out of the
-`watch_posts` window are pruned, so the persisted state stays bounded.)
+## Users database (`users`, opt-in, off by default)
 
-To tune it: `emoji[].id` are real premium **cat**-emoji ids (add more with the
-`/emojis` dump helper), `tz_offset_hours` is the persona's timezone, and
-`"enabled": false` turns it off.
+A per-profile **SQLite** DB (`users.db`) recording the channel audience over time
+(membership timeline, identity, seen messages). It collects PII, so it is off by
+default and lives only on your own state disk. Read it with `/users`.
 
-How it stays human (the nine principles, all tunable in the JSON):
+## Commands
 
-1. **Timing** is a mixture-of-Gaussians density over the day, separate
-   weekday/weekend curves, near-zero in `quiet_hours` -- not `uniform(0,24)`.
-2. **Intervals** are heavy-tailed (log-normal), so cats come in bursts then
-   long silences -- not a flat cadence.
-3. **Selection has memory**: weight = base preference x recency penalty, so
-   favourites lead and a just-used cat fades.
-4. **Mood** does an AR(1) random walk day to day and tilts sleepy vs. lively.
-5. **Context tags** (daypart, season, December) re-weight the pool.
-6. **Jitter** takes the fire time off the `:00` second.
-7. **Imperfection**: a comment is sometimes ignored (`skip_prob`), a whole day
-   is sometimes silent (`silent_day_prob`), and a rare second cat follows.
-8. **Feedback**: a reply to the freshest post gets a faster reaction.
-9. **State** persists (`cats_state.json` next to the aggregator state): mood,
-   the spacing cursor, per-cat recency, who was already catted, **the watched
-   posts, and the cats scheduled but not yet sent** -- so a nightly NAS
-   shutdown loses nothing.
-
-**Host uptime -- declared *and* learned.** `active_start_hour` /
-`active_end_hour` (local hours) are a **prior** -- a starting guess like 7-17.
-The bot also **learns the NAS's real on-hours**: a heartbeat records the
-current hour while it runs, and the schedule blends the learned curve with the
-declared window by confidence (`uptime_learn_obs` heartbeats for full trust,
-`uptime_half_life_sec` fades old data). So it adapts to whatever hours the NAS
-is actually up -- even outside 7-17 -- and follows a changed schedule on its
-own. Set the window to `0`/`24` to lean entirely on learning. A cat that would
-land while the host is down is kept in the persisted pending queue and
-**re-armed on the next boot** (missed ones renewed to a fresh slot so a night's
-worth doesn't fire at once). Watched posts and the learned uptime survive the
-restart too.
-
-**Don't double-answer** (`skip_if_manually_replied`, default true): before a
-cat fires (which can be hours after the comment), the bot checks whether the
-operator has **already answered that comment by hand** -- a manual reply to it,
-or a manual reaction already on it -- if so, it skips the cat instead of piling
-on.
-
-**Channel vs. group target** (`comments_in_discussion`, default `true`):
-- **Channel with a linked discussion** (`true`): each post's comments live in
-  the discussion group. The bot resolves the post's **discussion thread** and
-  reacts **only to comments on that channel post** -- off-topic discussion
-  messages and channel messages are ignored. The account **must be a member of
-  the discussion group** to receive those comments.
-- **Plain group** (`false`): comments are matched as direct replies to the post
-  message id, in the group itself.
-
-**Auto-rescan (per profile).** The bot re-scans the targets on a timer so a post
-made (and commented on) while it runs is picked up without a manual `/requeue`.
-The cadence differs by profile so you can iterate fast in test but stay quiet in
-production: **test = `rescan_sec_test` (5 min)**, **live = `rescan_sec_live`
-(1 hour)** in the `cats` JSON (both fall back to `rescan_sec`). `/status` shows a
-countdown to the next run.
-
-**Inspect it live** with the `/status` command (from any chat, renders into the
-source chat): it lists the videos still **pending** (and which platforms each
-awaits), a tail of what was **posted**, the **rejected** (non-Short) count, and
-the cat engine's state (enabled, pool size, watched posts, people catted,
-pending replies, mood) -- followed by a plain-language legend of the expected
-behaviour (`status_help` in the JSON).
-
-## Users database (`users.py`, opt-in)
-
-A per-profile **SQLite** database (`users.db`, next to the other state files)
-that records the channel audience over time. **Off by default** -- it collects
-personal data. Turn it on in the `users` section of the constants JSON:
-
-```json
-"users": { "enabled": true, "store_message_text": true, "enrich": true }
-```
-
-What it records:
-
-- **Membership timeline** -- every subscribe/unsubscribe, in order
-  (join -> leave -> re-join -> ...), fed from the greeter's admin-log stream.
-  So membership needs the same **admin** rights the greeter does; the DB fills
-  from the moment you enable it (the admin log only retains a few days).
-- **Identity** -- user id, and (via `get_entity`, when `enrich` is on)
-  username and first/last name.
-- **Messages** -- every comment the account can see in the linked discussion
-  group (and the source chat), with the text unless `store_message_text` is
-  `false`. Counts, first/last-seen, and the full text are kept per user.
-
-Read it with **`/users`** (totals, top commenters, recent join/leave, rendered
-into the source chat); `/status` gains a one-line users summary. The file is a
-normal SQLite DB, so you can also query it directly:
-`sqlite3 <DRIVE>/bots/aggregator/users.db 'SELECT * FROM membership_events'`.
-
-> **Limits, on purpose.** **Phone is essentially never available** -- Telegram
-> exposes `User.phone` only to mutual contacts, so that column is null for
-> virtually everyone. Only messages the account **sees** are logged (discussion
-> comments and the source chat) -- never DMs or plain channel posts. Every write
-> is idempotent, so re-polls and comment rescans never double-count. This is
-> **PII**: it lives only on your own state disk, `test` and `live` keep separate
-> databases, and nothing is collected while `enabled` is `false`.
-
-## Human-like story viewing (`stories.py`, opt-in)
-
-The account also **watches stories** the way a person idly would -- and only
-that: it **never reacts, likes or replies**, it just *views* them and keeps a
-log of whose stories it watched. **On by default** -- turn it off any time with
-**`/stories_off`**, or in the `stories` section of the constants JSON:
-
-```json
-"stories": { "enabled": true, "view_all": true, "include_archived": true }
-```
-
-**Catch-up vs. trickle (`view_all`).** With `view_all: true` (the default) each
-poll sweeps **every** currently-unseen story at once -- no per-session cap, no
-skip, no long cooldown -- so you do not see one story watched and then an hour
-of silence. A per-story dwell and a small gap between peers still apply (viewing
-dozens instantly would trip Telegram's flood limits), and quiet hours / the odd
-silent day still hold. Set `view_all: false` for the human handful-then-rest
-behaviour below.
-
-How it behaves like a person, not a scraper:
-
-- **Only what's new.** It reads Telegram's own active-stories feed -- which
-  already returns *contacts / people you follow*, never your whole address book
-  -- and views only the stories **past a persisted per-peer seen set**. A story
-  watched once is never re-opened, across restarts.
-- **Archived contacts** (people whose chats you moved to the Archive) live in a
-  separate *hidden* feed. By default they are left alone; set
-  `"include_archived": true` to view their stories too -- the hidden feed is
-  then polled and merged in, deduped by peer.
-- **A glance, not a sweep.** Each poll views a small **session** of peers
-  (`per_session_min..max`), **skips some** (`skip_peer_prob`), takes the
-  **freshest first**, and staggers the views over lognormal gaps -- then goes
-  quiet for a long, heavy-tailed `spacing_*` while before the next session.
-- **Quiet hours + the odd silent day**, read in the persona's timezone, so it
-  is asleep overnight and occasionally does not show up at all.
-- **A human dwell** (`dwell_min..max_sec`) between opening one story and the
-  next, so a peer's set is not blinked through instantly.
-
-It shares its human-timing kit (`humanize.py`) with the `cats` engine, so the
-"when does a person act" logic lives in one place. The re-poll cadence follows
-the profile like the cat rescan does: **test tight (5 min)**, **live hourly**
-(all live polls -- cats, greeter, stories -- are held to at most once an hour).
-Read the log with **`/stories`** (how many, and whose, most recent
-first); `/status` gains a one-line stories summary. State is a per-profile
-`stories_state.json`; `test` and `live` keep separate seen sets and logs.
-
-## Feature switches (`/features`, on/off at runtime)
-
-Every toggleable feature -- **`cats`**, **`stories`**, **`users`**,
-**`greeter`** -- can be turned on or off from chat, without editing the JSON or
-restarting the container:
-
-- **`/features`** lists each one and whether it is on.
-- **`/<name>_on`** / **`/<name>_off`** flips it, e.g. `/stories_off`,
-  `/cats_on`, `/users_off`.
-
-A switch **persists** to `feature_overrides.json` in the base state dir, so the
-choice **survives a restart** and overrides that feature's `enabled` default in
-the constants JSON. Flipping one restarts the active profile's loops so the
-change takes effect immediately; the override is shared by both profiles (like
-the single JSON `enabled`). To go back to the JSON default, flip it the other
-way (or delete the file).
+From **any** chat, rendered back into the source chat: `/help` (or `/start`),
+`/status`, `/preview`, `/emojis`, `/reactnow`, `/requeue`, `/greetnow`,
+`/stories`, `/users`, `/comod ...`, `/propiska_shkaf_month`, `/test` / `/live`
+(switch the whole bot's profile), `/features`, and per-service toggles
+`/<name>_on|off|test|live` (`name` in `aggregator, reactions, stories, users,
+greeter`). A toggle **persists** to `feature_overrides.json` and takes effect at
+once.

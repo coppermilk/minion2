@@ -15,7 +15,7 @@ Three steps:
    bots), and re-runs the install whenever `pyproject.toml` changes. So a
    `ModuleNotFoundError: No module named 'minions'` just means `run.cmd`
    has not run yet in this Python -- double-click it once and the library
-   is importable everywhere (including `python -m minions.aggregator.login`).
+   is importable everywhere (including `python -m minions.userbot.login`).
    The full stack is `.[ml,llm,links,tg]` -- torch/transformers for
    vision, google-genai, yt-dlp, telethon; the equivalent by hand from the
    repo root is `pip install -e .[ml,llm,links,tg]`.
@@ -70,7 +70,7 @@ to the NAS -- no container rebuild.
 3. Log in once -- it asks for phone, code, and 2FA if enabled:
 
    ```
-   python -m minions.aggregator.login
+   python -m minions.userbot.login
    ```
 
    It creates the session at **`%DRIVE%\bots\aggregator\telethon.session`**

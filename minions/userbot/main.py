@@ -1,60 +1,35 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Aggregate the same video across platforms, then post the collected links.
+"""The Telethon userbot host: wire the engines, dispatch events, run the loops.
 
-A userbot listens to a source chat where bots (or people) drop one JSON object
-per video per platform:
+One Telegram USER account behaving like a person across several engines:
 
-    {"platform": "youtube", "caption": "...", "link": "https://...",
-     "thumnailUrl": "https://...jpg", "duration": "0:0:16"}
+    * aggregator -- groups one Short's per-platform links and posts the
+      collected message (``glue/aggregator.py`` + the pure logic in
+      ``core/matching.py``);
+    * reactions -- reacts to/replies to commenters
+      (``engines/reactions.py``, ``glue/reactions.py``);
+    * stories, greeter, comod, users -- story viewing, welcome DMs, the
+      supporter cabinet, the audience DB.
 
-Messages whose captions match ~90% are treated as the same video. Once all the
-expected platforms have arrived (or a timeout elapses), one message collecting
-every platform's link is posted to the target chat.
+This module is only the HOST. ``__init__`` loads the constants and builds the
+active profile; ``_build_profile`` wires every engine to its own live/test
+mode (``glue/profiles.py``); ``handle`` routes each incoming event to the
+command dispatcher, the reaction engine, and the aggregator; and the status
+loop runs the /status log and the self-healing watchdog heartbeat. Each
+engine's own behaviour lives in its module, not here.
 
-Only Shorts are aggregated: a message whose known ``duration`` reaches 3
-minutes marks that video as full-length and drops it. Platforms are ranked by
-priority (tiktok, youtube, pinterest, instagram): the order sets the link order
-in the post and picks which platform's caption leads (the thumbnail is taken
-from YouTube only). After a video is posted, its source message ids are saved
-to disk; on restart, backfill skips any message whose id was already posted, so
-re-posting never happens. A second guard covers a video the source RE-DELIVERS
-under new ids (an upstream re-emit -- common once the chat's auto-delete has
-cleared the old messages): a title >= ``title_match`` similar to a recent post
-is not posted again. "Recent" is two overlapping windows and either one blocks:
-a TIME window (posted within ``repost_guard_sec`` seconds, 0 disables) and a
-COUNT window (among the last ``repost_guard_count`` posted videos, 0 disables).
-The count window is clock-independent, so once a title goes out the next
-``repost_guard_count`` distinct videos must post before that title is eligible
-again -- it holds even if the state file was just restored with stale
-timestamps, or the source floods faster than the time window expects.
+Configuration is two sources with no overlap. The ENV carries only deploy
+knobs -- credentials (TELEGRAM_API_ID/HASH, optional TELEGRAM_PASSWORD) and the
+chats (SOURCE_CHAT_ID, comma-separated TARGET_CHAT_ID). Everything BEHAVIOURAL
+lives in ``aggregator_constants.json`` (non-ASCII, so texts and emoji fit).
+Runtime state persists per profile (``aggregator_state.json`` and the
+per-engine ``*_state.json``) and is restored on start, so a restart loses
+nothing. The session file and state default to ``<DRIVE>/bots/aggregator/``
+(DRIVE is the library root: Google Drive on Windows, ``/data`` in the NAS
+container); override with TELEGRAM_SESSION_FILE / AGGREGATOR_STATE_DIR.
 
-Notes:
-    * The link is read from ``link`` (or ``url``); the thumbnail from
-      ``thumnailUrl`` (the API spelling), then ``thumbnailUrl``/``thumbnail``.
-    * ``thumnailUrl`` is optional; when present the post is that photo with
-      the links as its caption, otherwise a plain text message.
-    * Messages must be valid JSON; anything that does not parse is ignored.
-
-Every behaviour knob is editable in ``aggregator_constants.json`` (a JSON file,
-so it may hold non-ASCII text): platforms, title_match, timeout_sec, backfill,
-max_duration_sec, the incoming field names, and the post's texts and emoji.
-Runtime state is persisted to ``aggregator_state.json`` (human-readable,
-indented) and restored on start: ``posted`` (what went out -- title, links,
-time -- doubling as the re-post guard), ``pending`` (videos still collecting
-platforms) and ``rejected``. A restart within the timeout window loses nothing
-and never re-posts.
-
-The env holds only the deploy knobs: credentials (TELEGRAM_API_ID,
-TELEGRAM_API_HASH, optional TELEGRAM_PASSWORD), the monitoring chat
-SOURCE_CHAT_ID, and the target chat(s) TARGET_CHAT_ID (comma-separated -- list
-several chats to post to all of them). The chats live ONLY in the env, the
-behaviour ONLY in the JSON -- there is no overlap. The session file and the
-state default to <DRIVE>/bots/aggregator/ (DRIVE is the library root: your
-Google Drive on Windows, /data in the NAS container) -- so the session is
-created and read from the same place on every host. Override with
-TELEGRAM_SESSION_FILE / AGGREGATOR_STATE_DIR; with no DRIVE either, they fall
-back next to this package.
+Entry point: ``python -m minions.userbot.main``.
 """
 
 from __future__ import annotations

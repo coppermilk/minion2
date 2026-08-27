@@ -67,7 +67,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 # stack `.[ml,llm,links,tg]`: ml (torch/transformers/facenet, several
 # GB) for local vision, llm (google-genai) for Gemini, links (yt-dlp),
 # and tg (telethon) for the aggregator's session/login tool
-# (python -m minions.aggregator.login). Only `dev` is left out. The
+# (python -m minions.userbot.login). Only `dev` is left out. The
 # first install is heavy but it re-runs only when pyproject.toml
 # changes. A failed install is logged, never fatal: the bots still
 # start on whatever is already installed.
@@ -81,7 +81,7 @@ $prev = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { '' }
 
 # Probe the current env; a non-zero exit must not abort the script. Both
 # top-level packages must import: minion_core (the bots) AND minions (the
-# aggregator tools, e.g. python -m minions.aggregator.login) -- so a
+# aggregator tools, e.g. python -m minions.userbot.login) -- so a
 # partial env that only half-installed still triggers the reinstall, and
 # "No module named minions" is fixed here rather than at first run.
 $importOk = $true
