@@ -82,17 +82,6 @@ def _pool_markup(pool: tuple[reactions.ReactionEmoji, ...]) -> str:
     return ''.join(emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
 
 
-def _user_label(row: dict[str, object]) -> str:
-    """Return a readable handle for a users-DB row: @username/name/id."""
-    username = row.get('username')
-    if username:
-        return f'@{username}'
-    name = row.get('first_name')
-    if name:
-        return str(name)
-    return f'id {row.get("user_id", "?")}'
-
-
 class _StatusMixin(UserbotProtocol):
     """The /status renderer, mixed into Userbot (reads its state)."""
 
@@ -471,11 +460,11 @@ class _StatusMixin(UserbotProtocol):
 
     def _users_line(self) -> str:
         """Return a one-line users summary for /status ('off' if disabled)."""
-        if not self._users_enabled:
+        if not self.audience.deps.enabled:
             return self._header(
                 'users', 'Users DB', f'{self._dot(on=False)} off'
             )
-        s = self.users.summary()
+        s = self.audience.deps.store.summary()
         return self._header(
             'users',
             'Users DB',

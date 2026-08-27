@@ -131,7 +131,7 @@ class _CommandsMixin(UserbotProtocol):
         # /comod carries arguments ('/comod <nick> <amount>'), so it is matched
         # by its leading word rather than by the exact-text table below.
         if text.split()[:1] == [COMMAND_COMOD]:
-            await self.cabinet_command(text)
+            await self.cabinet.command(text)
             return True
         # /services, /features and every '/<service>_<action>' tap command.
         # Matched here (before the exact table) because the service name is
@@ -147,9 +147,9 @@ class _CommandsMixin(UserbotProtocol):
             COMMAND_REQUEUE: self.requeue_reactions,
             COMMAND_REACTNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
-            COMMAND_USERS: self.users_report,
+            COMMAND_USERS: self.audience.report,
             COMMAND_STORIES: self.stories_report,
-            COMMAND_PROPISKA: self.propiska_report,
+            COMMAND_PROPISKA: self.cabinet.propiska,
             COMMAND_TEST: self.enter_test,
             COMMAND_LIVE: self.enter_live,
         }

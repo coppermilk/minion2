@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 
+from minions.userbot.core import codec
 from minions.userbot.core.client import build_client
 from minions.userbot.core.config import CONSTANTS_FILE
 from minions.userbot.core.config import MODE_FILE
@@ -74,13 +75,15 @@ from minions.userbot.engines import users
 from minions.userbot.engines.premium_emoji import build_premium_message
 from minions.userbot.glue.aggregator import _AggregatorMixin
 from minions.userbot.glue.commands import _CommandsMixin
-from minions.userbot.glue.comod import _ComodMixin
+from minions.userbot.glue.comod import Cabinet
+from minions.userbot.glue.comod import CabinetDeps
 from minions.userbot.glue.profiles import _ProfilesMixin
 from minions.userbot.glue.reactions import _ReactionsMixin
 from minions.userbot.glue.status import STATUS_WARM_PEERS
 from minions.userbot.glue.status import _StatusMixin
 from minions.userbot.glue.stories import _StoriesMixin
-from minions.userbot.glue.users import _UsersMixin
+from minions.userbot.glue.users import AudienceDeps
+from minions.userbot.glue.users import AudienceLog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,10 +101,8 @@ class Userbot(
     _AggregatorMixin,
     _ProfilesMixin,
     _StatusMixin,
-    _ComodMixin,
     _StoriesMixin,
     _ReactionsMixin,
-    _UsersMixin,
     _CommandsMixin,
 ):
     """The Telethon userbot host: wires the engines and runs the loops.
@@ -141,7 +142,6 @@ class Userbot(
         self._react_rescan_task: asyncio.Task[None] | None = None
         self._react_next_rescan: float = 0.0  # ts of the next auto-rescan
         self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
-        self._enrich_tasks: set[asyncio.Task[None]] = set()
         self._story_tasks: set[asyncio.Task[None]] = set()
         self._stories_task: asyncio.Task[None] | None = None
         self._story_next_poll: float = 0.0  # ts of the next stories re-poll
@@ -206,14 +206,20 @@ class Userbot(
         )
         self._story_next_poll = 0.0
         self._pending_views = []
-        # Users DB: its own SQLite file per mode, so live and test audiences
-        # never mix. Config lives in the 'users' JSON section.
-        ucfg = self._raw.get('users')
-        ucfg = ucfg if isinstance(ucfg, dict) else {}
-        self._users_enabled = self._feature_enabled('users')
-        self._users_store_text = bool(ucfg.get('store_message_text', True))
-        self._users_enrich = bool(ucfg.get('enrich', True))
-        self.users = users.UserStore(self._service_dir('users') / 'users.db')
+        # Audience log: its own SQLite file per mode, so live and test
+        # audiences never mix. Config lives in the 'users' JSON section.
+        ucfg = codec.section(self._raw, 'users')
+        self.audience = AudienceLog(
+            AudienceDeps(
+                client=self.client,
+                source=self.config.source,
+                store=users.UserStore(self._service_dir('users') / 'users.db'),
+                watched=lambda: {c for c, _ in self.reactions.posts},
+                enabled=self._feature_enabled('users'),
+                store_text=bool(ucfg.get('store_message_text', True)),
+                enrich=bool(ucfg.get('enrich', True)),
+            )
+        )
         gchannel = self._profile_channel(self._modes['greeter'])
         greeter_params = replace(
             greeter.load_greeter_params(
@@ -226,12 +232,19 @@ class Userbot(
             greeter_params,
             greeter.GreeterIO(
                 self._service_dir('greeter') / 'greeter_state.json',
-                self._on_membership_event,
+                self.audience.note_membership,
             ),
         )
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
-        self.comod = comod.CabinetRoster(pdir / 'comod.json')
-        self._comod = comod.load_comod_params(self._raw)
+        self.cabinet = Cabinet(
+            CabinetDeps(
+                client=self.client,
+                chat=self.config.source,
+                roster=comod.CabinetRoster(pdir / 'comod.json'),
+                params=comod.load_comod_params(self._raw),
+                work_dir=pdir,
+            )
+        )
 
     async def handle(self, event: events.NewMessage.Event) -> None:
         """Dispatch one event: a /command, a comment reaction, or aggregation.
@@ -246,7 +259,7 @@ class Userbot(
             return
         if await self._unknown_command(event, text):
             return
-        self._record_user_message(event)
+        self.audience.record_message(event)
         if self.reactions.params.enabled:
             self._maybe_react(event)
         if event.chat_id == self.config.source:

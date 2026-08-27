@@ -27,11 +27,11 @@ if TYPE_CHECKING:
     from minions.userbot.core.models import Consts
     from minions.userbot.core.models import Group
     from minions.userbot.core.models import Posted
-    from minions.userbot.engines import comod
     from minions.userbot.engines import greeter
     from minions.userbot.engines import reactions
     from minions.userbot.engines import stories
-    from minions.userbot.engines import users
+    from minions.userbot.glue.comod import Cabinet
+    from minions.userbot.glue.users import AudienceLog
 
     class UserbotProtocol:
         """What every Userbot mixin may read off ``self`` (type-only).
@@ -49,19 +49,14 @@ if TYPE_CHECKING:
         reactions: reactions.ReactionBrain
         stories: stories.StoryBrain
         greeter: greeter.Greeter
-        users: users.UserStore
-        comod: comod.CabinetRoster
-        _comod: comod.ComodParams
+        audience: AudienceLog
+        cabinet: Cabinet
 
         # --- live state ---
         mode: str
         groups: list[Group]
         posted: list[Posted]
         rejected: set[str]
-        _users_enabled: bool
-        _users_enrich: bool
-        _users_store_text: bool
-        _enrich_tasks: set[asyncio.Task[None]]
         _react_next_rescan: float
         _story_next_poll: float
         _rescan_sec: float
@@ -143,17 +138,9 @@ if TYPE_CHECKING:
         async def answer_all_now(self) -> None:
             """Answer every pending commenter now (/reactnow)."""
 
-        async def users_report(self) -> None:
-            """Post the users-DB summary (/users)."""
-
         async def stories_report(self) -> None:
             """Post the story-viewer log (/stories)."""
 
-        async def cabinet_command(self, text: str) -> None:
-            """Run a /comod cabinet command."""
-
-        async def propiska_report(self) -> None:
-            """Post the month's cabinet registry (/propiska_shkaf_month)."""
 
 else:
 

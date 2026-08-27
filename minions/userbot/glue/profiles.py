@@ -127,7 +127,7 @@ class _ProfilesMixin(UserbotProtocol):
         """Cancel the active profile's timers and loops (before a switch)."""
         self._cancel_react_tasks()
         self._cancel_story_tasks()
-        tasks.cancel_all(self._enrich_tasks)
+        self.audience.close()
         for group in self.groups:
             cancel(getattr(group, 'task', None))
         cancel(self._greeter_task)
@@ -136,7 +136,6 @@ class _ProfilesMixin(UserbotProtocol):
         self._greeter_task = None
         self._react_rescan_task = None
         self._stories_task = None
-        self.users.close()  # release the SQLite handle before a rebind
 
     def _cancel_story_tasks(self) -> None:
         """Cancel every in-flight story-view timer (before a mode switch)."""

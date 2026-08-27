@@ -31,6 +31,7 @@ from minions.userbot.core.models import Posted  # noqa: E402
 from minions.userbot.engines import greeter  # noqa: E402
 from minions.userbot.engines import reactions  # noqa: E402
 from minions.userbot.engines import stories  # noqa: E402
+from minions.userbot.glue import users as users_glue  # noqa: E402
 
 NOW = 1_760_000_000.0  # a fixed clock, so every eta in the text is stable
 SOURCE = -1001
@@ -169,8 +170,14 @@ def _bot(tmp_path: Path) -> main.Userbot:
     grt.deferred = 0
     bot.greeter = grt
 
-    bot._users_enabled = False
-    bot.users = SimpleNamespace(summary=dict)
+    bot.audience = users_glue.AudienceLog(
+        users_glue.AudienceDeps(
+            client=SimpleNamespace(),
+            source=SOURCE,
+            store=SimpleNamespace(summary=dict),
+            watched=set,
+        )
+    )
     return bot
 
 

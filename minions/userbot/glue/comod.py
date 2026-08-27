@@ -1,11 +1,10 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The cabinet ("comod") commands, mixed into Userbot.
+"""The supporter cabinet ("comod"): a named shelf per donor for a month.
 
-Extracted from ``main``: the /comod and /propiska handlers plus their image
-render + caption helpers. ``_ComodMixin`` is mixed into ``Userbot`` with
-method bodies unchanged, so they keep reading ``self`` state; it inherits
-``UserbotProtocol`` (base.py) so the type checker knows that state.
+A collaborator, not a mixin. ``CabinetDeps`` names everything it may touch --
+the client, the chat it posts to, the roster file and its render settings --
+so the cabinet cannot reach into aggregation or reaction state.
 """
 
 from __future__ import annotations
@@ -14,23 +13,41 @@ import html
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from minion_core.adapters import files
-from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.config import PACKAGE_DIR
 from minions.userbot.engines import comod
+
+if TYPE_CHECKING:
+    from telethon import TelegramClient
 
 log = logging.getLogger('userbot')
 
 
-class _ComodMixin(UserbotProtocol):
-    """The cabinet commands, mixed into Userbot (reads its state)."""
+@dataclass(frozen=True)
+class CabinetDeps:
+    """Everything the cabinet may reach; nothing else is in scope."""
 
-    async def cabinet_command(self, text: str) -> None:
+    client: TelegramClient
+    chat: int  # where the cabinet posts (the source control chat)
+    roster: comod.CabinetRoster
+    params: comod.ComodParams
+    work_dir: Path  # where the rendered cabinet photo is written
+
+
+@dataclass
+class Cabinet:
+    """The /comod and /propiska commands over one roster."""
+
+    deps: CabinetDeps
+
+    async def command(self, text: str) -> None:
         """Move a nick into the cabinet, evict one, or re-post the cabinet.
 
         ``/comod <nick> <amount>`` seats NICK on a shelf (refreshing the 30-day
@@ -46,15 +63,17 @@ class _ComodMixin(UserbotProtocol):
         if args and args[0].lower() == 'kick':
             target = args[1].lstrip('@') if len(args) > 1 else ''
             if not target:
-                hint = str(self._comod.templates.get('kick_hint', ''))
-                await self.client.send_message(self._comod_chat(), hint)
+                hint = str(self.deps.params.templates.get('kick_hint', ''))
+                await self.deps.client.send_message(
+                    self.deps.params_chat(), hint
+                )
                 return
-            self.comod.remove(target)
+            self.deps.roster.remove(target)
             log.info('comod: evicted %s', target)
         elif args:
             moved_in = args[0]
             amount = args[1] if len(args) > 1 else ''
-            self.comod.add(moved_in, amount, now)
+            self.deps.roster.add(moved_in, amount, now)
             log.info('comod: moved in %s (%s)', moved_in, amount or '-')
         await self._post_cabinet(now)
 
@@ -65,15 +84,15 @@ class _ComodMixin(UserbotProtocol):
         there are more active residents than shelves, only the TOP donors by
         amount are drawn on the picture.
         """
-        active = self.comod.active(now)
-        residents = comod.by_amount(active)[: self._comod.max_shelves]
+        active = self.deps.roster.active(now)
+        residents = comod.by_amount(active)[: self.deps.params.max_shelves]
         caption = self._cabinet_caption(residents)
-        chat = self._comod_chat()
+        chat = self.deps.params_chat()
         image = self._render_cabinet(residents)
         n = len(residents)
         if image is not None:
             try:
-                await self.client.send_file(
+                await self.deps.client.send_file(
                     chat, str(image), caption=caption, parse_mode='html'
                 )
             except Exception:  # noqa: BLE001 -- bad render falls back to text
@@ -81,14 +100,10 @@ class _ComodMixin(UserbotProtocol):
             else:
                 log.info('comod: posted cabinet (%d in) to %s', n, chat)
                 return
-        await self.client.send_message(
+        await self.deps.client.send_message(
             chat, caption, parse_mode='html', link_preview=False
         )
         log.info('comod: posted cabinet text (%d in) to %s', n, chat)
-
-    def _comod_chat(self) -> object:
-        """Where the cabinet posts: the source chat, always (for now)."""
-        return self.config.source
 
     def _render_cabinet(self, residents: list[tuple[str, str]]) -> Path | None:
         """Return the rendered cabinet image, or None if it cannot be made.
@@ -96,27 +111,29 @@ class _ComodMixin(UserbotProtocol):
         None whenever no template photo is configured (or is missing) or the
         draw fails -- the caller then posts a plain-text roster instead.
         """
-        template = self._comod_asset(self._comod.template_path)
+        template = self.deps.params_asset(self.deps.params.template_path)
         if template is None or not template.is_file():
             return None
-        out = self.state_path.parent / 'comod_render.jpg'
+        out = self.deps.work_dir / 'comod_render.jpg'
         try:
             return files.render_cabinet(
                 template,
                 out,
                 files.CabinetSpec(
                     # Biggest amount on the biggest shelf (area-ranked).
-                    comod.assign_labels(residents, self._comod.slots),
-                    list(self._comod.slots),
-                    font_path=self._comod_font(self._comod.font_path),
-                    cyrillic_font_path=self._comod_font(
-                        self._comod.font_cyrillic_path
+                    comod.assign_labels(residents, self.deps.params.slots),
+                    list(self.deps.params.slots),
+                    font_path=self.deps.params_font(
+                        self.deps.params.font_path
                     ),
-                    ref_size=self._comod.ref_size,
-                    base_size=self._comod.base_size,
-                    amount_scale=self._comod.amount_scale,
-                    text_color=self._comod.text_color,
-                    shadow_color=self._comod.shadow_color,
+                    cyrillic_font_path=self.deps.params_font(
+                        self.deps.params.font_cyrillic_path
+                    ),
+                    ref_size=self.deps.params.ref_size,
+                    base_size=self.deps.params.base_size,
+                    amount_scale=self.deps.params.amount_scale,
+                    text_color=self.deps.params.text_color,
+                    shadow_color=self.deps.params.shadow_color,
                 ),
             )
         except Exception:  # noqa: BLE001 -- any Pillow failure -> text roster
@@ -140,7 +157,7 @@ class _ComodMixin(UserbotProtocol):
 
         Empty lets ``render_cabinet`` fall back to its system-font search.
         """
-        path = self._comod_asset(rel)
+        path = self.deps.params_asset(rel)
         return str(path) if path is not None and path.is_file() else ''
 
     def _cabinet_caption(self, residents: list[tuple[str, str]]) -> str:
@@ -150,29 +167,29 @@ class _ComodMixin(UserbotProtocol):
         lives on which shelf is shown on the picture, and the month's roster is
         the separate /propiska command.
         """
-        tpl = self._comod.templates
+        tpl = self.deps.params.templates
         if not residents:
             return str(tpl.get('empty', ''))
         return comod.move_in_text(
             tpl,
             '',
             {
-                'link': self._comod.donate_link,
-                'amazon': self._comod.amazon_link,
+                'link': self.deps.params.donate_link,
+                'amazon': self.deps.params.amazon_link,
             },
         )
 
-    async def propiska_report(self) -> None:
+    async def propiska(self) -> None:
         """Post the month's cabinet registry as text (/propiska_shkaf_month).
 
         One line per resident -- a random premium heart, the nick, and the
         move-in date -- sent as HTML so the hearts render as premium emoji.
         """
-        tpl = self._comod.templates
-        entries = self.comod.entries(time.time())
-        chat = self._comod_chat()
+        tpl = self.deps.params.templates
+        entries = self.deps.roster.entries(time.time())
+        chat = self.deps.params_chat()
         if not entries:
-            await self.client.send_message(
+            await self.deps.client.send_message(
                 chat, str(tpl.get('propiska_empty', '')), parse_mode='html'
             )
             return
@@ -188,14 +205,14 @@ class _ComodMixin(UserbotProtocol):
         head = str(tpl.get('propiska_head', ''))
         body = '\n'.join(rows)
         text = f'{head}\n{body}' if head else body
-        await self.client.send_message(
+        await self.deps.client.send_message(
             chat, text, parse_mode='html', link_preview=False
         )
         log.info('comod: posted propiska (%d) to %s', len(entries), chat)
 
     def _heart_html(self) -> str:
         """Return a random heart: a premium <tg-emoji>, or its plain glyph."""
-        hearts = self._comod.hearts
+        hearts = self.deps.params.hearts
         if not hearts:
             return ''
         emoji_id, fallback = random.choice(hearts)  # noqa: S311 -- decoration
@@ -205,5 +222,5 @@ class _ComodMixin(UserbotProtocol):
 
     def _move_in_date(self, at: float) -> str:
         """Format a move-in epoch as a date in the persona's timezone."""
-        tz = timezone(timedelta(hours=self._comod.tz_offset))
+        tz = timezone(timedelta(hours=self.deps.params.tz_offset))
         return datetime.fromtimestamp(at, tz=tz).strftime('%d.%m.%Y')
