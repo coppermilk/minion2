@@ -28,7 +28,6 @@ from minions.userbot.core.matching import thread_top
 from minions.userbot.core.models import Comment
 from minions.userbot.engines import reactions
 from minions.userbot.engines.premium_emoji import RichText
-from minions.userbot.glue.status import STATUS_PENDING_CATS
 from minions.userbot.glue.status import _trim
 
 if TYPE_CHECKING:
@@ -310,7 +309,7 @@ class _ReactionsMixin(UserbotProtocol):
             self.backfill_react_comments()
         )  # queue their new comments (armed)
         count = len(self.reactions.state.pending)
-        await self._send_status(await self._plan_text(f'Requeued {count}'))
+        await self._send_status(self._plan_text(f'Requeued {count}'))
         log.info('requeued %d pending reactions', count)
 
     async def answer_all_now(self) -> None:
@@ -326,31 +325,21 @@ class _ReactionsMixin(UserbotProtocol):
         due = self.reactions.due_now()
         for reaction in due:
             self._arm_reaction(reaction)
-        await self._send_status(await self._plan_text(f'Answering {len(due)}'))
+        await self._send_status(self._plan_text(f'Answering {len(due)}'))
         log.info('answering %d pending reactions now', len(due))
 
-    async def _plan_text(self, head: str) -> str:
+    def _plan_text(self, head: str) -> str:
         """`<head> pending reaction(s):` then a which-where line each.
 
-        This is what makes /requeue and /reactnow legible: every queued
-        reaction
-        is listed with the exact reaction, the comment, its post, and the eta
-        -- so
-        the operator sees the plan instead of a count.
+        This is what makes /requeue and /reactnow legible: the operator sees
+        the exact reaction, comment, post and eta of every queued item, not a
+        count. The same rows /status shows -- ``queued_react_rows`` builds
+        both.
         """
-        pending = self.reactions.state.pending
-        if not pending:
+        rows = self.queued_react_rows()
+        if not rows:
             return f'{head} pending reaction(s). Nothing queued.'
-        now = time.time()
-        lines = [f'{head} pending reaction(s):']
-        lines.extend(
-            self._pending_react_line(entry, now)
-            for entry in pending[:STATUS_PENDING_CATS]
-        )
-        extra = len(pending) - STATUS_PENDING_CATS
-        if extra > 0:
-            lines.append(f'    ... (+{extra} more)')
-        return '\n'.join(lines)
+        return '\n'.join([f'{head} pending reaction(s):', *rows])
 
     def _cancel_react_tasks(self) -> None:
         """Cancel every in-flight fire-later reaction task."""
