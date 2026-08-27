@@ -2,7 +2,8 @@
 # Proprietary -- no use without the author's prior approval.
 """The shared state contract for the Userbot mixins.
 
-Each glue mixin (status, cats, stories, comod, users, commands) reads state
+Each glue mixin (status, reactions, stories, comod, users, commands) reads
+state
 and calls peer methods off ``self`` that ``Userbot`` provides. Rather than
 each mixin re-declaring those names in its own ``TYPE_CHECKING`` block (four
 hand-kept copies that can silently drift), they all inherit
@@ -25,9 +26,9 @@ if TYPE_CHECKING:
     from minions.userbot.core.models import Consts
     from minions.userbot.core.models import Group
     from minions.userbot.core.models import Posted
-    from minions.userbot.engines import cats
     from minions.userbot.engines import comod
     from minions.userbot.engines import greeter
+    from minions.userbot.engines import reactions
     from minions.userbot.engines import stories
     from minions.userbot.engines import users
 
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
         config: Config
         consts: Consts
         state_path: Path
-        cats: cats.CatBrain
+        reactions: reactions.ReactionBrain
         stories: stories.StoryBrain
         greeter: greeter.Greeter
         users: users.UserStore
@@ -60,10 +61,10 @@ if TYPE_CHECKING:
         _users_enrich: bool
         _users_store_text: bool
         _enrich_tasks: set[asyncio.Task[None]]
-        _cat_next_rescan: float
+        _react_next_rescan: float
         _story_next_poll: float
         _rescan_sec: float
-        _cat_tasks: set[asyncio.Task[None]]
+        _react_tasks: set[asyncio.Task[None]]
         _story_tasks: set[asyncio.Task[None]]
         _thread_rescan_at: dict[int, float]
         _pending_views: list[stories.StoryView]
@@ -79,7 +80,7 @@ if TYPE_CHECKING:
 
         async def _chat_label(self, chat_id: int) -> str: ...
 
-        def _pending_cat_line(
+        def _pending_react_line(
             self, entry: dict[str, object], now: float
         ) -> str: ...
 
@@ -103,9 +104,7 @@ if TYPE_CHECKING:
         async def set_service_mode(self, name: str, mode: str) -> None:
             """Set one service's mode (off/test/live) and rebuild."""
 
-        async def start_profile(
-            self, *, source_backfill: bool = True
-        ) -> None:
+        async def start_profile(self, *, source_backfill: bool = True) -> None:
             """Hydrate the active profile and start its loops."""
 
         async def stop_profile(self) -> None:
@@ -118,11 +117,11 @@ if TYPE_CHECKING:
             """Post the /status report."""
 
         # --- command handlers implemented on sibling mixins ---
-        async def requeue_cats(self) -> None:
-            """Rebuild the pending-cat queue (/requeue)."""
+        async def requeue_reactions(self) -> None:
+            """Rebuild the pending-reaction queue (/requeue)."""
 
         async def answer_all_now(self) -> None:
-            """Answer every pending commenter now (/catnow)."""
+            """Answer every pending commenter now (/reactnow)."""
 
         async def users_report(self) -> None:
             """Post the users-DB summary (/users)."""

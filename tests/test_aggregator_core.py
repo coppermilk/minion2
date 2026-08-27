@@ -11,6 +11,7 @@ attributes the method under test touches -- no live client.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -38,11 +39,17 @@ CONSTS = config._load_constants(config.CONSTANTS_PATH)
 def _config(**over: object) -> Config:
     """Return a valid Config with the real defaults, overridable per test."""
     base: dict[str, object] = {
-        'source': -1, 'targets': (-2,), 'test_target': 0,
+        'source': -1,
+        'targets': (-2,),
+        'test_target': 0,
         'platforms': ('tiktok', 'youtube', 'pinterest', 'instagram'),
-        'threshold': 0.9, 'timeout': 10800.0, 'backfill': 100,
-        'max_duration': 180, 'repost_guard': 604800.0,
-        'repost_guard_count': 5, 'discussion_gap': 0.0,
+        'threshold': 0.9,
+        'timeout': 10800.0,
+        'backfill': 100,
+        'max_duration': 180,
+        'repost_guard': 604800.0,
+        'repost_guard_count': 5,
+        'discussion_gap': 0.0,
     }
     base.update(over)
     return Config(**base)  # type: ignore[arg-type]
@@ -135,10 +142,13 @@ def test_similar_does_not_merge_a_short_generic_prefix() -> None:
 
 def test_similar_keeps_ratio_for_unrelated_titles() -> None:
     """Unrelated captions stay well below the match threshold."""
-    assert matching._similar(
-        matching._norm('you can choose not to believe in yourself'),
-        matching._norm('a completely different video about cats'),
-    ) < 0.9  # noqa: PLR2004
+    assert (
+        matching._similar(
+            matching._norm('you can choose not to believe in yourself'),
+            matching._norm('a completely different video about cats'),
+        )
+        < 0.9  # noqa: PLR2004
+    )
 
 
 # ------------------------------------------------------------------ render
@@ -242,9 +252,9 @@ def test_short_or_reject_drops_long_video() -> None:
 def test_default_mode_follows_json_enabled() -> None:
     """Userbot defaults live; a feature is live only if its JSON is on."""
     agg = object.__new__(main.Userbot)
-    agg._raw = {'cats': {'enabled': True}, 'stories': {'enabled': False}}
+    agg._raw = {'reactions': {'enabled': True}, 'stories': {'enabled': False}}
     assert agg._default_mode('aggregator') == 'live'
-    assert agg._default_mode('cats') == 'live'
+    assert agg._default_mode('reactions') == 'live'
     assert agg._default_mode('stories') == 'off'
 
 
@@ -252,13 +262,15 @@ def test_migrate_service_modes_from_legacy_global(tmp_path: Path) -> None:
     """A pre-per-service install seeds from the old global mode + overrides."""
     agg = object.__new__(main.Userbot)
     agg._raw = {
-        'cats': {'enabled': True}, 'stories': {'enabled': True},
-        'users': {'enabled': False}, 'greeter': {'enabled': False},
+        'reactions': {'enabled': True},
+        'stories': {'enabled': True},
+        'users': {'enabled': False},
+        'greeter': {'enabled': False},
     }
     agg._overrides_path = tmp_path / 'absent.json'  # no legacy overrides
     modes = agg._migrate_service_modes({'mode': 'test'})
     assert modes['aggregator'] == 'test'  # poster always followed the mode
-    assert modes['cats'] == 'test'  # on -> the legacy mode
+    assert modes['reactions'] == 'test'  # on -> the legacy mode
     assert modes['users'] == 'off'  # disabled -> off
 
 
@@ -267,24 +279,81 @@ def test_load_service_modes_reads_and_cleans_the_block(
 ) -> None:
     """The stored services block is read; a junk value falls to the default."""
     agg = object.__new__(main.Userbot)
-    agg._raw = {'cats': {'enabled': True}}
+    agg._raw = {'reactions': {'enabled': True}}
     agg._mode_path = tmp_path / 'mode.json'
     agg._overrides_path = tmp_path / 'ov.json'
-    agg._mode_path.write_text(json.dumps({'services': {
-        'aggregator': 'test', 'cats': 'off', 'stories': 'live',
-        'users': 'bogus', 'greeter': 'off',
-    }}))
+    agg._mode_path.write_text(
+        json.dumps(
+            {
+                'services': {
+                    'aggregator': 'test',
+                    'reactions': 'off',
+                    'stories': 'live',
+                    'users': 'bogus',
+                    'greeter': 'off',
+                }
+            }
+        )
+    )
     modes = agg._load_service_modes()
     assert modes['aggregator'] == 'test'
-    assert modes['cats'] == 'off'
+    assert modes['reactions'] == 'off'
     assert modes['users'] == 'off'  # 'bogus' -> users default (JSON off)
+
+
+def test_load_service_modes_migrates_the_legacy_cats_key(
+    tmp_path: Path,
+) -> None:
+    """A pre-rename 'cats' service key is carried over to 'reactions'."""
+    agg = object.__new__(main.Userbot)
+    agg._raw = {'reactions': {'enabled': True}}
+    agg._mode_path = tmp_path / 'mode.json'
+    agg._overrides_path = tmp_path / 'ov.json'
+    agg._mode_path.write_text(
+        json.dumps({'services': {'aggregator': 'live', 'cats': 'test'}})
+    )
+    modes = agg._load_service_modes()
+    assert modes['reactions'] == 'test'  # the old 'cats' mode is preserved
+
+
+def test_migrate_reaction_state_renames_the_legacy_file(
+    tmp_path: Path,
+) -> None:
+    """cats_state.json moves to reactions_state.json once, never clobbered."""
+    (tmp_path / 'cats_state.json').write_text('{"mood": 1}')
+    main.Userbot._migrate_reaction_state(tmp_path)
+    assert not (tmp_path / 'cats_state.json').exists()
+    assert (tmp_path / 'reactions_state.json').read_text() == '{"mood": 1}'
+    # when the new file already exists, a stale old one is left untouched
+    (tmp_path / 'cats_state.json').write_text('{"mood": 9}')
+    main.Userbot._migrate_reaction_state(tmp_path)
+    assert (tmp_path / 'reactions_state.json').read_text() == '{"mood": 1}'
+
+
+def _agg_with_label(label: str) -> object:
+    """Build a bare Userbot whose reaction engine carries a persona label."""
+    agg = object.__new__(main.Userbot)
+    agg.reactions = SimpleNamespace(params=SimpleNamespace(label=label))
+    return agg
+
+
+def test_reaction_alias_maps_persona_label_to_canonical() -> None:
+    """A label answers /<label>now and /<label>_<action>; none = neutral."""
+    agg = _agg_with_label('cat')
+    assert main.Userbot._reaction_alias(agg, '/catnow') == '/reactnow'
+    assert main.Userbot._reaction_alias(agg, '/cat_on') == '/reactions_on'
+    assert main.Userbot._reaction_alias(agg, '/cat_test') == '/reactions_test'
+    assert main.Userbot._reaction_alias(agg, '/status') == '/status'
+    # no label configured -> friendly names are not recognised, text is as-is
+    plain = _agg_with_label('')
+    assert main.Userbot._reaction_alias(plain, '/catnow') == '/catnow'
 
 
 def test_feature_enabled_is_mode_not_off() -> None:
     """A service counts as enabled unless its mode is 'off'."""
     agg = object.__new__(main.Userbot)
-    agg._modes = {'cats': 'test', 'stories': 'off', 'greeter': 'live'}
-    assert agg._feature_enabled('cats') is True
+    agg._modes = {'reactions': 'test', 'stories': 'off', 'greeter': 'live'}
+    assert agg._feature_enabled('reactions') is True
     assert agg._feature_enabled('greeter') is True
     assert agg._feature_enabled('stories') is False
 
@@ -293,6 +362,6 @@ def test_service_dir_follows_each_services_mode(tmp_path: Path) -> None:
     """A test service lands in base/test; a live one in base."""
     agg = object.__new__(main.Userbot)
     agg._state_base = tmp_path
-    agg._modes = {'aggregator': 'live', 'cats': 'test'}
+    agg._modes = {'aggregator': 'live', 'reactions': 'test'}
     assert agg._service_dir('aggregator') == tmp_path
-    assert agg._service_dir('cats') == tmp_path / 'test'
+    assert agg._service_dir('reactions') == tmp_path / 'test'

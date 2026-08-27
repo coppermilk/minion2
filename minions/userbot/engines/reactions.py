@@ -1,9 +1,9 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Human-like cat-emoji reactions to people who comment on the last posts.
+"""Human-like reaction-emoji reactions to people who comment on the last posts.
 
 The aggregator posts announces; this module lets its user account react to a
-commenter's comment with a premium cat emoji ONCE, timed and chosen so the
+commenter's comment with a premium reaction emoji ONCE, timed and chosen so the
 behaviour reads as a distracted human, not a scheduler. It is deliberately
 Telethon-free (pure Python + stdlib) so every decision is unit-testable;
 ``main.py`` owns the client and calls in here for the *when* and the *what*.
@@ -18,23 +18,28 @@ The nine principles, mapped to code:
 2. Answering happens in SESSIONS: a human opens the comments now and then,
    clears the pile in a quick burst (short intra-session gaps), then closes the
    app for a long, heavy-tailed while. ``spacing_*`` is the gap BETWEEN
-   sessions; ``session_gap_*`` is the gap between cats INSIDE one -- so bursts
+   sessions; ``session_gap_*`` is the gap between reactions INSIDE one -- so
+   bursts
    then silence, and co-occurring comments land in the same burst.
 3. Selection has memory: weight = base preference * recency penalty (an
-   exponential recovery from the last time that cat was used), so favourites
-   lead and just-used cats fade.
+   exponential recovery from the last time that reaction was used), so
+   favourites
+   lead and just-used reactions fade.
 4. A latent "mood" does an AR(1) random walk day to day and tilts selection
-   toward sleepy vs. lively cats -- day-to-day coherence, not memorylessness.
-5. Context tags (daypart, season, holiday) re-weight the pool: a sleepy cat in
+   toward sleepy vs. lively reactions -- day-to-day coherence, not
+   memorylessness.
+5. Context tags (daypart, season, holiday) re-weight the pool: a sleepy
+reaction in
    the morning, a festive one in December.
 6. Jitter defeats the ":00 scheduler fingerprint": the fire time gets a random
    sub-minutes offset.
 7. Built-in imperfection: a comment is sometimes ignored, a day is sometimes
-   silent, and once in a while a second cat follows the first.
+   silent, and once in a while a second reaction follows the first.
 8. Feedback reactivity: a commenter who is themselves replying to us gets a
    faster reaction.
-9. State is persisted (mood, last-send cursor, per-cat recency, who was already
-   catted), because principles 2-4 need memory across restarts.
+9. State is persisted (mood, last-send cursor, per-reaction recency, who was
+already
+   reacted), because principles 2-4 need memory across restarts.
 
 All texts/ids live in the constants JSON, so this source stays ASCII.
 """
@@ -73,7 +78,7 @@ _ALIVE_STEP = 1.0
 _SESSION_REACH_SEC = 7200.0
 # A persisted emoji row is an [id, fallback] pair.
 _EMOJI_ROW_LEN = 2
-# A catted dedup key is 'chat:root:person[:msg]', so the person is field 3.
+# A reacted dedup key is 'chat:root:person[:msg]', so the person is field 3.
 _CATTED_PERSON_FIELDS = 3
 # datetime.weekday(): Monday is 0, so Saturday (5) and up is the weekend.
 _SATURDAY = 5
@@ -84,8 +89,8 @@ _DECEMBER = 12
 
 
 @dataclass(frozen=True)
-class CatEmoji:
-    """One premium cat emoji in the pool, with its selection knobs."""
+class ReactionEmoji:
+    """One premium reaction emoji in the pool, with its selection knobs."""
 
     emoji_id: str
     fallback: str
@@ -94,19 +99,22 @@ class CatEmoji:
 
 
 @dataclass(frozen=True)
-class Cat:
-    """A scheduled cat reaction: react to ``reply_to`` in ``chat``.
+class Reaction:
+    """A scheduled reaction: react to ``reply_to`` in ``chat``.
 
-    ``reply_to`` is the commenter's message id -- the cat emoji reaction is
+    ``reply_to`` is the commenter's message id -- the reaction emoji reaction
+    is
     placed directly on it (not a reply in the thread). ``root`` is the post
     (thread root) the comment sits under; it is kept for the
     once-per-(post, person) dedup key and the /status readout, not for
     placement (a reaction needs no threading). For a plain group it equals
     ``reply_to``.
 
-    ``emojis`` is the exact cat(s) chosen for THIS reaction, decided when the
+    ``emojis`` is the exact reaction(s) chosen for THIS reaction, decided when
+    the
     comment is scheduled (not at send time), so the queue is deterministic and
-    inspectable: /status and /requeue can show which cat lands where. Each item
+    inspectable: /status and /requeue can show which reaction lands where. Each
+    item
     is an ``(emoji_id, fallback)`` pair; usually one, occasionally two (the
     rare double).
     """
@@ -116,7 +124,9 @@ class Cat:
     root: int  # the thread root (post) for discussion threading
     when: float
     text: str = ''  # a snippet of the comment being answered (for status)
-    emojis: tuple[tuple[str, str], ...] = ()  # the chosen (id, fallback) cats
+    emojis: tuple[
+        tuple[str, str], ...
+    ] = ()  # the chosen (id, fallback) reactions
     kind: str = 'react'  # 'react' = a like reaction; 'reply' = thread sticker
 
 
@@ -130,10 +140,10 @@ def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _cat_from_entry(entry: dict[str, object], when: float) -> Cat:
-    """Rebuild a Cat from a persisted dict (root defaults to reply_to)."""
+def _reaction_from_entry(entry: dict[str, object], when: float) -> Reaction:
+    """Rebuild a Reaction from a persisted dict (root defaults to reply_to)."""
     reply_to = int(entry['reply_to'])
-    return Cat(
+    return Reaction(
         chat=int(entry['chat']),
         reply_to=reply_to,
         root=int(entry.get('root', reply_to)),
@@ -145,8 +155,8 @@ def _cat_from_entry(entry: dict[str, object], when: float) -> Cat:
 
 
 @dataclass(frozen=True)
-class CatParams:
-    """Every tunable, loaded from the constants JSON 'cats' section."""
+class ReactionParams:
+    """Every tunable, loaded from the constants JSON 'reactions' section."""
 
     enabled: bool
     # Like ABSOLUTELY every comment: bypass the human-like gates (skip_prob,
@@ -156,10 +166,12 @@ class CatParams:
     like_all: bool
     # When the target is a CHANNEL, its comments live in the linked discussion
     # group. True: resolve each post's discussion thread and react only there
-    # (so cats land in the channel post's comments). False: match replies to
+    # (so reactions land in the channel post's comments). False: match replies
+    # to
     # the post id directly (the target is a plain group).
     comments_in_discussion: bool
-    # Whether to also drop a cat reaction on our OWN fresh posts (immediately,
+    # Whether to also drop a reaction on our OWN fresh posts
+    # (immediately,
     # no human-like wait). Optional and off by default: the engine's job is
     # reacting to COMMENTERS; liking our own posts is a separate extra.
     react_to_posts: bool
@@ -176,7 +188,8 @@ class CatParams:
     # How the learned uptime is weighed: uptime_half_life_sec fades old
     # observations (so a changed schedule is followed), uptime_learn_obs is how
     # many heartbeats of history earn full trust in the learned curve over the
-    # declared window. skip_if_manually_replied drops the cat when the operator
+    # declared window. skip_if_manually_replied drops the reaction when the
+    # operator
     # has already replied to that comment by hand.
     uptime_half_life_sec: float
     uptime_learn_obs: float
@@ -197,20 +210,24 @@ class CatParams:
     mood_phi: float
     mood_sigma: float
     feedback_speedup: float
-    # Session model (see CatBrain._plan): spacing_* is the long gap BETWEEN
+    # Session model (see ReactionBrain._plan): spacing_* is the long gap
+    # BETWEEN
     # comment-answering sessions; the fields below shape ONE session.
     session_gap_log_mu: float  # log-mean of the short intra-session gap
     session_gap_log_sigma: float
     session_idle_sec: float  # a silence longer than this ends the session
     session_max_sec: float  # hard cap on one session's span
-    max_reply_delay_sec: float  # a cat older than this is too stale -> skip
-    pool: tuple[CatEmoji, ...]
+    max_reply_delay_sec: (
+        float  # a reaction older than this is too stale -> skip
+    )
+    pool: tuple[ReactionEmoji, ...]
     # The LIKE pool: the emoji placed as the default reaction. Chosen
     # pseudo-randomly but DETERMINISTICALLY -- seeded by the target id, so the
     # same comment/post always yields the same like: varied across targets, yet
-    # recomputable after a restart (no persisted cursor). Separate from the cat
+    # recomputable after a restart (no persisted cursor). Separate from the
+    # reaction
     # ``pool``.
-    like_pool: tuple[CatEmoji, ...]
+    like_pool: tuple[ReactionEmoji, ...]
     # How often (seconds) the bot re-scans the targets on its own -- picking up
     # posts created (and commented on) while it runs, without waiting for a
     # restart or a manual /requeue. 0 turns the auto-rescan off.
@@ -240,29 +257,39 @@ class CatParams:
     # the message-shaped stickers, the real ban surface. 0 disables the cap.
     like_max_per_day: int = 400
     sticker_max_per_day: int = 40
+    # Optional persona nickname for this engine (e.g. "cat"). When set,
+    # the neutral reaction commands ALSO answer under it -- /<label>now and
+    # /<label>_on|off|test|live -- so the persona keeps its own vocabulary
+    # without hard-coding it. Empty (default) = neutral commands only.
+    label: str = ''
 
 
 @dataclass
-class CatState:
+class ReactionState:
     """The persisted memory that principles 2-4 and once-per-person need.
 
-    ``posts`` (the watched comment targets) and ``pending`` (cats scheduled but
+    ``posts`` (the watched comment targets) and ``pending`` (reactions
+    scheduled but
     not yet sent) are persisted too, so a nightly NAS shutdown does not lose
-    which posts to watch or the cats due after it comes back.
+    which posts to watch or the reactions due after it comes back.
     """
 
     mood: float = 0.0
     mood_day: str = ''  # ISO date of the last mood step (drift once a day)
-    last_send: float = 0.0  # unix ts of the most recent cat sent
+    last_send: float = 0.0  # unix ts of the most recent reaction sent
     next_session_at: float = (
         0.0  # earliest the NEXT session may open (spacing)
     )
     session_start_at: float = 0.0  # when the current burst began
-    session_last_at: float = 0.0  # last cat placed in the current burst
-    cat_last: dict[str, float] = field(default_factory=dict)  # id -> last ts
-    catted: set[str] = field(default_factory=set)  # (post, person) keys done
+    session_last_at: float = 0.0  # last reaction placed in the current burst
+    reaction_last: dict[str, float] = field(
+        default_factory=dict
+    )  # id -> last ts
+    reacted: set[str] = field(default_factory=set)  # (post, person) keys done
     posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
-    pending: list[dict[str, object]] = field(default_factory=list)  # due cats
+    pending: list[dict[str, object]] = field(
+        default_factory=list
+    )  # due reactions
     alive: dict[str, float] = field(
         default_factory=dict
     )  # hour -> decayed obs
@@ -271,12 +298,10 @@ class CatState:
     # posts so a person is remembered across our posts (the point of adapting
     # to each individual): offered=commented, taken=engaged (liked),
     # recip=stickered, with the date-keyed like/sticker daily caps.
-    ledger: relationship.Ledger = field(
-        default_factory=relationship.Ledger
-    )
+    ledger: relationship.Ledger = field(default_factory=relationship.Ledger)
 
 
-def _local(ts: float, params: CatParams) -> datetime:
+def _local(ts: float, params: ReactionParams) -> datetime:
     """``ts`` as a datetime in the persona's timezone (principle 9)."""
     return humanize.local(ts, params.tz_offset_hours)
 
@@ -291,14 +316,14 @@ def _mixture(
     return total
 
 
-def _in_window(hour: float, params: CatParams) -> bool:
+def _in_window(hour: float, params: ReactionParams) -> bool:
     """Whether ``hour`` is inside the host's uptime window [start, end)."""
     if params.active_start >= params.active_end:
         return True  # no window configured -> always up
     return params.active_start <= hour < params.active_end
 
 
-def _density_weight(ts: float, params: CatParams) -> float:
+def _density_weight(ts: float, params: ReactionParams) -> float:
     """Return the day's activity density at ``ts`` (principle 1), 0 if quiet.
 
     This is the *shape* of a waking day; whether the host is actually up at
@@ -318,7 +343,7 @@ def _lognormal(rng: random.Random, mu: float, sigma: float) -> float:
     return humanize.lognormal(rng, mu, sigma)
 
 
-def _jitter(ts: float, params: CatParams, rng: random.Random) -> float:
+def _jitter(ts: float, params: ReactionParams, rng: random.Random) -> float:
     """Add a random sub-minutes offset so timestamps are not on the :00.
 
     Principle 6: a scheduled task firing on the exact minute is a fingerprint.
@@ -326,7 +351,7 @@ def _jitter(ts: float, params: CatParams, rng: random.Random) -> float:
     return ts + rng.uniform(0.0, params.jitter_sec)
 
 
-def _is_silent_day(ts: float, params: CatParams) -> bool:
+def _is_silent_day(ts: float, params: ReactionParams) -> bool:
     """Whether the whole day at ``ts`` is a silent one (principle 7).
 
     Deterministic per date (seeded by the date) so a restart does not flip a
@@ -337,7 +362,7 @@ def _is_silent_day(ts: float, params: CatParams) -> bool:
     )
 
 
-def _context_tags(ts: float, params: CatParams) -> frozenset[str]:
+def _context_tags(ts: float, params: ReactionParams) -> frozenset[str]:
     """Return context tags (principle 5): daypart, season, holiday."""
     when = _local(ts, params)
     tags = {'sleepy'} if when.hour < _NOON else {'bodry'}
@@ -347,17 +372,17 @@ def _context_tags(ts: float, params: CatParams) -> frozenset[str]:
     return frozenset(tags)
 
 
-def _mood_bias(cat: CatEmoji, mood: float) -> float:
-    """Tilt to lively cats when mood is high, sleepy when low (principle 4)."""
-    if 'bodry' in cat.tags:
+def _mood_bias(reaction: ReactionEmoji, mood: float) -> float:
+    """Tilt to lively reactions when mood is high, sleepy when low."""
+    if 'bodry' in reaction.tags:
         return math.exp(mood)
-    if 'sleepy' in cat.tags:
+    if 'sleepy' in reaction.tags:
         return math.exp(-mood)
     return 1.0
 
 
-class CatBrain:
-    """The stateful engine: track posts, decide when, and choose which cat.
+class ReactionBrain:
+    """The stateful engine: track posts, time them, choose a reaction.
 
     ``rng`` is injected so tests are deterministic; production uses a
     seeded-at-start ``random.Random``. Tests that need a fixed clock assign
@@ -368,7 +393,7 @@ class CatBrain:
 
     def __init__(
         self,
-        params: CatParams,
+        params: ReactionParams,
         path: Path,
         rng: random.Random | None = None,
     ) -> None:
@@ -389,7 +414,7 @@ class CatBrain:
 
         Only the last ``watch_posts`` posts are ever matched, so once a post
         falls out of the window its (post, person) keys can never fire again --
-        pruning them keeps the persisted ``catted`` set bounded (principle 9).
+        pruning them keeps the persisted ``reacted`` set bounded (principle 9).
         Re-noting a known post just moves it to the freshest slot (idempotent),
         so the startup backfill never doubles an entry.
         """
@@ -399,8 +424,8 @@ class CatBrain:
         self.state.posts.append(pair)
         del self.state.posts[: -self.params.watch_posts]  # keep the last N
         live = tuple(f'{c}:{m}:' for c, m in self.state.posts)
-        self.state.catted = {
-            k for k in self.state.catted if k.startswith(live)
+        self.state.reacted = {
+            k for k in self.state.reacted if k.startswith(live)
         }
         self._save()
 
@@ -408,28 +433,29 @@ class CatBrain:
         """Whether a reply in ``chat`` targets one of the tracked posts."""
         return reply_to is not None and (chat, reply_to) in self.state.posts
 
-    def add_pending(self, cat: Cat) -> None:
-        """Record a cat scheduled but not yet sent (survives a restart).
+    def add_pending(self, reaction: Reaction) -> None:
+        """Record a reaction scheduled but not yet sent (survives a restart).
 
         The chosen ``emojis`` ride along, so a restart, /requeue or /status
-        shows and then places exactly the cat that was picked when the comment
+        shows and then places exactly the reaction that was picked when the
+        comment
         was scheduled -- not a fresh random one at send time.
         """
         self.state.pending.append(
             {
-                'chat': cat.chat,
-                'reply_to': cat.reply_to,
-                'root': cat.root,
-                'when': cat.when,
-                'text': cat.text,
-                'emojis': [[eid, fb] for eid, fb in cat.emojis],
-                'kind': cat.kind,
+                'chat': reaction.chat,
+                'reply_to': reaction.reply_to,
+                'root': reaction.root,
+                'when': reaction.when,
+                'text': reaction.text,
+                'emojis': [[eid, fb] for eid, fb in reaction.emojis],
+                'kind': reaction.kind,
             }
         )
         self._save()
 
     def done_pending(self, chat: int, reply_to: int) -> None:
-        """Forget a cat once it has been sent (or abandoned)."""
+        """Forget a reaction once it has been sent (or abandoned)."""
         self.state.pending = [
             p
             for p in self.state.pending
@@ -437,52 +463,56 @@ class CatBrain:
         ]
         self._save()
 
-    def rearm(self, *, renew_all: bool = False) -> list[Cat]:
-        """Return the pending cats to re-arm, renewing missed ones (or all).
+    def rearm(self, *, renew_all: bool = False) -> list[Reaction]:
+        """Return pending reactions to re-arm, renewing missed ones.
 
-        A cat whose time passed while the host was down is given a fresh
+        A reaction whose time passed while the host was down is given a fresh
         near-future slot (snapped into the uptime window and spread by the
         spacing cursor), so a night's worth does not fire at once on boot. With
-        ``renew_all`` (the /requeue command) every pending cat is recomputed --
+        ``renew_all`` (the /requeue command) every pending reaction is
+        recomputed --
         used to flush a queue scheduled under stale timing.
         """
         now = self.clock()
         if renew_all:
             # Re-spread the whole queue from NOW: the heavy-tailed spacing
             # cursor may have run far into the future (a burst under the slow
-            # production spacing), which would otherwise keep every cat days
+            # production spacing), which would otherwise keep every reaction
+            # days
             # out. /requeue is the operator's reset.
             self.state.next_session_at = now
             self.state.session_start_at = 0.0
             self.state.session_last_at = 0.0
-        out: list[Cat] = []
+        out: list[Reaction] = []
         for entry in self.state.pending:
             when = float(entry['when'])
             if renew_all or when <= now:
                 when = self._fire_time(now, engaged=False)
                 entry['when'] = when
-            out.append(_cat_from_entry(entry, when))
+            out.append(_reaction_from_entry(entry, when))
         self._save()
         return out
 
-    def due_now(self) -> list[Cat]:
-        """Set EVERY pending cat's time to now and return them (answer all)."""
+    def due_now(self) -> list[Reaction]:
+        """Set every pending reaction to fire now and return them."""
         now = self.clock()
-        out = [_cat_from_entry(entry, now) for entry in self.state.pending]
+        out = [
+            _reaction_from_entry(entry, now) for entry in self.state.pending
+        ]
         for entry in self.state.pending:
             entry['when'] = now
         self._save()
         return out
 
     def schedule(self, key: str, *, engaged: bool) -> float | None:
-        """Decide if/when to cat ``key``; None means no cat this time.
+        """Decide if/when to react to ``key``; None means skip it.
 
         ``key`` is an opaque dedup handle (the caller ties it to a specific
         post + commenter, so it is once per (post, person)). Marks ``key`` as
-        catted on success. Returns the unix ts at which ``emit`` should run.
+        reacted on success. Returns the unix ts at which ``emit`` should run.
         """
         now = self.clock()
-        if not self.params.enabled or key in self.state.catted:
+        if not self.params.enabled or key in self.state.reacted:
             return None
         # like_all likes every comment: place it at the next awake moment
         # (always lands). Otherwise the human-like gates may drop it.
@@ -493,7 +523,7 @@ class CatBrain:
         )
         if when is None:
             return None
-        self.state.catted.add(key)
+        self.state.reacted.add(key)
         self._save()
         return when
 
@@ -517,7 +547,8 @@ class CatBrain:
         they open the comments now and then, clear whatever piled up in a quick
         BURST (short intra-session gaps), then close the app for a long,
         heavy-tailed while. So ``spacing_*`` is the gap BETWEEN sessions (the
-        silence) and ``session_gap_*`` is the gap between cats INSIDE one, so
+        silence) and ``session_gap_*`` is the gap between reactions INSIDE one,
+        so
         two comments written close together land in the SAME burst, seconds
         apart, not smeared an hour apart by a global cursor.
 
@@ -569,9 +600,10 @@ class CatBrain:
         return _jitter(placed, self.params, self.rng)
 
     def _fire_time(self, now: float, *, engaged: bool) -> float:
-        """Re-slot a committed pending cat (rearm) into the next session.
+        """Re-slot a committed pending reaction (rearm) into the next session.
 
-        Unlike ``schedule`` a pending cat is already committed, so it must land
+        Unlike ``schedule`` a pending reaction is already committed, so it must
+        land
         somewhere: if the session planner would drop it (asleep / stale), fall
         back to the next awake moment rather than returning nothing.
         """
@@ -659,48 +691,56 @@ class CatBrain:
             return None
         return weighted_choice(self.rng, slots, weights)
 
-    def pick_like(self, key: str) -> list[CatEmoji]:
+    def pick_like(self, key: str) -> list[ReactionEmoji]:
         """One like for a target, WEIGHTED and DETERMINISTIC in ``key``.
 
-        Drawn from the like pool through the same human machinery as the cats
+        Drawn from the like pool through the same human machinery as the
+        reactions
         (principles 3,4,5): base favourites, recency suppression, mood and
         context tags. Still seeded by ``key`` (the target message id) so the
         pick is reproducible per target given the persisted state -- but now
-        the pick is recorded into ``cat_last``, so consecutive reactions in a
+        the pick is recorded into ``reaction_last``, so consecutive reactions
+        in a
         burst avoid repeating the same emoji, which the old uniform ``choice``
         did not. Always one like; an empty pool yields [].
         """
         return self._choose(self.params.like_pool, key)
 
-    def pick_cat(self, key: str) -> list[CatEmoji]:
-        """One cat (the thread sticker), WEIGHTED and DETERMINISTIC in ``key``.
+    def pick_reaction(self, key: str) -> list[ReactionEmoji]:
+        """Pick the thread sticker, WEIGHTED and DETERMINISTIC in ``key``.
 
-        Same as ``pick_like`` but drawn from the cat ``pool``, so a sticker
+        Same as ``pick_like`` but drawn from the reaction ``pool``, so a
+        sticker
         honours base favourites, recency, mood and season/daypart tags (a
-        sleepy cat in the morning, a lively one when mood runs high) instead of
+        sleepy reaction in the morning, a lively one when mood runs high)
+        instead of
         a flat uniform pick. Seeded by the target id; records recency. An empty
         pool yields [].
         """
         return self._choose(self.params.pool, key)
 
-    def _choose(self, pool: tuple[CatEmoji, ...], key: str) -> list[CatEmoji]:
+    def _choose(
+        self, pool: tuple[ReactionEmoji, ...], key: str
+    ) -> list[ReactionEmoji]:
         """Weighted, reproducible-in-key draw of one emoji; records recency.
 
-        Shared by ``pick_like`` and ``pick_cat``. Weights come from ``_weight``
+        Shared by ``pick_like`` and ``pick_reaction``. Weights come from
+        ``_weight``
         (base * recency * mood * context), so the emoji people actually SEE
         inherits the same human machinery that the (otherwise unused) ``emit``
         path had. Seeded by ``key`` for per-target reproducibility, then the
-        pick is written to ``cat_last`` so the next draw suppresses it -- no
+        pick is written to ``reaction_last`` so the next draw suppresses it --
+        no
         back-to-back repeats across a burst of reactions.
         """
         if not pool:
             return []
         now = self.clock()
         self._step_mood(now)  # principle 4: advance the daily mood first
-        weights = [self._weight(cat, now) for cat in pool]
+        weights = [self._weight(reaction, now) for reaction in pool]
         roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible-in-key
         chosen = weighted_choice(roll, pool, weights)
-        self.state.cat_last[chosen.emoji_id] = now  # principle 3: recency
+        self.state.reaction_last[chosen.emoji_id] = now  # principle 3: recency
         self._save()
         return [chosen]
 
@@ -793,39 +833,40 @@ class CatBrain:
         """Return the persona timezone offset (for the daily counters)."""
         return self.params.tz_offset_hours
 
-    def emit(self) -> list[CatEmoji]:
-        """Pick the cat(s) to send now and record the send (principles 3,4,7).
+    def emit(self) -> list[ReactionEmoji]:
+        """Pick the reaction(s) to send now and record the send.
 
-        Returns one cat, or two when the rare "second cat" fires. An empty pool
+        Returns one reaction, or two when the rare "second reaction" fires. An
+        empty pool
         yields an empty list (the caller then sends nothing).
         """
         now = self.clock()
         self._step_mood(now)
         if not self.params.pool:
             return []
-        cats = [self._pick(now)]
+        reactions = [self._pick(now)]
         if self.rng.random() < self.params.double_prob:  # principle 7
-            cats.append(self._pick(now))
-        for cat in cats:
-            self.state.cat_last[cat.emoji_id] = now
+            reactions.append(self._pick(now))
+        for reaction in reactions:
+            self.state.reaction_last[reaction.emoji_id] = now
         self.state.last_send = now
         self._save()
-        return cats
+        return reactions
 
-    def _pick(self, now: float) -> CatEmoji:
-        """One weighted cat draw at ``now``."""
+    def _pick(self, now: float) -> ReactionEmoji:
+        """One weighted reaction draw at ``now``."""
         pool = self.params.pool
         weights = [self._weight(c, now) for c in pool]
         return weighted_choice(self.rng, pool, weights)
 
-    def _weight(self, cat: CatEmoji, now: float) -> float:
+    def _weight(self, reaction: ReactionEmoji, now: float) -> float:
         """Return the selection weight: base*recency*mood*context (3,4,5)."""
-        dt = now - self.state.cat_last.get(cat.emoji_id, 0.0)
-        weight = cat.base * recency_penalty(
+        dt = now - self.state.reaction_last.get(reaction.emoji_id, 0.0)
+        weight = reaction.base * recency_penalty(
             dt, self.params.recency_half_life_sec
         )
-        weight *= _mood_bias(cat, self.state.mood)
-        if _context_tags(now, self.params) & set(cat.tags):
+        weight *= _mood_bias(reaction, self.state.mood)
+        if _context_tags(now, self.params) & set(reaction.tags):
             weight *= 2.0  # a context match is the strongest human signal
         return max(weight, 0.0)
 
@@ -838,33 +879,33 @@ class CatBrain:
         self.state.mood = self.params.mood_phi * self.state.mood + noise
         self.state.mood_day = day
 
-    def _backfill_ledger(self, state: CatState) -> None:
+    def _backfill_ledger(self, state: ReactionState) -> None:
         """Seed the relationship ledger from historically-liked comments.
 
         A state file written before the attachment control has an empty ledger
-        but a full ``catted`` set (every comment we already liked). Seed
+        but a full ``reacted`` set (every comment we already liked). Seed
         offered=taken per commenter from it, so the /status coefficients show
         the history at once instead of only new comments; the control then
         steers each person from there. Runs only while the ledger is empty, so
         a real engagement (which persists the ledger) supersedes it.
         """
-        if state.ledger.offered or not state.catted:
+        if state.ledger.offered or not state.reacted:
             return
-        for key in state.catted:
+        for key in state.reacted:
             parts = key.split(':')
             person = parts[2] if len(parts) >= _CATTED_PERSON_FIELDS else ''
             if person:
                 state.ledger.add_take(person, 1)
 
-    def _load(self) -> CatState:
+    def _load(self) -> ReactionState:
         """Reload the persisted memory, or start fresh if none/corrupt."""
         if not self.path.exists():
-            return CatState()
+            return ReactionState()
         try:
             raw = json.loads(self.path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
-            return CatState()
-        state = CatState(
+            return ReactionState()
+        state = ReactionState(
             mood=float(raw.get('mood', 0.0)),
             mood_day=str(raw.get('mood_day', '')),
             last_send=float(raw.get('last_send', 0.0)),
@@ -873,11 +914,11 @@ class CatBrain:
             ),
             session_start_at=float(raw.get('session_start_at', 0.0)),
             session_last_at=float(raw.get('session_last_at', 0.0)),
-            cat_last={
+            reaction_last={
                 str(k): float(v)
-                for k, v in (raw.get('cat_last') or {}).items()
+                for k, v in (raw.get('reaction_last') or {}).items()
             },
-            catted={str(p) for p in (raw.get('catted') or [])},
+            reacted={str(p) for p in (raw.get('reacted') or [])},
             posts=[(int(c), int(m)) for c, m in (raw.get('posts') or [])],
             pending=[dict(p) for p in (raw.get('pending') or [])],
             alive={
@@ -893,8 +934,7 @@ class CatBrain:
                 recip_day=str(raw.get('sticker_day', '')),
                 recip_today=int(raw.get('sticker_today', 0)),
                 names={
-                    str(k): str(v)
-                    for k, v in (raw.get('names') or {}).items()
+                    str(k): str(v) for k, v in (raw.get('names') or {}).items()
                 },
             ),
         )
@@ -910,8 +950,8 @@ class CatBrain:
             'next_session_at': self.state.next_session_at,
             'session_start_at': self.state.session_start_at,
             'session_last_at': self.state.session_last_at,
-            'cat_last': self.state.cat_last,
-            'catted': sorted(self.state.catted),
+            'reaction_last': self.state.reaction_last,
+            'reacted': sorted(self.state.reacted),
             'posts': [[c, m] for c, m in self.state.posts],
             'pending': self.state.pending,
             'alive': self.state.alive,
@@ -932,10 +972,10 @@ class CatBrain:
         tmp.replace(self.path)
 
 
-def _emoji(raw: dict[str, object]) -> CatEmoji:
-    """One CatEmoji from its JSON dict (unknown keys ignored)."""
+def _emoji(raw: dict[str, object]) -> ReactionEmoji:
+    """One ReactionEmoji from its JSON dict (unknown keys ignored)."""
     tags = raw.get('tags') or []
-    return CatEmoji(
+    return ReactionEmoji(
         emoji_id=str(raw.get('id', '')),
         fallback=str(raw.get('fallback') or ' '),
         base=float(raw.get('base') or 1.0),
@@ -963,63 +1003,78 @@ def _entries_of_type(data: dict[str, object], etype: str) -> list[dict]:
     return [e for e in top if isinstance(e, dict) and e.get('type') == etype]
 
 
-def load_cat_params(data: dict[str, object]) -> CatParams:
-    """Load the cat engine's parameters from the constants JSON 'cats' key."""
-    cats = data.get('cats') if isinstance(data.get('cats'), dict) else {}
-    cats = cats or {}
-    pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'cat'))
+def load_reaction_params(data: dict[str, object]) -> ReactionParams:
+    """Load the reaction engine's params from the 'reactions' JSON key."""
+    reactions = (
+        data.get('reactions')
+        if isinstance(data.get('reactions'), dict)
+        else {}
+    )
+    reactions = reactions or {}
+    pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'reaction'))
     like_pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'like'))
-    return CatParams(
-        enabled=bool(cats.get('enabled', False)),
-        like_all=bool(cats.get('like_all', False)),
-        comments_in_discussion=bool(cats.get('comments_in_discussion', False)),
-        react_to_posts=bool(cats.get('react_to_posts', False)),
-        watch_posts=int(cats.get('watch_posts') or 4),
-        hours_weekday=_peaks(cats.get('hours_weekday'))
+    return ReactionParams(
+        enabled=bool(reactions.get('enabled', False)),
+        like_all=bool(reactions.get('like_all', False)),
+        comments_in_discussion=bool(
+            reactions.get('comments_in_discussion', False)
+        ),
+        react_to_posts=bool(reactions.get('react_to_posts', False)),
+        watch_posts=int(reactions.get('watch_posts') or 4),
+        hours_weekday=_peaks(reactions.get('hours_weekday'))
         or ((9.0, 2.0, 1.0), (21.0, 2.5, 1.3)),
-        hours_weekend=_peaks(cats.get('hours_weekend'))
+        hours_weekend=_peaks(reactions.get('hours_weekend'))
         or ((11.0, 3.0, 1.0), (22.0, 3.0, 1.2)),
         quiet_hours=frozenset(
-            int(h) for h in (cats.get('quiet_hours') or [2, 3, 4, 5, 6])
+            int(h) for h in (reactions.get('quiet_hours') or [2, 3, 4, 5, 6])
         ),
-        active_start=float(cats.get('active_start_hour', 0.0)),
-        active_end=float(cats.get('active_end_hour', 24.0)),
-        uptime_half_life_sec=float(cats.get('uptime_half_life_sec', 864000.0)),
-        uptime_learn_obs=float(cats.get('uptime_learn_obs', 2000.0)),
+        active_start=float(reactions.get('active_start_hour', 0.0)),
+        active_end=float(reactions.get('active_end_hour', 24.0)),
+        uptime_half_life_sec=float(
+            reactions.get('uptime_half_life_sec', 864000.0)
+        ),
+        uptime_learn_obs=float(reactions.get('uptime_learn_obs', 2000.0)),
         skip_if_manually_replied=bool(
-            cats.get('skip_if_manually_replied', True)
+            reactions.get('skip_if_manually_replied', True)
         ),
-        tz_offset_hours=float(cats.get('tz_offset_hours', 3.0)),
-        latency_log_mu=float(cats.get('latency_log_mu', 7.0)),
-        latency_log_sigma=float(cats.get('latency_log_sigma', 1.2)),
-        spacing_log_mu=float(cats.get('spacing_log_mu', 9.5)),
-        spacing_log_sigma=float(cats.get('spacing_log_sigma', 1.3)),
-        jitter_sec=float(cats.get('jitter_sec', 90.0)),
-        skip_prob=float(cats.get('skip_prob', 0.12)),
-        double_prob=float(cats.get('double_prob', 0.06)),
-        double_gap_sec=float(cats.get('double_gap_sec', 40.0)),
-        silent_day_prob=float(cats.get('silent_day_prob', 0.08)),
+        tz_offset_hours=float(reactions.get('tz_offset_hours', 3.0)),
+        latency_log_mu=float(reactions.get('latency_log_mu', 7.0)),
+        latency_log_sigma=float(reactions.get('latency_log_sigma', 1.2)),
+        spacing_log_mu=float(reactions.get('spacing_log_mu', 9.5)),
+        spacing_log_sigma=float(reactions.get('spacing_log_sigma', 1.3)),
+        jitter_sec=float(reactions.get('jitter_sec', 90.0)),
+        skip_prob=float(reactions.get('skip_prob', 0.12)),
+        double_prob=float(reactions.get('double_prob', 0.06)),
+        double_gap_sec=float(reactions.get('double_gap_sec', 40.0)),
+        silent_day_prob=float(reactions.get('silent_day_prob', 0.08)),
         recency_half_life_sec=float(
-            cats.get('recency_half_life_sec', 172800.0)
+            reactions.get('recency_half_life_sec', 172800.0)
         ),
-        mood_phi=float(cats.get('mood_phi', 0.8)),
-        mood_sigma=float(cats.get('mood_sigma', 0.35)),
-        feedback_speedup=float(cats.get('feedback_speedup', 0.4)),
-        session_gap_log_mu=float(cats.get('session_gap_log_mu', 3.8)),
-        session_gap_log_sigma=float(cats.get('session_gap_log_sigma', 0.6)),
-        session_idle_sec=float(cats.get('session_idle_sec', 900.0)),
-        session_max_sec=float(cats.get('session_max_sec', 1200.0)),
-        max_reply_delay_sec=float(cats.get('max_reply_delay_sec', 21600.0)),
+        mood_phi=float(reactions.get('mood_phi', 0.8)),
+        mood_sigma=float(reactions.get('mood_sigma', 0.35)),
+        feedback_speedup=float(reactions.get('feedback_speedup', 0.4)),
+        session_gap_log_mu=float(reactions.get('session_gap_log_mu', 3.8)),
+        session_gap_log_sigma=float(
+            reactions.get('session_gap_log_sigma', 0.6)
+        ),
+        session_idle_sec=float(reactions.get('session_idle_sec', 900.0)),
+        session_max_sec=float(reactions.get('session_max_sec', 1200.0)),
+        max_reply_delay_sec=float(
+            reactions.get('max_reply_delay_sec', 21600.0)
+        ),
         pool=pool,
         like_pool=like_pool,
-        rescan_sec=float(cats.get('rescan_sec', 300.0)),
-        attach_enabled=bool(cats.get('attach_enabled', True)),
-        exposure_c1=float(cats.get('exposure_c1', 0.45)),
-        exposure_c2=float(cats.get('exposure_c2', 0.90)),
-        exposure_k=float(cats.get('exposure_k', 8.0)),
-        like_control_gain=float(cats.get('like_control_gain', 1.0)),
-        recip_fraction_target=float(cats.get('recip_fraction_target', 0.20)),
-        recip_control_gain=float(cats.get('recip_control_gain', 1.0)),
-        like_max_per_day=int(cats.get('like_max_per_day', 400)),
-        sticker_max_per_day=int(cats.get('sticker_max_per_day', 40)),
+        rescan_sec=float(reactions.get('rescan_sec', 300.0)),
+        attach_enabled=bool(reactions.get('attach_enabled', True)),
+        exposure_c1=float(reactions.get('exposure_c1', 0.45)),
+        exposure_c2=float(reactions.get('exposure_c2', 0.90)),
+        exposure_k=float(reactions.get('exposure_k', 8.0)),
+        like_control_gain=float(reactions.get('like_control_gain', 1.0)),
+        recip_fraction_target=float(
+            reactions.get('recip_fraction_target', 0.20)
+        ),
+        recip_control_gain=float(reactions.get('recip_control_gain', 1.0)),
+        like_max_per_day=int(reactions.get('like_max_per_day', 400)),
+        sticker_max_per_day=int(reactions.get('sticker_max_per_day', 40)),
+        label=str(reactions.get('label', '')),
     )

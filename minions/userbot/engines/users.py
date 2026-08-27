@@ -105,7 +105,7 @@ class UserStore:
 
     ``path`` is the database file (``users.db`` under the profile's state dir);
     ``':memory:'`` is accepted for tests. ``clock`` is injected so tests can
-    pin timestamps, exactly like ``CatBrain``.
+    pin timestamps, exactly like ``ReactionBrain``.
     """
 
     clock: Callable[[], float]

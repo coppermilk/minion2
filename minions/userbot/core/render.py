@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from minions.userbot.engines.premium_emoji import PremiumMessage
 
 # The order emoji types are grouped in for the /emojis catalog message.
-_EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'cat', 'like')
+_EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'reaction', 'like')
 
 
 def _youtube_thumb(group: Group) -> str:
@@ -97,7 +97,7 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
 
 
 def _catalog_suffix(entry: dict[str, object]) -> str:
-    """Return the trailing id + platform / cat tags for one entry."""
+    """Return the trailing id + platform / reaction tags for one entry."""
     parts = [str(entry.get('id', '?'))]
     if entry.get('name'):
         parts.append(str(entry['name']))

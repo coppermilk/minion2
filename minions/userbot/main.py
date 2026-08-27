@@ -110,18 +110,18 @@ from minions.userbot.core.statefile import _pending_dict
 from minions.userbot.core.statefile import _pending_from_dict
 from minions.userbot.core.statefile import _posted_dict
 from minions.userbot.core.statefile import _posted_from_dict
-from minions.userbot.engines import cats
 from minions.userbot.engines import comod
 from minions.userbot.engines import greeter
+from minions.userbot.engines import reactions
 from minions.userbot.engines import stories
 from minions.userbot.engines import users
 from minions.userbot.engines.premium_emoji import build_premium_message
-from minions.userbot.glue.cats import _CatsMixin
 from minions.userbot.glue.commands import FEATURE_NAMES
 from minions.userbot.glue.commands import SERVICE_MODES
 from minions.userbot.glue.commands import SERVICE_NAMES
 from minions.userbot.glue.commands import _CommandsMixin
 from minions.userbot.glue.comod import _ComodMixin
+from minions.userbot.glue.reactions import _ReactionsMixin
 from minions.userbot.glue.status import STATUS_WARM_PEERS
 from minions.userbot.glue.status import _StatusMixin
 from minions.userbot.glue.stories import _StoriesMixin
@@ -147,7 +147,7 @@ class Userbot(
     _StatusMixin,
     _ComodMixin,
     _StoriesMixin,
-    _CatsMixin,
+    _ReactionsMixin,
     _UsersMixin,
     _CommandsMixin,
 ):
@@ -167,7 +167,8 @@ class Userbot(
         # emoji from repeating on consecutive posts (in-memory; cosmetic).
         self._variety = Variety()
         # State is per PROFILE (live vs test): each mode has its OWN channel
-        # AND its own state files (cats, greeter, posted, dedup), so a test run
+        # AND its own state files (reactions, greeter, posted, dedup), so a
+        # test run
         # never touches live state and any future stateful feature is isolated
         # for free. The active mode is a marker in the base state dir; live
         # uses that dir (unchanged), test a 'test/' subdir under it.
@@ -176,10 +177,10 @@ class Userbot(
         self._mode_path = self._state_base / MODE_FILE
         self._overrides_path = self._state_base / FEATURE_OVERRIDES_FILE
         self._modes = self._load_service_modes()
-        self._cat_tasks: set[asyncio.Task[None]] = set()
+        self._react_tasks: set[asyncio.Task[None]] = set()
         self._greeter_task: asyncio.Task[None] | None = None
-        self._cat_rescan_task: asyncio.Task[None] | None = None
-        self._cat_next_rescan: float = 0.0  # ts of the next auto-rescan
+        self._react_rescan_task: asyncio.Task[None] | None = None
+        self._react_next_rescan: float = 0.0  # ts of the next auto-rescan
         self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
         self._enrich_tasks: set[asyncio.Task[None]] = set()
         self._story_tasks: set[asyncio.Task[None]] = set()
@@ -202,6 +203,21 @@ class Userbot(
         self._probe_interval = float(rt.get('probe_interval_sec', 300.0))
         self._last_probe = 0.0
         self._build_profile()
+
+    @staticmethod
+    def _migrate_reaction_state(pdir: Path) -> None:
+        """Carry pre-rename cats_state.json over to reactions_state.json once.
+
+        The reaction engine used to be the 'cats' engine, keeping its state in
+        cats_state.json. On the first start after the rename, move that file so
+        the live mood, dedup, learned uptime and pending queue survive -- a
+        plain one-time rename when only the old file exists, no runtime alias.
+        """
+        old = pdir / 'cats_state.json'
+        new = pdir / 'reactions_state.json'
+        if old.exists() and not new.exists():
+            old.rename(new)
+            log.info('migrated cats_state.json -> reactions_state.json')
 
     def _service_dir(self, name: str) -> Path:
         """Return (and create) the state dir for a service's OWN mode.
@@ -230,17 +246,20 @@ class Userbot(
         self.rejected: set[str] = set()
         self.posted: list[Posted] = []
         self.processed_ids: set[int] = set()
-        self._cat_tasks = set()
-        self._cat_next_rescan = 0.0
-        self._rescan_sec = self._rescan_interval(self._modes['cats'])
+        self._react_tasks = set()
+        self._react_next_rescan = 0.0
+        self._rescan_sec = self._rescan_interval(self._modes['reactions'])
         # A service is enabled when its mode != 'off' (``_feature_enabled``).
         # The params are frozen, so the flag is swapped via replace.
-        cat_params = replace(
-            cats.load_cat_params(self._raw),
-            enabled=self._feature_enabled('cats'),
+        reaction_params = replace(
+            reactions.load_reaction_params(self._raw),
+            enabled=self._feature_enabled('reactions'),
         )
-        self.cats = cats.CatBrain(
-            cat_params, self._service_dir('cats') / 'cats_state.json'
+        react_dir = self._service_dir('reactions')
+        self._migrate_reaction_state(react_dir)
+        self.reactions = reactions.ReactionBrain(
+            reaction_params,
+            react_dir / 'reactions_state.json',
         )
         # Story viewer: watches friends'/contacts' stories the way a person
         # does -- a glance now and then, no reactions -- with its own
@@ -292,7 +311,7 @@ class Userbot(
         Test wants a tight loop while you iterate (default 5 min); live can be
         relaxed (default 1 hour). Both fall back to ``rescan_sec``.
         """
-        cfg = self._raw.get('cats')
+        cfg = self._raw.get('reactions')
         cfg = cfg if isinstance(cfg, dict) else {}
         default = float(cfg.get('rescan_sec', 300.0))
         key = 'rescan_sec_test' if mode == 'test' else 'rescan_sec_live'
@@ -317,6 +336,8 @@ class Userbot(
             raw = {}
         stored = raw.get('services')
         if isinstance(stored, dict):
+            if 'cats' in stored and 'reactions' not in stored:
+                stored['reactions'] = stored['cats']  # pre-rename service key
             return {
                 n: self._clean_mode(n, stored.get(n)) for n in SERVICE_NAMES
             }
@@ -356,10 +377,10 @@ class Userbot(
             raw = json.loads(self._overrides_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             return {}
+        if 'cats' in raw and 'reactions' not in raw:
+            raw['reactions'] = raw['cats']  # pre-rename feature key
         return {
-            str(k): bool(v)
-            for k, v in raw.items()
-            if str(k) in FEATURE_NAMES
+            str(k): bool(v) for k, v in raw.items() if str(k) in FEATURE_NAMES
         }
 
     def _feature_default(self, name: str) -> bool:
@@ -381,31 +402,31 @@ class Userbot(
         """
         self.restore()
         try:
-            self.rearm_cats()
-            await self.backfill_cat_posts()
-            await self.backfill_cat_comments()
-            if self.cats.params.enabled:
-                self.cats.mark_alive(time.time())
+            self.rearm_reactions()
+            await self.backfill_react_posts()
+            await self.backfill_react_comments()
+            if self.reactions.params.enabled:
+                self.reactions.mark_alive(time.time())
         except Exception:
-            log.exception('cats: startup step failed; listening anyway')
+            log.exception('reactions: startup step failed; listening anyway')
         if source_backfill:
             await self.backfill()
         self._greeter_task = asyncio.create_task(self.greeter.loop())
-        self._cat_rescan_task = asyncio.create_task(self.cat_rescan_loop())
+        self._react_rescan_task = asyncio.create_task(self.react_rescan_loop())
         self._stories_task = asyncio.create_task(self.stories_loop())
 
     async def stop_profile(self) -> None:
         """Cancel the active profile's timers and loops (before a switch)."""
-        self._cancel_cat_tasks()
+        self._cancel_react_tasks()
         self._cancel_story_tasks()
         self._cancel_enrich_tasks()
         for group in self.groups:
             _cancel(getattr(group, 'task', None))
         _cancel(self._greeter_task)
-        _cancel(self._cat_rescan_task)
+        _cancel(self._react_rescan_task)
         _cancel(self._stories_task)
         self._greeter_task = None
-        self._cat_rescan_task = None
+        self._react_rescan_task = None
         self._stories_task = None
         self.users.close()  # release the SQLite handle before a rebind
 
@@ -651,10 +672,11 @@ class Userbot(
         self.processed_ids = {i for p in self.posted for i in p.msg_ids}
 
     async def handle(self, event: events.NewMessage.Event) -> None:
-        """Dispatch one event: a /command, a comment cat, or aggregation.
+        """Dispatch one event: a /command, a comment reaction, or aggregation.
 
         Commands (/emojis, /preview, /status) work from ANY chat and for
-        ANYONE and always render into the source chat; the cat engine watches
+        ANYONE and always render into the source chat; the reaction engine
+        watches
         replies to our own posts (any chat); aggregation stays source-scoped.
         """
         text = (event.raw_text or '').strip().lower()
@@ -663,14 +685,13 @@ class Userbot(
         if await self._unknown_command(event, text):
             return
         self._record_user_message(event)
-        if self.cats.params.enabled:
-            self._maybe_cat(event)
+        if self.reactions.params.enabled:
+            self._maybe_react(event)
         if event.chat_id == self.config.source:
             await self.on_message(event.message)
 
-
     async def status_report(self) -> None:
-        """Post the pending/posted/cat diagnostics to the source chat."""
+        """Post the pending/posted/reaction diagnostics to the source chat."""
         labels = await self._chat_labels()
         await self._send_status(self._status_text(labels))
         log.info('sent status report to %s', self.config.source)
@@ -678,8 +699,9 @@ class Userbot(
     async def _send_status(self, text: str) -> None:
         """Send an operator report, rendering its premium-emoji markup.
 
-        /status, /requeue and /catnow embed `<tg-emoji>` tags for the chosen
-        cats/likes and the pool previews; build_premium_message turns them into
+        /status, /requeue and /reactnow embed `<tg-emoji>` tags for the chosen
+        reactions/likes and the pool previews; build_premium_message turns them
+        into
         custom-emoji entities, so the REAL premium emoji show (a non-premium
         viewer still sees the fallback glyph). Text without tags sends plain.
         """
@@ -697,7 +719,7 @@ class Userbot(
         ids = {self.config.source, *self.config.targets}
         if self.config.test_target:
             ids.add(self.config.test_target)
-        ids |= {chat for chat, _ in self.cats.posts}
+        ids |= {chat for chat, _ in self.reactions.posts}
         ids |= {v.peer_id for v in self._pending_views}  # story-view queue
         return {cid: await self._chat_label(cid) for cid in ids}
 
@@ -709,9 +731,9 @@ class Userbot(
         @names through the shared resolver and cache them on each ledger, so it
         is a one-time lookup per peer.
         """
-        if self.cats.params.enabled:
+        if self.reactions.params.enabled:
             await self._resolve_rows(
-                self.cats.warmth(), self.cats.remember
+                self.reactions.warmth(), self.reactions.remember
             )
         if self.stories.params.enabled:
             await self._resolve_rows(
@@ -743,15 +765,14 @@ class Userbot(
         )
         return f'"{title}" ({chat_id})' if title else str(chat_id)
 
-
     async def status_loop(self) -> None:
         """Periodically log pending videos, learn uptime, beat the watchdog."""
         while True:
             await asyncio.sleep(STATUS_INTERVAL)
             now = time.time()
             await self._maybe_probe(now)
-            if self.cats.params.enabled:
-                self.cats.mark_alive(now)  # learn actual on-hours
+            if self.reactions.params.enabled:
+                self.reactions.mark_alive(now)  # learn actual on-hours
             self._log_pending()
 
     async def _maybe_probe(self, now: float) -> None:
@@ -851,51 +872,58 @@ class Userbot(
         return posts
 
     async def _react_to_post(self, target: int, post_id: int) -> None:
-        """Immediately place a cat reaction ON a freshly-posted message.
+        """Immediately place a reaction ON a freshly-posted message.
 
         Optional (``react_to_posts``, default off): reacting to our own posts
         is an extra, separate from the engine's real job of reacting to
         commenters. When on, there is no human-like wait -- the post is ours,
-        so the cat goes on straight away. A failure never blocks the post -- it
+        so the reaction goes on straight away. A failure never blocks the post
+        -- it
         is logged and swallowed, unlike the comment path which owns its own
         retry/skip machinery.
         """
-        if not self.cats.params.enabled or not post_id:
+        if not self.reactions.params.enabled or not post_id:
             return
-        if not self.cats.params.react_to_posts:
+        if not self.reactions.params.react_to_posts:
             return
-        specs = self.cats.pick_like(f'{target}:{post_id}')
+        specs = self.reactions.pick_like(f'{target}:{post_id}')
         emojis = tuple((s.emoji_id, s.fallback) for s in specs)
         try:
             placed = await self._react(target, post_id, emojis)
         except Exception:  # noqa: BLE001 -- reacting must never break posting
             log.warning(
-                'cat: could not react to new post %s in %s', post_id, target
+                'reaction: could not react to new post %s in %s',
+                post_id,
+                target,
             )
             return
         if placed:
             glyphs = ''.join(fb for _, fb in emojis)
             log.info(
-                'cat: reacted %s to new post %s in %s', glyphs, post_id, target
+                'reaction: reacted %s to new post %s in %s',
+                glyphs,
+                post_id,
+                target,
             )
 
     async def _watch_post(self, target: int, post_id: int) -> None:
-        """Register where comments on this post will appear (the cat target).
+        """Register where this post's comments appear (the react target).
 
         For a channel with a linked discussion (comments_in_discussion), the
         comments live in the discussion group: resolve the post's thread root
-        and watch THAT, so cats land only in the channel post's comments. For a
+        and watch THAT, so reactions land only in the channel post's comments.
+        For a
         plain group target, the post message id itself is the comment target.
         """
-        if self.cats.params.comments_in_discussion:
+        if self.reactions.params.comments_in_discussion:
             # Channel: only watch a post whose discussion thread resolves; a
             # post with comments off (or deleted) adds nothing rather than a
             # useless channel-id entry that could evict a real one.
             thread = await self._discussion_thread(target, post_id)
             if thread is not None:
-                self.cats.note_post(*thread)
+                self.reactions.note_post(*thread)
             return
-        self.cats.note_post(target, post_id)
+        self.reactions.note_post(target, post_id)
 
     async def _throttle_discussion(self) -> None:
         """Space out GetDiscussionMessageRequest calls (Telegram flood guard).
@@ -923,7 +951,7 @@ class Userbot(
                 GetDiscussionMessageRequest(peer=channel, msg_id=post_id)
             )
         except Exception:  # noqa: BLE001 -- not a channel / no linked group
-            log.warning('cats: no discussion thread for post %s', post_id)
+            log.warning('reactions: no discussion thread for post %s', post_id)
             return None
         messages = getattr(disc, 'messages', None) or []
         if not messages:
@@ -1032,7 +1060,8 @@ async def main() -> None:
         start_kwargs['password'] = password
     log.info('Session store: %s.session', session_path)
     await client.start(**start_kwargs)
-    # Hydrate the active profile (live or test) and start its loops. The cat
+    # Hydrate the active profile (live or test) and start its loops. The
+    # reaction
     # startup inside can fail without stopping the bot from listening.
     await agg.start_profile()
     log.info(

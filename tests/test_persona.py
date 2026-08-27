@@ -39,26 +39,26 @@ def _persona() -> dict[str, object]:
 
 
 def test_persona_fans_the_clock_into_every_engine() -> None:
-    """Tz reaches all four engines; the window reaches cats and greeter."""
+    """Tz reaches all four engines; window reaches reactions+greeter."""
     data: dict[str, object] = {'persona': _persona()}
     config.apply_persona(data)
-    for name in ('cats', 'stories', 'greeter', 'comod'):
+    for name in ('reactions', 'stories', 'greeter', 'comod'):
         assert _block(data, name)['tz_offset_hours'] == _TZ
-    cats = _block(data, 'cats')
-    assert cats['active_start_hour'] == _WAKE_START
-    assert cats['active_end_hour'] == _WAKE_END
+    reactions = _block(data, 'reactions')
+    assert reactions['active_start_hour'] == _WAKE_START
+    assert reactions['active_end_hour'] == _WAKE_END
     greeter = _block(data, 'greeter')
     assert greeter['wake_start_hour'] == _WAKE_START
     assert greeter['wake_end_hour'] == _WAKE_END
 
 
-def test_silent_day_prob_reaches_cats_and_stories() -> None:
+def test_silent_day_prob_reaches_reactions_and_stories() -> None:
     """One persona silent-day chance fans to both behavioural engines."""
     data: dict[str, object] = {
         'persona': {**_persona(), 'silent_day_prob': _SILENT},
     }
     config.apply_persona(data)
-    assert _block(data, 'cats')['silent_day_prob'] == _SILENT
+    assert _block(data, 'reactions')['silent_day_prob'] == _SILENT
     assert _block(data, 'stories')['silent_day_prob'] == _SILENT
 
 
@@ -75,15 +75,17 @@ def test_an_explicit_engine_key_overrides_persona() -> None:
     """A key set in an engine's own section wins; the rest still fills in."""
     data: dict[str, object] = {
         'persona': _persona(),
-        'cats': {'active_start_hour': _OVERRIDE_START},
+        'reactions': {'active_start_hour': _OVERRIDE_START},
     }
     config.apply_persona(data)
-    cats = _block(data, 'cats')
-    assert cats['active_start_hour'] == _OVERRIDE_START  # explicit wins
-    assert cats['active_end_hour'] == _WAKE_END  # still filled from persona
+    reactions = _block(data, 'reactions')
+    assert reactions['active_start_hour'] == _OVERRIDE_START  # explicit wins
+    assert (
+        reactions['active_end_hour'] == _WAKE_END
+    )  # still filled from persona
 
 
 def test_no_persona_block_is_a_noop() -> None:
     """Without a persona block the config is returned untouched."""
-    data: dict[str, object] = {'cats': {}}
-    assert config.apply_persona(data) == {'cats': {}}
+    data: dict[str, object] = {'reactions': {}}
+    assert config.apply_persona(data) == {'reactions': {}}

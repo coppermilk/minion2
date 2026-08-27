@@ -89,7 +89,8 @@ def _str_list(value: object, default: str) -> list[str]:
 
 # Every premium emoji lives in ONE top-level "emoji" array in the JSON, each
 # entry tagged with its "type"; the post-composition lists (love/lead/arrow/
-# platform) and the cat pool are all derived from it, and /emojis renders it in
+# platform) and the reaction pool are all derived from it, and /emojis renders
+# it in
 # this order.
 
 
@@ -118,16 +119,16 @@ def _engine(data: dict[str, object], name: str) -> dict[str, object]:
 def _fan_window(  # noqa: PLR0913 -- the window's start/end/quiet read best flat
     data: dict[str, object], start: object, end: object, quiet: object
 ) -> None:
-    """Fan the waking window into cats/greeter and stories' quiet hours.
+    """Fan the waking window into reactions/greeter and stories' quiet hours.
 
     Does nothing unless both edges are given. Stories' quiet hours are the
     explicit ``quiet`` when set, else everything OUTSIDE the waking window.
     """
     if start is None or end is None:
         return
-    cats = _engine(data, 'cats')
-    cats.setdefault('active_start_hour', start)
-    cats.setdefault('active_end_hour', end)
+    reactions = _engine(data, 'reactions')
+    reactions.setdefault('active_start_hour', start)
+    reactions.setdefault('active_end_hour', end)
     greeter = _engine(data, 'greeter')
     greeter.setdefault('wake_start_hour', start)
     greeter.setdefault('wake_end_hour', end)
@@ -157,10 +158,11 @@ def _fan_key(  # noqa: PLR0913 -- data + the (names, key, value) fan read flat
 def apply_persona(data: dict[str, object]) -> dict[str, object]:
     """Fill the shared persona traits into each engine's sub-config.
 
-    One account is one person, so cats / stories / greeter must share ONE
+    One account is one person, so reactions / stories / greeter must share ONE
     waking window, quiet hours, timezone and silent-day chance -- otherwise the
     same "person" reacts only 7-17 but watches stories until 23 and DMs at 4am,
-    or has a "did not show up" day for cats but not for stories, which reads as
+    or has a "did not show up" day for reactions but not for stories, which
+    reads as
     several schedules. The top-level ``persona`` block is the single source of
     truth (``setdefault``, so an engine may still override its own key).
     Mutates and returns ``data``.
@@ -174,18 +176,27 @@ def apply_persona(data: dict[str, object]) -> dict[str, object]:
         return data
     quiet = persona.get('quiet_hours')
     _fan_key(
-        data, ('cats', 'stories', 'greeter', 'comod'),
-        'tz_offset_hours', persona.get('tz_offset_hours'),
+        data,
+        ('reactions', 'stories', 'greeter', 'comod'),
+        'tz_offset_hours',
+        persona.get('tz_offset_hours'),
     )
     _fan_window(
-        data, persona.get('wake_start_hour'), persona.get('wake_end_hour'),
+        data,
+        persona.get('wake_start_hour'),
+        persona.get('wake_end_hour'),
         quiet,
     )
     # One silent-day roll (is_silent_day seeds by date), one shared threshold,
-    # so cats and stories fall silent on the SAME days -- one person offline.
-    _fan_key(data, ('cats', 'stories'), 'silent_day_prob',
-             persona.get('silent_day_prob'))
-    _fan_key(data, ('cats',), 'quiet_hours', quiet)
+    # so reactions and stories fall silent on the SAME days -- one person
+    # offline.
+    _fan_key(
+        data,
+        ('reactions', 'stories'),
+        'silent_day_prob',
+        persona.get('silent_day_prob'),
+    )
+    _fan_key(data, ('reactions',), 'quiet_hours', quiet)
     return data
 
 
@@ -354,7 +365,7 @@ def _load_config() -> Config:
             # auto-delete re-emit) are skipped, not re-posted. 5 by default;
             # 0 disables this window and leaves only the time guard.
             repost_guard_count=int(data.get('repost_guard_count', 5)),
-            # Space out discussion-thread lookups so cat seeding on
+            # Space out discussion-thread lookups so reaction seeding on
             # startup/rescan does not trip flood waits. 2s default; 0 disables.
             discussion_gap=float(data.get('discussion_gap_sec', 2.0)),
         )

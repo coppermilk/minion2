@@ -142,7 +142,7 @@ convention = 'pep257'
 # targets stray debug prints in library code, not a tool's own output.
 'minions/userbot/login.py' = ['T201']
 'minions/userbot/dev/dump_emoji_ids.py' = ['T201']
-'minions/userbot/dev/cats_proof.py' = ['T201']
+'minions/userbot/dev/reactions_proof.py' = ['T201']
 'minions/donate/login.py' = ['T201']
 
 # ---------------------------------------------------------------- mypy

@@ -108,7 +108,7 @@ def load_greeter_params(
 ) -> GreeterParams:
     """Load the greeter params; channel falls back to the aggregator target.
 
-    The admin-log poll cadence is per profile (like the cats rescan): test
+    The admin-log poll cadence is per profile (like the reactions rescan): test
     tight, live relaxed to at most hourly. Live events (ChatAction) still catch
     a join/leave in real time, so the poll is only the diff-based safety net --
     hourly in live is plenty. Both fall back to ``poll_sec``.

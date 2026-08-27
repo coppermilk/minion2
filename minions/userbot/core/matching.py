@@ -184,7 +184,8 @@ def _needs_human(text: str, words: tuple[str, ...]) -> bool:
     """Whether a comment wants a real reply, not an auto sticker.
 
     A question, a link, or business/outreach wording is exactly where a canned
-    cat STICKER (a message-shaped reply) reads as a non-sequitur. The caller
+    reaction STICKER (a message-shaped reply) reads as a non-sequitur. The
+    caller
     uses this to downgrade such comments to a plain REACTION (safe on anything)
     instead. It never blocks the reaction -- it only keeps message-stickers off
     comments a human would actually answer. This is the one light content gate;

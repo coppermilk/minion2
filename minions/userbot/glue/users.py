@@ -42,7 +42,7 @@ class _UsersMixin(UserbotProtocol):
             return
         uid = int(getattr(event, 'sender_id', 0) or 0)
         chat = int(event.chat_id or 0)
-        disc_chats = {c for c, _ in self.cats.posts}
+        disc_chats = {c for c, _ in self.reactions.posts}
         if uid <= 0 or (chat != self.config.source and chat not in disc_chats):
             return
         root = _thread_top(getattr(message, 'reply_to', None)) or 0

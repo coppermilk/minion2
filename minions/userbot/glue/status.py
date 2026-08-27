@@ -23,13 +23,15 @@ from minions.userbot.core.runtime import _fmt_eta
 from minions.userbot.glue.commands import SERVICE_ACTIONS
 from minions.userbot.glue.commands import SERVICE_NAMES
 
-# How many pending cats to list individually in /status (the rest are summed).
+# How many pending reactions to list individually in /status (the rest are
+# summed).
 STATUS_PENDING_CATS = 12
 # How many of the warmest story peers to list in the attachment readout.
 STATUS_WARM_PEERS = 3
 
 if TYPE_CHECKING:
-    from minions.userbot.engines import cats
+    from minions.userbot.engines import reactions
+
 
 def _trim(title: str, width: int = 40) -> str:
     """Return a one-line, length-capped title for the /status report."""
@@ -42,7 +44,7 @@ _EMOJI_ROW_LEN = 2
 
 
 def _pending_markup(entry: dict[str, object]) -> str:
-    """Render a pending entry's chosen cat(s) as premium markup, or '?'.
+    """Render a pending entry's chosen reaction(s) as premium markup, or '?'.
 
     Reactions scheduled before the emoji were stored show '?' -- a /requeue
     does not re-pick them (the choice is made at schedule time), it only
@@ -58,7 +60,7 @@ def _pending_markup(entry: dict[str, object]) -> str:
     return markup or '?'
 
 
-def _pool_markup(pool: tuple[cats.CatEmoji, ...]) -> str:
+def _pool_markup(pool: tuple[reactions.ReactionEmoji, ...]) -> str:
     """Render a whole emoji pool as premium markup (a preview strip)."""
     return ''.join(_emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
 
@@ -100,7 +102,7 @@ class _StatusMixin(UserbotProtocol):
         return sep.join([title, *(t for t in tail if t)])
 
     def _status_text(self, labels: dict[int, str]) -> str:
-        """Return status: header, routing, videos, cats, greeter, users."""
+        """Return the /status text: header, routing, videos, engines."""
         flag = 'TEST' if self.mode == 'test' else 'LIVE'
         parts = [
             self._head('title', 'Userbot', f'{self._dot(on=True)} {flag}'),
@@ -109,7 +111,7 @@ class _StatusMixin(UserbotProtocol):
             '',
             *self._videos_lines(),
             '',
-            *self._cat_status_lines(labels),
+            *self._react_status_lines(labels),
             '',
             *self._greeter_lines(),
             '',
@@ -166,9 +168,7 @@ class _StatusMixin(UserbotProtocol):
         clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
         eta = nxt - now
         when = 'now' if eta <= 0 else _fmt_eta(eta)
-        return (
-            f'{b} check {period}s {self._arr()} next {clock} (in {when})'
-        )
+        return f'{b} check {period}s {self._arr()} next {clock} (in {when})'
 
     def _greeter_wake_eta(self, now: float) -> str:
         """Return 'HH:MM (in Xd Yh)' for the greeter's next wake-up."""
@@ -245,9 +245,9 @@ class _StatusMixin(UserbotProtocol):
         )
         return lines
 
-    def _cat_status_lines(self, labels: dict[int, str]) -> list[str]:
-        """Return the cat engine's live state (empty-ish when disabled)."""
-        brain = self.cats
+    def _react_status_lines(self, labels: dict[int, str]) -> list[str]:
+        """Return the reaction engine's live state (empty when off)."""
+        brain = self.reactions
         b = self._bul()
         enabled = brain.params.enabled
         state = 'on' if enabled else 'off'
@@ -259,28 +259,28 @@ class _StatusMixin(UserbotProtocol):
         pool = _pool_markup(brain.params.pool)
         return [
             self._head(
-                'cats',
-                'Cats',
+                'reactions',
+                'Reactions',
                 f'{self._dot(on=enabled)} {state}',
-                f'{len(brain.params.pool)} cats / '
+                f'{len(brain.params.pool)} reactions / '
                 f'{len(brain.params.like_pool)} likes',
             ),
             f'{b} likes {self._arr()} {likes}',
-            f'{b} cats {self._arr()} {pool}',
+            f'{b} reactions {self._arr()} {pool}',
             (
                 f'{b} mood {brain.state.mood:.2f} {b} answered '
-                f'{len(brain.state.catted)} {b} pending '
+                f'{len(brain.state.reacted)} {b} pending '
                 f'{len(brain.state.pending)}'
             ),
             f'{b} window {window} (prior) {b} learned {learned}',
-            self._cat_rescan_line(),
-            *self._cat_attach_lines(),
+            self._react_rescan_line(),
+            *self._react_attach_lines(),
             *self._last_posts_lines(labels),
-            *self._pending_cat_lines(),
-            f'{b} /catnow {b} /requeue',
+            *self._pending_react_lines(),
+            f'{b} /reactnow {b} /requeue',
         ]
 
-    def _cat_attach_lines(self) -> list[str]:
+    def _react_attach_lines(self) -> list[str]:
         """Return the per-commenter like-attachment readout (Berlyne control).
 
         exposure p = engaged/commented (steered to the Wundt peak ~0.67),
@@ -290,7 +290,7 @@ class _StatusMixin(UserbotProtocol):
         come from the ledger's cached @names (same as stories). Empty when the
         control is off.
         """
-        brain = self.cats
+        brain = self.reactions
         if not brain.params.attach_enabled:
             return []
         now = time.time()
@@ -316,30 +316,30 @@ class _StatusMixin(UserbotProtocol):
         ]
         return [today, head, *rows]
 
-    def _cat_rescan_line(self) -> str:
+    def _react_rescan_line(self) -> str:
         """Return the auto-rescan period and the countdown to the next one."""
         b = self._bul()
         period = int(self._rescan_sec)
         if period <= 0:
             return f'{b} rescan: off (use /requeue)'
-        nxt = self._cat_next_rescan
+        nxt = self._react_next_rescan
         if nxt <= 0:
             return f'{b} rescan {period}s {b} next: first run'
-        tz = timezone(timedelta(hours=self.cats.params.tz_offset_hours))
+        tz = timezone(timedelta(hours=self.reactions.params.tz_offset_hours))
         clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
         eta = nxt - time.time()
         when = 'now' if eta <= 0 else _fmt_eta(eta)
         return f'{b} rescan {period}s {self._arr()} next {clock} (in {when})'
 
-    def _pending_cat_lines(self) -> list[str]:
-        """Return the queued cats: which cat lands on which comment, when."""
-        pending = self.cats.state.pending
+    def _pending_react_lines(self) -> list[str]:
+        """Return queued reactions: which lands on which comment, when."""
+        pending = self.reactions.state.pending
         if not pending:
             return []
         now = time.time()
         lines = [f'{self._bul()} queued:']
         lines.extend(
-            self._pending_cat_line(entry, now)
+            self._pending_react_line(entry, now)
             for entry in pending[:STATUS_PENDING_CATS]
         )
         extra = len(pending) - STATUS_PENDING_CATS
@@ -347,8 +347,8 @@ class _StatusMixin(UserbotProtocol):
             lines.append(f'    ... (+{extra} more)')
         return lines
 
-    def _pending_cat_line(self, entry: dict[str, object], now: float) -> str:
-        """One queued line: '<cat> <verb> -> <comment> . post N . <eta>'."""
+    def _pending_react_line(self, entry: dict[str, object], now: float) -> str:
+        """One queued line: reaction, verb, comment, post, eta."""
         b = self._bul()
         msg = int(entry.get('reply_to', 0))
         root = int(entry.get('root', msg))
@@ -365,7 +365,7 @@ class _StatusMixin(UserbotProtocol):
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
         """Return the watched comment threads, grouped one line per chat."""
-        posts = self.cats.posts
+        posts = self.reactions.posts
         if not posts:
             return []
         by_chat: dict[int, list[int]] = {}
@@ -382,7 +382,8 @@ class _StatusMixin(UserbotProtocol):
     def _services_lines(self) -> list[str]:
         """Return the service control table: each mode + its tap commands.
 
-        Underscore commands (``/cats_test`` ...) so Telegram renders each as a
+        Underscore commands (``/reactions_test`` ...) so Telegram renders each
+        as a
         single tappable command; every service is off/test/live on its own.
         """
         lines = [self._head('services', 'Services')]
@@ -422,8 +423,7 @@ class _StatusMixin(UserbotProtocol):
         mean_p = sum(w.p for w in warm) / n
         mean_r = sum(w.r for w in warm) / n
         head = (
-            f'{b} attach {n} peers {self._arr()} '
-            f'p~{mean_p:.2f} r~{mean_r:.2f}'
+            f'{b} attach {n} peers {self._arr()} p~{mean_p:.2f} r~{mean_r:.2f}'
         )
         rows = [
             f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'

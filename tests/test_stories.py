@@ -65,9 +65,7 @@ def _params(**over: object) -> stories.StoryParams:
     return stories.StoryParams(**base)
 
 
-def _brain(
-    tmp_path: Path, **over: object
-) -> stories.StoryBrain:
+def _brain(tmp_path: Path, **over: object) -> stories.StoryBrain:
     brain = stories.StoryBrain(
         _params(**over),
         tmp_path / 'stories.json',

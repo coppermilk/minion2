@@ -194,11 +194,15 @@ def _hearts(value: object) -> tuple[tuple[str, str], ...]:
 
 
 def _tz_offset(data: dict[str, object]) -> float:
-    """Return the persona's UTC offset, from the shared 'cats' section."""
-    cats = data.get('cats') if isinstance(data.get('cats'), dict) else {}
-    cats = cats or {}
+    """Return the persona's UTC offset, from the shared 'reactions' section."""
+    reactions = (
+        data.get('reactions')
+        if isinstance(data.get('reactions'), dict)
+        else {}
+    )
+    reactions = reactions or {}
     try:
-        return float(cats.get('tz_offset_hours', 3.0))
+        return float(reactions.get('tz_offset_hours', 3.0))
     except (TypeError, ValueError):
         return 3.0
 

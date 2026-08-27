@@ -9,7 +9,7 @@ curve, not all of them), leaves an occasional heart/thumb, and closes the app.
 The choices are per-peer so each relationship is steered toward the peak; see
 ``engines/attachment.py`` for the model.
 
-Like ``cats.py`` this module is deliberately Telethon-free (pure Python +
+Like ``reactions.py`` this module is deliberately Telethon-free (pure Python +
 stdlib) so every decision is unit-testable; ``main.py`` owns the client, feeds
 in the peers who currently have unseen stories (Telegram's own stories feed
 already limits that to contacts / people we follow), and calls in here for the
@@ -594,9 +594,7 @@ class StoryBrain:
             for k, v in (raw.get('seen') or {}).items()
         }
         order = [
-            str(k)
-            for k in (raw.get('seen_order') or [])
-            if str(k) in seen
+            str(k) for k in (raw.get('seen_order') or []) if str(k) in seen
         ]
         # Any peer missing from the persisted order (older state file) is
         # appended, so the LRU cap still has every tracked peer to work with.
@@ -617,8 +615,7 @@ class StoryBrain:
                 recip_day=str(raw.get('react_day', '')),
                 recip_today=int(raw.get('react_today', 0)),
                 names={
-                    str(k): str(v)
-                    for k, v in (raw.get('names') or {}).items()
+                    str(k): str(v) for k, v in (raw.get('names') or {}).items()
                 },
             ),
             last_react=float(raw.get('last_react', 0.0)),
@@ -656,7 +653,7 @@ def load_story_params(
     """Load the stories engine's parameters from the JSON 'stories' key.
 
     ``mode`` selects the re-poll cadence (test tight, live relaxed), mirroring
-    the cats rescan interval; both fall back to ``poll_sec``.
+    the reactions rescan interval; both fall back to ``poll_sec``.
     """
     cfg = data.get('stories') if isinstance(data.get('stories'), dict) else {}
     cfg = cfg or {}

@@ -1,10 +1,10 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The cat-reply engine glue, mixed into Userbot.
+"""The reaction-reply engine glue, mixed into Userbot.
 
-Extracted from ``main``: scheduling human-like cat replies to comments,
+Extracted from ``main``: scheduling human-like reaction replies to comments,
 seeding/rescanning the watch-list, and the send primitives (sticker, text
-reply, reaction). ``_CatsMixin`` is mixed into ``Userbot`` with method
+reply, reaction). ``_ReactionsMixin`` is mixed into ``Userbot`` with method
 bodies unchanged, so they keep reading ``self`` state; it inherits
 ``UserbotProtocol`` (base.py) so the type checker knows that state.
 """
@@ -26,7 +26,7 @@ from minions.userbot.core.base import UserbotProtocol
 from minions.userbot.core.matching import _needs_human
 from minions.userbot.core.matching import _thread_top
 from minions.userbot.core.models import _Comment
-from minions.userbot.engines import cats
+from minions.userbot.engines import reactions
 from minions.userbot.engines.premium_emoji import RichText
 from minions.userbot.glue.status import STATUS_PENDING_CATS
 from minions.userbot.glue.status import _trim
@@ -39,42 +39,47 @@ if TYPE_CHECKING:
 log = logging.getLogger('userbot')
 
 # How many recent messages to scan when checking whether the operator already
-# replied to a comment by hand (so the bot does not pile a cat on top).
+# replied to a comment by hand (so the bot does not pile a reaction on top).
 CAT_REPLY_SCAN = 200
 # How many existing comments per watched thread to consider at startup, so
-# comments made before the bot started can still get a (delayed) cat.
+# comments made before the bot started can still get a (delayed) reaction.
 COMMENT_SCAN = 50
-# Just before a cat fires we re-scan its post's thread so a fresh comment need
+# Just before a reaction fires we re-scan its post's thread so a fresh comment
+# need
 # not wait for the next rescan loop. Throttled per thread to this many seconds
 # so a burst of firings costs at most one extra read per thread (flood-safe).
 PRE_FIRE_REFRESH_SEC = 45.0
 
 
-class _CatsMixin(UserbotProtocol):
-    """The cat-reply engine, mixed into Userbot (reads its state)."""
+class _ReactionsMixin(UserbotProtocol):
+    """The reaction-reply engine, mixed into Userbot (reads its state)."""
 
-    def _maybe_cat(self, event: events.NewMessage.Event) -> None:
-        """If this message comments on one of our posts, schedule a cat react.
+    def _maybe_react(self, event: events.NewMessage.Event) -> None:
+        """If this message comments on one of our posts, schedule a reaction.
 
         A "comment" is a reply whose target is one of the last posts. Each
-        commenter is catted at most once PER POST -- a second comment under the
+        commenter is reacted at most once PER POST -- a second comment under
+        the
         same post is ignored, but the same person on a different post is
         eligible again. The engine decides whether and when (it may return
-        nothing -- skipped, silent day, already catted here).
+        nothing -- skipped, silent day, already reacted here).
         """
         if getattr(event.message, 'out', False):
-            return  # our own message (a post) -- never cat it
+            return  # our own message (a post) -- never reaction it
         reply = getattr(event.message, 'reply_to', None)
         top = _thread_top(reply)
         chat = int(event.chat_id or 0)
-        if not self.cats.is_comment(chat, top):
+        if not self.reactions.is_comment(chat, top):
             return
         person = str(getattr(event, 'sender_id', None) or '')
         if not person:
             return
         # Feedback (principle 8): a reply to our freshest post reads as active
         # engagement, so the reaction comes faster.
-        engaged = bool(self.cats.posts) and self.cats.posts[-1] == (chat, top)
+        engaged = bool(self.reactions.posts) and self.reactions.posts[-1] == (
+            chat,
+            top,
+        )
         text = _trim(str(getattr(event.message, 'message', '') or ''))
         ref = _Comment(
             chat=chat, root=top, msg_id=int(event.message.id), text=text
@@ -84,35 +89,39 @@ class _CatsMixin(UserbotProtocol):
     def _schedule_comment(
         self, comment: _Comment, person: str, *, engaged: bool
     ) -> None:
-        """Schedule (and arm) a cat for one commenter under a watched post.
+        """Schedule (and arm) a reaction for a commenter under a post.
 
         Once per (post, commenter): the dedup key ties the person to THIS
-        post's thread, so re-commenting under the same post gets no second cat,
+        post's thread, so re-commenting under the same post gets no second
+        reaction,
         but the same person on another post is eligible again. The engine may
-        return nothing (skipped, silent day, already catted here).
+        return nothing (skipped, silent day, already reacted here).
 
-        The cat(s) are CHOSEN here, at schedule time, and stored on the pending
-        entry -- so /status and /requeue can show exactly which cat will land
-        on which comment, and the send places that same cat rather than a fresh
+        The reaction(s) are CHOSEN here, at schedule time, and stored on the
+        pending
+        entry -- so /status and /requeue can show exactly which reaction will
+        land
+        on which comment, and the send places that same reaction rather than a
+        fresh
         random one.
         """
         # When liking everything OR steering exposure per person, key per
         # COMMENT (chat:root:person:msg) so each comment is decided once;
         # otherwise once per (post, person). The key keeps the 'chat:root:'
         # prefix so note_post's pruning holds.
-        attach = self.cats.params.attach_enabled
-        per_comment = self.cats.params.like_all or attach
+        attach = self.reactions.params.attach_enabled
+        per_comment = self.reactions.params.like_all or attach
         key = f'{comment.chat}:{comment.root}:{person}'
         if per_comment:
             key = f'{key}:{comment.msg_id}'
-        when = self.cats.schedule(key, engaged=engaged)
+        when = self.reactions.schedule(key, engaged=engaged)
         if when is None:
             return
         # Berlyne exposure control: like only a Wundt-peak fraction of a
         # person's comments (the first is always liked). A steered skip still
         # leaves the key recorded as decided (schedule marked it), so a rescan
         # never re-rolls it into a like.
-        if attach and not self.cats.decide_engage(person):
+        if attach and not self.reactions.decide_engage(person):
             return
         # Choose the like reaction vs. the rarer thread sticker (deterministic
         # in the comment id), then place it.
@@ -120,7 +129,7 @@ class _CatsMixin(UserbotProtocol):
         if chosen is None:  # empty pool -> nothing to place
             return
         specs, kind = chosen
-        cat = cats.Cat(
+        reaction = reactions.Reaction(
             chat=comment.chat,
             reply_to=comment.msg_id,
             root=comment.root,
@@ -129,12 +138,12 @@ class _CatsMixin(UserbotProtocol):
             emojis=tuple((s.emoji_id, s.fallback) for s in specs),
             kind=kind,
         )
-        self.cats.add_pending(cat)
-        self._arm_cat(cat)
+        self.reactions.add_pending(reaction)
+        self._arm_reaction(reaction)
 
     def _choose_reaction(
         self, person: str, comment: _Comment
-    ) -> tuple[list[cats.CatEmoji], str] | None:
+    ) -> tuple[list[reactions.ReactionEmoji], str] | None:
         """Pick (emoji specs, kind) for this comment: a like or a sticker.
 
         A thread STICKER is a message-shaped reply, so it only fits plain
@@ -147,110 +156,121 @@ class _CatsMixin(UserbotProtocol):
         allow_sticker = not _needs_human(comment.text, self.consts.human_words)
         # The reciprocity control decides sticker vs like at our target rate
         # (no activity-burst gate); a question/link comment stays a plain like.
-        if self.cats.decide_sticker(person, content_ok=allow_sticker):
-            specs, kind = self.cats.pick_cat(seed), 'reply'
+        if self.reactions.decide_sticker(person, content_ok=allow_sticker):
+            specs, kind = self.reactions.pick_reaction(seed), 'reply'
         else:
-            specs, kind = self.cats.pick_like(seed), 'react'
+            specs, kind = self.reactions.pick_like(seed), 'react'
         return (specs, kind) if specs else None
 
-    def _arm_cat(self, cat: cats.Cat) -> None:
-        """Create the fire-later task for a scheduled (persisted) cat."""
-        task = asyncio.create_task(self._cat_later(cat))
-        self._cat_tasks.add(task)
-        task.add_done_callback(self._cat_tasks.discard)
+    def _arm_reaction(self, reaction: reactions.Reaction) -> None:
+        """Create the fire-later task for a scheduled (persisted) reaction."""
+        task = asyncio.create_task(self._reaction_later(reaction))
+        self._react_tasks.add(task)
+        task.add_done_callback(self._react_tasks.discard)
 
-    def rearm_cats(self) -> None:
-        """Re-arm cats that were scheduled before a restart (survive downtime).
+    def rearm_reactions(self) -> None:
+        """Re-arm reactions scheduled before a restart (survive downtime).
 
         Any whose time passed while the host was down is renewed to a fresh
         in-window slot by the engine, so a night's worth does not fire at once.
         """
-        for cat in self.cats.rearm():
-            self._arm_cat(cat)
+        for reaction in self.reactions.rearm():
+            self._arm_reaction(reaction)
 
-    async def backfill_cat_posts(self) -> None:
-        """Seed the cat watch-list from the posts already in each target.
+    async def backfill_react_posts(self) -> None:
+        """Seed the reaction watch-list from the posts already in each target.
 
-        Without this, cats only watch posts made AFTER the bot starts noting
+        Without this, reactions only watch posts made AFTER the bot starts
+        noting
         them, so posts that predate a deploy/restart are ignored. Here we look
         up the last ``watch_posts`` real posts per target and register them (in
         the channel case, resolving each one's discussion thread), so comments
-        on the existing last posts get cats right away.
+        on the existing last posts get reactions right away.
         """
-        if not self.cats.params.enabled:
+        if not self.reactions.params.enabled:
             return
         for target in self.live_targets():  # test mode -> the test channel
             await self._seed_target_posts(target)
-        log.info('cats: watch-list has %d post(s)', len(self.cats.posts))
+        log.info(
+            'reactions: watch-list has %d post(s)', len(self.reactions.posts)
+        )
 
     async def _recent_target_posts(self, target: int, want: int) -> object:
         """Return the last ``want`` posts in a target (channel/group)."""
-        if self.cats.params.comments_in_discussion:
+        if self.reactions.params.comments_in_discussion:
             return await self.client.get_messages(target, limit=want)
         return await self.client.get_messages(
             target, limit=want, from_user='me'
         )
 
     async def _seed_target_posts(self, target: int) -> None:
-        """Register the last posts of one target into the cat watch-list."""
-        want = self.cats.params.watch_posts
+        """Register a target's last posts into the reaction watch-list."""
+        want = self.reactions.params.watch_posts
         try:
             history = await self._recent_target_posts(target, want)
         except Exception:  # noqa: BLE001 -- unreachable target: skip, no crash
-            log.warning('cats: could not read %s post history', target)
+            log.warning('reactions: could not read %s post history', target)
             return
         for message in reversed(list(history)):  # oldest first -> newest last
             msg_id = int(getattr(message, 'id', 0) or 0)
             if msg_id:
                 await self._watch_post(target, msg_id)
 
-    async def backfill_cat_comments(self) -> None:
-        """Schedule cats for comments already sitting under the watched posts.
+    async def backfill_react_comments(self) -> None:
+        """Schedule reactions for comments already under the watched posts.
 
         Live events only cover comments that arrive WHILE the bot runs, so
-        comments made before it started would never get a cat. Here we scan the
+        comments made before it started would never get a reaction. Here we
+        scan the
         existing comments in each watched thread and schedule the ones not yet
-        catted (dedup, skip and the manual-reply check still apply), spread by
+        reacted (dedup, skip and the manual-reply check still apply), spread by
         the engine's heavy-tailed spacing so they trickle out, not burst.
         """
-        if not self.cats.params.enabled:
+        if not self.reactions.params.enabled:
             return
-        for chat, root in list(self.cats.posts):
+        for chat, root in list(self.reactions.posts):
             await self._seed_thread_comments(chat, root)
-        log.info('cats: %d comment(s) queued', len(self.cats.state.pending))
+        log.info(
+            'reactions: %d comment(s) queued',
+            len(self.reactions.state.pending),
+        )
 
-    async def cat_rescan_loop(self) -> None:
+    async def react_rescan_loop(self) -> None:
         """Periodically re-scan targets so new posts are picked up by itself.
 
         A post created (and commented on) while the bot runs is not
         auto-watched by the event stream; without this the operator had to run
         /requeue by hand. Every ``rescan_sec`` this re-seeds the watch-list
-        from each target's recent posts and schedules cats for new comments
-        (dedup skips what is already queued/answered). ``_cat_next_rescan`` is
+        from each target's recent posts and schedules reactions for new
+        comments
+        (dedup skips what is already queued/answered). ``_react_next_rescan``
+        is
         published for the /status countdown. Off when rescan_sec <= 0.
         """
         period = self._rescan_sec
-        if not self.cats.params.enabled or period <= 0:
+        if not self.reactions.params.enabled or period <= 0:
             return
         while True:
-            self._cat_next_rescan = time.time() + period
+            self._react_next_rescan = time.time() + period
             await asyncio.sleep(period)
             try:
-                await self.backfill_cat_posts()
-                await self.backfill_cat_comments()
+                await self.backfill_react_posts()
+                await self.backfill_react_comments()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception('cats: periodic rescan failed; will retry')
+                log.exception('reactions: periodic rescan failed; will retry')
 
     async def _seed_thread_comments(self, chat: int, root: int) -> None:
-        """Schedule cats for the recent comments in one watched thread."""
+        """Schedule reactions for the recent comments in one watched thread."""
         try:
             comments = await self.client.get_messages(
                 chat, reply_to=root, limit=COMMENT_SCAN
             )
         except Exception:  # noqa: BLE001 -- no thread/unreachable: skip quietly
-            log.warning('cats: could not read comments of %s/%s', chat, root)
+            log.warning(
+                'reactions: could not read comments of %s/%s', chat, root
+            )
             return
         for message in reversed(list(comments)):  # oldest first
             self._schedule_from_message(chat, root, message)
@@ -258,7 +278,7 @@ class _CatsMixin(UserbotProtocol):
     def _schedule_from_message(
         self, chat: int, root: int, message: object
     ) -> None:
-        """Schedule a cat for one existing comment message (skip our own)."""
+        """Schedule a reaction for one existing comment (skip our own)."""
         if getattr(message, 'out', False):
             return
         person = str(getattr(message, 'sender_id', None) or '')
@@ -268,55 +288,63 @@ class _CatsMixin(UserbotProtocol):
             ref = _Comment(chat=chat, root=root, msg_id=comment_id, text=text)
             self._schedule_comment(ref, person, engaged=False)
 
-    async def requeue_cats(self) -> None:
-        """Rescan + refresh the pending-cat queue on demand (the /requeue cmd).
+    async def requeue_reactions(self) -> None:
+        """Rescan + refresh the pending-reaction queue (the /requeue cmd).
 
         First re-times and re-arms the PERSISTED queue (so a queue scheduled
         under stale timing is flushed). Then it RESCANS the targets: it
         re-seeds the watch-list from each target's recent posts and schedules
-        cats for comments not yet queued -- so a post created (and commented
+        reactions for comments not yet queued -- so a post created (and
+        commented
         on) WHILE the bot was running, which is not auto-watched, is picked up
         here instead of returning "nothing queued". Dedup, skip and the
         manual-reply check still apply, so nothing is duplicated.
         """
-        self._cancel_cat_tasks()
-        for cat in self.cats.rearm(renew_all=True):  # re-time existing queue
-            self._arm_cat(cat)
-        await self.backfill_cat_posts()  # pick up posts made since startup
-        await self.backfill_cat_comments()  # queue their new comments (armed)
-        count = len(self.cats.state.pending)
+        self._cancel_react_tasks()
+        for reaction in self.reactions.rearm(
+            renew_all=True
+        ):  # re-time existing queue
+            self._arm_reaction(reaction)
+        await self.backfill_react_posts()  # pick up posts made since startup
+        await (
+            self.backfill_react_comments()
+        )  # queue their new comments (armed)
+        count = len(self.reactions.state.pending)
         await self._send_status(await self._plan_text(f'Requeued {count}'))
-        log.info('requeued %d pending cats', count)
+        log.info('requeued %d pending reactions', count)
 
     async def answer_all_now(self) -> None:
-        """Answer EVERY pending commenter immediately (the /catnow command).
+        """Answer EVERY pending commenter immediately (the /reactnow command).
 
-        The human-like wait is bypassed: all pending cats are set to fire now
+        The human-like wait is bypassed: all pending reactions are set to fire
+        now
         (the manual-reply check still applies). An operator override. The reply
-        lists exactly which cat lands on which comment, so it is never a
-        mystery which reaction /catnow placed.
+        lists exactly which reaction lands on which comment, so it is never a
+        mystery which reaction /reactnow placed.
         """
-        self._cancel_cat_tasks()
-        due = self.cats.due_now()
-        for cat in due:
-            self._arm_cat(cat)
+        self._cancel_react_tasks()
+        due = self.reactions.due_now()
+        for reaction in due:
+            self._arm_reaction(reaction)
         await self._send_status(await self._plan_text(f'Answering {len(due)}'))
-        log.info('answering %d pending cats now', len(due))
+        log.info('answering %d pending reactions now', len(due))
 
     async def _plan_text(self, head: str) -> str:
-        """`<head> pending cat(s):` then a which-cat-where line for each.
+        """`<head> pending reaction(s):` then a which-where line each.
 
-        This is what makes /requeue and /catnow legible: every queued reaction
-        is listed with the exact cat, the comment, its post, and the eta -- so
+        This is what makes /requeue and /reactnow legible: every queued
+        reaction
+        is listed with the exact reaction, the comment, its post, and the eta
+        -- so
         the operator sees the plan instead of a count.
         """
-        pending = self.cats.state.pending
+        pending = self.reactions.state.pending
         if not pending:
-            return f'{head} pending cat(s). Nothing queued.'
+            return f'{head} pending reaction(s). Nothing queued.'
         now = time.time()
-        lines = [f'{head} pending cat(s):']
+        lines = [f'{head} pending reaction(s):']
         lines.extend(
-            self._pending_cat_line(entry, now)
+            self._pending_react_line(entry, now)
             for entry in pending[:STATUS_PENDING_CATS]
         )
         extra = len(pending) - STATUS_PENDING_CATS
@@ -324,65 +352,73 @@ class _CatsMixin(UserbotProtocol):
             lines.append(f'    ... (+{extra} more)')
         return '\n'.join(lines)
 
-    def _cancel_cat_tasks(self) -> None:
-        """Cancel every in-flight fire-later cat task."""
-        for task in list(self._cat_tasks):
+    def _cancel_react_tasks(self) -> None:
+        """Cancel every in-flight fire-later reaction task."""
+        for task in list(self._react_tasks):
             task.cancel()
-        self._cat_tasks.clear()
+        self._react_tasks.clear()
 
-    async def _refresh_before_fire(self, cat: cats.Cat) -> None:
+    async def _refresh_before_fire(self, reaction: reactions.Reaction) -> None:
         """Pull new comments in this post's thread just before we like it.
 
         A comment made between rescan loops would otherwise wait for the next
         session; re-reading the thread here queues it now. Debounced per thread
-        (``PRE_FIRE_REFRESH_SEC``) so a burst of due cats reads it once.
+        (``PRE_FIRE_REFRESH_SEC``) so a burst of due reactions reads it once.
         """
-        if not self.cats.params.enabled:
+        if not self.reactions.params.enabled:
             return
-        root = cat.root or cat.reply_to
+        root = reaction.root or reaction.reply_to
         now = time.time()
         if now - self._thread_rescan_at.get(root, 0.0) < PRE_FIRE_REFRESH_SEC:
             return
         self._thread_rescan_at[root] = now
         try:
-            await self._seed_thread_comments(cat.chat, root)
-        except Exception:  # noqa: BLE001 -- best effort; the cat still fires
-            log.warning('cat: pre-fire refresh failed for thread %s', root)
+            await self._seed_thread_comments(reaction.chat, root)
+        except Exception:  # noqa: BLE001 -- best effort; the reaction still fires
+            log.warning(
+                'reaction: pre-fire refresh failed for thread %s', root
+            )
 
-    async def _cat_later(self, cat: cats.Cat) -> None:
-        """Sleep until the cat is due, then react unless answered by hand.
+    async def _reaction_later(self, reaction: reactions.Reaction) -> None:
+        """Sleep until the reaction is due, then react unless answered by hand.
 
         A send failure is logged loudly (not swallowed) and the entry is
         dropped so one poison comment cannot wedge the queue; the person stays
-        catted, so it is not rescheduled.
+        reacted, so it is not rescheduled.
         """
-        delay = cat.when - time.time()
+        delay = reaction.when - time.time()
         if delay > 0:
             await asyncio.sleep(delay)
-        await self._refresh_before_fire(cat)
+        await self._refresh_before_fire(reaction)
         try:
-            if not await self._should_skip_cat(cat.chat, cat.reply_to):
-                await self._deliver(cat)
+            if not await self._should_skip_reaction(
+                reaction.chat, reaction.reply_to
+            ):
+                await self._deliver(reaction)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception(
-                'cat: react failed in %s (comment %s)', cat.chat, cat.reply_to
+                'reaction: react failed in %s (comment %s)',
+                reaction.chat,
+                reaction.reply_to,
             )
-        self.cats.done_pending(cat.chat, cat.reply_to)
+        self.reactions.done_pending(reaction.chat, reaction.reply_to)
 
-    async def _should_skip_cat(self, chat: int, comment_id: int) -> bool:
-        """Skip the cat when the operator already answered the comment by hand.
+    async def _should_skip_reaction(self, chat: int, comment_id: int) -> bool:
+        """Skip the reaction if the operator already answered by hand.
 
         "By hand" is either a manual reply to the comment OR a manual reaction
         already sitting on it -- in both cases the operator has engaged, so the
-        bot does not pile a cat reaction on top.
+        bot does not pile a reaction on top.
         """
-        if not self.cats.params.skip_if_manually_replied:
+        if not self.reactions.params.skip_if_manually_replied:
             return False
         answered = await self._human_answered(chat, comment_id)
         if answered:
-            log.info('cat: %s already answered by hand, skipping', comment_id)
+            log.info(
+                'reaction: %s already answered by hand, skipping', comment_id
+            )
         return answered
 
     async def _human_answered(self, chat: int, comment_id: int) -> bool:
@@ -390,8 +426,8 @@ class _CatsMixin(UserbotProtocol):
 
         Two hand signals count, either one wins: an outgoing (manual) reply to
         the comment, or this account's own reaction already sitting on it. The
-        cat has not been placed yet, so any such reply/reaction is the
-        operator's own -- do not pile a cat reaction on top of it.
+        reaction has not been placed yet, so any such reply/reaction is the
+        operator's own -- do not pile a reaction on top of it.
         """
         try:
             history = await self.client.get_messages(
@@ -399,7 +435,7 @@ class _CatsMixin(UserbotProtocol):
             )
         except Exception:  # noqa: BLE001 -- unreachable: fail open, react anyway
             log.warning(
-                'cat: could not check a manual reply to %s', comment_id
+                'reaction: could not check a manual reply to %s', comment_id
             )
             return False
         for message in history:
@@ -433,39 +469,44 @@ class _CatsMixin(UserbotProtocol):
         recent = getattr(reactions, 'recent_reactions', None) or []
         return any(getattr(r, 'my', False) for r in recent)
 
-    async def _deliver(self, cat: cats.Cat) -> None:
-        """Place the scheduled cat: a like REACTION, or a thread STICKER.
+    async def _deliver(self, reaction: reactions.Reaction) -> None:
+        """Place the scheduled reaction: a like REACTION, or a thread STICKER.
 
-        ``cat.kind`` was decided at schedule time and stored, so the delivery
+        ``reaction.kind`` was decided at schedule time and stored, so the
+        delivery
         is exactly what /status showed: 'react' puts a like reaction ON the
-        comment; 'reply' sends the chosen premium cat emoji as a message in the
+        comment; 'reply' sends the chosen premium reaction emoji as a message
+        in the
         comment's thread (it reads like a sticker).
         """
-        if cat.kind == 'reply':
-            await self._send_sticker(cat)
+        if reaction.kind == 'reply':
+            await self._send_sticker(reaction)
         else:
-            await self._send_cats(cat)
+            await self._send_reactions(reaction)
 
-    async def _send_cats(self, cat: cats.Cat) -> None:
-        """React to the commenter's message with the cat(s) chosen at schedule.
+    async def _send_reactions(self, reaction: reactions.Reaction) -> None:
+        """React to the commenter with the reaction(s) chosen at schedule.
 
-        The reaction is placed ON the comment itself -- the cat emoji shows as
+        The reaction is placed ON the comment itself -- the reaction emoji
+        shows as
         a reaction pill under the commenter's message, not as a reply in the
         thread. The emoji were picked when the comment was scheduled and stored
-        on ``cat``, so what lands is exactly what /status showed.
+        on ``reaction``, so what lands is exactly what /status showed.
         """
-        placed = await self._react(cat.chat, cat.reply_to, cat.emojis)
+        placed = await self._react(
+            reaction.chat, reaction.reply_to, reaction.emojis
+        )
         if placed:
-            glyphs = ''.join(fb for _, fb in cat.emojis)
+            glyphs = ''.join(fb for _, fb in reaction.emojis)
             log.info(
-                'cat: reacted %s on comment %s in %s',
+                'reaction: reacted %s on comment %s in %s',
                 glyphs,
-                cat.reply_to,
-                cat.chat,
+                reaction.reply_to,
+                reaction.chat,
             )
 
-    async def _send_sticker(self, cat: cats.Cat) -> None:
-        """Reply IN THE THREAD with the chosen premium cat emoji (a sticker).
+    async def _send_sticker(self, reaction: reactions.Reaction) -> None:
+        """Reply IN THE THREAD with the chosen premium emoji (a sticker).
 
         The emoji is sent as a message that replies to the comment inside its
         discussion thread (top=root), so it lands in the post's comments and
@@ -473,51 +514,52 @@ class _CatsMixin(UserbotProtocol):
         if the threaded send is refused (or it is a plain group), so a sticker
         is never lost to threading.
         """
-        if not cat.emojis:
+        if not reaction.emojis:
             return
-        emoji_id, fallback = cat.emojis[0]
+        emoji_id, fallback = reaction.emojis[0]
         spec = {'id': emoji_id, 'fallback': fallback}
         message = RichText().emoji(spec).build()
-        threaded = bool(cat.root) and cat.root != cat.reply_to
+        threaded = bool(reaction.root) and reaction.root != reaction.reply_to
         if threaded:
             try:
-                await self._reply_in_thread(cat, message)
+                await self._reply_in_thread(reaction, message)
             except Exception:  # noqa: BLE001 -- fall back to a flat reply
                 log.warning(
-                    'cat: threaded sticker failed in %s; flat', cat.chat
+                    'reaction: threaded sticker failed in %s; flat',
+                    reaction.chat,
                 )
             else:
                 log.info(
-                    'cat: sticker %s in thread %s of %s',
+                    'reaction: sticker %s in thread %s of %s',
                     fallback,
-                    cat.root,
-                    cat.chat,
+                    reaction.root,
+                    reaction.chat,
                 )
                 return
         await self.client.send_message(
-            cat.chat,
+            reaction.chat,
             message.text,
             formatting_entities=message.entities,
-            reply_to=cat.reply_to,
+            reply_to=reaction.reply_to,
             link_preview=False,
         )
         log.info(
-            'cat: sticker %s on comment %s in %s',
+            'reaction: sticker %s on comment %s in %s',
             fallback,
-            cat.reply_to,
-            cat.chat,
+            reaction.reply_to,
+            reaction.chat,
         )
 
     async def _reply_in_thread(
-        self, cat: cats.Cat, message: PremiumMessage
+        self, reaction: reactions.Reaction, message: PremiumMessage
     ) -> None:
         """Send ``message`` as a reply inside the comment thread (top=root)."""
         reply = InputReplyToMessage(
-            reply_to_msg_id=cat.reply_to, top_msg_id=cat.root
+            reply_to_msg_id=reaction.reply_to, top_msg_id=reaction.root
         )
         await self.client(
             SendMessageRequest(
-                peer=cat.chat,
+                peer=reaction.chat,
                 message=message.text,
                 entities=message.entities,
                 reply_to=reply,
@@ -528,9 +570,10 @@ class _CatsMixin(UserbotProtocol):
     async def _react(
         self, peer: int, msg_id: int, emojis: tuple[tuple[str, str], ...]
     ) -> bool:
-        """Place the given premium cat(s) as a reaction ON ``msg_id``.
+        """Place the given premium reaction(s) as a reaction ON ``msg_id``.
 
-        ``emojis`` are the ``(id, fallback)`` cats chosen up front. The whole
+        ``emojis`` are the ``(id, fallback)`` reactions chosen up front. The
+        whole
         set goes in ONE ``SendReaction`` call (reactions are atomic: one
         request carries the account's whole reaction set on the message).
         Returns whether anything was placed (False for an empty set). Shared by
@@ -546,13 +589,14 @@ class _CatsMixin(UserbotProtocol):
         except Exception:  # noqa: BLE001 -- custom emoji may be disallowed
             # The chat may not allow CUSTOM-emoji reactions (or the account
             # is not Premium): fall back to the plain-emoji version of the
-            # same cats (the fallback glyphs), so a cat reaction still lands
+            # same reactions (the fallback glyphs), so a reaction
+            # still lands
             # wherever standard reactions are allowed. If that fails too, it
             # propagates to the caller's guard (logged, never fatal).
             standard = [ReactionEmoji(emoticon=fb) for _, fb in emojis]
             await self._send_reaction(peer, msg_id, standard)
             log.info(
-                'cat: custom reaction rejected in %s; used standard emoji',
+                'reaction: custom rejected in %s; used standard emoji',
                 peer,
             )
         return True

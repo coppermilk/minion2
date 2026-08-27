@@ -14,7 +14,7 @@ levers, so the logic lives here once:
 Both reduce to one memory (``Ledger`` -- offers seen, exposures taken,
 reciprocations) and one control law (``steer`` -- a clamped P-controller that
 nudges a running fraction toward its target). The engines keep only what is
-genuinely theirs: their I/O, their dedup (seen ids / catted keys), and their
+genuinely theirs: their I/O, their dedup (seen ids / reacted keys), and their
 own commit timing (the story engine decides at plan time and commits when a
 view/react actually lands; the like engine commits at decide time).
 

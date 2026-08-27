@@ -5,7 +5,7 @@
 Extracted from ``main``: the /command table and the feature on/off switches,
 plus the small handlers that render straight back to the source chat
 (/help, /emojis, /preview, /features, /test, /live, /greetnow). Handlers that
-live on other mixins (cats, comod, users, stories) are dispatched through
+live on other mixins (reactions, comod, users, stories) are dispatched through
 ``self``. ``_CommandsMixin`` inherits ``UserbotProtocol`` (base.py) so the
 type checker knows that shared surface.
 """
@@ -29,8 +29,9 @@ log = logging.getLogger('userbot')
 # Chat commands (from ANY chat, ANYONE), always rendered into the source chat:
 # /emojis previews the whole unified emoji array (all types) with ids; /preview
 # renders sample posts (partial + full platform coverage) for QC; /status
-# reports what is pending, what was posted/rejected, the last posts and the cat
-# engine's live state; /requeue refreshes the pending-cat queue.
+# reports what is pending, what was posted/rejected, the last posts and the
+# reaction
+# engine's live state; /requeue refreshes the pending-reaction queue.
 # /help (and its natural alias /start) print a plain-language command menu --
 # the friendly front door for anyone who has never used the bot.
 COMMAND_HELP = '/help'
@@ -38,12 +39,13 @@ COMMAND_START = '/start'
 COMMAND_EMOJIS = '/emojis'
 COMMAND_PREVIEW = '/preview'
 COMMAND_STATUS = '/status'
-# /requeue safely refreshes the pending-cat queue: cancel the in-flight timers
+# /requeue safely refreshes the pending-reaction queue: cancel the in-flight
+# timers
 # and re-arm from the persisted queue (renewing any that are due).
 COMMAND_REQUEUE = '/requeue'
-# /catnow answers EVERY pending commenter immediately (bypass the human-like
+# /reactnow answers EVERY pending commenter immediately (bypass the human-like
 # wait) -- an operator override for "reply to everyone now".
-COMMAND_CATNOW = '/catnow'
+COMMAND_REACTNOW = '/reactnow'
 # /greetnow forces the greeter to poll+process now (no waiting for poll_sec) --
 # for testing welcome/farewell DMs.
 COMMAND_GREETNOW = '/greetnow'
@@ -73,7 +75,7 @@ COMMAND_LIVE = '/live'
 # restart, overriding the JSON default), and restarts the profile's loops so
 # the change takes effect at once. The togglable feature sections, by name:
 COMMAND_FEATURES = '/features'
-FEATURE_NAMES = ('cats', 'stories', 'users', 'greeter')
+FEATURE_NAMES = ('reactions', 'stories', 'users', 'greeter')
 # /services prints a table of every service, its mode, and the ready tap
 # commands. Each service takes '/<service>_<action>' where action is
 # on|off|test|live (on aliases live) -- so one service can be sandboxed on its
@@ -93,7 +95,7 @@ def _service_action(word: str) -> tuple[str, str] | None:
     for action, mode in SERVICE_ACTIONS.items():
         suffix = '_' + action
         if word.endswith(suffix):
-            name = word[1:-len(suffix)]  # strip '/' and '_<action>'
+            name = word[1 : -len(suffix)]  # strip '/' and '_<action>'
             if name in SERVICE_NAMES:
                 return name, mode
     return None
@@ -102,8 +104,30 @@ def _service_action(word: str) -> tuple[str, str] | None:
 class _CommandsMixin(UserbotProtocol):
     """The /command dispatcher + feature switches, mixed into Userbot."""
 
+    def _reaction_alias(self, text: str) -> str:
+        """Map a persona label's friendly reaction commands to the canonical.
+
+        The reaction commands are neutral (/reactnow and /reactions_on|off|
+        test|live). A persona MAY set ``reactions.label`` (e.g. "cat") to also
+        answer under a friendly name -- /catnow, /cat_on|off|test|live -- so it
+        speaks its own vocabulary without hard-coding it. No label = neutral
+        commands only.
+        """
+        label = self.reactions.params.label
+        if not label:
+            return text
+        parts = text.split(maxsplit=1)
+        word = parts[0] if parts else text
+        if word == f'/{label}now':
+            return COMMAND_REACTNOW
+        for action in ('on', 'off', 'test', 'live'):
+            if word == f'/{label}_{action}':
+                return f'/reactions_{action}'
+        return text
+
     async def _command(self, text: str) -> bool:
         """Run a matching /command, returning True if one handled the text."""
+        text = self._reaction_alias(text)  # persona label -> canonical, if set
         # /comod carries arguments ('/comod <nick> <amount>'), so it is matched
         # by its leading word rather than by the exact-text table below.
         if text.split()[:1] == [COMMAND_COMOD]:
@@ -120,8 +144,8 @@ class _CommandsMixin(UserbotProtocol):
             COMMAND_EMOJIS: self.show_constants,
             COMMAND_PREVIEW: self.preview_posts,
             COMMAND_STATUS: self.status_report,
-            COMMAND_REQUEUE: self.requeue_cats,
-            COMMAND_CATNOW: self.answer_all_now,
+            COMMAND_REQUEUE: self.requeue_reactions,
+            COMMAND_REACTNOW: self.answer_all_now,
             COMMAND_GREETNOW: self.greet_now,
             COMMAND_USERS: self.users_report,
             COMMAND_STORIES: self.stories_report,

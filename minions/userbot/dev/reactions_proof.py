@@ -1,13 +1,14 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Proof of work: the aggregator reacts to comments under its posts with cats.
+"""Proof of work: the bot reacts to comments under its posts.
 
 Run it -- no network, no Telegram, no session -- and watch the REAL engine
-(``cats.CatBrain``) and the REAL premium cat-emoji from
+(``reactions.ReactionBrain``) and the REAL premium reaction-emoji from
 ``aggregator_constants.json`` walk the whole path a comment takes:
 
     a person comments under a post  ->  the engine decides WHEN (human-timed)
-    and WHICH cat  ->  a custom-emoji cat REACTION is placed ON the comment
+    and WHICH reaction  ->  a custom-emoji reaction REACTION is placed ON the
+    comment
     message (a reaction pill under it), NOT a reply in the thread.
 
 Reacting to our OWN new posts is optional (``react_to_posts``, off by default)
@@ -17,20 +18,20 @@ distracted-human timing.
 This is a DRY RUN: it never connects to Telegram, it just prints the exact
 SendReaction payloads the live bot would send. To see real reactions, run the
 bot (python -m minions.userbot.main); a live comment reaction is DELAYED on
-purpose (to read as human), so send /catnow in the control chat to fire the
+purpose (to read as human), so send /reactnow in the control chat to fire the
 queue immediately.
 
 Nothing here mocks the decision code: ``schedule``, ``emit`` and ``is_comment``
 are the same functions ``main.py`` calls in production. Only the Telethon send
 is stood in for -- we print the exact payload (the ``SendReaction`` request
 with its ``ReactionCustomEmoji`` and the target comment id) that
-``main._send_cats`` would hand to Telethon.
+``main._send_reactions`` would hand to Telethon.
 
-    python -m minions.userbot.cats_proof
+    python -m minions.userbot.reactions_proof
 
 Deterministic (seeded RNG + a fixed clock), so the output is reproducible and
 the timing reads as a distracted human, not a scheduler. Source stays ASCII;
-the cat glyphs are read from the JSON at runtime (BLUEPRINT 4).
+the reaction glyphs are read from the JSON at runtime (BLUEPRINT 4).
 """
 
 from __future__ import annotations
@@ -45,10 +46,11 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
-from minions.userbot.engines import cats
+from minions.userbot.engines import reactions
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
-# Midday on a weekday, inside the active window, so cats are answered promptly.
+# Midday on a weekday, inside the active window, so reactions are answered
+# promptly.
 _SEED = 0
 _NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC).timestamp()
 
@@ -66,54 +68,59 @@ _POST_OLD = 1001
 # POSIX alike -- a hardcoded /tmp resolves to \tmp on Windows and crashes
 # the atomic save). Cleared at the start of main() so every run is fresh
 # and reproducible, not replaying a previous run's dedup state.
-_STATE = Path(tempfile.gettempdir()) / 'cats_proof_state.json'
+_STATE = Path(tempfile.gettempdir()) / 'reactions_proof_state.json'
 
 
-def _local(ts: float, params: cats.CatParams) -> str:
+def _local(ts: float, params: reactions.ReactionParams) -> str:
     """Return a send time in the persona's timezone (reads as human)."""
     tz = timezone(timedelta(hours=params.tz_offset_hours))
     stamp = datetime.fromtimestamp(ts, tz=tz)
     return stamp.strftime('%Y-%m-%d %H:%M:%S (%a) %z')
 
 
-def _load_params() -> cats.CatParams:
-    """Return the REAL cat params + premium pool from the constants JSON."""
+def _load_params() -> reactions.ReactionParams:
+    """Return the REAL reaction params + pool from the constants JSON."""
     path = Path(__file__).with_name('aggregator_constants.json')
     data = json.loads(path.read_text(encoding='utf-8'))
-    return cats.load_cat_params(data)
+    return reactions.load_reaction_params(data)
 
 
-def _payload(specs: list[cats.CatEmoji], cat: cats.Cat) -> str:
+def _payload(
+    specs: list[reactions.ReactionEmoji], reaction: reactions.Reaction
+) -> str:
     """Return the exact request main would send, rendered for the proof.
 
     'react': a ``ReactionCustomEmoji`` placed ON the comment message in one
     ``SendReaction`` call (a reaction pill under the comment). 'reply': the
-    premium cat emoji sent as a THREAD MESSAGE replying to the comment (top =
+    premium reaction emoji sent as a THREAD MESSAGE replying to the comment
+    (top =
     the post root) -- it reads like a sticker.
     """
     glyphs = ' '.join(s.fallback for s in specs)
-    if cat.kind == 'reply':
+    if reaction.kind == 'reply':
         ids = ', '.join(s.emoji_id for s in specs)
         return (
-            f'      request  : SendMessage(peer={cat.chat}, '
-            f'reply_to=msg {cat.reply_to}, top_msg_id={cat.root})\n'
+            f'      request  : SendMessage(peer={reaction.chat}, '
+            f'reply_to=msg {reaction.reply_to}, top_msg_id={reaction.root})\n'
             f'      sticker  : MessageEntityCustomEmoji(document_id={ids})\n'
             f'      shows as : {glyphs}   (a premium-emoji "sticker" reply '
-            f'IN the thread of post {cat.root})'
+            f'IN the thread of post {reaction.root})'
         )
     reactions = ', '.join(
         f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
     )
     return (
-        f'      request  : SendReaction(peer={cat.chat}, '
-        f'msg_id={cat.reply_to}, add_to_recent=True)\n'
+        f'      request  : SendReaction(peer={reaction.chat}, '
+        f'msg_id={reaction.reply_to}, add_to_recent=True)\n'
         f'      reaction : [{reactions}]\n'
         f'      shows as : {glyphs}   (a reaction pill ON comment '
-        f'{cat.reply_to}, under post {cat.root})'
+        f'{reaction.reply_to}, under post {reaction.root})'
     )
 
 
-def _post_reaction(brain: cats.CatBrain, channel: int, post_id: int) -> None:
+def _post_reaction(
+    brain: reactions.ReactionBrain, channel: int, post_id: int
+) -> None:
     """Immediately react to a freshly-created post (main._react_to_post).
 
     No schedule, no wait -- the post is ours, so the next deterministic like
@@ -147,12 +154,16 @@ class _Comment:
     engaged: bool
 
 
-def _comment(brain: cats.CatBrain, c: _Comment) -> cats.Cat | None:
+def _comment(
+    brain: reactions.ReactionBrain, c: _Comment
+) -> reactions.Reaction | None:
     """Run one comment through the real engine, exactly as main.py does.
 
-    Mirrors main._maybe_cat/_schedule_comment: recognise the comment, key it
-    once-per-(post, person), let the engine decide when, then (on a cat) emit
-    which premium cat-emoji to react with. Returns the scheduled Cat, or None.
+    Mirrors main._maybe_react/_schedule_comment: recognise the comment, key it
+    once-per-(post, person), let the engine decide when, then (on a reaction)
+    emit
+    which premium reaction-emoji to react with. Returns the scheduled Reaction,
+    or None.
     """
     if not brain.is_comment(_CHAT, c.root):
         print(
@@ -165,7 +176,7 @@ def _comment(brain: cats.CatBrain, c: _Comment) -> cats.Cat | None:
     if when is None:
         print(
             f'  comment {c.msg_id} by {c.person} under post {c.root}: '
-            f'no cat (dedup / skip / silent day)'
+            f'no reaction (dedup / skip / silent day)'
         )
         return None
     # Default is a like REACTION; the reciprocity control turns some into a
@@ -173,10 +184,14 @@ def _comment(brain: cats.CatBrain, c: _Comment) -> cats.Cat | None:
     # deterministic in the comment id (recomputable after a restart).
     seed = f'{_CHAT}:{c.msg_id}'
     if brain.decide_sticker(c.person, content_ok=True):
-        specs, kind, label = brain.pick_cat(seed), 'reply', 'STICKER in thread'
+        specs, kind, label = (
+            brain.pick_reaction(seed),
+            'reply',
+            'STICKER in thread',
+        )
     else:
         specs, kind, label = brain.pick_like(seed), 'react', 'LIKE reaction'
-    cat = cats.Cat(
+    reaction = reactions.Reaction(
         chat=_CHAT,
         reply_to=c.msg_id,
         root=c.root,
@@ -185,7 +200,7 @@ def _comment(brain: cats.CatBrain, c: _Comment) -> cats.Cat | None:
         emojis=tuple((s.emoji_id, s.fallback) for s in specs),
         kind=kind,
     )
-    brain.add_pending(cat)
+    brain.add_pending(reaction)
     print(
         f'  comment {c.msg_id} by {c.person} under post {c.root}: '
         f'{label} scheduled'
@@ -194,11 +209,11 @@ def _comment(brain: cats.CatBrain, c: _Comment) -> cats.Cat | None:
         f'      when     : {_local(when, brain.params)}   '
         f'(+{when - _NOW:.0f}s, jittered off :00)'
     )
-    print(_payload(specs, cat))
-    return cat
+    print(_payload(specs, reaction))
+    return reaction
 
 
-def _banner(params: cats.CatParams) -> None:
+def _banner(params: reactions.ReactionParams) -> None:
     """Print the header block: what this is and the live config it reads."""
     likes = ', '.join(f'{c.emoji_id}({c.fallback})' for c in params.like_pool)
     print('=' * 72)
@@ -236,7 +251,7 @@ def _closing(count: int) -> None:
     print('NOTE: this was a DRY RUN -- no Telegram, no real reactions. Live:')
     print('  1) run the bot:  python -m minions.userbot.main')
     print('  2) a live comment reaction is DELAYED (human-like); to see it')
-    print('     now, send /catnow in the control chat.')
+    print('     now, send /reactnow in the control chat.')
     print('  3) the discussion group must ALLOW custom-emoji reactions (else')
     print('     the bot falls back to the plain-emoji like).')
     print('=' * 72)
@@ -246,7 +261,7 @@ def main() -> None:
     """Drive the real engine end to end and print the proof."""
     params = _load_params()
     _STATE.unlink(missing_ok=True)  # start fresh: don't replay old dedup state
-    brain = cats.CatBrain(
+    brain = reactions.ReactionBrain(
         params,
         _STATE,
         random.Random(_SEED),  # noqa: S311 -- reproducible proof, not crypto
@@ -267,7 +282,7 @@ def main() -> None:
         )
     print()
 
-    print('STEP 2  watch the last posts (main.backfill_cat_posts)')
+    print('STEP 2  watch the last posts (main.backfill_react_posts)')
     brain.note_post(_CHAT, _POST_OLD)
     brain.note_post(_CHAT, _POST_NEW)
     print(f'  watch-list: {brain.posts}')
@@ -346,7 +361,9 @@ def main() -> None:
     )
     print()
 
-    print('STEP 8  the queue that survives a restart (persisted pending cats)')
+    print(
+        'STEP 8  the queue that survives a restart (persisted pending)'
+    )
     for entry in brain.state.pending:
         print(
             f'  pending: {entry.get("kind", "react")} on comment '
@@ -360,7 +377,7 @@ def main() -> None:
     _closing(len(brain.state.pending))
 
 
-def _sticker_rate_demo(params: cats.CatParams) -> None:
+def _sticker_rate_demo(params: reactions.ReactionParams) -> None:
     """Show the reciprocity control placing stickers at our target rate.
 
     No activity-burst gate: among the comments we engage, about
@@ -373,9 +390,9 @@ def _sticker_rate_demo(params: cats.CatParams) -> None:
         f'{params.recip_fraction_target:.0%} of engaged comments become a '
         f'thread sticker (no activity-burst gate).'
     )
-    path = Path(tempfile.gettempdir()) / 'cats_proof_gate.json'
+    path = Path(tempfile.gettempdir()) / 'reactions_proof_gate.json'
     path.unlink(missing_ok=True)
-    brain = cats.CatBrain(params, path, random.Random(0))  # noqa: S311 -- demo
+    brain = reactions.ReactionBrain(params, path, random.Random(0))  # noqa: S311 -- demo
     brain.clock = lambda: _NOW
     stickers = engaged = 0
     for _ in range(200):

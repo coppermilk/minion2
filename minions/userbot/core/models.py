@@ -129,7 +129,7 @@ class Posted:
 
 @dataclass(frozen=True)
 class _Comment:
-    """A comment to maybe cat: chat, thread root, message id and text."""
+    """A comment to maybe reaction: chat, thread root, message id and text."""
 
     chat: int
     root: int
@@ -161,7 +161,8 @@ class Consts:
     # terms + any non-ASCII marks): a sticker is suppressed there, a plain
     # reaction goes instead. Non-ASCII, so it lives in the JSON, not here.
     human_words: tuple[str, ...]
-    # /status icons (emoji, so JSON not source): title/routing/videos/cats/
+    # /status icons (emoji, so JSON not source):
+    # title/routing/videos/reactions/
     # greeter/users/legend section glyphs + on/off dots + bullet/arrow.
     status: dict[str, str]
     emoji_all: list[

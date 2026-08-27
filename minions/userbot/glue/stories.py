@@ -174,9 +174,7 @@ class _StoriesMixin(UserbotProtocol):
             return
         label = await self._chat_label(view.peer_id)
         self.stories.mark_viewed(view.peer_id, view.story_ids, label=label)
-        log.info(
-            'stories: viewed %d of %s', len(view.story_ids), label
-        )
+        log.info('stories: viewed %d of %s', len(view.story_ids), label)
 
     def _dequeue_view(self, view: stories.StoryView) -> None:
         """Drop a fired view from the /status queue (no-op if already gone)."""
@@ -216,9 +214,7 @@ class _StoriesMixin(UserbotProtocol):
         except Exception:  # noqa: BLE001 -- best-effort; ReadStories marks
             log.debug('stories: increment view failed for %s', sid)
 
-    async def _react_to_story(
-        self, peer: object, sid: int, emoji: str
-    ) -> int:
+    async def _react_to_story(self, peer: object, sid: int, emoji: str) -> int:
         """Leave one reaction on a story; return 1 on success, 0 on failure."""
         try:
             await self.client(

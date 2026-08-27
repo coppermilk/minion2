@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The aggregator's human-like cat-reply engine (minions/userbot/cats.py).
+"""The human-like reaction-reply engine (engines/reactions.py).
 
 Pure-logic tests: no Telethon, no network -- the engine is stdlib-only by
 design, so every one of the nine behavioural principles is checked here.
@@ -14,7 +14,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from minions.userbot.engines import cats
+from minions.userbot.engines import reactions
 
 _BURST_SIZE = 6
 _HALF = 0.5
@@ -70,23 +70,23 @@ def _params(**over: object) -> object:
         'session_max_sec': 1200.0,
         'max_reply_delay_sec': 86400.0,
         'pool': (
-            cats.CatEmoji('1', 'a', 1.0, ('bodry',)),
-            cats.CatEmoji('2', 'b', 1.0, ('sleepy',)),
+            reactions.ReactionEmoji('1', 'a', 1.0, ('bodry',)),
+            reactions.ReactionEmoji('2', 'b', 1.0, ('sleepy',)),
         ),
         'like_pool': (
-            cats.CatEmoji('L1', 'x', 1.0, ()),
-            cats.CatEmoji('L2', 'y', 1.0, ()),
-            cats.CatEmoji('L3', 'z', 1.0, ()),
+            reactions.ReactionEmoji('L1', 'x', 1.0, ()),
+            reactions.ReactionEmoji('L2', 'y', 1.0, ()),
+            reactions.ReactionEmoji('L3', 'z', 1.0, ()),
         ),
         'rescan_sec': 300.0,
     }
     base.update(over)
-    return cats.CatParams(**base)
+    return reactions.ReactionParams(**base)
 
 
 def _brain(tmp_path: Path, seed: int = 0, **over: object) -> object:
-    brain = cats.CatBrain(
-        _params(**over), tmp_path / 'cats_state.json', random.Random(seed)
+    brain = reactions.ReactionBrain(
+        _params(**over), tmp_path / 'reactions_state.json', random.Random(seed)
     )
     brain.clock = _ts
     return brain
@@ -97,15 +97,15 @@ def _brain(tmp_path: Path, seed: int = 0, **over: object) -> object:
 
 def test_density_is_zero_in_quiet_hours() -> None:
     """Check density is zero in quiet hours."""
-    assert cats._density_weight(_ts(hour=3), _params()) == 0.0
+    assert reactions._density_weight(_ts(hour=3), _params()) == 0.0
 
 
 def test_density_peaks_at_the_active_mean() -> None:
     """Check density peaks at the active mean."""
     params = _params()
-    assert cats._density_weight(_ts(hour=12), params) > cats._density_weight(
-        _ts(hour=16), params
-    )
+    assert reactions._density_weight(
+        _ts(hour=12), params
+    ) > reactions._density_weight(_ts(hour=16), params)
 
 
 def test_weekday_and_weekend_curves_are_independent() -> None:
@@ -117,7 +117,7 @@ def test_weekday_and_weekend_curves_are_independent() -> None:
     )
     sat = _ts(year=2026, month=7, day=18, hour=23)  # Saturday
     wed = _ts(year=2026, month=7, day=15, hour=23)  # Wednesday
-    assert cats._density_weight(sat, params) > cats._density_weight(
+    assert reactions._density_weight(sat, params) > reactions._density_weight(
         wed, params
     )
 
@@ -128,7 +128,7 @@ def test_weekday_and_weekend_curves_are_independent() -> None:
 def test_lognormal_is_positive_and_heavy_tailed() -> None:
     """Check lognormal is positive and heavy tailed."""
     rng = random.Random(1)
-    draws = [cats._lognormal(rng, 3.0, 1.0) for _ in range(2000)]
+    draws = [reactions._lognormal(rng, 3.0, 1.0) for _ in range(2000)]
     assert all(d > 0 for d in draws)
     # A heavy tail: the max dwarfs the median (a uniform never would).
     draws.sort()
@@ -138,17 +138,17 @@ def test_lognormal_is_positive_and_heavy_tailed() -> None:
 # --- principle 3: selection has memory (recency penalty)
 
 
-def test_just_used_cat_is_avoided(tmp_path: Path) -> None:
-    """Check just used cat is avoided."""
+def test_just_used_reaction_is_avoided(tmp_path: Path) -> None:
+    """Check just used reaction is avoided."""
     brain = _brain(
         tmp_path,
         pool=(
-            cats.CatEmoji('fresh', 'f', 1.0, ('x',)),
-            cats.CatEmoji('used', 'u', 1.0, ('x',)),
+            reactions.ReactionEmoji('fresh', 'f', 1.0, ('x',)),
+            reactions.ReactionEmoji('used', 'u', 1.0, ('x',)),
         ),
     )
     now = _ts()
-    brain.state.cat_last = {'used': now}  # just sent -> suppressed
+    brain.state.reaction_last = {'used': now}  # just sent -> suppressed
     picks = [brain._pick(now).emoji_id for _ in range(200)]
     assert picks.count('fresh') > picks.count('used') * 5
 
@@ -158,8 +158,8 @@ def test_favourite_base_is_chosen_more(tmp_path: Path) -> None:
     brain = _brain(
         tmp_path,
         pool=(
-            cats.CatEmoji('fav', 'f', 6.0, ('x',)),
-            cats.CatEmoji('rare', 'r', 1.0, ('x',)),
+            reactions.ReactionEmoji('fav', 'f', 6.0, ('x',)),
+            reactions.ReactionEmoji('rare', 'r', 1.0, ('x',)),
         ),
     )
     picks = [brain._pick(_ts()).emoji_id for _ in range(300)]
@@ -185,15 +185,17 @@ def test_mood_steps_once_per_day(tmp_path: Path) -> None:
 
 def test_context_is_sleepy_in_the_morning() -> None:
     """Check context is sleepy in the morning."""
-    assert 'sleepy' in cats._context_tags(_ts(hour=8), _params())
-    assert 'bodry' in cats._context_tags(_ts(hour=20), _params())
+    assert 'sleepy' in reactions._context_tags(_ts(hour=8), _params())
+    assert 'bodry' in reactions._context_tags(_ts(hour=20), _params())
 
 
 def test_context_flags_december_as_holiday() -> None:
     """Check context flags december as holiday."""
     params = _params()
-    assert 'newyear' in cats._context_tags(_ts(month=12, hour=13), params)
-    assert 'newyear' not in cats._context_tags(_ts(month=7, hour=13), params)
+    assert 'newyear' in reactions._context_tags(_ts(month=12, hour=13), params)
+    assert 'newyear' not in reactions._context_tags(
+        _ts(month=7, hour=13), params
+    )
 
 
 # --- principle 6: jitter off the :00
@@ -211,9 +213,13 @@ def test_fire_time_lands_in_an_active_hour(tmp_path: Path) -> None:
 def test_engaged_commenter_gets_a_faster_reaction(tmp_path: Path) -> None:
     # Same rng stream, so only the feedback speed-up differs.
     """Check engaged commenter gets a faster reaction."""
-    plain = cats.CatBrain(_params(), tmp_path / 'a.json', random.Random(3))
+    plain = reactions.ReactionBrain(
+        _params(), tmp_path / 'a.json', random.Random(3)
+    )
     plain.clock = _ts
-    eager = cats.CatBrain(_params(), tmp_path / 'b.json', random.Random(3))
+    eager = reactions.ReactionBrain(
+        _params(), tmp_path / 'b.json', random.Random(3)
+    )
     eager.clock = _ts
     # Compare the raw latency by disabling snapping noise via a huge peak.
     a = plain._fire_time(_ts(), engaged=False)
@@ -224,8 +230,8 @@ def test_engaged_commenter_gets_a_faster_reaction(tmp_path: Path) -> None:
 # --- principle 7: built-in imperfection
 
 
-def test_double_sends_a_second_cat(tmp_path: Path) -> None:
-    """Check double sends a second cat."""
+def test_double_sends_a_second_reaction(tmp_path: Path) -> None:
+    """Check double sends a second reaction."""
     brain = _brain(tmp_path, double_prob=1.0)
     assert len(brain.emit()) == _TWO_CATS
 
@@ -234,22 +240,20 @@ def test_skip_probability_drops_a_comment(tmp_path: Path) -> None:
     """Check skip probability drops a comment."""
     brain = _brain(tmp_path, skip_prob=1.0)
     assert brain.schedule('u', engaged=False) is None
-    assert 'u' not in brain.state.catted  # a skip is not a "catted" person
+    assert 'u' not in brain.state.reacted  # a skip is not a "reacted" person
 
 
-def test_silent_day_yields_no_cat(tmp_path: Path) -> None:
-    """Check silent day yields no cat."""
+def test_silent_day_yields_no_reaction(tmp_path: Path) -> None:
+    """Check silent day yields no reaction."""
     brain = _brain(tmp_path, silent_day_prob=1.0)
     assert brain.schedule('u', engaged=False) is None
 
 
 def test_like_all_bypasses_skip_and_silent_day(tmp_path: Path) -> None:
     """like_all likes every comment, even under a full skip / silent day."""
-    brain = _brain(
-        tmp_path, like_all=True, skip_prob=1.0, silent_day_prob=1.0
-    )
+    brain = _brain(tmp_path, like_all=True, skip_prob=1.0, silent_day_prob=1.0)
     assert brain.schedule('u', engaged=False) is not None
-    assert 'u' in brain.state.catted
+    assert 'u' in brain.state.reacted
     # Dedup still holds: the same key is not liked twice.
     assert brain.schedule('u', engaged=False) is None
 
@@ -280,14 +284,14 @@ def test_a_comment_out_of_reach_goes_stale(tmp_path: Path) -> None:
     )
     brain.clock = lambda: _ts(hour=20)  # host down; window 07:00 is >1h off
     assert brain.schedule('late', engaged=False) is None
-    assert 'late' not in brain.state.catted  # stale, not a committed cat
+    assert 'late' not in brain.state.reacted  # stale, not a committed reaction
 
 
 # --- once-per-person, enabled gate
 
 
-def test_a_person_is_catted_at_most_once(tmp_path: Path) -> None:
-    """Check a person is catted at most once."""
+def test_a_person_is_reacted_at_most_once(tmp_path: Path) -> None:
+    """Check a person is reacted at most once."""
     brain = _brain(tmp_path)
     assert brain.schedule('u', engaged=False) is not None
     assert brain.schedule('u', engaged=False) is None
@@ -315,21 +319,21 @@ def test_is_comment_tracks_only_the_last_posts(tmp_path: Path) -> None:
     assert brain.is_comment(100, 13)
 
 
-def test_catted_keys_are_pruned_when_a_post_rolls_off(tmp_path: Path) -> None:
-    """Check catted keys are pruned when a post rolls off."""
+def test_reacted_keys_are_pruned_when_a_post_rolls_off(tmp_path: Path) -> None:
+    """Check reacted keys are pruned when a post rolls off."""
     brain = _brain(tmp_path, watch_posts=2)
     brain.note_post(1, 10)
     assert brain.schedule('1:10:alice', engaged=False) is not None
-    assert '1:10:alice' in brain.state.catted
+    assert '1:10:alice' in brain.state.reacted
     brain.note_post(1, 11)
     brain.note_post(1, 12)  # window is [11, 12] now -> post 10 rolled off
-    assert '1:10:alice' not in brain.state.catted
+    assert '1:10:alice' not in brain.state.reacted
 
 
 # --- adaptive uptime: cold start follows the declared window, then learns
 
 
-def _window_brain(tmp_path: Path) -> cats.CatBrain:
+def _window_brain(tmp_path: Path) -> reactions.ReactionBrain:
     brain = _brain(
         tmp_path,
         active_start=7.0,
@@ -372,54 +376,56 @@ def test_effective_weight_gates_when_host_is_down(tmp_path: Path) -> None:
     assert brain._effective_weight(_ts(hour=12)) > 0.0  # host up + awake
 
 
-# --- principle 9: watched posts and pending cats survive a restart
+# --- principle 9: watched posts and pending reactions survive a restart
 
 
 def test_watched_posts_survive_a_restart(tmp_path: Path) -> None:
     """Check watched posts survive a restart."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     brain.note_post(100, 42)
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    fresh = reactions.ReactionBrain(_params(), path, random.Random(0))
     assert fresh.is_comment(100, 42)  # still watched after reload
 
 
-def test_pending_cats_are_re_armed_and_missed_ones_renewed(
+def test_pending_reactions_are_re_armed_and_missed_ones_renewed(
     tmp_path: Path,
 ) -> None:
-    """Check pending cats are re armed and missed ones renewed."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    """Check pending reactions are re armed and missed ones renewed."""
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     brain.clock = _ts
     now = _ts()
-    brain.add_pending(cats.Cat(5, 900, 900, now + 3600))  # future
-    brain.add_pending(cats.Cat(5, 901, 901, now - 3600))  # missed
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    brain.add_pending(reactions.Reaction(5, 900, 900, now + 3600))  # future
+    brain.add_pending(reactions.Reaction(5, 901, 901, now - 3600))  # missed
+    fresh = reactions.ReactionBrain(_params(), path, random.Random(0))
     fresh.clock = _ts
     armed = {c.reply_to: c.when for c in fresh.rearm()}
     assert armed[900] == now + 3600  # future one kept as-is
     assert armed[901] > now  # missed one renewed to the future
 
 
-def test_pending_cat_emoji_round_trips(tmp_path: Path) -> None:
-    # The cat chosen at schedule time is persisted and restored, so a
-    # restart / requeue places (and /status shows) the SAME cat.
-    """Check pending cat emoji round trips."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+def test_pending_reaction_emoji_round_trips(tmp_path: Path) -> None:
+    # The reaction chosen at schedule time is persisted and restored, so a
+    # restart / requeue places (and /status shows) the SAME reaction.
+    """Check pending reaction emoji round trips."""
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     brain.add_pending(
-        cats.Cat(5, 900, 900, 111.0, emojis=(('42', 'x'), ('43', 'y')))
+        reactions.Reaction(
+            5, 900, 900, 111.0, emojis=(('42', 'x'), ('43', 'y'))
+        )
     )
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    fresh = reactions.ReactionBrain(_params(), path, random.Random(0))
     (restored,) = fresh.rearm(renew_all=True)
     assert restored.emojis == (('42', 'x'), ('43', 'y'))
 
 
-def test_done_pending_forgets_a_sent_cat(tmp_path: Path) -> None:
-    """Check done pending forgets a sent cat."""
+def test_done_pending_forgets_a_sent_reaction(tmp_path: Path) -> None:
+    """Check done pending forgets a sent reaction."""
     brain = _brain(tmp_path)
-    brain.add_pending(cats.Cat(5, 900, 900, 111.0))
-    brain.add_pending(cats.Cat(5, 901, 901, 222.0))
+    brain.add_pending(reactions.Reaction(5, 900, 900, 111.0))
+    brain.add_pending(reactions.Reaction(5, 901, 901, 222.0))
     brain.done_pending(5, 900)
     assert [p['reply_to'] for p in brain.state.pending] == [901]
 
@@ -428,7 +434,9 @@ def test_due_now_sets_all_pending_to_now(tmp_path: Path) -> None:
     """Check due now sets all pending to now."""
     brain = _brain(tmp_path)
     brain.clock = _ts
-    brain.add_pending(cats.Cat(5, 900, 800, _ts() + 99999))  # far future
+    brain.add_pending(
+        reactions.Reaction(5, 900, 800, _ts() + 99999)
+    )  # far future
     due = brain.due_now()
     assert len(due) == 1
     assert due[0].when == _ts()  # pulled back to now
@@ -445,7 +453,7 @@ def test_emit_records_last_send_and_recency(tmp_path: Path) -> None:
     sent = brain.emit()
     assert len(sent) == 1
     assert brain.state.last_send == now
-    assert brain.state.cat_last[sent[0].emoji_id] == now
+    assert brain.state.reaction_last[sent[0].emoji_id] == now
 
 
 def test_emit_with_empty_pool_sends_nothing(tmp_path: Path) -> None:
@@ -454,7 +462,7 @@ def test_emit_with_empty_pool_sends_nothing(tmp_path: Path) -> None:
     assert brain.emit() == []
 
 
-# --- the like/cat pools: weighted draw, seeded by the target key
+# --- the like/reaction pools: weighted draw, seeded by the target key
 
 
 def test_pick_like_returns_one_from_the_pool(tmp_path: Path) -> None:
@@ -468,20 +476,26 @@ def test_pick_is_reproducible_for_equal_state(tmp_path: Path) -> None:
     # Weighted now, but still seeded by the key: two engines with the SAME
     # (fresh) state and rng pick the same emoji for the same key.
     """Check pick is reproducible for equal state."""
-    a = cats.CatBrain(_params(), tmp_path / 'a.json', random.Random(0))
-    b = cats.CatBrain(_params(), tmp_path / 'b.json', random.Random(0))
+    a = reactions.ReactionBrain(
+        _params(), tmp_path / 'a.json', random.Random(0)
+    )
+    b = reactions.ReactionBrain(
+        _params(), tmp_path / 'b.json', random.Random(0)
+    )
     a.clock = b.clock = _ts
     assert a.pick_like('k')[0].emoji_id == b.pick_like('k')[0].emoji_id
-    assert a.pick_cat('k')[0].emoji_id == b.pick_cat('k')[0].emoji_id
+    assert a.pick_reaction('k')[0].emoji_id == b.pick_reaction('k')[0].emoji_id
 
 
 def test_pick_avoids_repeats_within_a_burst(tmp_path: Path) -> None:
-    # The main fix: each pick is recorded into cat_last (recency), so within a
+    # The main fix: each pick is recorded into reaction_last (recency), so
+    # within a
     # burst (one frozen instant) an already-used emoji is suppressed -- with a
     # pool at least as large as the burst, every reaction is a different glyph.
     """Check pick avoids repeats within a burst."""
     pool = tuple(
-        cats.CatEmoji(f'L{i}', chr(97 + i), 1.0, ()) for i in range(6)
+        reactions.ReactionEmoji(f'L{i}', chr(97 + i), 1.0, ())
+        for i in range(6)
     )
     brain = _brain(tmp_path, like_pool=pool)
     picks = [brain.pick_like(f'k{i}')[0].emoji_id for i in range(6)]
@@ -490,13 +504,15 @@ def test_pick_avoids_repeats_within_a_burst(tmp_path: Path) -> None:
 
 def test_pick_records_recency_and_persists(tmp_path: Path) -> None:
     """Check pick records recency and persists."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     brain.clock = _ts
     chosen = brain.pick_like('k')[0].emoji_id
-    assert brain.state.cat_last[chosen] == _ts()
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
-    assert fresh.state.cat_last[chosen] == _ts()  # recency survived a restart
+    assert brain.state.reaction_last[chosen] == _ts()
+    fresh = reactions.ReactionBrain(_params(), path, random.Random(0))
+    assert (
+        fresh.state.reaction_last[chosen] == _ts()
+    )  # recency survived a restart
 
 
 def test_pick_like_varies_across_keys(tmp_path: Path) -> None:
@@ -515,30 +531,32 @@ def test_pick_like_empty_pool_sends_nothing(tmp_path: Path) -> None:
 # --- the sticker gate: deterministic, both conditions, per post
 
 
-def test_pick_cat_returns_one_from_the_cat_pool(tmp_path: Path) -> None:
-    """Check pick cat returns one from the cat pool."""
+def test_pick_reaction_returns_one_from_the_reaction_pool(
+    tmp_path: Path,
+) -> None:
+    """Check pick reaction returns one from the reaction pool."""
     brain = _brain(tmp_path)
     ids = {c.emoji_id for c in brain.params.pool}
-    assert brain.pick_cat('chat:5001')[0].emoji_id in ids
+    assert brain.pick_reaction('chat:5001')[0].emoji_id in ids
 
 
 def test_pending_kind_round_trips(tmp_path: Path) -> None:
     """Check pending kind round trips."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(), path, random.Random(0))
-    brain.add_pending(cats.Cat(5, 900, 900, 111.0, kind='reply'))
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
+    brain.add_pending(reactions.Reaction(5, 900, 900, 111.0, kind='reply'))
+    fresh = reactions.ReactionBrain(_params(), path, random.Random(0))
     (restored,) = fresh.rearm(renew_all=True)
     assert restored.kind == 'reply'
 
 
 def test_load_reads_the_like_pool() -> None:
     """Check load reads the like pool."""
-    params = cats.load_cat_params(
+    params = reactions.load_reaction_params(
         {
-            'cats': {'enabled': True},
+            'reactions': {'enabled': True},
             'emoji': [
-                {'type': 'cat', 'id': '9', 'fallback': 'c'},
+                {'type': 'reaction', 'id': '9', 'fallback': 'c'},
                 {'type': 'like', 'id': '7', 'fallback': 'k'},
             ],
         }
@@ -552,34 +570,34 @@ def test_load_reads_the_like_pool() -> None:
 
 def test_state_round_trips_through_disk(tmp_path: Path) -> None:
     """Check state round trips through disk."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     brain.state.mood = 0.5
-    brain.state.catted = {'x', 'y'}
-    brain.state.cat_last = {'1': 123.0}
+    brain.state.reacted = {'x', 'y'}
+    brain.state.reaction_last = {'1': 123.0}
     brain.state.next_session_at = 999.0
     brain._save()
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    fresh = reactions.ReactionBrain(_params(), path, random.Random(0))
     assert fresh.state.mood == _HALF
-    assert fresh.state.catted == {'x', 'y'}
-    assert fresh.state.cat_last == {'1': 123.0}
+    assert fresh.state.reacted == {'x', 'y'}
+    assert fresh.state.reaction_last == {'1': 123.0}
     assert fresh.state.next_session_at == _SESSION_AT
 
 
 def test_corrupt_state_starts_fresh(tmp_path: Path) -> None:
     """Check corrupt state starts fresh."""
-    path = tmp_path / 'cats_state.json'
+    path = tmp_path / 'reactions_state.json'
     path.write_text('{ not json', encoding='utf-8')
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     assert brain.state.mood == 0.0
-    assert brain.state.catted == set()
+    assert brain.state.reacted == set()
 
 
 def test_old_state_migrates_next_earliest_to_session(tmp_path: Path) -> None:
     """Check old state migrates next earliest to session."""
-    path = tmp_path / 'cats_state.json'
+    path = tmp_path / 'reactions_state.json'
     path.write_text('{"next_earliest": 555.0}', encoding='utf-8')
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     assert (
         brain.state.next_session_at == _MIGRATED_AT
     )  # migrated from the old key
@@ -588,23 +606,24 @@ def test_old_state_migrates_next_earliest_to_session(tmp_path: Path) -> None:
 # --- loader
 
 
-def test_load_cat_params_defaults_to_disabled() -> None:
-    """Check load cat params defaults to disabled."""
-    params = cats.load_cat_params({})
+def test_load_reaction_params_defaults_to_disabled() -> None:
+    """Check load reaction params defaults to disabled."""
+    params = reactions.load_reaction_params({})
     assert params.enabled is False
     assert params.watch_posts == _WATCH_POSTS
 
 
-def test_load_cat_params_reads_the_pool() -> None:
-    # The cat pool is the type=cat entries of the unified top-level array.
-    """Check load cat params reads the pool."""
-    params = cats.load_cat_params(
+def test_load_reaction_params_reads_the_pool() -> None:
+    # The reaction pool is the type=reaction entries of the unified top-level
+    # array.
+    """Check load reaction params reads the pool."""
+    params = reactions.load_reaction_params(
         {
-            'cats': {'enabled': True},
+            'reactions': {'enabled': True},
             'emoji': [
                 {'type': 'love', 'id': '1', 'fallback': 'l'},
                 {
-                    'type': 'cat',
+                    'type': 'reaction',
                     'id': '9',
                     'fallback': 'c',
                     'base': 2,
@@ -614,7 +633,7 @@ def test_load_cat_params_reads_the_pool() -> None:
         }
     )
     assert params.enabled is True
-    assert len(params.pool) == 1  # only the type=cat entry
+    assert len(params.pool) == 1  # only the type=reaction entry
     assert params.pool[0].emoji_id == '9'
     assert params.pool[0].tags == ('bodry',)
 
@@ -681,9 +700,7 @@ def test_a_steered_skip_is_recorded_not_re_rolled(tmp_path: Path) -> None:
 
 def test_daily_like_cap_clamps_engagements(tmp_path: Path) -> None:
     """like_max_per_day caps total engagements in a day, no matter the flow."""
-    brain = _brain(
-        tmp_path, like_max_per_day=_LIKE_CAP, sticker_max_per_day=0
-    )
+    brain = _brain(tmp_path, like_max_per_day=_LIKE_CAP, sticker_max_per_day=0)
     for _ in range(200):
         brain.decide_engage('spammer')
     assert brain.likes_today(_ts()) == _LIKE_CAP
@@ -716,8 +733,10 @@ def test_a_question_comment_never_becomes_a_sticker(tmp_path: Path) -> None:
 
 def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
     """commented/engaged/stickered survive a restart (relationship memory)."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(like_max_per_day=0), path, random.Random(2))
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(
+        _params(like_max_per_day=0), path, random.Random(2)
+    )
     brain.clock = _ts
     for _ in range(30):
         if brain.decide_engage('mem'):
@@ -727,25 +746,27 @@ def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
         brain.state.ledger.taken['mem'],
         brain.state.ledger.recip.get('mem', 0),
     )
-    fresh = cats.CatBrain(_params(like_max_per_day=0), path, random.Random(2))
+    fresh = reactions.ReactionBrain(
+        _params(like_max_per_day=0), path, random.Random(2)
+    )
     assert fresh.state.ledger.offered['mem'] == saved[0]
     assert fresh.state.ledger.taken['mem'] == saved[1]
     assert fresh.state.ledger.recip.get('mem', 0) == saved[2]
 
 
-def test_ledger_backfills_from_catted_history(tmp_path: Path) -> None:
-    """A pre-attach state file (catted, no ledger) seeds coefficients on load.
+def test_ledger_backfills_from_reacted_history(tmp_path: Path) -> None:
+    """A pre-attach state file (reacted, no ledger) seeds coefficients on load.
 
     Each already-liked comment counts as offered=taken for its commenter, so
     /status shows the history at once instead of only new comments.
     """
-    path = tmp_path / 'cats_state.json'
+    path = tmp_path / 'reactions_state.json'
     path.write_text(
         json.dumps(
-            {'catted': ['10:20:alice:1', '10:20:alice:2', '10:20:bob:3']}
+            {'reacted': ['10:20:alice:1', '10:20:alice:2', '10:20:bob:3']}
         )
     )
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     assert brain.state.ledger.offered == {'alice': 2, 'bob': 1}
     assert brain.state.ledger.taken == {'alice': 2, 'bob': 1}
     assert {w.label for w in brain.warmth()} == {'alice', 'bob'}
@@ -753,26 +774,29 @@ def test_ledger_backfills_from_catted_history(tmp_path: Path) -> None:
 
 def test_ledger_backfill_skipped_when_populated(tmp_path: Path) -> None:
     """A state file that already has ledger data is not re-seeded."""
-    path = tmp_path / 'cats_state.json'
+    path = tmp_path / 'reactions_state.json'
     path.write_text(
         json.dumps(
-            {'catted': ['10:20:alice:1'], 'commented': {'bob': 5},
-             'engaged': {'bob': 3}}
+            {
+                'reacted': ['10:20:alice:1'],
+                'commented': {'bob': 5},
+                'engaged': {'bob': 3},
+            }
         )
     )
-    brain = cats.CatBrain(_params(), path, random.Random(0))
-    assert brain.state.ledger.offered == {'bob': 5}  # catted not merged in
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
+    assert brain.state.ledger.offered == {'bob': 5}  # reacted not merged in
     assert 'alice' not in brain.state.ledger.offered
 
 
 def test_remember_caches_commenter_name_and_persists(tmp_path: Path) -> None:
     """A remembered @name shows in warmth and survives a reload."""
-    path = tmp_path / 'cats_state.json'
-    brain = cats.CatBrain(_params(), path, random.Random(0))
+    path = tmp_path / 'reactions_state.json'
+    brain = reactions.ReactionBrain(_params(), path, random.Random(0))
     brain.decide_engage('770')
     brain.remember('770', '@vasya (770)')
     assert next(w.label for w in brain.warmth()) == '@vasya (770)'
-    fresh = cats.CatBrain(_params(), path, random.Random(0))
+    fresh = reactions.ReactionBrain(_params(), path, random.Random(0))
     assert next(w.label for w in fresh.warmth()) == '@vasya (770)'
 
 
