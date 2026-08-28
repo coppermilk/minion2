@@ -291,8 +291,10 @@ class StatusReport:
         mean_p = sum(w.p for w in warm) / len(warm)
         mean_r = sum(w.r for w in warm) / len(warm)
         return [
-            f'{b} attach {len(warm)} {noun} {self.arrow()} '
-            f'p~{mean_p:.2f} r~{mean_r:.2f}',
+            (
+                f'{b} attach {len(warm)} {noun} {self.arrow()} '
+                f'p~{mean_p:.2f} r~{mean_r:.2f}'
+            ),
             *(
                 f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'
                 for w in warm[:STATUS_WARM_PEERS]

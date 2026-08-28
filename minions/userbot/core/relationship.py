@@ -169,7 +169,7 @@ class Ledger:
         """Count one reciprocation whose daily slot is already spent."""
         self.store.bump(self.engine, peer, {'recip': 1})
 
-    def add_recip(  # noqa: PLR0913 -- peer + count + (now, tz) read best flat
+    def add_recip(  # noqa: PLR0913,PLR0917 -- peer + count + (now, tz) read best flat
         self, peer: str, n: int, now: float, tz: float
     ) -> None:
         """Record ``n`` reciprocations to ``peer`` and the daily counter."""

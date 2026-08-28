@@ -146,7 +146,7 @@ def render_constants(consts: Consts) -> PremiumMessage:
     return rich.build()
 
 
-def compose(  # noqa: PLR0913 -- variety is an optional post-decoration picker
+def compose(  # noqa: PLR0913,PLR0917 -- variety is an optional post-decoration picker
     group: Group,
     order: tuple[str, ...],
     consts: Consts,

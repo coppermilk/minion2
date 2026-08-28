@@ -90,7 +90,7 @@ def mass_pen(c: float) -> float:
     return 1.0 - _MASS_PENALTY * c
 
 
-def attachment_index(  # noqa: PLR0913 -- the four model factors read best flat
+def attachment_index(  # noqa: PLR0913,PLR0917 -- the four model factors read best flat
     p: float, v: float, r: float, c: float
 ) -> float:
     """Combine the four factors into one attachment index (>= 0)."""
