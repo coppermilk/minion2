@@ -193,6 +193,27 @@ A per-profile **SQLite** DB (`users.db`) recording the channel audience over tim
 (membership timeline, identity, seen messages). It collects PII, so it is off by
 default and lives only on your own state disk. Read it with `/users`.
 
+## Reading `/status`
+
+Two sections answer the questions that used to need the log.
+
+**Stories** lists everyone who has stories up right now -- the same people you
+see in Telegram, archived feed included -- and what the bot decided about each:
+`viewing 3 in ~3m 10s`, `passed this glance`, `nothing new`, or the reason the
+whole session is held (quiet hours, cooldown, silent day). It is a snapshot from
+the last poll with its age beside it (`glance 4m 10s ago`), on purpose: the
+report never re-reads the feed, because two story requests behind every `/status`
+is exactly the traffic the request gate exists to prevent.
+
+An archived peer is watched on the same maths as anyone else; the `archived feed`
+marker says where we saw them, not that they are treated differently.
+
+**Schedule** collects every background loop's next run -- host tick, liveness
+probe, reactions rescan, stories poll, greeter check -- plus the request gate:
+when each lane may fire next, and how far a lane has been widened after a
+FloodWait. That widening is the only place Telegram's "slow down" is visible
+without reading the log.
+
 ## Commands
 
 From **any** chat, rendered back into the source chat: `/help` (or `/start`),
