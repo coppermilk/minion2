@@ -23,6 +23,7 @@ import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import codec
 from minions.userbot.core import statefile
 
 if TYPE_CHECKING:
@@ -185,23 +186,18 @@ def _hearts(value: object) -> tuple[tuple[str, str], ...]:
 
 
 def _tz_offset(data: dict[str, object]) -> float:
-    """Return the persona's UTC offset, from the shared 'reactions' section."""
-    reactions = (
-        data.get('reactions')
-        if isinstance(data.get('reactions'), dict)
-        else {}
-    )
-    reactions = reactions or {}
+    """Return the persona's UTC offset, as the persona fan left it here."""
     try:
-        return float(reactions.get('tz_offset_hours', 3.0))
+        return float(
+            codec.engine(data, 'comod').get('tz_offset_hours', 3.0)  # type: ignore[arg-type]
+        )
     except (TypeError, ValueError):
         return 3.0
 
 
 def load_comod_params(data: dict[str, object]) -> ComodParams:
     """Load the cabinet's params from the constants JSON 'comod' section."""
-    cfg = data.get('comod') if isinstance(data.get('comod'), dict) else {}
-    cfg = cfg or {}
+    cfg = codec.engine(data, 'comod')
     templates = cfg.get('templates')
     templates = templates if isinstance(templates, dict) else {}
     render = cfg.get('render') if isinstance(cfg.get('render'), dict) else {}

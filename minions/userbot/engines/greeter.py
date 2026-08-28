@@ -117,7 +117,7 @@ def load_greeter_params(
     ``poll_sec``. Live ChatAction events still catch a join/leave in real
     time, so the poll is only the diff-based safety net.
     """
-    cfg = codec.section(data, 'greeter')
+    cfg = codec.engine(data, 'greeter')
     default_poll = float(cfg.get('poll_sec') or GreeterParams.poll_sec)
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
     return codec.decode(

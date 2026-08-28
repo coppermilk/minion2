@@ -309,7 +309,12 @@ def test_default_mode_follows_json_enabled(tmp_path: Path) -> None:
     """The poster defaults live; a feature only if its JSON says enabled."""
     modes = _modes(
         tmp_path,
-        {'reactions': {'enabled': True}, 'stories': {'enabled': False}},
+        {
+            'engines': {
+                'reactions': {'enabled': True},
+                'stories': {'enabled': False},
+            }
+        },
     )
     assert modes.mode_of('aggregator') == 'live'
     assert modes.mode_of('reactions') == 'live'
@@ -333,7 +338,7 @@ def test_stored_modes_are_read_and_junk_falls_to_the_default(
             }
         )
     )
-    modes = _modes(tmp_path, {'reactions': {'enabled': True}})
+    modes = _modes(tmp_path, {'engines': {'reactions': {'enabled': True}}})
     assert modes.mode_of('aggregator') == 'test'
     assert modes.mode_of('reactions') == 'off'
     assert modes.mode_of('users') == 'off'  # 'bogus' -> the users default
@@ -343,7 +348,12 @@ def test_modes_fall_back_when_the_file_is_absent(tmp_path: Path) -> None:
     """No modes file (a fresh install) -> every service on its own default."""
     modes = _modes(
         tmp_path,
-        {'reactions': {'enabled': True}, 'users': {'enabled': False}},
+        {
+            'engines': {
+                'reactions': {'enabled': True},
+                'users': {'enabled': False},
+            }
+        },
     )
     assert modes.mode_of('aggregator') == 'live'  # the poster is always live
     assert modes.mode_of('reactions') == 'live'  # JSON-enabled -> live

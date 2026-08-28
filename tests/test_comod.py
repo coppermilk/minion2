@@ -129,14 +129,16 @@ def test_load_comod_params_reads_section() -> None:
     """Configured knobs override the defaults."""
     params = comod.load_comod_params(
         {
-            'comod': {
-                'donate_link': 'http://d',
-                'render': {
-                    'template': 't.jpg',
-                    'max_shelves': 3,
-                    'slots': [[1, 2, 3, 4]],
-                    'text_color': [1, 2, 3],
-                },
+            'engines': {
+                'comod': {
+                    'donate_link': 'http://d',
+                    'render': {
+                        'template': 't.jpg',
+                        'max_shelves': 3,
+                        'slots': [[1, 2, 3, 4]],
+                        'text_color': [1, 2, 3],
+                    },
+                }
             }
         }
     )

@@ -658,7 +658,7 @@ def load_story_params(
     profile (test tight, live relaxed), mirroring the reactions rescan
     interval, and both fall back to ``poll_sec``.
     """
-    cfg = codec.section(data, 'stories')
+    cfg = codec.engine(data, 'stories')
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
     default_poll = float(cfg.get('poll_sec', StoryParams.poll_sec))
     return codec.decode(

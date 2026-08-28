@@ -957,7 +957,7 @@ def load_reaction_params(data: dict[str, object]) -> ReactionParams:
     spelled out here -- the two emoji pools, the Gaussian day curves, and
     the uptime window whose JSON keys carry an ``_hour`` suffix.
     """
-    cfg = codec.section(data, 'reactions')
+    cfg = codec.engine(data, 'reactions')
     return codec.decode(
         ReactionParams,
         cfg,

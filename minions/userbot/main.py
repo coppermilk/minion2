@@ -220,7 +220,7 @@ class Userbot:
         )
         # Audience log: its own SQLite file per mode, so live and test
         # audiences never mix. Config lives in the 'users' JSON section.
-        ucfg = codec.section(self.settings, 'users')
+        ucfg = codec.engine(self.settings, 'users')
         self.audience = AudienceLog(
             AudienceDeps(
                 client=self.client,

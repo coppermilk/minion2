@@ -91,7 +91,22 @@ def decode(
     return cls(**given)
 
 
-def section(data: Mapping[str, object], name: str) -> Mapping[str, object]:
-    """Return the named JSON sub-section, or an empty one."""
-    got = data.get(name)
-    return got if isinstance(got, dict) else {}
+def section(data: Mapping[str, object], *path: str) -> Mapping[str, object]:
+    """Return the sub-section at ``path``, or an empty one.
+
+    ``section(data, 'engines', 'reactions')`` walks a level at a time, so a
+    missing or non-object step reads as "no settings here" rather than
+    raising -- a half-written constants file must not take the bot down.
+    """
+    node: Mapping[str, object] = data
+    for step in path:
+        got = node.get(step)
+        if not isinstance(got, dict):
+            return {}
+        node = got
+    return node
+
+
+def engine(data: Mapping[str, object], name: str) -> Mapping[str, object]:
+    """Return one engine's settings block from ``engines.<name>``."""
+    return section(data, 'engines', name)

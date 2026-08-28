@@ -33,8 +33,8 @@ minions/userbot/
   login.py                # one-time interactive login -> the session file
   aggregator_constants.json, assets/   # editable texts + premium-emoji ids (UTF-8), cabinet template/fonts
   core/                   # pure building blocks, no Telethon
-    models, matching, statefile, render, config, codec, runtime, client,
-    humanize, tasks, attachment, relationship
+    models, matching, state (the store), statefile, render, config, codec,
+    runtime, client, humanize, tasks, attachment, relationship
   engines/                # domain brains (Telethon-free, unit-tested)
     reactions, stories, greeter, comod, users, premium_emoji
   glue/                   # the collaborators that DO touch Telethon
@@ -80,12 +80,40 @@ the chats); **`aggregator_constants.json`** carries all behaviour and content.
 > `AGGREGATOR_STATE_DIR` env) so the live bot finds its session and state exactly
 > where it always did -- only the **code** is now `minions.userbot`.
 
-**`aggregator_constants.json`** -- key sections: `platforms`, `title_match`,
-`timeout_sec`, `backfill`, `max_duration_sec`, `repost_guard_sec` /
-`repost_guard_count` / `discussion_gap_sec` (the aggregator's dedup/flood knobs),
-the incoming `fields` names, the post's texts + the unified `emoji` array, and one
-section per engine (`reactions`, `stories`, `greeter`, `comod`, `users`,
-`persona`, `runtime`).
+**`aggregator_constants.json`** -- six sections, one rule: **a setting lives
+in the section of the engine that reads it.**
+
+| Section | What is in it |
+|---------|---------------|
+| `persona` | one human: timezone, waking window, silent-day chance. Fanned into every engine at load, so you tune the person in one place |
+| `runtime` | the process: watchdog, liveness probe, flood-sleep threshold |
+| `engines` | one block per engine -- `aggregator` (platforms, timeouts, the dedup/flood guards, the incoming `fields` names), `reactions`, `stories`, `greeter`, `comod`, `users` |
+| `post` | what a post looks like: author, announce lines, rows, labels, samples |
+| `emoji` | the unified premium-emoji catalog, each entry tagged with its `type` |
+| `texts` | what the operator sees: `/help`, the `/status` legend and glyphs, the words that suppress a sticker |
+
+## State on disk
+
+Two shapes, because two things behave differently. Per-peer data grows with
+the audience and is written one row at a time; cursors are a bounded handful
+of scalars and are the only part worth reading by eye.
+
+```
+<DRIVE>/bots/aggregator/       (live; test/ mirrors it under the same dir)
+  telethon.session             the MTProto session (SQLite, WAL)
+  peers.db                     per-peer ledger + dedup marks, both engines
+  cursors.json                 mood, session marks, daily counters, queues
+  aggregator_state.json        the posted log + groups still collecting
+  greeter_state.json           the admin-log cursor and DM budget
+  comod.json                   who is on which shelf
+  users.db                     the opt-in audience DB (PII, off by default)
+```
+
+`peers.db` is the source of truth; `cursors.json` is rebuilt from what the
+store holds rather than written per event -- at a thousand peers the old
+single-file design reached 652 KB and 47 000 lines and was rewritten on
+every comment. `users.db` stays separate on purpose: it is opt-in and holds
+PII, which the always-on ledger does not.
 
 ## Run (without Docker)
 

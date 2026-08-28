@@ -465,10 +465,12 @@ def test_state_survives_reopening_the_store(tmp_path: Path) -> None:
 def test_load_story_params_mode_selects_poll(tmp_path: Path) -> None:
     """Check load story params mode selects poll."""
     data = {
-        'stories': {
-            'enabled': True,
-            'poll_sec_test': 300,
-            'poll_sec_live': 3600,
+        'engines': {
+            'stories': {
+                'enabled': True,
+                'poll_sec_test': 300,
+                'poll_sec_live': 3600,
+            }
         }
     }
     assert stories.load_story_params(data, 'test').poll_sec == _POLL_TEST
@@ -477,6 +479,9 @@ def test_load_story_params_mode_selects_poll(tmp_path: Path) -> None:
 
 def test_include_archived_defaults_off(tmp_path: Path) -> None:
     """Check include archived defaults off."""
-    assert not stories.load_story_params({'stories': {}}).include_archived
-    on = stories.load_story_params({'stories': {'include_archived': True}})
+    blank = {'engines': {'stories': {}}}
+    assert not stories.load_story_params(blank).include_archived
+    on = stories.load_story_params(
+        {'engines': {'stories': {'include_archived': True}}}
+    )
     assert on.include_archived

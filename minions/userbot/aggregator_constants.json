@@ -1,57 +1,334 @@
 {
-  "platforms": "tiktok,youtube,pinterest,instagram",
-  "title_match": 0.9,
-  "timeout_sec": 10800,
-  "backfill": 100,
-  "max_duration_sec": 180,
-  "repost_guard_sec": 604800,
-  "repost_guard_count": 5,
-  "discussion_gap_sec": 2.0,
-  "fields": {
-    "action": "action",
-    "platform": "platform",
-    "caption": "caption",
-    "link": "link",
-    "thumbnail": "thumnailUrl",
-    "duration": "duration"
+  "_note": "ALL premium emoji live in the single top-level \"emoji\" array. Each entry is {type, id, fallback} plus per-type extras: type=platform adds \"name\" (tiktok/youtube/instagram/pinterest); type=reaction adds \"base\" (preference) and \"tags\" (sleepy/bodry/winter/spring/summer/autumn/newyear). Types: love + lead + arrow drive the post (random pick), platform is the link grid, reaction is the reply pool. Add/remove entries freely; the whole array is rendered by /emojis. Render from a user account with Telegram Premium; replace an entry's id with a plain glyph in fallback to use a non-premium emoji.",
+  "persona": {
+    "_note": "ЕДИНЫЕ ЧАСЫ ПЕРСОНАЖА — один источник правды для cats/stories/greeter/comod (см. core/config.py apply_persona). tz_offset_hours — UTC-сдвиг. wake_start_hour/wake_end_hour — окно бодрствования [start,end): коты активны в нём, greeter шлёт ЛС только в нём, тихие часы сторис = всё ВНЕ окна. silent_day_prob — шанс, что человек весь день не заходил (коты и сторис молчат в ОДНИ и те же дни). Правишь ЗДЕСЬ — двигаются все движки разом. Пер-движковый ключ в его секции перекрывает persona (намеренное исключение).",
+    "tz_offset_hours": 3,
+    "wake_start_hour": 7,
+    "wake_end_hour": 17,
+    "silent_day_prob": 0.08
   },
-  "action_value": "newVideo",
-  "author": "@da_eto_tyoma",
-  "announce": [
-    "наконец домонтировал и выложил",
-    "чуть не умер и загрузил новое видо",
-    "не выдержал и залил новое видео",
-    "чуть не удалил всё, но выложил",
-    "доел спагетти и выложил нове видео",
-    "доел мисо суп и выложил нове видео",
-    "хотел лечь спать, а вместо этого домонтировал",
-    "не ел, не спал, только кофе и слёзы. Зато выложил бэнгер",
-    "три дня не спал, два раза чуть не удалил канал, но всё равно залил видео",
-    "упал с самоката, но для вас домонтировал и выложил видео",
-    "доел последние пельмени и выложил новое видео",
-    "монтировал с температурой 37. если я умру - знайте, это видео было ради вас",
-    "доел мясо, запил вискарём и залил новое видео. Нормально?",
-    "вместо того чтобы кого-то чпокнуть, я чпокал финальный рендер",
-    "три ночи без сна, один нервный срыв - и вот оно",
-    "если я завтра не проснусь - знайте, это видео было последним",
-    "ради этого ролика я отменил все планы (и жизнь)",
-    "доел последние дошираки и выложил бэнгер",
-    "запил кофе слезами и залил новое видео",
-    "вместо ужина - финальный рендер. Приятного просмотра",
-    "доел пельмени холодными, зато видео горячее",
-    "съел всё, что было в холодильнике, и только потом выложил",
-    "хотел лечь спать, а вместо этого домонтировал до 5 утра",
-    "будильник звонил три раза, я его послал и доделал",
-    "специально для тех, кто ждёт. Держите",
-    "упал с кровати, но для вас всё равно домонтировал",
-    "если это видео вам не зайдёт - я лично приду и посмотрю, как вы его не смотрите",
-    "монтировал в одних трусах и с температурой. Люблю вас",
-    "монтировал до трясущихся рук, но для вас выложил",
-    "хотел всё сжечь, но вспомнил про вас и залил",
-    "ради ваших комментариев пережил этот ад",
-    "если бы не вы - давно бы удалил канал",
-    "монтировал с температурой и экзистенциальным кризисом"
-  ],
+  "runtime": {
+    "_note": "Self-healing watchdog. status_loop touches a health file только после успешной Telegram-пробы; демон-тред делает os._exit(1) если она устарела (завис), и Docker restart:always поднимает контейнер. watchdog_sec=0 отключает. probe_timeout_sec -- таймаут одной пробы get_me. probe_interval_sec -- КАК ЧАСТО вообще стучимся пробой в Telegram: раньше get_me летел КАЖДЫЙ 60с тик (1440 запросов/сутки фонового шума), теперь раз в 300с -- единственный постоянный запрос перестаёт долбить сервер, а штамп всё равно внутри окна вачдога (probe_interval + probe_timeout << watchdog_sec). Локальные дела (обучение uptime, лог pending) остаются на 60с. flood_sleep_threshold_sec -- ЩАДЯЩИЕ ЗАПРОСЫ / устойчивость к флуду: при FloodWait клиент САМ терпеливо ждёт до этого числа секунд и повторяет запрос, а не падает и долбит дальше (дефолт Telethon -- всего 60с). Час поглощает любой обычный лимит от лайков/сторис/ЛС; флуд длиннее (редкость) всё ещё бросается и ловится на месте. Сама сессия -- SQLite-файл -- открывается в WAL (core/client.py), так что жёсткий os._exit(1) больше НЕ бьёт файл сессии ('database disk image is malformed' и перелогин раз в пару недель ушли).",
+    "watchdog_sec": 600,
+    "probe_timeout_sec": 30,
+    "probe_interval_sec": 300,
+    "flood_sleep_threshold_sec": 3600
+  },
+  "engines": {
+    "aggregator": {
+      "platforms": "tiktok,youtube,pinterest,instagram",
+      "title_match": 0.9,
+      "timeout_sec": 10800,
+      "backfill": 100,
+      "max_duration_sec": 180,
+      "repost_guard_sec": 604800,
+      "repost_guard_count": 5,
+      "discussion_gap_sec": 2.0,
+      "fields": {
+        "action": "action",
+        "platform": "platform",
+        "caption": "caption",
+        "link": "link",
+        "thumbnail": "thumnailUrl",
+        "duration": "duration"
+      },
+      "action_value": "newVideo"
+    },
+    "reactions": {
+      "enabled": true,
+      "label": "",
+      "like_all": true,
+      "comments_in_discussion": true,
+      "react_to_posts": false,
+      "watch_posts": 4,
+      "rescan_sec": 300,
+      "rescan_sec_test": 300,
+      "rescan_sec_live": 3600,
+      "uptime_half_life_sec": 864000,
+      "uptime_learn_obs": 2000,
+      "skip_if_manually_replied": true,
+      "quiet_hours": [],
+      "hours_weekday": [
+        [
+          10,
+          2.0,
+          1.0
+        ],
+        [
+          15,
+          2.5,
+          1.3
+        ]
+      ],
+      "hours_weekend": [
+        [
+          11,
+          2.5,
+          1.0
+        ],
+        [
+          15,
+          2.5,
+          1.1
+        ]
+      ],
+      "latency_log_mu": 7.0,
+      "latency_log_sigma": 1.2,
+      "spacing_log_mu": 9.0,
+      "spacing_log_sigma": 1.3,
+      "jitter_sec": 90,
+      "skip_prob": 0.12,
+      "double_prob": 0.06,
+      "double_gap_sec": 40,
+      "recency_half_life_sec": 172800,
+      "mood_phi": 0.8,
+      "mood_sigma": 0.35,
+      "feedback_speedup": 0.4,
+      "_note": "Human-like cat-emoji replies to people who comment on the last watch_posts posts, ONCE per (post, commenter) -- a second comment under the SAME post is ignored, but the same person on another post is eligible again (see minions/userbot/engines/reactions.py). Turn off with enabled=false. like_all=true лайкает АБСОЛЮТНО каждый комментарий: отключает человекоподобные гейты (skip_prob, тихие дни, пропуск 'уснул/устарело') и ставит лайк-реакцию на каждый коммент (без стикеров), ключ дедупа становится по комментарию (каждый коммент лайкается один раз, но все комменты одного человека тоже). Дедуп и проверка ручного ответа остаются. The reaction pool is the type=reaction entries of the top-level \"emoji\" array (not here); add more there. /emojis renders the whole emoji array. tz_offset_hours is the persona's UTC offset (3 = Moscow) so hours match the legend. active_start_hour/active_end_hour are the DECLARED uptime window in local hours [start, end) -- a starting guess only. The bot also LEARNS the NAS's real on-hours (a heartbeat records the current hour while running) and blends the learned curve with this window by confidence, so it adapts to whatever hours the NAS is actually up, even outside 7-17 (set start>=end or 0/24 to lean entirely on learning). uptime_half_life_sec fades old uptime observations (10 days) so a changed schedule is followed; uptime_learn_obs is how many heartbeats of history earn full trust in the learned curve (2000 ~ 1.4 days of continuous uptime). A cat planned for an hour the NAS turns out to be down survives in the persisted pending queue and fires (renewed to a fresh in-window slot) when it is back. skip_if_manually_replied=true drops the cat if the operator has already replied to that comment by hand. hours_* are [mean_hour, sigma, weight] Gaussian peaks (the waking-day shape); quiet_hours are hard-silent hours. State (mood, watched posts, pending cats, and the learned uptime) persists to reactions_state.json, so a nightly shutdown loses nothing. latency_* is the log-normal reaction delay after a comment; spacing_* is the heavy-tailed gap BETWEEN answering sessions; the short intra-session gap is session_gap_* (a burst clears the pile), and session_idle_sec/session_max_sec bound one session; a comment that cannot be answered at an awake, host-up moment within max_reply_delay_sec is skipped as stale (keep it at 86400=24h or small, NOT ~12h -- see cats_rewrite_notes). skip_prob ignores a comment; silent_day_prob mutes a whole day; double_prob sends a rare second cat. recency_half_life_sec fades a just-used cat; mood_phi/mood_sigma is the day-to-day AR(1) mood; a cat's tags (sleepy/bodry/winter/spring/summer/autumn/newyear) re-weight it by daypart/season. comments_in_discussion=true (default here) is for a CHANNEL target: each post's comments live in the linked discussion group, so the bot resolves the post's discussion thread and replies ONLY inside that channel post's comments. The account MUST be a member of the discussion group to receive those comments. Set comments_in_discussion=false only when the target is a plain group (then comments are matched as direct replies to the post message id).",
+      "session_gap_log_mu": 3.8,
+      "session_gap_log_sigma": 0.6,
+      "session_idle_sec": 900,
+      "session_max_sec": 1200,
+      "max_reply_delay_sec": 86400,
+      "_note_attach": "Berlyne attachment control on comment-likes (кривая Берлайна на лайки, та же логика, что и на сторис). attach_enabled=true: НЕ лайкаем каждый коммент -- доля лайкнутых комментов человека держится у пика кривой Вундта (~0.67 = engaged/commented), иначе лайкать всё подряд читается как навязчивость; тяжёлого комментатора притормаживаем, новичка всё равно приветствуем. Лайк-реакция = ЭКСПОЗИЦИЯ; тред-стикер = ВЗАИМНОСТЬ (recip_fraction_target=0.20 = stickered/engaged, ~1 из 5 engaged становится стикером). ПЕРВЫЙ коммент человека лайкаем всегда. exposure_c1/c2/k -- параметры кривой Вундта, их argmax И ЕСТЬ целевая доля (нет отдельной 0.67). like_control_gain/recip_control_gain -- сила обратной связи. like_max_per_day кап на все engagement за день (лайки дешёвые), sticker_max_per_day -- на стикеры (сообщения = реальная бан-поверхность), 0 = без капа, в tz персоны. Память по человеку (commented/engaged/stickered) живёт в reactions_state.json и НЕ сбрасывается при откате поста -- это и есть адаптация к каждому. attach_enabled=false возвращает старое поведение like_all.",
+      "attach_enabled": true,
+      "exposure_c1": 0.45,
+      "exposure_c2": 0.9,
+      "exposure_k": 8.0,
+      "like_control_gain": 1.0,
+      "recip_fraction_target": 0.2,
+      "recip_control_gain": 1.0,
+      "like_max_per_day": 400,
+      "sticker_max_per_day": 40
+    },
+    "stories": {
+      "_note": "Human-like story viewing (NO reactions -- just a view + a log of who was viewed). On by default; turn it off at runtime with /stories_off (or set enabled=false here). Telegram's feed only returns contacts/followed peers, and we only ever view UNSEEN stories, so it never walks the whole contact list. view_all=true (catch-up) views EVERY unseen story each poll -- no per-session cap, no skip, no long cooldown -- so all current stories are swept at once (a small dwell/gap between them stays, to respect flood limits); false is the human handful-then-rest. include_archived=true also views the stories of people whose chats you moved to the Archive (the hidden feed). poll_sec_test/live set how often the feed is re-polled (test tight, live relaxed).",
+      "enabled": true,
+      "view_all": false,
+      "include_archived": true,
+      "poll_sec": 1800,
+      "poll_sec_test": 300,
+      "poll_sec_live": 3600,
+      "per_session_min": 2,
+      "per_session_max": 6,
+      "skip_peer_prob": 0.35,
+      "latency_log_mu": 2.5,
+      "latency_log_sigma": 0.8,
+      "gap_log_mu": 2.3,
+      "gap_log_sigma": 0.7,
+      "spacing_log_mu": 8.6,
+      "spacing_log_sigma": 1.0,
+      "dwell_min_sec": 2.0,
+      "dwell_max_sec": 9.0,
+      "max_peers_tracked": 500,
+      "seen_per_peer": 40,
+      "log_limit": 50,
+      "_note_exposure": "Berlyne exposure control: we view a FRACTION of each person's stories toward the peak of the Wundt curve (~2/3), not all of them -- viewing everything reads as stalking. exposure_c1/c2/k shape the curve (reward turns on at c1, overexposure-aversion at c2>c1, slope k; see engines/attachment.py) and its peak IS the per-peer view target. view_control_gain is how hard a peer above/below target is corrected. To view everything again, push exposure_c2 past 1 (aversion never kicks in -> peak at p=1).",
+      "exposure_c1": 0.45,
+      "exposure_c2": 0.9,
+      "exposure_k": 8.0,
+      "view_control_gain": 1.0,
+      "_note_react": "Reciprocity: leave a heart/thumb on a FRACTION (react_fraction_target) of the stories we view, so a viewer sees an occasional reaction instead of a silent watcher -- the term that lifts attachment off zero. react_max_per_day is a HARD anti-ban ceiling (reactions on stories are automated engagement); react_pool is the reaction glyphs to choose from. react_enabled=false leaves stories view-only.",
+      "react_enabled": true,
+      "react_fraction_target": 0.2,
+      "react_pool": [
+        "✊",
+        "👍"
+      ],
+      "react_max_per_day": 70
+    },
+    "greeter": {
+      "enabled": true,
+      "channel": 0,
+      "welcome": "Привет {name} <tg-emoji emoji-id=\"5413808716149467908\">🤩</tg-emoji>\nи добро пожаловать в тгк {channel}\n\nЧувствуйте себя свободно, будьте собой. Располагайтесь как дома. Если у вас будут какие-либо идеи, смело пишите.\n\nС любовью и отвагой,\nТёма",
+      "welcome_back": "",
+      "farewell": "Привет {name} <tg-emoji emoji-id=\"5413369766196848984\">🤩</tg-emoji>\nТы часть семьи. А из семьи не уходят насовсем — просто иногда выходят проветриться.\n\nМы тебя помним и ждём. Возвращайся домой.\n\nС любовью и отвагой,\nТёма\n\n<a href=\"{channel_url}\">➡️ ВЕРНУТЬСЯ</a>",
+      "poll_sec": 600,
+      "poll_sec_test": 600,
+      "poll_sec_live": 3600,
+      "dm_min_gap_sec": 45,
+      "dm_jitter_sec": 90,
+      "max_dm_per_run": 3,
+      "max_dm_per_day": 10,
+      "_note": "Приветствие/прощание в ЛС подписчикам канала (minions/userbot/greeter.py). ВНИМАНИЕ: рассылка в ЛС с юзербота -- главный триггер спам-бана Telegram (PeerFloodError). Держи объём низким. ВЫКЛЮЧЕНО по умолчанию: поставь enabled=true, channel (0 = первый target из env) и тексты. Аккаунт ДОЛЖЕН быть админом канала, чтобы читать список участников. ПЕРВЫЙ запуск -- тихий бэйзлайн: текущие подписчики просто запоминаются, НИКОМУ не пишем; приветствуем только тех, кто подписался ПОСЛЕ. Тексты рендерятся как HTML (parse_mode=html): премиум-эмодзи через <tg-emoji emoji-id=\"...\">X</tg-emoji> и ссылки через <a href=\"...\">текст</a> работают; {name} подставляется именем человека (если не удалось узнать -- fallback_name). ВАЖНО: юзербот НЕ умеет слать инлайн-КНОПКИ (это только для бот-аккаунтов), поэтому \"Вернуться\" сделано HTML-ссылкой на канал. welcome -- подписчику, farewell -- отписавшемуся (welcome_back пуст = вернувшийся получает обычный welcome). max_dm_per_day -- жёсткий дневной потолок (главная защита); max_dm_per_run -- потолок за один цикл; dm_min_gap_sec/dm_jitter_sec -- пауза между ЛС (сейчас 10с без джиттера). Детект: и live-события (events.ChatAction), и поллинг раз в poll_sec с диффом списка (страховка, разбирает бэклог после отключения питания при старте). Ошибки приватности пропускаются, PeerFlood -- откат. Состояние (участники, кто отписался, дневной счётчик) в greeter_state.json. {channel} -> @юзернейм таргет-канала, {channel_url} -> ссылка t.me на него (подставляются автоматически). Превью ссылок отключено (link_preview=false).",
+      "fallback_name": "друг"
+    },
+    "comod": {
+      "_note": "Шкаф/комод: команда /comod заселяет ника на именную полку. Данные в comod.json (свои на каждый профиль): ник -> {at (эпоха заезда), amount (сумма доната, строкой)}. Через МЕСЯЦ (30 дней) после заезда ник авто-удаляется -- полка освобождается ('съехал'). /comod <ник> <сумма> -- заселить (повторное заселение обновляет 30-дневный таймер) и запостить картинку шкафа + текст-объявление; /comod -- показать текущий шкаф; /comod kick <ник> -- выселить вручную. Всё постится ТОЛЬКО в исходный чат (source), откуда пришла команда. На полке размер НИКА подгоняется под клетку, а сумма пишется ПОД ником шрифтом поменьше (render.amount_scale -- доля от размера ника, 0.75 по умолчанию), по центру. Картинка рендерится поверх фото шкафа (render.template) через minion_core/adapters/files.py:render_cabinet -- Pillow живёт ТОЛЬКО там. render.template -- путь к ПУСТОМУ фото шкафа (по умолчанию assets/cabinet.jpg; относительный путь ищется от пакета minions/userbot, так что положи файл в minions/userbot/assets/cabinet.jpg); render.slots -- координаты полок [x,y,w,h] под ЭТО фото (по умолчанию под макет 1080px с 10 полками). render.font -- основной TTF (по умолчанию Liberation Serif Bold Italic -- тот же шрифт, что в прототипе; в нём есть и латиница, и кириллица, так что один шрифт на всё); render.font_cyrillic -- запасной TTF для строк с кириллицей (если основной шрифт без кириллицы; тут указан тот же Liberation). Пути относительны пакету minions/userbot (лежат в assets/fonts/). Пусто = поиск системных шрифтов, иначе дефолтный. render.ref_width/ref_height -- размер эталонного фото, под который заданы координаты slots (1080x1350); при рендере слоты масштабируются под реальный размер cabinet.jpg, так что можно залить то же фото в любом разрешении. donate_link -- ссылка на донаты для {link} в объявлении. Если template пуст или рендер не удался -- шлём текстовый ростер. Объявление шлётся с parse_mode=HTML: в move_in работают премиум-эмодзи <tg-emoji emoji-id=\"...\">X</tg-emoji> и ссылки <a href=\"{link}\">текст</a>; {link} -- ссылка на донат (donate_link), {amazon} -- ссылка на Amazon-вишлист (amazon_link). /comod постит ТОЛЬКО картинку шкафа + это объявление (без списка ников). Отдельная команда /propiska_shkaf_month шлёт текстовый список жильцов за месяц: строка propiska_line = {heart} {nick} {date} (heart -- случайное премиум-сердечко из hearts, nick экранируется, date -- дата заселения в таймзоне cats.tz_offset_hours). hearts -- список {id, fallback}: id пустой = обычный глиф, id заданный = премиум <tg-emoji>. kick_hint шлётся обычным текстом (в нём есть <ник>).",
+      "donate_link": "https://revolut.me/da_eto_tyoma",
+      "amazon_link": "https://www.amazon.de/hz/wishlist/ls/YCM86K0NYW9P/ref=nav_wishlist_lists_1",
+      "templates": {
+        "move_in": "Сегодня в Шкафу пополнение <tg-emoji emoji-id=\"5470079333257224410\">😼</tg-emoji>\nТоп донатеры уже там… Они счастливы. Они улыбались. Они… не важно!\n\nСюда попасть - оч просто:\n💸 Задонатить любую сумму\n<tg-emoji emoji-id=\"5411262178500059433\">🤩</tg-emoji> или подарить что-то из вишлиста - вещь приедет прямо ко мне\n\nИ за это ты получаешь:\n<tg-emoji emoji-id=\"5411262178500059433\">🤩</tg-emoji> Своё имя в Шкафу на целый месяц\n<tg-emoji emoji-id=\"5411262178500059433\">🤩</tg-emoji> Личную табличку на полке\n🙌 И публичное спасибо от меня - при всех\n\nПолки потихоньку заполняются, и мне правда приятно видеть там каждого из вас 🤍\n\n<b><a href=\"{link}\">Задонатить</a></b> | <b><a href=\"{amazon}\">Подарить из вишлиста</a></b>",
+        "empty": "шкаф пока пуст - задонать, и заселю 🤍",
+        "kick_hint": "кого выселить? /comod kick <ник>",
+        "propiska_head": "🏠 Прописка в шкафу на этот месяц:",
+        "propiska_line": "{heart} {nick} - {date}",
+        "propiska_empty": "в шкафу пока никто не прописан 🤍"
+      },
+      "hearts": [
+        {
+          "id": "",
+          "fallback": "🤍"
+        },
+        {
+          "id": "",
+          "fallback": "❤️"
+        },
+        {
+          "id": "",
+          "fallback": "💖"
+        },
+        {
+          "id": "",
+          "fallback": "💛"
+        }
+      ],
+      "render": {
+        "template": "assets/cabinet.jpg",
+        "font": "assets/fonts/LiberationSerif-BoldItalic.ttf",
+        "font_cyrillic": "assets/fonts/LiberationSerif-BoldItalic.ttf",
+        "base_size": 40,
+        "amount_scale": 0.75,
+        "ref_width": 1080,
+        "ref_height": 1350,
+        "max_shelves": 10,
+        "text_color": [
+          255,
+          255,
+          255
+        ],
+        "shadow_color": [
+          0,
+          0,
+          0
+        ],
+        "slots": [
+          [
+            347,
+            73,
+            412,
+            203
+          ],
+          [
+            340,
+            303,
+            199,
+            150
+          ],
+          [
+            560,
+            296,
+            198,
+            159
+          ],
+          [
+            341,
+            476,
+            198,
+            147
+          ],
+          [
+            558,
+            473,
+            198,
+            151
+          ],
+          [
+            342,
+            649,
+            193,
+            122
+          ],
+          [
+            556,
+            644,
+            179,
+            127
+          ],
+          [
+            346,
+            906,
+            406,
+            105
+          ],
+          [
+            346,
+            1050,
+            400,
+            93
+          ],
+          [
+            344,
+            1198,
+            391,
+            73
+          ]
+        ]
+      }
+    },
+    "users": {
+      "_note": "Opt-in users database (SQLite, per profile). enabled=false collects nothing. store_message_text=false keeps counts only, no text. enrich=true resolves username/name via get_entity (phone is essentially never available).",
+      "enabled": false,
+      "store_message_text": true,
+      "enrich": true
+    }
+  },
+  "post": {
+    "author": "@da_eto_tyoma",
+    "announce": [
+      "наконец домонтировал и выложил",
+      "чуть не умер и загрузил новое видо",
+      "не выдержал и залил новое видео",
+      "чуть не удалил всё, но выложил",
+      "доел спагетти и выложил нове видео",
+      "доел мисо суп и выложил нове видео",
+      "хотел лечь спать, а вместо этого домонтировал",
+      "не ел, не спал, только кофе и слёзы. Зато выложил бэнгер",
+      "три дня не спал, два раза чуть не удалил канал, но всё равно залил видео",
+      "упал с самоката, но для вас домонтировал и выложил видео",
+      "доел последние пельмени и выложил новое видео",
+      "монтировал с температурой 37. если я умру - знайте, это видео было ради вас",
+      "доел мясо, запил вискарём и залил новое видео. Нормально?",
+      "вместо того чтобы кого-то чпокнуть, я чпокал финальный рендер",
+      "три ночи без сна, один нервный срыв - и вот оно",
+      "если я завтра не проснусь - знайте, это видео было последним",
+      "ради этого ролика я отменил все планы (и жизнь)",
+      "доел последние дошираки и выложил бэнгер",
+      "запил кофе слезами и залил новое видео",
+      "вместо ужина - финальный рендер. Приятного просмотра",
+      "доел пельмени холодными, зато видео горячее",
+      "съел всё, что было в холодильнике, и только потом выложил",
+      "хотел лечь спать, а вместо этого домонтировал до 5 утра",
+      "будильник звонил три раза, я его послал и доделал",
+      "специально для тех, кто ждёт. Держите",
+      "упал с кровати, но для вас всё равно домонтировал",
+      "если это видео вам не зайдёт - я лично приду и посмотрю, как вы его не смотрите",
+      "монтировал в одних трусах и с температурой. Люблю вас",
+      "монтировал до трясущихся рук, но для вас выложил",
+      "хотел всё сжечь, но вспомнил про вас и залил",
+      "ради ваших комментариев пережил этот ад",
+      "если бы не вы - давно бы удалил канал",
+      "монтировал с температурой и экзистенциальным кризисом"
+    ],
+    "view_label": [
+      "Посмотреть"
+    ],
+    "column_separator": "  |  ",
+    "rows": [
+      [
+        "tiktok",
+        "youtube"
+      ],
+      [
+        "instagram",
+        "pinterest"
+      ]
+    ],
+    "sample_titles": {
+      "short": "Когда просят сальсу 💃 #скетч #комедия",
+      "long": "Три дня монтировал этот номер и наконец готово #бэнгер #юмор"
+    }
+  },
   "emoji": [
     {
       "type": "love",
@@ -258,236 +535,89 @@
         "bodry"
       ]
     },
-    { "type": "like", "id": "5413808716149467908", "fallback": "🤩" },
-    { "type": "like", "id": "5285268883375169145", "fallback": "🤍" },
-    { "type": "like", "id": "5413441397661409586", "fallback": "🐰" },
-    { "type": "like", "id": "5413842126700060975", "fallback": "🤍" },
-    { "type": "like", "id": "5458580949891589643", "fallback": "🤩" },
-    { "type": "like", "id": "5461051092957700947", "fallback": "🤝" },
-    { "type": "like", "id": "5461072816902285831", "fallback": "🤩" },
-    { "type": "like", "id": "5458670315276116087", "fallback": "🤍" },
-    { "type": "like", "id": "5458472746780502747", "fallback": "🤩" },
-    { "type": "like", "id": "5458884526770005216", "fallback": "🤍" }
-  ],
-  "view_label": [
-    "Посмотреть"
-  ],
-  "column_separator": "  |  ",
-  "rows": [
-    [
-      "tiktok",
-      "youtube"
-    ],
-    [
-      "instagram",
-      "pinterest"
-    ]
-  ],
-  "sample_titles": {
-    "short": "Когда просят сальсу 💃 #скетч #комедия",
-    "long": "Три дня монтировал этот номер и наконец готово #бэнгер #юмор"
-  },
-  "human_words": [
-    "？",
-    "сотруднич", "реклам", "оффер", "предлож", "бартер", "интеграц",
-    "прайс", "коллаб", "collab", "promo", "sponsor"
-  ],
-  "users": {
-    "_note": "Opt-in users database (SQLite, per profile). enabled=false collects nothing. store_message_text=false keeps counts only, no text. enrich=true resolves username/name via get_entity (phone is essentially never available).",
-    "enabled": false,
-    "store_message_text": true,
-    "enrich": true
-  },
-  "persona": {
-    "_note": "ЕДИНЫЕ ЧАСЫ ПЕРСОНАЖА — один источник правды для cats/stories/greeter/comod (см. core/config.py apply_persona). tz_offset_hours — UTC-сдвиг. wake_start_hour/wake_end_hour — окно бодрствования [start,end): коты активны в нём, greeter шлёт ЛС только в нём, тихие часы сторис = всё ВНЕ окна. silent_day_prob — шанс, что человек весь день не заходил (коты и сторис молчат в ОДНИ и те же дни). Правишь ЗДЕСЬ — двигаются все движки разом. Пер-движковый ключ в его секции перекрывает persona (намеренное исключение).",
-    "tz_offset_hours": 3,
-    "wake_start_hour": 7,
-    "wake_end_hour": 17,
-    "silent_day_prob": 0.08
-  },
-  "stories": {
-    "_note": "Human-like story viewing (NO reactions -- just a view + a log of who was viewed). On by default; turn it off at runtime with /stories_off (or set enabled=false here). Telegram's feed only returns contacts/followed peers, and we only ever view UNSEEN stories, so it never walks the whole contact list. view_all=true (catch-up) views EVERY unseen story each poll -- no per-session cap, no skip, no long cooldown -- so all current stories are swept at once (a small dwell/gap between them stays, to respect flood limits); false is the human handful-then-rest. include_archived=true also views the stories of people whose chats you moved to the Archive (the hidden feed). poll_sec_test/live set how often the feed is re-polled (test tight, live relaxed).",
-    "enabled": true,
-    "view_all": false,
-    "include_archived": true,
-    "poll_sec": 1800,
-    "poll_sec_test": 300,
-    "poll_sec_live": 3600,
-    "per_session_min": 2,
-    "per_session_max": 6,
-    "skip_peer_prob": 0.35,
-    "latency_log_mu": 2.5,
-    "latency_log_sigma": 0.8,
-    "gap_log_mu": 2.3,
-    "gap_log_sigma": 0.7,
-    "spacing_log_mu": 8.6,
-    "spacing_log_sigma": 1.0,
-    "dwell_min_sec": 2.0,
-    "dwell_max_sec": 9.0,
-    "max_peers_tracked": 500,
-    "seen_per_peer": 40,
-    "log_limit": 50,
-    "_note_exposure": "Berlyne exposure control: we view a FRACTION of each person's stories toward the peak of the Wundt curve (~2/3), not all of them -- viewing everything reads as stalking. exposure_c1/c2/k shape the curve (reward turns on at c1, overexposure-aversion at c2>c1, slope k; see engines/attachment.py) and its peak IS the per-peer view target. view_control_gain is how hard a peer above/below target is corrected. To view everything again, push exposure_c2 past 1 (aversion never kicks in -> peak at p=1).",
-    "exposure_c1": 0.45,
-    "exposure_c2": 0.90,
-    "exposure_k": 8.0,
-    "view_control_gain": 1.0,
-    "_note_react": "Reciprocity: leave a heart/thumb on a FRACTION (react_fraction_target) of the stories we view, so a viewer sees an occasional reaction instead of a silent watcher -- the term that lifts attachment off zero. react_max_per_day is a HARD anti-ban ceiling (reactions on stories are automated engagement); react_pool is the reaction glyphs to choose from. react_enabled=false leaves stories view-only.",
-    "react_enabled": true,
-    "react_fraction_target": 0.20,
-    "react_pool": ["✊", "👍"],
-    "react_max_per_day": 70
-  },
-  "runtime": {
-    "_note": "Self-healing watchdog. status_loop touches a health file только после успешной Telegram-пробы; демон-тред делает os._exit(1) если она устарела (завис), и Docker restart:always поднимает контейнер. watchdog_sec=0 отключает. probe_timeout_sec -- таймаут одной пробы get_me. probe_interval_sec -- КАК ЧАСТО вообще стучимся пробой в Telegram: раньше get_me летел КАЖДЫЙ 60с тик (1440 запросов/сутки фонового шума), теперь раз в 300с -- единственный постоянный запрос перестаёт долбить сервер, а штамп всё равно внутри окна вачдога (probe_interval + probe_timeout << watchdog_sec). Локальные дела (обучение uptime, лог pending) остаются на 60с. flood_sleep_threshold_sec -- ЩАДЯЩИЕ ЗАПРОСЫ / устойчивость к флуду: при FloodWait клиент САМ терпеливо ждёт до этого числа секунд и повторяет запрос, а не падает и долбит дальше (дефолт Telethon -- всего 60с). Час поглощает любой обычный лимит от лайков/сторис/ЛС; флуд длиннее (редкость) всё ещё бросается и ловится на месте. Сама сессия -- SQLite-файл -- открывается в WAL (core/client.py), так что жёсткий os._exit(1) больше НЕ бьёт файл сессии ('database disk image is malformed' и перелогин раз в пару недель ушли).",
-    "watchdog_sec": 600,
-    "probe_timeout_sec": 30,
-    "probe_interval_sec": 300,
-    "flood_sleep_threshold_sec": 3600
-  },
-  "reactions": {
-    "enabled": true,
-    "label": "",
-    "like_all": true,
-    "comments_in_discussion": true,
-    "react_to_posts": false,
-    "watch_posts": 4,
-    "rescan_sec": 300,
-    "rescan_sec_test": 300,
-    "rescan_sec_live": 3600,
-    "uptime_half_life_sec": 864000,
-    "uptime_learn_obs": 2000,
-    "skip_if_manually_replied": true,
-    "quiet_hours": [],
-    "hours_weekday": [
-      [
-        10,
-        2.0,
-        1.0
-      ],
-      [
-        15,
-        2.5,
-        1.3
-      ]
-    ],
-    "hours_weekend": [
-      [
-        11,
-        2.5,
-        1.0
-      ],
-      [
-        15,
-        2.5,
-        1.1
-      ]
-    ],
-    "latency_log_mu": 7.0,
-    "latency_log_sigma": 1.2,
-    "spacing_log_mu": 9.0,
-    "spacing_log_sigma": 1.3,
-    "jitter_sec": 90,
-    "skip_prob": 0.12,
-    "double_prob": 0.06,
-    "double_gap_sec": 40,
-    "recency_half_life_sec": 172800,
-    "mood_phi": 0.8,
-    "mood_sigma": 0.35,
-    "feedback_speedup": 0.4,
-    "_note": "Human-like cat-emoji replies to people who comment on the last watch_posts posts, ONCE per (post, commenter) -- a second comment under the SAME post is ignored, but the same person on another post is eligible again (see minions/userbot/engines/reactions.py). Turn off with enabled=false. like_all=true лайкает АБСОЛЮТНО каждый комментарий: отключает человекоподобные гейты (skip_prob, тихие дни, пропуск 'уснул/устарело') и ставит лайк-реакцию на каждый коммент (без стикеров), ключ дедупа становится по комментарию (каждый коммент лайкается один раз, но все комменты одного человека тоже). Дедуп и проверка ручного ответа остаются. The reaction pool is the type=reaction entries of the top-level \"emoji\" array (not here); add more there. /emojis renders the whole emoji array. tz_offset_hours is the persona's UTC offset (3 = Moscow) so hours match the legend. active_start_hour/active_end_hour are the DECLARED uptime window in local hours [start, end) -- a starting guess only. The bot also LEARNS the NAS's real on-hours (a heartbeat records the current hour while running) and blends the learned curve with this window by confidence, so it adapts to whatever hours the NAS is actually up, even outside 7-17 (set start>=end or 0/24 to lean entirely on learning). uptime_half_life_sec fades old uptime observations (10 days) so a changed schedule is followed; uptime_learn_obs is how many heartbeats of history earn full trust in the learned curve (2000 ~ 1.4 days of continuous uptime). A cat planned for an hour the NAS turns out to be down survives in the persisted pending queue and fires (renewed to a fresh in-window slot) when it is back. skip_if_manually_replied=true drops the cat if the operator has already replied to that comment by hand. hours_* are [mean_hour, sigma, weight] Gaussian peaks (the waking-day shape); quiet_hours are hard-silent hours. State (mood, watched posts, pending cats, and the learned uptime) persists to reactions_state.json, so a nightly shutdown loses nothing. latency_* is the log-normal reaction delay after a comment; spacing_* is the heavy-tailed gap BETWEEN answering sessions; the short intra-session gap is session_gap_* (a burst clears the pile), and session_idle_sec/session_max_sec bound one session; a comment that cannot be answered at an awake, host-up moment within max_reply_delay_sec is skipped as stale (keep it at 86400=24h or small, NOT ~12h -- see cats_rewrite_notes). skip_prob ignores a comment; silent_day_prob mutes a whole day; double_prob sends a rare second cat. recency_half_life_sec fades a just-used cat; mood_phi/mood_sigma is the day-to-day AR(1) mood; a cat's tags (sleepy/bodry/winter/spring/summer/autumn/newyear) re-weight it by daypart/season. comments_in_discussion=true (default here) is for a CHANNEL target: each post's comments live in the linked discussion group, so the bot resolves the post's discussion thread and replies ONLY inside that channel post's comments. The account MUST be a member of the discussion group to receive those comments. Set comments_in_discussion=false only when the target is a plain group (then comments are matched as direct replies to the post message id).",
-    "session_gap_log_mu": 3.8,
-    "session_gap_log_sigma": 0.6,
-    "session_idle_sec": 900,
-    "session_max_sec": 1200,
-    "max_reply_delay_sec": 86400,
-    "_note_attach": "Berlyne attachment control on comment-likes (кривая Берлайна на лайки, та же логика, что и на сторис). attach_enabled=true: НЕ лайкаем каждый коммент -- доля лайкнутых комментов человека держится у пика кривой Вундта (~0.67 = engaged/commented), иначе лайкать всё подряд читается как навязчивость; тяжёлого комментатора притормаживаем, новичка всё равно приветствуем. Лайк-реакция = ЭКСПОЗИЦИЯ; тред-стикер = ВЗАИМНОСТЬ (recip_fraction_target=0.20 = stickered/engaged, ~1 из 5 engaged становится стикером). ПЕРВЫЙ коммент человека лайкаем всегда. exposure_c1/c2/k -- параметры кривой Вундта, их argmax И ЕСТЬ целевая доля (нет отдельной 0.67). like_control_gain/recip_control_gain -- сила обратной связи. like_max_per_day кап на все engagement за день (лайки дешёвые), sticker_max_per_day -- на стикеры (сообщения = реальная бан-поверхность), 0 = без капа, в tz персоны. Память по человеку (commented/engaged/stickered) живёт в reactions_state.json и НЕ сбрасывается при откате поста -- это и есть адаптация к каждому. attach_enabled=false возвращает старое поведение like_all.",
-    "attach_enabled": true,
-    "exposure_c1": 0.45,
-    "exposure_c2": 0.90,
-    "exposure_k": 8.0,
-    "like_control_gain": 1.0,
-    "recip_fraction_target": 0.20,
-    "recip_control_gain": 1.0,
-    "like_max_per_day": 400,
-    "sticker_max_per_day": 40
-  },
-  "greeter": {
-    "enabled": true,
-    "channel": 0,
-    "welcome": "Привет {name} <tg-emoji emoji-id=\"5413808716149467908\">🤩</tg-emoji>\nи добро пожаловать в тгк {channel}\n\nЧувствуйте себя свободно, будьте собой. Располагайтесь как дома. Если у вас будут какие-либо идеи, смело пишите.\n\nС любовью и отвагой,\nТёма",
-    "welcome_back": "",
-    "farewell": "Привет {name} <tg-emoji emoji-id=\"5413369766196848984\">🤩</tg-emoji>\nТы часть семьи. А из семьи не уходят насовсем — просто иногда выходят проветриться.\n\nМы тебя помним и ждём. Возвращайся домой.\n\nС любовью и отвагой,\nТёма\n\n<a href=\"{channel_url}\">➡️ ВЕРНУТЬСЯ</a>",
-    "poll_sec": 600,
-    "poll_sec_test": 600,
-    "poll_sec_live": 3600,
-    "dm_min_gap_sec": 45,
-    "dm_jitter_sec": 90,
-    "max_dm_per_run": 3,
-    "max_dm_per_day": 10,
-    "_note": "Приветствие/прощание в ЛС подписчикам канала (minions/userbot/greeter.py). ВНИМАНИЕ: рассылка в ЛС с юзербота -- главный триггер спам-бана Telegram (PeerFloodError). Держи объём низким. ВЫКЛЮЧЕНО по умолчанию: поставь enabled=true, channel (0 = первый target из env) и тексты. Аккаунт ДОЛЖЕН быть админом канала, чтобы читать список участников. ПЕРВЫЙ запуск -- тихий бэйзлайн: текущие подписчики просто запоминаются, НИКОМУ не пишем; приветствуем только тех, кто подписался ПОСЛЕ. Тексты рендерятся как HTML (parse_mode=html): премиум-эмодзи через <tg-emoji emoji-id=\"...\">X</tg-emoji> и ссылки через <a href=\"...\">текст</a> работают; {name} подставляется именем человека (если не удалось узнать -- fallback_name). ВАЖНО: юзербот НЕ умеет слать инлайн-КНОПКИ (это только для бот-аккаунтов), поэтому \"Вернуться\" сделано HTML-ссылкой на канал. welcome -- подписчику, farewell -- отписавшемуся (welcome_back пуст = вернувшийся получает обычный welcome). max_dm_per_day -- жёсткий дневной потолок (главная защита); max_dm_per_run -- потолок за один цикл; dm_min_gap_sec/dm_jitter_sec -- пауза между ЛС (сейчас 10с без джиттера). Детект: и live-события (events.ChatAction), и поллинг раз в poll_sec с диффом списка (страховка, разбирает бэклог после отключения питания при старте). Ошибки приватности пропускаются, PeerFlood -- откат. Состояние (участники, кто отписался, дневной счётчик) в greeter_state.json. {channel} -> @юзернейм таргет-канала, {channel_url} -> ссылка t.me на него (подставляются автоматически). Превью ссылок отключено (link_preview=false).",
-    "fallback_name": "друг"
-  },
-  "comod": {
-    "_note": "Шкаф/комод: команда /comod заселяет ника на именную полку. Данные в comod.json (свои на каждый профиль): ник -> {at (эпоха заезда), amount (сумма доната, строкой)}. Через МЕСЯЦ (30 дней) после заезда ник авто-удаляется -- полка освобождается ('съехал'). /comod <ник> <сумма> -- заселить (повторное заселение обновляет 30-дневный таймер) и запостить картинку шкафа + текст-объявление; /comod -- показать текущий шкаф; /comod kick <ник> -- выселить вручную. Всё постится ТОЛЬКО в исходный чат (source), откуда пришла команда. На полке размер НИКА подгоняется под клетку, а сумма пишется ПОД ником шрифтом поменьше (render.amount_scale -- доля от размера ника, 0.75 по умолчанию), по центру. Картинка рендерится поверх фото шкафа (render.template) через minion_core/adapters/files.py:render_cabinet -- Pillow живёт ТОЛЬКО там. render.template -- путь к ПУСТОМУ фото шкафа (по умолчанию assets/cabinet.jpg; относительный путь ищется от пакета minions/userbot, так что положи файл в minions/userbot/assets/cabinet.jpg); render.slots -- координаты полок [x,y,w,h] под ЭТО фото (по умолчанию под макет 1080px с 10 полками). render.font -- основной TTF (по умолчанию Liberation Serif Bold Italic -- тот же шрифт, что в прототипе; в нём есть и латиница, и кириллица, так что один шрифт на всё); render.font_cyrillic -- запасной TTF для строк с кириллицей (если основной шрифт без кириллицы; тут указан тот же Liberation). Пути относительны пакету minions/userbot (лежат в assets/fonts/). Пусто = поиск системных шрифтов, иначе дефолтный. render.ref_width/ref_height -- размер эталонного фото, под который заданы координаты slots (1080x1350); при рендере слоты масштабируются под реальный размер cabinet.jpg, так что можно залить то же фото в любом разрешении. donate_link -- ссылка на донаты для {link} в объявлении. Если template пуст или рендер не удался -- шлём текстовый ростер. Объявление шлётся с parse_mode=HTML: в move_in работают премиум-эмодзи <tg-emoji emoji-id=\"...\">X</tg-emoji> и ссылки <a href=\"{link}\">текст</a>; {link} -- ссылка на донат (donate_link), {amazon} -- ссылка на Amazon-вишлист (amazon_link). /comod постит ТОЛЬКО картинку шкафа + это объявление (без списка ников). Отдельная команда /propiska_shkaf_month шлёт текстовый список жильцов за месяц: строка propiska_line = {heart} {nick} {date} (heart -- случайное премиум-сердечко из hearts, nick экранируется, date -- дата заселения в таймзоне cats.tz_offset_hours). hearts -- список {id, fallback}: id пустой = обычный глиф, id заданный = премиум <tg-emoji>. kick_hint шлётся обычным текстом (в нём есть <ник>).",
-    "donate_link": "https://revolut.me/da_eto_tyoma",
-    "amazon_link": "https://www.amazon.de/hz/wishlist/ls/YCM86K0NYW9P/ref=nav_wishlist_lists_1",
-    "templates": {
-      "move_in": "Сегодня в Шкафу пополнение <tg-emoji emoji-id=\"5470079333257224410\">😼</tg-emoji>\nТоп донатеры уже там… Они счастливы. Они улыбались. Они… не важно!\n\nСюда попасть - оч просто:\n💸 Задонатить любую сумму\n<tg-emoji emoji-id=\"5411262178500059433\">🤩</tg-emoji> или подарить что-то из вишлиста - вещь приедет прямо ко мне\n\nИ за это ты получаешь:\n<tg-emoji emoji-id=\"5411262178500059433\">🤩</tg-emoji> Своё имя в Шкафу на целый месяц\n<tg-emoji emoji-id=\"5411262178500059433\">🤩</tg-emoji> Личную табличку на полке\n🙌 И публичное спасибо от меня - при всех\n\nПолки потихоньку заполняются, и мне правда приятно видеть там каждого из вас 🤍\n\n<b><a href=\"{link}\">Задонатить</a></b> | <b><a href=\"{amazon}\">Подарить из вишлиста</a></b>",
-      "empty": "шкаф пока пуст - задонать, и заселю 🤍",
-      "kick_hint": "кого выселить? /comod kick <ник>",
-      "propiska_head": "🏠 Прописка в шкафу на этот месяц:",
-      "propiska_line": "{heart} {nick} - {date}",
-      "propiska_empty": "в шкафу пока никто не прописан 🤍"
+    {
+      "type": "like",
+      "id": "5413808716149467908",
+      "fallback": "🤩"
     },
-    "hearts": [
-      { "id": "", "fallback": "🤍" },
-      { "id": "", "fallback": "❤️" },
-      { "id": "", "fallback": "💖" },
-      { "id": "", "fallback": "💛" }
-    ],
-    "render": {
-      "template": "assets/cabinet.jpg",
-      "font": "assets/fonts/LiberationSerif-BoldItalic.ttf",
-      "font_cyrillic": "assets/fonts/LiberationSerif-BoldItalic.ttf",
-      "base_size": 40,
-      "amount_scale": 0.75,
-      "ref_width": 1080,
-      "ref_height": 1350,
-      "max_shelves": 10,
-      "text_color": [255, 255, 255],
-      "shadow_color": [0, 0, 0],
-      "slots": [
-        [347, 73, 412, 203],
-        [340, 303, 199, 150],
-        [560, 296, 198, 159],
-        [341, 476, 198, 147],
-        [558, 473, 198, 151],
-        [342, 649, 193, 122],
-        [556, 644, 179, 127],
-        [346, 906, 406, 105],
-        [346, 1050, 400, 93],
-        [344, 1198, 391, 73]
-      ]
+    {
+      "type": "like",
+      "id": "5285268883375169145",
+      "fallback": "🤍"
+    },
+    {
+      "type": "like",
+      "id": "5413441397661409586",
+      "fallback": "🐰"
+    },
+    {
+      "type": "like",
+      "id": "5413842126700060975",
+      "fallback": "🤍"
+    },
+    {
+      "type": "like",
+      "id": "5458580949891589643",
+      "fallback": "🤩"
+    },
+    {
+      "type": "like",
+      "id": "5461051092957700947",
+      "fallback": "🤝"
+    },
+    {
+      "type": "like",
+      "id": "5461072816902285831",
+      "fallback": "🤩"
+    },
+    {
+      "type": "like",
+      "id": "5458670315276116087",
+      "fallback": "🤍"
+    },
+    {
+      "type": "like",
+      "id": "5458472746780502747",
+      "fallback": "🤩"
+    },
+    {
+      "type": "like",
+      "id": "5458884526770005216",
+      "fallback": "🤍"
     }
-  },
-  "status": {
-    "_note": "Icons for the /status message. Kept here (not in code) so the Python source stays ASCII. Blank any value to drop that glyph; the layout still works.",
-    "title": "📊",
-    "routing": "📡",
-    "videos": "🎬",
-    "reactions": "🐈",
-    "greeter": "👋",
-    "users": "🗄",
-    "stories": "👀",
-    "legend": "ℹ️",
-    "on": "🟢",
-    "off": "🔴",
-    "bullet": "·",
-    "arrow": "→"
-  },
-  "status_help": "агрегатор собирает ссылки одного видео со всех площадок в ОДИН пост; коты по-человечески отвечают на комментарии; гритер приветствует подписчиков в ЛС. Полный список команд — /help",
-  "_note": "ALL premium emoji live in the single top-level \"emoji\" array. Each entry is {type, id, fallback} plus per-type extras: type=platform adds \"name\" (tiktok/youtube/instagram/pinterest); type=reaction adds \"base\" (preference) and \"tags\" (sleepy/bodry/winter/spring/summer/autumn/newyear). Types: love + lead + arrow drive the post (random pick), platform is the link grid, reaction is the reply pool. Add/remove entries freely; the whole array is rendered by /emojis. Render from a user account with Telegram Premium; replace an entry's id with a plain glyph in fallback to use a non-premium emoji.",
-  "help": "🤖 Бот-агрегатор\n\nЧто делаю: собираю ссылки одного видео со всех площадок в ОДИН пост, по-человечески отвечаю кот-эмодзи на комментарии под постами и приветствую подписчиков в личных сообщениях.\n\n📋 Команды\n\nОсновное\n• /help — это меню (или /start)\n• /status — что сейчас происходит: что в работе, что запощено, коты и приветствия\n• /test — переключить ВЕСЬ бот в ТЕСТОВЫЙ профиль: посты, коты и приветствия идут в тестовый канал (TEST_CHAT_ID), со своим отдельным состоянием — боевое не трогается\n• /live — вернуть ВЕСЬ бот в БОЕВОЙ профиль (TARGET_CHAT_ID). Профиль переживает перезагрузку, текущий виден в /status\n\nПосты\n• /preview — показать примеры готовых постов\n• /emojis — список премиум-эмодзи и котов\n\nКоты (авто-ответы на комментарии)\n• /reactnow — ответить котами всем из очереди прямо сейчас\n• /requeue — пересобрать очередь котов заново\n\nПриветствия в ЛС\n• /greetnow — проверить подписки/отписки и разослать приветствия сейчас\n\nСторис\n• /stories — журнал просмотра сторис: сколько и чьих сторис посмотрели (без реакций, только просмотр)\n\nФункции (вкл/выкл на лету)\n• /features — список функций и что включено\n• /<функция>_on и /<функция>_off — включить/выключить функцию (reactions, stories, users, greeter). Например /stories_off или /reactions_on. Выбор сохраняется и переживает перезагрузку\n\nСервисы (режим по отдельности)\n• /status — внизу показывает таблицу сервисов с готовыми командами\n• /<сервис>_off /<сервис>_test /<сервис>_live (и _on = live) — перевести ОДИН сервис в свой режим, остальные не трогаются (aggregator, reactions, stories, users, greeter). Тест = отдельная песочница состояния; у постера и гритера ещё и тестовый канал. Например /aggregator_test или /reactions_off. Выбор сохраняется\n\nШкаф\n• /comod <ник> <сумма> — заселить ника на полку на месяц (перезаселение обновляет таймер), запостить картинку шкафа и объявление\n• /comod — перепостить шкаф с объявлением\n• /comod kick <ник> — выселить ника вручную\n• /propiska_shkaf_month — список жильцов шкафа за месяц (сердечко, ник, дата заселения)",
-  "help_hint": "Не знаю такую команду 🤔 Напиши /help — покажу всё, что умею."
+  ],
+  "texts": {
+    "help": "🤖 Бот-агрегатор\n\nЧто делаю: собираю ссылки одного видео со всех площадок в ОДИН пост, по-человечески отвечаю кот-эмодзи на комментарии под постами и приветствую подписчиков в личных сообщениях.\n\n📋 Команды\n\nОсновное\n• /help — это меню (или /start)\n• /status — что сейчас происходит: что в работе, что запощено, коты и приветствия\n• /test — переключить ВЕСЬ бот в ТЕСТОВЫЙ профиль: посты, коты и приветствия идут в тестовый канал (TEST_CHAT_ID), со своим отдельным состоянием — боевое не трогается\n• /live — вернуть ВЕСЬ бот в БОЕВОЙ профиль (TARGET_CHAT_ID). Профиль переживает перезагрузку, текущий виден в /status\n\nПосты\n• /preview — показать примеры готовых постов\n• /emojis — список премиум-эмодзи и котов\n\nКоты (авто-ответы на комментарии)\n• /reactnow — ответить котами всем из очереди прямо сейчас\n• /requeue — пересобрать очередь котов заново\n\nПриветствия в ЛС\n• /greetnow — проверить подписки/отписки и разослать приветствия сейчас\n\nСторис\n• /stories — журнал просмотра сторис: сколько и чьих сторис посмотрели (без реакций, только просмотр)\n\nФункции (вкл/выкл на лету)\n• /features — список функций и что включено\n• /<функция>_on и /<функция>_off — включить/выключить функцию (reactions, stories, users, greeter). Например /stories_off или /reactions_on. Выбор сохраняется и переживает перезагрузку\n\nСервисы (режим по отдельности)\n• /status — внизу показывает таблицу сервисов с готовыми командами\n• /<сервис>_off /<сервис>_test /<сервис>_live (и _on = live) — перевести ОДИН сервис в свой режим, остальные не трогаются (aggregator, reactions, stories, users, greeter). Тест = отдельная песочница состояния; у постера и гритера ещё и тестовый канал. Например /aggregator_test или /reactions_off. Выбор сохраняется\n\nШкаф\n• /comod <ник> <сумма> — заселить ника на полку на месяц (перезаселение обновляет таймер), запостить картинку шкафа и объявление\n• /comod — перепостить шкаф с объявлением\n• /comod kick <ник> — выселить ника вручную\n• /propiska_shkaf_month — список жильцов шкафа за месяц (сердечко, ник, дата заселения)",
+    "help_hint": "Не знаю такую команду 🤔 Напиши /help — покажу всё, что умею.",
+    "status_help": "агрегатор собирает ссылки одного видео со всех площадок в ОДИН пост; коты по-человечески отвечают на комментарии; гритер приветствует подписчиков в ЛС. Полный список команд — /help",
+    "status": {
+      "_note": "Icons for the /status message. Kept here (not in code) so the Python source stays ASCII. Blank any value to drop that glyph; the layout still works.",
+      "title": "📊",
+      "routing": "📡",
+      "videos": "🎬",
+      "reactions": "🐈",
+      "greeter": "👋",
+      "users": "🗄",
+      "stories": "👀",
+      "legend": "ℹ️",
+      "on": "🟢",
+      "off": "🔴",
+      "bullet": "·",
+      "arrow": "→"
+    },
+    "human_words": [
+      "？",
+      "сотруднич",
+      "реклам",
+      "оффер",
+      "предлож",
+      "бартер",
+      "интеграц",
+      "прайс",
+      "коллаб",
+      "collab",
+      "promo",
+      "sponsor"
+    ]
+  }
 }

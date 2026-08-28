@@ -63,7 +63,7 @@ class ServiceModes:
         Test wants a tight loop while you iterate (default 5 min); live can be
         relaxed (default 1 hour). Both fall back to ``rescan_sec``.
         """
-        cfg = codec.section(self.bot.settings, 'reactions')
+        cfg = codec.engine(self.bot.settings, 'reactions')
         default = float(cfg.get('rescan_sec', 300.0))
         key = 'rescan_sec_test' if mode == 'test' else 'rescan_sec_live'
         return float(cfg.get(key, default))
@@ -193,5 +193,5 @@ class ServiceModes:
         """Return a service's default mode (live, else off if disabled)."""
         if name == 'aggregator':
             return 'live'
-        section = codec.section(self.bot.settings, name)
+        section = codec.engine(self.bot.settings, name)
         return 'live' if bool(section.get('enabled', False)) else 'off'

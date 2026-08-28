@@ -536,7 +536,7 @@ def test_load_reads_the_like_pool() -> None:
     """Check load reads the like pool."""
     params = reactions.load_reaction_params(
         {
-            'reactions': {'enabled': True},
+            'engines': {'reactions': {'enabled': True}},
             'emoji': [
                 {'type': 'reaction', 'id': '9', 'fallback': 'c'},
                 {'type': 'like', 'id': '7', 'fallback': 'k'},
@@ -593,7 +593,7 @@ def test_load_reaction_params_reads_the_pool() -> None:
     """Check load reaction params reads the pool."""
     params = reactions.load_reaction_params(
         {
-            'reactions': {'enabled': True},
+            'engines': {'reactions': {'enabled': True}},
             'emoji': [
                 {'type': 'love', 'id': '1', 'fallback': 'l'},
                 {

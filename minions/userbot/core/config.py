@@ -15,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 
+from minions.userbot.core import codec
 from minions.userbot.core.models import DEFAULT_FIELDS
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Consts
@@ -105,11 +106,19 @@ def emoji_of(catalog: list[dict[str, object]], etype: str) -> list[dict]:
 
 
 def _engine(data: dict[str, object], name: str) -> dict[str, object]:
-    """Return engine sub-config ``name``, creating an empty one if absent."""
-    got = data.get(name)
+    """Return ``engines.<name>``, creating it (and ``engines``) if absent.
+
+    Writable, unlike ``codec.engine``: the persona fan needs somewhere to
+    put the traits it shares out.
+    """
+    engines = data.get('engines')
+    if not isinstance(engines, dict):
+        engines = {}
+        data['engines'] = engines
+    got = engines.get(name)
     if not isinstance(got, dict):
         got = {}
-        data[name] = got
+        engines[name] = got
     return got
 
 
@@ -200,32 +209,35 @@ def apply_persona(data: dict[str, object]) -> dict[str, object]:
 def load_constants(path: Path) -> Consts:
     """Load the post constants from JSON, ignoring unknown keys."""
     data = read_json(path)
-    samples = dict(data.get('sample_titles') or {})
+    poster = codec.engine(data, 'aggregator')
+    post = codec.section(data, 'post')
+    texts = codec.section(data, 'texts')
+    samples = dict(post.get('sample_titles') or {})  # type: ignore[arg-type]
     catalog = emoji_catalog(data)
     platforms = emoji_of(catalog, 'platform')
     return Consts(
-        fields={**DEFAULT_FIELDS, **(data.get('fields') or {})},
-        action_value=str(data.get('action_value', '')),
-        author=str(data.get('author', '')),
-        announce=list(data.get('announce') or ['']),
+        fields={**DEFAULT_FIELDS, **(poster.get('fields') or {})},
+        action_value=str(poster.get('action_value', '')),
+        author=str(post.get('author', '')),
+        announce=list(post.get('announce') or ['']),
         love=emoji_of(catalog, 'love') or [''],
         lead=emoji_of(catalog, 'lead') or [''],
         arrow_down=emoji_of(catalog, 'arrow') or [''],
-        view_label=_str_list(data.get('view_label'), 'View'),
-        column_separator=str(data.get('column_separator', '  |  ')),
-        rows=list(data.get('rows') or []),
+        view_label=_str_list(post.get('view_label'), 'View'),
+        column_separator=str(post.get('column_separator', '  |  ')),
+        rows=list(post.get('rows') or []),
         platform_emoji={str(e['name']): e for e in platforms if e.get('name')},
         sample_short=str(samples.get('short') or 'Sample short video'),
         sample_long=str(samples.get('long') or 'Sample long video'),
-        status_help=str(data.get('status_help') or ''),
-        help_text=str(data.get('help') or ''),
-        help_hint=str(data.get('help_hint') or 'Unknown command. Try /help'),
+        status_help=str(texts.get('status_help') or ''),
+        help_text=str(texts.get('help') or ''),
+        help_hint=str(texts.get('help_hint') or 'Unknown command. Try /help'),
         human_words=tuple(
-            str(w).lower() for w in (data.get('human_words') or [])
+            str(w).lower() for w in (texts.get('human_words') or [])
         ),
         status={
             str(k): str(v)
-            for k, v in (data.get('status') or {}).items()
+            for k, v in (texts.get('status') or {}).items()
             if not str(k).startswith('_')
         },
         emoji_all=catalog,
@@ -335,7 +347,8 @@ def load_config() -> Config:
     a confusing crash later or a bot that silently never completes a group.
     """
     data = read_json(CONSTANTS_PATH)
-    csv = str(data.get('platforms') or DEFAULT_PLATFORMS)
+    poster = codec.engine(data, 'aggregator')
+    csv = str(poster.get('platforms') or DEFAULT_PLATFORMS)
     platforms = tuple(p.strip().lower() for p in csv.split(',') if p.strip())
     try:
         config = Config(
@@ -343,17 +356,17 @@ def load_config() -> Config:
             targets=_targets(),
             test_target=_test_target(),
             platforms=platforms,
-            threshold=float(data.get('title_match') or 0.9),
+            threshold=float(poster.get('title_match') or 0.9),
             # Three hours by default: platforms can arrive far apart. The wait
             # is a local timer (asyncio.sleep), so it costs Telegram nothing.
-            timeout=float(data.get('timeout_sec') or 10800),
+            timeout=float(poster.get('timeout_sec') or 10800),
             # Recent source messages to scan at startup for unprocessed ones.
-            backfill=int(data.get('backfill') or 100),
+            backfill=int(poster.get('backfill') or 100),
             # A video at/above this many seconds is dropped (not a Short).
-            max_duration=int(data.get('max_duration_sec') or MAX_SHORT_SEC),
+            max_duration=int(poster.get('max_duration_sec') or MAX_SHORT_SEC),
             # A week by default: a title posted in the last week is not posted
             # again (matches a typical chat auto-delete window). 0 disables.
-            repost_guard=float(data.get('repost_guard_sec', 604800)),
+            repost_guard=float(poster.get('repost_guard_sec', 604800)),
             # Also block a title matching any of the last N posted videos, no
             # matter how long ago -- a clock-independent floor so a
             # re-delivered video cannot slip back in until N distinct videos
@@ -361,10 +374,10 @@ def load_config() -> Config:
             # the timeout, then the same title's later platforms (or an
             # auto-delete re-emit) are skipped, not re-posted. 5 by default;
             # 0 disables this window and leaves only the time guard.
-            repost_guard_count=int(data.get('repost_guard_count', 5)),
+            repost_guard_count=int(poster.get('repost_guard_count', 5)),
             # Space out discussion-thread lookups so reaction seeding on
             # startup/rescan does not trip flood waits. 2s default; 0 disables.
-            discussion_gap=float(data.get('discussion_gap_sec', 2.0)),
+            discussion_gap=float(poster.get('discussion_gap_sec', 2.0)),
         )
     except (TypeError, ValueError) as exc:
         msg = f'{CONSTANTS_FILE}: a numeric knob is not a number ({exc})'
