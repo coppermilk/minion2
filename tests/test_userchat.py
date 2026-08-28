@@ -11,9 +11,11 @@ answer instead of raising, and no request leaves without passing the gate.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 from dataclasses import dataclass
 from dataclasses import field
+from pathlib import Path
 from types import SimpleNamespace
 
 from minion_core.adapters import userchat
@@ -253,3 +255,60 @@ def test_dm_is_paced_apart_from_ordinary_writes() -> None:
     assert gate.paces[userchat.DM].per_minute < (
         gate.paces[userchat.WRITE].per_minute
     )
+
+
+# ----------------------------------------------------- nothing slips past
+
+
+def _account_methods() -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Every method defined on the Account class, from its source."""
+    source = Path(userchat.__file__).read_text(encoding='ascii')
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ClassDef) and node.name == 'Account':
+            return [
+                child
+                for child in node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+    msg = 'Account class not found'
+    raise AssertionError(msg)
+
+
+def _touches_client(method: ast.AST) -> bool:
+    """Whether a method reaches self.client anywhere in its body."""
+    return any(
+        isinstance(node, ast.Attribute)
+        and node.attr == 'client'
+        and isinstance(node.value, ast.Name)
+        and node.value.id == 'self'
+        for node in ast.walk(method)
+    )
+
+
+def _waits(method: ast.AST) -> bool:
+    """Whether a method routes through _call, or waits on the gate itself."""
+    return any(
+        isinstance(node, ast.Attribute) and node.attr in {'_call', 'wait'}
+        for node in ast.walk(method)
+    )
+
+
+def test_no_request_leaves_without_passing_the_gate() -> None:
+    """Structural: every Account method that uses the client is paced.
+
+    This is the property the whole adapter exists for, and it cannot be
+    tested by calling things -- a new method that forgets the gate would
+    simply work, and the account would quietly send at whatever rate the
+    caller felt like. So it is checked by reading the code: touching
+    self.client obliges a method to go through _call or await the gate.
+
+    on_message is the one exception and is named here rather than
+    excluded by a rule, because it REGISTERS a handler; Telegram pushes
+    those to us, and pacing what someone else sends is meaningless.
+    """
+    unpaced = [
+        method.name
+        for method in _account_methods()
+        if _touches_client(method) and not _waits(method)
+    ]
+    assert unpaced == ['on_message']
