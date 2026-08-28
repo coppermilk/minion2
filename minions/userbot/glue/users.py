@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from minion_core.adapters import userchat
 from minions.userbot.core import tasks
 from minions.userbot.core.models import iso
 from minions.userbot.engines import users
@@ -22,14 +23,17 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Callable
 
-    from telethon import TelegramClient
-
-    from minion_core.adapters import userchat
 
 log = logging.getLogger('userbot')
 
 # How many rows each /users section lists.
 REPORT_ROWS = 5
+
+# Strangers queued for an identity lookup before the oldest is dropped.
+# The queue exists to space the lookups out, not to guarantee every one:
+# a backlog this long already means the account is seeing more new people
+# than it can politely ask about, and the recent ones matter more.
+ENRICH_BACKLOG = 500
 
 
 def user_label(row: dict[str, object]) -> str:
@@ -53,7 +57,7 @@ class AudienceDeps:
     across a mode switch.
     """
 
-    client: TelegramClient
+    account: userchat.Account
     source: int
     store: users.UserStore
     watched: Callable[[], set[int]]
@@ -67,6 +71,9 @@ class AudienceLog:
     """Record the channel audience over time (off by default; it holds PII)."""
 
     deps: AudienceDeps
+    # Strangers waiting for an identity lookup, and the single worker
+    # that drains them (see _maybe_enrich).
+    _waiting: dict[int, None] = field(default_factory=dict)
     _lookups: set[asyncio.Task[None]] = field(default_factory=set)
 
     def record_message(self, msg: userchat.Msg) -> None:
@@ -112,34 +119,61 @@ class AudienceLog:
         self.deps.store.close()
 
     def _maybe_enrich(self, user_id: int) -> None:
-        """Schedule a one-off identity lookup for a user we do not know yet."""
+        """Queue a one-off identity lookup for a user we do not know yet.
+
+        A QUEUE with one worker, not a task per stranger. Every unknown
+        person the account sees needs one lookup, and a busy chat produces
+        them in bursts -- a task each meant an unbounded pile of coroutines
+        all wanting the same connection at the same moment, which is what a
+        flood wait is made of.
+
+        Recency wins at both ends: the worker takes the most recently seen
+        stranger first, and an overlong backlog drops its oldest. Someone
+        queued a thousand messages ago is not who /users is about.
+        """
         if (
             not self.deps.enrich
             or user_id <= 0
+            or user_id in self._waiting
             or self.deps.store.has_identity(user_id)
         ):
             return
-        tasks.spawn(self._lookups, self._enrich(user_id))
+        self._waiting[user_id] = None
+        while len(self._waiting) > ENRICH_BACKLOG:
+            self._waiting.pop(next(iter(self._waiting)))
+        # `done()` and not `self._lookups` emptiness: a worker that has
+        # just returned is still in the bucket until asyncio runs its
+        # done-callback, and a stranger queued in that window would wait
+        # for the next one to arrive.
+        if all(task.done() for task in self._lookups):
+            tasks.spawn(self._lookups, self._drain())
+
+    async def _drain(self) -> None:
+        """Resolve every queued identity, one lookup at a time."""
+        while self._waiting:
+            user_id, _ = self._waiting.popitem()  # most recent first
+            await self._enrich(user_id)
 
     async def _enrich(self, user_id: int) -> None:
         """Resolve a user's username/name (phone is almost always absent)."""
-        try:
-            entity = await self.deps.client.get_entity(user_id)
-        except Exception:  # noqa: BLE001 -- unresolvable id: leave it bare
+        peer = await self.deps.account.peer(user_id)
+        if peer is None:  # unresolvable id: leave the row bare
             return
         self.deps.store.apply_identity(
             users.Identity(
                 user_id,
-                username=getattr(entity, 'username', None),
-                first_name=getattr(entity, 'first_name', None),
-                last_name=getattr(entity, 'last_name', None),
-                phone=getattr(entity, 'phone', None),
+                username=peer.username or None,
+                first_name=peer.first_name or None,
+                last_name=peer.last_name or None,
+                phone=peer.phone or None,
             )
         )
 
     async def report(self) -> None:
         """Post the users-DB summary to the source chat (/users command)."""
-        await self.deps.client.send_message(self.deps.source, self.text())
+        await self.deps.account.send(
+            self.deps.source, userchat.Text(self.text())
+        )
         log.info('sent users report to %s', self.deps.source)
 
     def text(self) -> str:

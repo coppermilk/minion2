@@ -1,20 +1,24 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The aggregator's users database (minions/userbot/users.py).
+"""The aggregator's users database, and the log that feeds it.
 
 Pure-logic tests against a temp SQLite file: no Telethon, no network. Every
 write is idempotent, so re-reads (deferred admin-log events, comment rescans)
-never double-count -- that is the property most of these tests pin down.
+never double-count -- that is the property most of these tests pin down. The
+last section covers the identity-lookup queue, which is about pacing rather
+than storage: one worker, oldest first, bounded.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from minions.userbot.engines.users import Identity
 from minions.userbot.engines.users import MembershipEvent
 from minions.userbot.engines.users import SeenMessage
 from minions.userbot.engines.users import UserStore
+from minions.userbot.glue import users as users_glue
 
 _FIRST_SEEN = 100.0
 _LAST_SEEN = 200.0
@@ -213,3 +217,94 @@ def test_state_survives_reopening_the_file(tmp_path: Path) -> None:
         'left': 0,
         'messages': 1,
     }
+
+
+# --- the identity-lookup queue
+
+
+class _CountingAccount:
+    """An Account whose peer() records the order it was asked in."""
+
+    def __init__(self) -> None:
+        """Start with nothing asked and nobody in flight."""
+        self.asked: list[int] = []
+        self.in_flight = 0
+        self.overlapped = False
+
+    async def peer(self, user_id: int) -> None:
+        """Record the lookup, and whether another was already running."""
+        self.overlapped = self.overlapped or self.in_flight > 0
+        self.in_flight += 1
+        self.asked.append(user_id)
+        await asyncio.sleep(0)  # a real lookup yields; this must too
+        self.in_flight -= 1
+
+    def close(self) -> None:
+        """Match the store interface AudienceLog.close() reaches for."""
+
+
+def _log(account: _CountingAccount, store: UserStore) -> object:
+    """Return an enabled audience log over ``account`` and a store."""
+    return users_glue.AudienceLog(
+        users_glue.AudienceDeps(
+            account=account,
+            source=-100,
+            store=store,
+            watched=set,
+            enabled=True,
+        )
+    )
+
+
+def test_strangers_are_looked_up_one_at_a_time(tmp_path: Path) -> None:
+    """Every unknown person is resolved, but never two calls at once.
+
+    A task per stranger meant a busy chat could put dozens of lookups on
+    the wire in the same instant, which is how an account earns a flood
+    wait. One worker drains the queue instead, most recent first.
+    """
+    account = _CountingAccount()
+    log = _log(account, _store(tmp_path))
+
+    async def scenario() -> None:
+        for user_id in (1, 2, 3, 4):
+            log._maybe_enrich(user_id)
+        await asyncio.gather(*list(log._lookups))
+
+    asyncio.run(scenario())
+    assert account.asked == [4, 3, 2, 1]  # most recent stranger first
+    assert not account.overlapped
+
+
+def test_a_stranger_already_queued_is_not_queued_twice(
+    tmp_path: Path,
+) -> None:
+    """Ten messages from one new person are still one lookup."""
+    account = _CountingAccount()
+    log = _log(account, _store(tmp_path))
+
+    async def scenario() -> None:
+        for _ in range(10):
+            log._maybe_enrich(_USER_ID)
+        await asyncio.gather(*list(log._lookups))
+
+    asyncio.run(scenario())
+    assert account.asked == [_USER_ID]
+
+
+def test_the_backlog_is_bounded(tmp_path: Path) -> None:
+    """A queue longer than the cap drops the OLDEST ids, not the newest."""
+    account = _CountingAccount()
+    log = _log(account, _store(tmp_path))
+    over = users_glue.ENRICH_BACKLOG + 5
+
+    async def scenario() -> None:
+        for user_id in range(1, over + 1):
+            log._maybe_enrich(user_id)
+        # Read the queue before the worker gets a turn to drain it.
+        assert len(log._waiting) == users_glue.ENRICH_BACKLOG
+        assert over in log._waiting
+        assert 1 not in log._waiting
+        await asyncio.gather(*list(log._lookups))
+
+    asyncio.run(scenario())

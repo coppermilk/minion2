@@ -214,7 +214,7 @@ class Userbot:
         )
         self.story_watch = StoryWatch(
             StoryDeps(
-                client=self.client,
+                account=self.account,
                 brain=self.stories,
                 source=self.config.source,
                 label=self._chat_label,
@@ -225,7 +225,7 @@ class Userbot:
         ucfg = codec.engine(self.settings, 'users')
         self.audience = AudienceLog(
             AudienceDeps(
-                client=self.client,
+                account=self.account,
                 source=self.config.source,
                 store=users.UserStore(
                     self.modes.service_dir('users') / 'users.db'

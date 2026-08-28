@@ -190,7 +190,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
     bot.stories = stories.StoryBrain(stories.StoryParams(enabled=False), store)
     bot.story_watch = stories_glue.StoryWatch(
         stories_glue.StoryDeps(
-            client=SimpleNamespace(),
+            account=None,
             brain=bot.stories,
             source=SOURCE,
             label=_unused_label,
@@ -217,7 +217,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
 
     bot.audience = users_glue.AudienceLog(
         users_glue.AudienceDeps(
-            client=SimpleNamespace(),
+            account=None,
             source=SOURCE,
             store=SimpleNamespace(summary=dict),
             watched=set,

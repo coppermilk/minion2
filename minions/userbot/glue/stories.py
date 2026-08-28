@@ -19,23 +19,15 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from telethon import utils
-from telethon.tl.functions.stories import GetAllStoriesRequest
-from telethon.tl.functions.stories import IncrementStoryViewsRequest
-from telethon.tl.functions.stories import ReadStoriesRequest
-from telethon.tl.functions.stories import SendReactionRequest
-from telethon.tl.types import ReactionEmoji
-
+from minion_core.adapters import userchat
 from minions.userbot.core import tasks
 from minions.userbot.core.models import iso
-from minions.userbot.core.models import story_epoch
 from minions.userbot.engines import stories
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
 
-    from telethon import TelegramClient
 
 log = logging.getLogger('userbot')
 
@@ -47,7 +39,7 @@ REPORT_ROWS = 10
 class StoryDeps:
     """Everything the story watcher may reach; nothing else is in scope."""
 
-    client: TelegramClient
+    account: userchat.Account
     brain: stories.StoryBrain
     source: int  # where /stories reports
     label: Callable[[int], Awaitable[str]]  # peer id -> @name, for the log
@@ -143,12 +135,7 @@ class StoryWatch:
         already collected from the other feed is not overwritten.
         """
         which = 'hidden' if hidden else 'main'
-        try:
-            res = await self.deps.client(GetAllStoriesRequest(hidden=hidden))
-        except Exception:  # noqa: BLE001 -- feed unreachable: skip this pass
-            log.warning('stories: could not read the %s stories feed', which)
-            return
-        feed = getattr(res, 'peer_stories', None) or []
+        feed = await self.deps.account.stories_feed(hidden=hidden)
         added = 0
         for peer_stories in feed:
             cand = self._candidate(peer_stories)
@@ -167,24 +154,20 @@ class StoryWatch:
         )
 
     def _candidate(
-        self, peer_stories: object
+        self, peer_stories: userchat.PeerStories
     ) -> stories.StoryCandidate | None:
         """Build a ``StoryCandidate`` from one feed entry, or None if empty."""
-        peer = getattr(peer_stories, 'peer', None)
-        if peer is None:
-            return None
-        items = getattr(peer_stories, 'stories', None) or []
-        ids = [int(getattr(s, 'id', 0) or 0) for s in items]
-        ids = [sid for sid in ids if sid > 0]
+        ids = tuple(story.id for story in peer_stories.stories)
         if not ids:
             return None
-        dates = [story_epoch(getattr(s, 'date', None)) for s in items]
         return stories.StoryCandidate(
-            peer_id=int(utils.get_peer_id(peer)),
-            story_ids=tuple(ids),
+            peer_id=peer_stories.peer_id,
+            story_ids=ids,
             max_id=max(ids),
-            last_ts=max(dates, default=0.0),
-            label=str(utils.get_peer_id(peer)),
+            last_ts=max(
+                (story.date for story in peer_stories.stories), default=0.0
+            ),
+            label=str(peer_stories.peer_id),
         )
 
     async def _view_later(self, view: stories.StoryView) -> None:
@@ -224,7 +207,7 @@ class StoryWatch:
         ids the brain chose (``react_ids``), then marks the peer read up to
         ``max_id``. Reactions are recorded (against the daily cap) as they go.
         """
-        peer = await self.deps.client.get_input_entity(view.peer_id)
+        peer = await self.deps.account.input_peer(view.peer_id)
         params = self.deps.brain.params
         react_set = set(view.react_ids)
         sent = 0
@@ -234,42 +217,20 @@ class StoryWatch:
                     params.dwell_min_sec, params.dwell_max_sec
                 )
             )
-            await self._increment_view(peer, sid)
+            await self.deps.account.view_story(peer, sid)
             if sid in react_set:
-                sent += await self._react_to_story(peer, sid, view.react_emoji)
-        await self.deps.client(
-            ReadStoriesRequest(peer=peer, max_id=view.max_id)
-        )
+                sent += await self.deps.account.react_to_story(
+                    peer, sid, view.react_emoji
+                )
+        await self.deps.account.read_stories(peer, view.max_id)
         if sent:
             self.deps.brain.mark_reacted(view.peer_id, sent, time.time())
 
-    async def _increment_view(self, peer: object, sid: int) -> None:
-        """Register one story view (best-effort; ReadStories is the mark)."""
-        try:
-            await self.deps.client(
-                IncrementStoryViewsRequest(peer=peer, id=[sid])
-            )
-        except Exception:  # noqa: BLE001 -- best-effort; ReadStories marks
-            log.debug('stories: increment view failed for %s', sid)
-
-    async def _react_to_story(self, peer: object, sid: int, emoji: str) -> int:
-        """Leave one reaction on a story; return 1 on success, 0 on failure."""
-        try:
-            await self.deps.client(
-                SendReactionRequest(
-                    peer=peer,
-                    story_id=sid,
-                    reaction=ReactionEmoji(emoticon=emoji),
-                )
-            )
-        except Exception:  # noqa: BLE001 -- best-effort, capped per day
-            log.debug('stories: reaction failed for %s', sid)
-            return 0
-        return 1
-
     async def report(self) -> None:
         """Post the story-viewer log to the source chat (/stories command)."""
-        await self.deps.client.send_message(self.deps.source, self.text())
+        await self.deps.account.send(
+            self.deps.source, userchat.Text(self.text())
+        )
         log.info('sent stories report to %s', self.deps.source)
 
     def text(self) -> str:
