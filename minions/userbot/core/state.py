@@ -175,6 +175,25 @@ class StateStore:
         )
         self._commit()
 
+    def trim_peers(self, engine: str, keep: int) -> list[str]:
+        """Drop all but the ``keep`` most recent peers; return what went.
+
+        The tracked set is bounded so a long-running account does not carry
+        every peer it ever met. The caller clears whatever else it keyed by
+        those peers -- the store does not know their mark format.
+        """
+        if keep <= 0:
+            return []
+        rows = self._conn.execute(
+            'SELECT peer_id FROM peers WHERE engine = ? '
+            'ORDER BY last_at DESC LIMIT -1 OFFSET ?',
+            (engine, keep),
+        ).fetchall()
+        dropped = [str(r['peer_id']) for r in rows]
+        for peer_id in dropped:
+            self.forget(engine, peer_id)
+        return dropped
+
     # --- dedup marks -----------------------------------------------------
 
     def mark(self, engine: str, key: str) -> bool:
@@ -197,6 +216,37 @@ class StateStore:
             'SELECT 1 FROM marks WHERE engine = ? AND key = ?', (engine, key)
         ).fetchone()
         return got is not None
+
+    def count_marks(self, engine: str) -> int:
+        """How many dedup keys an engine currently holds."""
+        got = self._conn.execute(
+            'SELECT count(*) FROM marks WHERE engine = ?', (engine,)
+        ).fetchone()
+        return int(got[0])
+
+    def drop_marks(self, engine: str, prefix: str) -> None:
+        """Drop every mark under one prefix (a peer that rolled off)."""
+        self._conn.execute(
+            'DELETE FROM marks WHERE engine = ? AND key LIKE ?',
+            (engine, f'{prefix}%'),
+        )
+        self._commit()
+
+    def trim_marks(self, engine: str, prefix: str, keep: int) -> None:
+        """Keep only the newest ``keep`` marks under one prefix.
+
+        A peer whose stories we have watched for years would otherwise
+        accumulate a mark per story forever. 0 keeps them all.
+        """
+        if keep <= 0:
+            return
+        self._conn.execute(
+            'DELETE FROM marks WHERE engine = ? AND key LIKE ? AND key NOT IN '
+            '(SELECT key FROM marks WHERE engine = ? AND key LIKE ? '
+            'ORDER BY at DESC LIMIT ?)',
+            (engine, f'{prefix}%', engine, f'{prefix}%', keep),
+        )
+        self._commit()
 
     def keep_marks(self, engine: str, prefixes: tuple[str, ...]) -> None:
         """Drop an engine's marks that no live prefix covers any more.

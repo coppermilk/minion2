@@ -15,6 +15,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from minions.userbot.core.state import StateStore
 from minions.userbot.engines import stories
 
 _MANY = 50
@@ -65,14 +66,28 @@ def _params(**over: object) -> stories.StoryParams:
     return stories.StoryParams(**base)
 
 
+def _store(tmp_path: Path) -> StateStore:
+    """Return a state store over a temp dir (reopening reads it back)."""
+    return StateStore(tmp_path / 'peers.db', tmp_path / 'cursors.json')
+
+
 def _brain(tmp_path: Path, **over: object) -> stories.StoryBrain:
     brain = stories.StoryBrain(
-        _params(**over),
-        tmp_path / 'stories.json',
-        rng=random.Random(0),
+        _params(**over), _store(tmp_path), rng=random.Random(0)
     )
     brain.clock = lambda: _NOON
     return brain
+
+
+def _seen(brain: stories.StoryBrain, peer: int) -> set[int]:
+    """Return the story ids recorded seen for one peer."""
+    return {
+        int(row['key'].split(':')[1])
+        for row in brain.store._conn.execute(
+            'SELECT key FROM marks WHERE engine = ? AND key LIKE ?',
+            (stories.ENGINE, f'{peer}:%'),
+        )
+    }
 
 
 def _cand(
@@ -232,7 +247,7 @@ def test_mark_viewed_dedups_and_counts_fresh(tmp_path: Path) -> None:
     brain.mark_viewed(7, (1, 2), ts=_NOON)
     brain.mark_viewed(7, (2, 3), ts=_NOON)  # 2 already seen -> only 3 is fresh
     assert brain.seen_count() == _THREE
-    assert set(brain.state.seen['7']) == {1, 2, 3}
+    assert _seen(brain, 7) == {1, 2, 3}
 
 
 # --- Berlyne exposure control (view a fraction toward the Wundt peak)
@@ -257,7 +272,7 @@ def test_view_split_converges_to_the_wundt_peak(tmp_path: Path) -> None:
         brain._record_skips(peer, skip_ids)  # skips: offered, never viewed
         brain.mark_viewed(peer, view_ids, ts=_NOON)  # views: offered + viewed
     key = str(peer)
-    ratio = brain.state.ledger.taken[key] / brain.state.ledger.offered[key]
+    ratio = brain.ledger.row(key).taken / brain.ledger.row(key).offered
     assert abs(ratio - p_star) < _EXPO_TOL
 
 
@@ -267,7 +282,7 @@ def test_skipped_stories_are_recorded_seen(tmp_path: Path) -> None:
     _view, skip = brain._view_split(7, (1, 2, 3, 4, 5), brain._view_target())
     brain._record_skips(7, skip)
     for sid in skip:
-        assert sid in set(brain.state.seen['7'])  # would not be offered again
+        assert sid in _seen(brain, 7)  # would not be offered again
 
 
 def test_view_all_exposure_still_views_every_story(tmp_path: Path) -> None:
@@ -298,7 +313,7 @@ def test_react_fraction_converges_to_target(tmp_path: Path) -> None:
         brain.mark_viewed(peer, ids, ts=_NOON)
         brain.mark_reacted(peer, len(r_ids), _NOON)
     key = str(peer)
-    ratio = brain.state.ledger.recip[key] / brain.state.ledger.taken[key]
+    ratio = brain.ledger.row(key).recip / brain.ledger.row(key).taken
     assert abs(ratio - _R_TARGET) < _EXPO_TOL
 
 
@@ -325,10 +340,10 @@ def test_react_counter_rolls_over_daily(tmp_path: Path) -> None:
     """The daily counter resets at local midnight; the per-peer tally stays."""
     brain = _brain(tmp_path)
     brain.mark_reacted(7, _FIVE, _NOON)
-    assert brain.state.ledger.recip_today == _FIVE
+    assert brain.ledger.recip_today == _FIVE
     brain.mark_reacted(7, _TWO, _NOON + 86400.0)  # the next day
-    assert brain.state.ledger.recip_today == _TWO  # reset, then +2
-    assert brain.state.ledger.recip['7'] == _FIVE + _TWO  # cumulative per peer
+    assert brain.ledger.recip_today == _TWO  # reset, then +2
+    assert brain.ledger.row('7').recip == _FIVE + _TWO  # cumulative per peer
 
 
 def test_plan_attaches_reactions(tmp_path: Path) -> None:
@@ -343,13 +358,13 @@ def test_plan_attaches_reactions(tmp_path: Path) -> None:
 
 def test_remember_fills_a_peer_name_and_persists(tmp_path: Path) -> None:
     """A peer viewed before the name cache existed can be labelled later."""
-    path = tmp_path / 'stories_state.json'
-    brain = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    store = _store(tmp_path)
+    brain = stories.StoryBrain(_params(), store, rng=random.Random(0))
     brain.mark_viewed(552, (1, 2), ts=_NOON)  # no label -> raw id in warmth
     assert next(w.label for w in brain.warmth()) == '552'
     brain.remember('552', '@liriiu (552)')  # status path resolves it
     assert next(w.label for w in brain.warmth()) == '@liriiu (552)'
-    fresh = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    fresh = stories.StoryBrain(_params(), store, rng=random.Random(0))
     assert next(w.label for w in fresh.warmth()) == '@liriiu (552)'
 
 
@@ -393,7 +408,7 @@ def test_seen_list_is_bounded_per_peer(tmp_path: Path) -> None:
     """Check seen list is bounded per peer."""
     brain = _brain(tmp_path, seen_per_peer=3)
     brain.mark_viewed(7, tuple(range(10)), ts=_NOON)
-    assert brain.state.seen['7'] == [7, 8, 9]  # newest kept
+    assert _seen(brain, 7) == {7, 8, 9}
 
 
 def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
@@ -401,7 +416,10 @@ def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
     brain = _brain(tmp_path, max_peers_tracked=2)
     for peer in (1, 2, 3):
         brain.mark_viewed(peer, (1,), ts=_NOON)
-    assert set(brain.state.seen) == {'2', '3'}  # peer 1 evicted
+    assert {r.peer_id for r in brain.store.peers(stories.ENGINE)} == {
+        '2',
+        '3',
+    }  # peer 1 evicted
 
 
 def test_every_view_is_logged(tmp_path: Path) -> None:
@@ -411,10 +429,10 @@ def test_every_view_is_logged(tmp_path: Path) -> None:
     brain.mark_viewed(2, (9,), label='@b', ts=_NOON)
     log = brain.recent_log(10)
     assert len(log) == _TWO  # one entry per view
-    by_peer = {e['peer_id']: e for e in log}
-    assert by_peer[1]['count'] == _TWO
-    assert by_peer[1]['label'] == '@a'
-    assert by_peer[2]['count'] == 1
+    by_peer = {e.peer_id: e for e in log}
+    assert by_peer[1].count == _TWO
+    assert by_peer[1].label == '@a'
+    assert by_peer[2].count == 1
 
 
 def test_recent_log_is_newest_first(tmp_path: Path) -> None:
@@ -423,7 +441,7 @@ def test_recent_log_is_newest_first(tmp_path: Path) -> None:
     brain.mark_viewed(1, (1,), label='@a', ts=_NOON)
     brain.mark_viewed(2, (1,), label='@b', ts=_NOON)
     recent = brain.recent_log(5)
-    assert [r['peer_id'] for r in recent] == [2, 1]
+    assert [r.peer_id for r in recent] == [2, 1]
 
 
 def test_log_is_bounded(tmp_path: Path) -> None:
@@ -434,12 +452,12 @@ def test_log_is_bounded(tmp_path: Path) -> None:
     assert len(brain.state.log) == _LOG_CAP
 
 
-def test_state_survives_reopening_the_file(tmp_path: Path) -> None:
-    """Check state survives reopening the file."""
-    path = tmp_path / 'stories.json'
-    first = stories.StoryBrain(_params(), path, rng=random.Random(0))
+def test_state_survives_reopening_the_store(tmp_path: Path) -> None:
+    """Seen marks and the odometer both survive a reopen."""
+    store = _store(tmp_path)
+    first = stories.StoryBrain(_params(), store, rng=random.Random(0))
     first.mark_viewed(7, (1, 2, 3), ts=_NOON)
-    reopened = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    reopened = stories.StoryBrain(_params(), store, rng=random.Random(0))
     assert reopened.unseen(_cand(7, (1, 2, 3, 4))) == (4,)
     assert reopened.seen_count() == _THREE
 

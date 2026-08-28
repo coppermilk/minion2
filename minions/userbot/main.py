@@ -65,6 +65,7 @@ from minions.userbot.core.render import Glyphs
 from minions.userbot.core.runtime import configure_logging
 from minions.userbot.core.runtime import touch_health
 from minions.userbot.core.runtime import watchdog
+from minions.userbot.core.state import StateStore
 from minions.userbot.engines import comod
 from minions.userbot.engines import greeter
 from minions.userbot.engines import reactions
@@ -132,6 +133,7 @@ class Userbot:
         self.modes = ServiceModes(self, base_state.parent)
         self.report = StatusReport(self)
         self.router = CommandRouter(self)
+        self._stores: dict[Path, StateStore] = {}
         self.greeter_task: asyncio.Task[None] | None = None
         self.rescan_task: asyncio.Task[None] | None = None
         self.stories_task: asyncio.Task[None] | None = None
@@ -145,6 +147,20 @@ class Userbot:
         self._probe_interval = float(rt.get('probe_interval_sec', 300.0))
         self._last_probe = 0.0
         self.build_profile()
+
+    def _store(self, service_dir: Path) -> StateStore:
+        """Return the state store for one service's profile directory.
+
+        One store per directory, shared by every engine that lands there:
+        live and test each get their own, exactly as the JSON files did.
+        """
+        store = self._stores.get(service_dir)
+        if store is None:
+            store = StateStore(
+                service_dir / 'peers.db', service_dir / 'cursors.json'
+            )
+            self._stores[service_dir] = store
+        return store
 
     def build_profile(self) -> None:
         """(Re)bind every service to ITS OWN mode -- dir, enabled, channel.
@@ -166,8 +182,7 @@ class Userbot:
         )
         react_dir = self.modes.service_dir('reactions')
         self.reactions = reactions.ReactionBrain(
-            reaction_params,
-            react_dir / 'reactions_state.json',
+            reaction_params, self._store(react_dir)
         )
         self.comment_watch = CommentWatch(
             CommentDeps(
@@ -193,8 +208,7 @@ class Userbot:
             enabled=self.modes.enabled('stories'),
         )
         self.stories = stories.StoryBrain(
-            story_params,
-            self.modes.service_dir('stories') / 'stories_state.json',
+            story_params, self._store(self.modes.service_dir('stories'))
         )
         self.story_watch = StoryWatch(
             StoryDeps(

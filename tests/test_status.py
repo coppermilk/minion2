@@ -30,6 +30,7 @@ from minions.userbot.core.models import Consts  # noqa: E402
 from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
 from minions.userbot.core.render import Glyphs  # noqa: E402
+from minions.userbot.core.state import StateStore  # noqa: E402
 from minions.userbot.engines import greeter  # noqa: E402
 from minions.userbot.engines import reactions  # noqa: E402
 from minions.userbot.engines import stories  # noqa: E402
@@ -154,26 +155,26 @@ def _bot(tmp_path: Path) -> main.Userbot:
         pool=(reactions.ReactionEmoji('11', 'a', 1.0, ()),),
         like_pool=(reactions.ReactionEmoji('22', 'b', 1.0, ()),),
     )
-    brain = reactions.ReactionBrain(params, tmp_path / 'r.json')
+    store = StateStore(tmp_path / 'peers.db', tmp_path / 'cursors.json')
+    brain = reactions.ReactionBrain(params, store)
     brain.clock = lambda: NOW
     brain.state.mood = 0.25
     brain.state.alive = {'12': 5.0, '13': 3.0}
     brain.state.posts = [(TARGET, 77)]
-    brain.state.reacted = {f'{TARGET}:77:alice'}
+    store.mark(reactions.ENGINE, f'{TARGET}:77:alice')
     brain.state.pending = [
-        {
-            'chat': TARGET,
-            'reply_to': 90,
-            'root': 77,
-            'when': NOW + 300,
-            'text': 'nice one',
-            'emojis': [['11', 'a']],
-            'kind': 'react',
-        },
+        reactions.Reaction(
+            chat=TARGET,
+            reply_to=90,
+            root=77,
+            when=NOW + 300,
+            text='nice one',
+            emojis=(('11', 'a'),),
+        ),
     ]
-    brain.state.ledger.add_take('alice', 3)
-    brain.state.ledger.add_offer('alice', 1)
-    brain.state.ledger.remember('alice', '@alice')
+    brain.ledger.add_take('alice', 3)
+    brain.ledger.add_offer('alice', 1)
+    brain.ledger.remember('alice', '@alice')
     bot.reactions = brain
     bot.comment_watch = reactions_glue.CommentWatch(
         reactions_glue.CommentDeps(
@@ -187,9 +188,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
         next_rescan=NOW + 120,
     )
 
-    bot.stories = stories.StoryBrain(
-        stories.StoryParams(enabled=False), tmp_path / 's.json'
-    )
+    bot.stories = stories.StoryBrain(stories.StoryParams(enabled=False), store)
     bot.story_watch = stories_glue.StoryWatch(
         stories_glue.StoryDeps(
             client=SimpleNamespace(),

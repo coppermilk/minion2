@@ -263,7 +263,7 @@ class StatusReport:
             f'{b} reactions {self.arrow()} {pool}',
             (
                 f'{b} mood {brain.state.mood:.2f} {b} answered '
-                f'{len(brain.state.reacted)} {b} pending '
+                f'{brain.answered()} {b} pending '
                 f'{len(brain.state.pending)}'
             ),
             f'{b} window {window} (prior) {b} learned {learned}',

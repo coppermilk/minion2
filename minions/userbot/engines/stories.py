@@ -48,11 +48,19 @@ from minions.userbot.core import attachment
 from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
-from minions.userbot.core import statefile
+from minions.userbot.core import state as state_store
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
+
+
+ENGINE = 'stories'
+"""This engine's name in the shared state store."""
+
+
+def _seen_key(peer_id: int, story_id: int) -> str:
+    """Return the dedup key for one story of one peer."""
+    return f'{peer_id}:{story_id}'
 
 
 @dataclass(frozen=True)
@@ -162,28 +170,32 @@ class StoryView:
     react_emoji: str = ''
 
 
+@dataclass(frozen=True)
+class ViewLog:
+    """One line of the rolling view log, shown by /status and /stories."""
+
+    peer_id: int
+    label: str
+    count: int
+    ts: float
+
+
 @dataclass
 class StoryState:
-    """The persisted memory: what we have already seen, and the session cursor.
+    """The engine's cursors: session marks and a bounded rolling log.
 
-    ``seen`` maps a peer id (as str, for JSON) to the story ids already viewed,
-    so principle 1 (never re-view) survives a restart. ``log`` is a rolling
-    record of recent views for /status and /stories.
+    What grew with the audience has moved to the state store -- the seen
+    story ids as marks (principle 1, never re-view), and the per-peer ledger
+    as rows. What is left is bounded: five scalars and the last ``log_limit``
+    views.
     """
 
-    seen: dict[str, list[int]] = field(default_factory=dict)
-    seen_order: list[str] = field(default_factory=list)  # LRU of peer ids
     last_view: float = 0.0
     next_session_at: float = 0.0
     session_start_at: float = 0.0
     session_last_at: float = 0.0
-    total_views: int = 0  # peers viewed all-time (a simple odometer)
-    log: list[dict[str, object]] = field(default_factory=list)
-    # Per-peer relationship memory (the shared Berlyne ledger): offered=stories
-    # offered, taken=viewed, recip=reacted, with the date-keyed reaction cap.
-    # Unbounded, so p = viewed/offered stays a true fraction even when seen is
-    # trimmed; a skipped story counts as offered but not viewed.
-    ledger: relationship.Ledger = field(default_factory=relationship.Ledger)
+    total_views: int = 0  # stories viewed all-time (a simple odometer)
+    log: list[ViewLog] = field(default_factory=list)
     last_react: float = 0.0  # ts of the last reaction, for the min-gap pacing
 
 
@@ -200,20 +212,24 @@ class StoryBrain:
     def __init__(
         self,
         params: StoryParams,
-        path: Path,
+        store: state_store.StateStore,
         rng: random.Random | None = None,
     ) -> None:
-        """Bind the params and state path; seed the RNG; load the memory."""
+        """Bind the params and the shared store; seed the RNG."""
         self.params = params
-        self.path = path
+        self.store = store
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto
         self.clock = time.time
+        self.ledger = relationship.Ledger(store, ENGINE)
         self.state = self._load()
 
     def unseen(self, cand: StoryCandidate) -> tuple[int, ...]:
         """Return the candidate's story ids we have not viewed yet."""
-        seen = set(self.state.seen.get(str(cand.peer_id), ()))
-        return tuple(sid for sid in cand.story_ids if sid not in seen)
+        return tuple(
+            sid
+            for sid in cand.story_ids
+            if not self.store.marked(ENGINE, _seen_key(cand.peer_id, sid))
+        )
 
     def plan(
         self, candidates: list[StoryCandidate], now: float | None = None
@@ -356,9 +372,8 @@ class StoryBrain:
         Runs on local counters (the ledger commits at ``mark_viewed`` /
         ``_record_skips``, so the plan/commit split survives I/O that fails).
         """
-        key = str(peer_id)
-        offered = self.state.ledger.offered.get(key, 0)
-        viewed = self.state.ledger.taken.get(key, 0)
+        row = self.ledger.row(str(peer_id))
+        offered, viewed = row.offered, row.taken
         gain = self.params.view_control_gain
         view_ids: list[int] = []
         skip_ids: list[int] = []
@@ -378,20 +393,21 @@ class StoryBrain:
         Decided once at plan time so a skipped story is not re-offered every
         poll (which would drive p back to 1); it counts as offered, not viewed.
         """
-        key = str(peer_id)
-        prior = self.state.seen.get(key, [])
-        fresh = [sid for sid in skip_ids if sid not in set(prior)]
+        fresh = [
+            sid
+            for sid in skip_ids
+            if self.store.mark(ENGINE, _seen_key(peer_id, sid))
+        ]
         if not fresh:
             return
-        self.state.seen[key] = (prior + fresh)[-self.params.seen_per_peer :]
-        self.state.ledger.add_offer(key, len(fresh))
-        self._touch_peer(key)
+        self.ledger.add_offer(str(peer_id), len(fresh))
+        self._trim_peers()
 
     def _react_budget(self, now: float) -> int:
         """Return how many reactions are still allowed today (date roll)."""
         if not self.params.react_enabled:
             return 0
-        return self.state.ledger.recip_left(self._control(), now, self._tz())
+        return self.ledger.recip_left(self._control(), now, self._tz())
 
     def _plan_reacts(
         self, peer_id: int, view_ids: tuple[int, ...], budget: int
@@ -409,7 +425,7 @@ class StoryBrain:
         for sid in view_ids:
             if budget <= 0:
                 break
-            prob = self.state.ledger.recip_prob(key, ctrl, taken_now=False)
+            prob = self.ledger.recip_prob(key, ctrl, taken_now=False)
             if self.rng.random() < prob:
                 chosen.append(sid)
                 budget -= 1
@@ -490,27 +506,21 @@ class StoryBrain:
         newly-seen ids (so a re-mark does not inflate the count).
         """
         now = self.clock() if ts is None else ts
-        key = str(peer_id)
-        prior = self.state.seen.get(key, [])
-        known = set(prior)
-        fresh = [sid for sid in story_ids if sid not in known]
+        fresh = [
+            sid
+            for sid in story_ids
+            if self.store.mark(ENGINE, _seen_key(peer_id, sid))
+        ]
         if not fresh:
             return
-        merged = prior + fresh
-        self.state.seen[key] = merged[-self.params.seen_per_peer :]
-        self.state.ledger.add_take(key, len(fresh))
-        self.state.ledger.remember(key, label)  # @name for /status
-        self._touch_peer(key)
+        key = str(peer_id)
+        self.ledger.add_take(key, len(fresh))
+        self.ledger.remember(key, label)  # @name for /status
+        self.store.trim_marks(ENGINE, f'{peer_id}:', self.params.seen_per_peer)
+        self._trim_peers()
         self.state.last_view = now
         self.state.total_views += len(fresh)
-        self.state.log.append(
-            {
-                'peer_id': peer_id,
-                'label': label,
-                'count': len(fresh),
-                'ts': now,
-            }
-        )
+        self.state.log.append(ViewLog(peer_id, label, len(fresh), now))
         del self.state.log[: -self.params.log_limit]
         self._save()
 
@@ -523,21 +533,23 @@ class StoryBrain:
         """
         if count <= 0:
             return
-        self.state.ledger.add_recip(str(peer_id), count, now, self._tz())
+        self.ledger.add_recip(str(peer_id), count, now, self._tz())
         self.state.last_react = now
         self._save()
 
-    def _touch_peer(self, key: str) -> None:
-        """Mark ``key`` most-recently-seen, dropping the oldest past cap."""
-        if key in self.state.seen_order:
-            self.state.seen_order.remove(key)
-        self.state.seen_order.append(key)
-        while len(self.state.seen_order) > self.params.max_peers_tracked:
-            oldest = self.state.seen_order.pop(0)
-            self.state.seen.pop(oldest, None)
-            self.state.ledger.evict(oldest)
+    def _trim_peers(self) -> None:
+        """Keep only the most recent ``max_peers_tracked`` peers.
 
-    def recent_log(self, limit: int) -> list[dict[str, object]]:
+        Recency is a column now, so the store does the ordering; we clear the
+        seen marks the dropped peers keyed, since the store does not know
+        their format.
+        """
+        for peer in self.store.trim_peers(
+            ENGINE, self.params.max_peers_tracked
+        ):
+            self.store.drop_marks(ENGINE, f'{peer}:')
+
+    def recent_log(self, limit: int) -> list[ViewLog]:
         """Return recent views, newest first (for /status, /stories)."""
         return list(reversed(self.state.log))[:limit]
 
@@ -547,11 +559,11 @@ class StoryBrain:
 
     def reacts_today(self, now: float, tz: float) -> int:
         """Return reactions sent on the local date of ``now`` (0 past it)."""
-        return self.state.ledger.recips_today(now, tz)
+        return self.ledger.recips_today(now, tz)
 
     def warmth(self) -> list[relationship.Warmth]:
         """Per-peer attachment readout for /status, most recent first."""
-        return relationship.warmth(self.state.ledger, self._control())
+        return relationship.warmth(self.ledger, self._control())
 
     def remember(self, peer: str, label: str) -> None:
         """Cache a peer's @name for /status (persisted).
@@ -562,7 +574,7 @@ class StoryBrain:
         """
         if not label or label == peer:
             return
-        self.state.ledger.remember(peer, label)
+        self.ledger.remember(peer, label)
         self._save()
 
     def views_today(self, now: float, tz: float) -> int:
@@ -573,72 +585,67 @@ class StoryBrain:
         of the all-time odometer.
         """
         today = humanize.local(now, tz).date()
-        total = 0
-        for entry in self.state.log:
-            ts = entry.get('ts')
-            if isinstance(ts, int | float) and (
-                humanize.local(ts, tz).date() == today
-            ):
-                total += int(entry.get('count', 0) or 0)
-        return total
+        return sum(
+            row.count
+            for row in self.state.log
+            if humanize.local(row.ts, tz).date() == today
+        )
 
     def _load(self) -> StoryState:
-        """Reload the persisted memory, or start fresh if none/corrupt."""
-        raw = statefile.read_state(self.path)
+        """Reload the cursors, or start fresh when the store has none."""
+        raw = self.store.cursor(ENGINE)
+        self.ledger.restore(raw)
         if not raw:
             return StoryState()
-        seen = {
-            str(k): [int(x) for x in v]
-            for k, v in (raw.get('seen') or {}).items()
-        }
-        order = [
-            str(k) for k in (raw.get('seen_order') or []) if str(k) in seen
-        ]
-        # Any peer missing from the persisted order (older state file) is
-        # appended, so the LRU cap still has every tracked peer to work with.
-        order += [k for k in seen if k not in order]
+        session = raw.get('session')
+        block = session if isinstance(session, dict) else {}
+        rows = raw.get('log')
         return StoryState(
-            seen=seen,
-            seen_order=order,
-            last_view=float(raw.get('last_view', 0.0)),
-            next_session_at=float(raw.get('next_session_at', 0.0)),
-            session_start_at=float(raw.get('session_start_at', 0.0)),
-            session_last_at=float(raw.get('session_last_at', 0.0)),
-            total_views=int(raw.get('total_views', 0)),
-            log=[dict(e) for e in (raw.get('log') or [])],
-            ledger=relationship.Ledger(
-                offered=relationship.int_map(raw.get('offered')),
-                taken=relationship.int_map(raw.get('viewed')),
-                recip=relationship.int_map(raw.get('reacted')),
-                recip_day=str(raw.get('react_day', '')),
-                recip_today=int(raw.get('react_today', 0)),
-                names={
-                    str(k): str(v) for k, v in (raw.get('names') or {}).items()
-                },
-            ),
-            last_react=float(raw.get('last_react', 0.0)),
+            last_view=float(raw.get('last_view', 0.0)),  # type: ignore[arg-type]
+            next_session_at=float(block.get('next_at', 0.0)),
+            session_start_at=float(block.get('start_at', 0.0)),
+            session_last_at=float(block.get('last_at', 0.0)),
+            total_views=int(raw.get('total_views', 0)),  # type: ignore[arg-type]
+            log=[_view(r) for r in (rows if isinstance(rows, list) else [])],
+            last_react=float(raw.get('last_react', 0.0)),  # type: ignore[arg-type]
         )
 
     def _save(self) -> None:
-        """Persist the memory atomically as readable JSON."""
-        data = {
-            'seen': self.state.seen,
-            'seen_order': self.state.seen_order,
-            'last_view': self.state.last_view,
-            'next_session_at': self.state.next_session_at,
-            'session_start_at': self.state.session_start_at,
-            'session_last_at': self.state.session_last_at,
-            'total_views': self.state.total_views,
-            'log': self.state.log,
-            'offered': self.state.ledger.offered,
-            'viewed': self.state.ledger.taken,
-            'reacted': self.state.ledger.recip,
-            'react_day': self.state.ledger.recip_day,
-            'react_today': self.state.ledger.recip_today,
-            'names': self.state.ledger.names,
-            'last_react': self.state.last_react,
-        }
-        statefile.write_state(self.path, data)
+        """Publish the cursors to the store (the twin is rebuilt later)."""
+        self.store.put_cursor(
+            ENGINE,
+            {
+                'last_view': self.state.last_view,
+                'session': {
+                    'next_at': self.state.next_session_at,
+                    'start_at': self.state.session_start_at,
+                    'last_at': self.state.session_last_at,
+                },
+                'total_views': self.state.total_views,
+                'log': [
+                    {
+                        'peer_id': row.peer_id,
+                        'label': row.label,
+                        'count': row.count,
+                        'ts': row.ts,
+                    }
+                    for row in self.state.log
+                ],
+                'last_react': self.state.last_react,
+                **self.ledger.counters(),
+            },
+        )
+
+
+def _view(raw: object) -> ViewLog:
+    """Rebuild one view-log line from its cursor row."""
+    row = raw if isinstance(raw, dict) else {}
+    return ViewLog(
+        peer_id=int(row.get('peer_id', 0)),
+        label=str(row.get('label', '')),
+        count=int(row.get('count', 0)),
+        ts=float(row.get('ts', 0.0)),
+    )
 
 
 def load_story_params(

@@ -59,25 +59,16 @@ COMMENT_SCAN = 50
 PRE_FIRE_REFRESH_SEC = 45.0
 # How many queued rows to list before summing the rest as "... (+N more)".
 QUEUED_ROWS = 12
-# A persisted emoji row is an [id, fallback] pair.
-_EMOJI_ROW_LEN = 2
 
 
-def _queued_markup(entry: dict[str, object]) -> str:
-    """Render a queued entry's chosen reaction(s) as premium markup, or '?'.
+def _queued_markup(queued: reactions.Reaction) -> str:
+    """Render a queued reaction's chosen emoji as premium markup, or '?'.
 
-    Reactions scheduled before the emoji were stored show '?' -- a /requeue
-    does not re-pick them (the choice is made at schedule time), it only
-    re-times what is already there.
+    A reaction scheduled before the emoji were stored shows '?' -- a
+    /requeue does not re-pick it (the choice is made at schedule time),
+    it only re-times what is already there.
     """
-    raw = entry.get('emojis')
-    rows = raw if isinstance(raw, list) else []
-    markup = ''.join(
-        emoji_markup(str(row[0]), str(row[1]))
-        for row in rows
-        if len(row) == _EMOJI_ROW_LEN
-    )
-    return markup or '?'
+    return ''.join(emoji_markup(e, f) for e, f in queued.emojis) or '?'
 
 
 @dataclass(frozen=True)
@@ -118,19 +109,18 @@ class CommentWatch:
         extra = len(rows) - QUEUED_ROWS
         return [*rows[:QUEUED_ROWS], f'    ... (+{extra} more)']
 
-    def _queued_row(self, entry: dict[str, object], now: float) -> str:
+    def _queued_row(self, queued: reactions.Reaction, now: float) -> str:
         """One queued line: reaction, verb, comment, post, eta."""
         b = self.deps.glyphs.bullet
-        msg = int(entry.get('reply_to', 0))
-        root = int(entry.get('root', msg))
-        body = str(entry.get('text', ''))
-        what = f'"{body}"' if body else f'comment {msg}'
-        verb = 'sticker' if entry.get('kind') == 'reply' else 'like'
-        eta = float(entry.get('when', now)) - now
+        what = (
+            f'"{queued.text}"' if queued.text else f'comment {queued.reply_to}'
+        )
+        verb = 'sticker' if queued.kind == 'reply' else 'like'
+        eta = queued.when - now
         when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
         return (
-            f'    {_queued_markup(entry)} {verb} {self.deps.glyphs.arrow}'
-            f' {what} {b} post {root} {b} {when}'
+            f'    {_queued_markup(queued)} {verb} {self.deps.glyphs.arrow}'
+            f' {what} {b} post {queued.root} {b} {when}'
         )
 
     def on_message(self, event: events.NewMessage.Event) -> None:

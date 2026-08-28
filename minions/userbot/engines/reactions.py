@@ -50,20 +50,24 @@ import random
 import time
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
 from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
-from minions.userbot.core import statefile
+from minions.userbot.core import state as state_store
 from minions.userbot.core.humanize import recency_penalty
 from minions.userbot.core.humanize import weighted_choice
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from collections.abc import Mapping
     from datetime import datetime
-    from pathlib import Path
+
+ENGINE = 'reactions'
+"""This engine's name in the shared state store."""
 
 # When a session start lands in a dead hour we sample a real send moment on
 # this grid across the reachable awake time (see _place); 5 min is fine-grained
@@ -78,8 +82,6 @@ _ALIVE_STEP = 1.0
 _SESSION_REACH_SEC = 7200.0
 # A persisted emoji row is an [id, fallback] pair.
 _EMOJI_ROW_LEN = 2
-# A reacted dedup key is 'chat:root:person[:msg]', so the person is field 3.
-_CATTED_PERSON_FIELDS = 3
 # datetime.weekday(): Monday is 0, so Saturday (5) and up is the weekend.
 _SATURDAY = 5
 # Local hours: midnight..noon reads sleepy, noon..midnight bodry.
@@ -130,7 +132,7 @@ class Reaction:
     kind: str = 'react'  # 'react' = a like reaction; 'reply' = thread sticker
 
 
-def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
+def _emojis_from_row(raw: object) -> tuple[tuple[str, str], ...]:
     """Parse a persisted ``emojis`` list of [id, fallback] pairs."""
     rows = raw if isinstance(raw, list) else []
     return tuple(
@@ -140,18 +142,37 @@ def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _reaction_from_entry(entry: dict[str, object], when: float) -> Reaction:
-    """Rebuild a Reaction from a persisted dict (root defaults to reply_to)."""
-    reply_to = int(entry['reply_to'])
+def _reaction(raw: object) -> Reaction | None:
+    """Rebuild one queued Reaction from its cursor row, or None if broken."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        reply_to = int(raw['reply_to'])  # type: ignore[arg-type]
+        chat = int(raw['chat'])  # type: ignore[arg-type]
+    except (KeyError, TypeError, ValueError):
+        return None
     return Reaction(
-        chat=int(entry['chat']),
+        chat=chat,
         reply_to=reply_to,
-        root=int(entry.get('root', reply_to)),
-        when=when,
-        text=str(entry.get('text', '')),
-        emojis=_emojis_from_entry(entry.get('emojis')),
-        kind=str(entry.get('kind', 'react')),
+        root=int(raw.get('root', reply_to)),  # type: ignore[arg-type]
+        when=float(raw.get('when', 0.0)),  # type: ignore[arg-type]
+        text=str(raw.get('text', '')),
+        emojis=_emojis_from_row(raw.get('emojis')),
+        kind=str(raw.get('kind', 'react')),
     )
+
+
+def _queue_row(reaction: Reaction) -> dict[str, object]:
+    """Return one queued Reaction as its readable cursor row."""
+    return {
+        'chat': reaction.chat,
+        'reply_to': reaction.reply_to,
+        'root': reaction.root,
+        'when': reaction.when,
+        'text': reaction.text,
+        'emojis': [[eid, fb] for eid, fb in reaction.emojis],
+        'kind': reaction.kind,
+    }
 
 
 @dataclass(frozen=True)
@@ -264,12 +285,14 @@ class ReactionParams:
 
 @dataclass
 class ReactionState:
-    """The persisted memory that principles 2-4 and once-per-person need.
+    """The engine's cursors: everything bounded, nothing per-audience.
 
-    ``posts`` (the watched comment targets) and ``pending`` (reactions
-    scheduled but
-    not yet sent) are persisted too, so a nightly NAS shutdown does not lose
-    which posts to watch or the reactions due after it comes back.
+    What used to sit here and grow with the audience now lives in the state
+    store: the per-commenter ledger as rows, and the once-per-(post, person)
+    dedup as marks. What is left is a handful of scalars plus three bounded
+    lists -- the watched posts (four), the due queue (tens), and the
+    per-emoji recency of a 39-entry catalog. That is the whole reason this
+    is still a readable JSON block.
     """
 
     mood: float = 0.0
@@ -282,20 +305,12 @@ class ReactionState:
     reaction_last: dict[str, float] = field(
         default_factory=dict
     )  # id -> last ts
-    reacted: set[str] = field(default_factory=set)  # (post, person) keys done
     posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
-    pending: list[dict[str, object]] = field(
-        default_factory=list
-    )  # due reactions
+    pending: list[Reaction] = field(default_factory=list)  # due reactions
     alive: dict[str, float] = field(
         default_factory=dict
     )  # hour -> decayed obs
     alive_ts: float = 0.0  # last heartbeat, for decay
-    # Per-commenter relationship memory (the shared Berlyne ledger), spanning
-    # posts so a person is remembered across our posts (the point of adapting
-    # to each individual): offered=commented, taken=engaged (liked),
-    # recip=stickered, with the date-keyed like/sticker daily caps.
-    ledger: relationship.Ledger = field(default_factory=relationship.Ledger)
 
 
 def _local(ts: float, params: ReactionParams) -> datetime:
@@ -391,14 +406,15 @@ class ReactionBrain:
     def __init__(
         self,
         params: ReactionParams,
-        path: Path,
+        store: state_store.StateStore,
         rng: random.Random | None = None,
     ) -> None:
-        """Bind the params and state path; seed the RNG."""
+        """Bind the params and the shared store; seed the RNG."""
         self.params = params
-        self.path = path
+        self.store = store
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto
         self.clock = time.time
+        self.ledger = relationship.Ledger(store, ENGINE)
         self.state = self._load()
 
     @property
@@ -420,11 +436,14 @@ class ReactionBrain:
             self.state.posts.remove(pair)
         self.state.posts.append(pair)
         del self.state.posts[: -self.params.watch_posts]  # keep the last N
-        live = tuple(f'{c}:{m}:' for c, m in self.state.posts)
-        self.state.reacted = {
-            k for k in self.state.reacted if k.startswith(live)
-        }
+        self.store.keep_marks(
+            ENGINE, tuple(f'{c}:{m}:' for c, m in self.state.posts)
+        )
         self._save()
+
+    def answered(self) -> int:
+        """How many (post, commenter) pairs have already been reacted to."""
+        return self.store.count_marks(ENGINE)
 
     def is_comment(self, chat: int, reply_to: int | None) -> bool:
         """Whether a reply in ``chat`` targets one of the tracked posts."""
@@ -438,17 +457,7 @@ class ReactionBrain:
         comment
         was scheduled -- not a fresh random one at send time.
         """
-        self.state.pending.append(
-            {
-                'chat': reaction.chat,
-                'reply_to': reaction.reply_to,
-                'root': reaction.root,
-                'when': reaction.when,
-                'text': reaction.text,
-                'emojis': [[eid, fb] for eid, fb in reaction.emojis],
-                'kind': reaction.kind,
-            }
-        )
+        self.state.pending.append(reaction)
         self._save()
 
     def done_pending(self, chat: int, reply_to: int) -> None:
@@ -456,7 +465,7 @@ class ReactionBrain:
         self.state.pending = [
             p
             for p in self.state.pending
-            if not (p['chat'] == chat and p['reply_to'] == reply_to)
+            if not (p.chat == chat and p.reply_to == reply_to)
         ]
         self._save()
 
@@ -480,26 +489,23 @@ class ReactionBrain:
             self.state.next_session_at = now
             self.state.session_start_at = 0.0
             self.state.session_last_at = 0.0
-        out: list[Reaction] = []
-        for entry in self.state.pending:
-            when = float(entry['when'])
-            if renew_all or when <= now:
-                when = self._fire_time(now, engaged=False)
-                entry['when'] = when
-            out.append(_reaction_from_entry(entry, when))
+        fresh: list[Reaction] = []
+        for queued in self.state.pending:
+            due = renew_all or queued.when <= now
+            when = self._fire_time(now, engaged=False) if due else queued.when
+            fresh.append(replace(queued, when=when))
+        self.state.pending = fresh
         self._save()
-        return out
+        return list(fresh)
 
     def due_now(self) -> list[Reaction]:
         """Set every pending reaction to fire now and return them."""
         now = self.clock()
-        out = [
-            _reaction_from_entry(entry, now) for entry in self.state.pending
+        self.state.pending = [
+            replace(queued, when=now) for queued in self.state.pending
         ]
-        for entry in self.state.pending:
-            entry['when'] = now
         self._save()
-        return out
+        return list(self.state.pending)
 
     def schedule(self, key: str, *, engaged: bool) -> float | None:
         """Decide if/when to react to ``key``; None means skip it.
@@ -509,7 +515,7 @@ class ReactionBrain:
         reacted on success. Returns the unix ts at which ``emit`` should run.
         """
         now = self.clock()
-        if not self.params.enabled or key in self.state.reacted:
+        if not self.params.enabled or self.store.marked(ENGINE, key):
             return None
         # like_all likes every comment: place it at the next awake moment
         # (always lands). Otherwise the human-like gates may drop it.
@@ -520,7 +526,7 @@ class ReactionBrain:
         )
         if when is None:
             return None
-        self.state.reacted.add(key)
+        self.store.mark(ENGINE, key)
         self._save()
         return when
 
@@ -755,7 +761,7 @@ class ReactionBrain:
 
     def _grant_engage(self, person: str) -> bool:
         """Commit one engagement (like) to the ledger if the cap allows."""
-        led = self.state.ledger
+        led = self.ledger
         if not led.spend_take(self._control(), self.clock(), self._tz()):
             return False
         led.bump_take(person)
@@ -771,8 +777,8 @@ class ReactionBrain:
         control starts from the second. Records the comment as offered either
         way, so a rescan never re-rolls a decided comment.
         """
-        led = self.state.ledger
-        first = led.offered.get(person, 0) == 0
+        led = self.ledger
+        first = led.row(person).offered == 0
         prob = led.take_prob(person, self._control())
         take = first or self.rng.random() < prob
         led.add_offer(person)  # count this comment (recorded before granting)
@@ -794,35 +800,35 @@ class ReactionBrain:
         """
         if not content_ok:
             return False
-        led = self.state.ledger
+        led = self.ledger
         ctrl = self._control()
         prob = led.recip_prob(person, ctrl, taken_now=True)
         if self.rng.random() >= prob:
             return False
         if not led.spend_recip(ctrl, self.clock(), self._tz()):
             return False
-        led.recip[person] = led.recip.get(person, 0) + 1
+        led.bump_recip(person)
         self._save()
         return True
 
     def warmth(self) -> list[relationship.Warmth]:
         """Per-commenter attachment readout for /status, most recent first."""
-        return relationship.warmth(self.state.ledger, self._control())
+        return relationship.warmth(self.ledger, self._control())
 
     def remember(self, person: str, label: str) -> None:
         """Cache a commenter's @name for /status (persisted)."""
         if not label or label == person:
             return
-        self.state.ledger.remember(person, label)
+        self.ledger.remember(person, label)
         self._save()
 
     def likes_today(self, now: float) -> int:
         """Engagements (likes) placed on the local date of ``now`` (else 0)."""
-        return self.state.ledger.takes_today(now, self._tz())
+        return self.ledger.takes_today(now, self._tz())
 
     def stickers_today(self, now: float) -> int:
         """Stickers placed on the local date of ``now`` (else 0)."""
-        return self.state.ledger.recips_today(now, self._tz())
+        return self.ledger.recips_today(now, self._tz())
 
     def _tz(self) -> float:
         """Return the persona timezone offset (for the daily counters)."""
@@ -848,88 +854,65 @@ class ReactionBrain:
         self.state.mood = self.params.mood_phi * self.state.mood + noise
         self.state.mood_day = day
 
-    def _backfill_ledger(self, state: ReactionState) -> None:
-        """Seed the relationship ledger from historically-liked comments.
-
-        A state file written before the attachment control has an empty ledger
-        but a full ``reacted`` set (every comment we already liked). Seed
-        offered=taken per commenter from it, so the /status coefficients show
-        the history at once instead of only new comments; the control then
-        steers each person from there. Runs only while the ledger is empty, so
-        a real engagement (which persists the ledger) supersedes it.
-        """
-        if state.ledger.offered or not state.reacted:
-            return
-        for key in state.reacted:
-            parts = key.split(':')
-            person = parts[2] if len(parts) >= _CATTED_PERSON_FIELDS else ''
-            if person:
-                state.ledger.add_take(person, 1)
-
     def _load(self) -> ReactionState:
-        """Reload the persisted memory, or start fresh if none/corrupt."""
-        raw = statefile.read_state(self.path)
+        """Reload the cursors, or start fresh when the store has none."""
+        raw = self.store.cursor(ENGINE)
+        self.ledger.restore(raw)
         if not raw:
             return ReactionState()
-        state = ReactionState(
-            mood=float(raw.get('mood', 0.0)),
+        queued = [_reaction(row) for row in _rows(raw.get('queue'))]
+        return ReactionState(
+            mood=float(raw.get('mood', 0.0)),  # type: ignore[arg-type]
             mood_day=str(raw.get('mood_day', '')),
-            next_session_at=float(
-                raw.get('next_session_at', raw.get('next_earliest', 0.0))
-            ),
-            session_start_at=float(raw.get('session_start_at', 0.0)),
-            session_last_at=float(raw.get('session_last_at', 0.0)),
-            reaction_last={
-                str(k): float(v)
-                for k, v in (raw.get('reaction_last') or {}).items()
-            },
-            reacted={str(p) for p in (raw.get('reacted') or [])},
-            posts=[(int(c), int(m)) for c, m in (raw.get('posts') or [])],
-            pending=[dict(p) for p in (raw.get('pending') or [])],
-            alive={
-                str(k): float(v) for k, v in (raw.get('alive') or {}).items()
-            },
-            alive_ts=float(raw.get('alive_ts', 0.0)),
-            ledger=relationship.Ledger(
-                offered=relationship.int_map(raw.get('commented')),
-                taken=relationship.int_map(raw.get('engaged')),
-                recip=relationship.int_map(raw.get('stickered')),
-                take_day=str(raw.get('engage_day', '')),
-                take_today=int(raw.get('engage_today', 0)),
-                recip_day=str(raw.get('sticker_day', '')),
-                recip_today=int(raw.get('sticker_today', 0)),
-                names={
-                    str(k): str(v) for k, v in (raw.get('names') or {}).items()
-                },
-            ),
+            next_session_at=_at(raw, 'next_at'),
+            session_start_at=_at(raw, 'start_at'),
+            session_last_at=_at(raw, 'last_at'),
+            reaction_last=_floats(raw.get('emoji_last')),
+            posts=[(int(c), int(m)) for c, m in _rows(raw.get('posts'))],
+            pending=[q for q in queued if q is not None],
+            alive=_floats(raw.get('alive')),
+            alive_ts=float(raw.get('alive_at', 0.0)),  # type: ignore[arg-type]
         )
-        self._backfill_ledger(state)
-        return state
 
     def _save(self) -> None:
-        """Persist the memory atomically as readable JSON."""
-        data = {
-            'mood': self.state.mood,
-            'mood_day': self.state.mood_day,
-            'next_session_at': self.state.next_session_at,
-            'session_start_at': self.state.session_start_at,
-            'session_last_at': self.state.session_last_at,
-            'reaction_last': self.state.reaction_last,
-            'reacted': sorted(self.state.reacted),
-            'posts': [[c, m] for c, m in self.state.posts],
-            'pending': self.state.pending,
-            'alive': self.state.alive,
-            'alive_ts': self.state.alive_ts,
-            'commented': self.state.ledger.offered,
-            'engaged': self.state.ledger.taken,
-            'stickered': self.state.ledger.recip,
-            'engage_day': self.state.ledger.take_day,
-            'engage_today': self.state.ledger.take_today,
-            'sticker_day': self.state.ledger.recip_day,
-            'sticker_today': self.state.ledger.recip_today,
-            'names': self.state.ledger.names,
-        }
-        statefile.write_state(self.path, data)
+        """Publish the cursors to the store (the twin is rebuilt later)."""
+        self.store.put_cursor(
+            ENGINE,
+            {
+                'mood': self.state.mood,
+                'mood_day': self.state.mood_day,
+                'session': {
+                    'next_at': self.state.next_session_at,
+                    'start_at': self.state.session_start_at,
+                    'last_at': self.state.session_last_at,
+                },
+                'emoji_last': self.state.reaction_last,
+                'posts': [[c, m] for c, m in self.state.posts],
+                'queue': [_queue_row(q) for q in self.state.pending],
+                'alive': self.state.alive,
+                'alive_at': self.state.alive_ts,
+                **self.ledger.counters(),
+            },
+        )
+
+
+def _rows(raw: object) -> list[object]:
+    """Return a persisted list, or an empty one for anything else."""
+    return raw if isinstance(raw, list) else []
+
+
+def _floats(raw: object) -> dict[str, float]:
+    """Coerce a persisted ``{key: number}`` block to ``dict[str, float]``."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): float(v) for k, v in raw.items()}
+
+
+def _at(cursor: Mapping[str, object], key: str) -> float:
+    """Read one timestamp out of the nested ``session`` block."""
+    session = cursor.get('session')
+    block = session if isinstance(session, dict) else {}
+    return float(block.get(key, 0.0))
 
 
 def _emoji(raw: dict[str, object]) -> ReactionEmoji:

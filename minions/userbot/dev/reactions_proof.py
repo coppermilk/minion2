@@ -47,6 +47,7 @@ from pathlib import Path
 
 from minions.userbot.core.config import CONSTANTS_PATH
 from minions.userbot.core.config import read_json
+from minions.userbot.core.state import StateStore
 from minions.userbot.engines import reactions
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
@@ -69,7 +70,7 @@ _POST_OLD = 1001
 # POSIX alike -- a hardcoded /tmp resolves to \tmp on Windows and crashes
 # the atomic save). Cleared at the start of main() so every run is fresh
 # and reproducible, not replaying a previous run's dedup state.
-_STATE = Path(tempfile.gettempdir()) / 'reactions_proof_state.json'
+_STATE = Path(tempfile.gettempdir()) / 'reactions_proof.db'
 
 
 def _local(ts: float, params: reactions.ReactionParams) -> str:
@@ -259,10 +260,10 @@ def _closing(count: int) -> None:
 def main() -> None:
     """Drive the real engine end to end and print the proof."""
     params = _load_params()
-    _STATE.unlink(missing_ok=True)  # start fresh: don't replay old dedup state
+    _STATE.unlink(missing_ok=True)  # start fresh: don't replay old dedup
     brain = reactions.ReactionBrain(
         params,
-        _STATE,
+        StateStore(_STATE),
         random.Random(_SEED),  # noqa: S311 -- reproducible proof, not crypto
     )
     brain.clock = lambda: _NOW
@@ -361,11 +362,11 @@ def main() -> None:
     print()
 
     print('STEP 8  the queue that survives a restart (persisted pending)')
-    for entry in brain.state.pending:
+    for queued in brain.state.pending:
         print(
-            f'  pending: {entry.get("kind", "react")} on comment '
-            f'{entry["reply_to"]} (post {entry["root"]}) in {entry["chat"]}'
-            f'  "{entry["text"]}"'
+            f'  pending: {queued.kind} on comment '
+            f'{queued.reply_to} (post {queued.root}) in {queued.chat}'
+            f'  "{queued.text}"'
         )
     print()
 
@@ -387,9 +388,9 @@ def _sticker_rate_demo(params: reactions.ReactionParams) -> None:
         f'{params.recip_fraction_target:.0%} of engaged comments become a '
         f'thread sticker (no activity-burst gate).'
     )
-    path = Path(tempfile.gettempdir()) / 'reactions_proof_gate.json'
+    path = Path(tempfile.gettempdir()) / 'reactions_proof_gate.db'
     path.unlink(missing_ok=True)
-    brain = reactions.ReactionBrain(params, path, random.Random(0))  # noqa: S311 -- demo
+    brain = reactions.ReactionBrain(params, StateStore(path), random.Random(0))  # noqa: S311 -- demo
     brain.clock = lambda: _NOW
     stickers = engaged = 0
     for _ in range(200):
