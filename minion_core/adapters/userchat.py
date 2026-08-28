@@ -308,8 +308,17 @@ class Account:
         root_id = int(getattr(rows[0], 'id', 0) or 0)
         return (chat_id, root_id) if chat_id and root_id else None
 
-    async def admin_log(self, channel: int, after: int) -> list[MemberEvent]:
-        """Join/leave events newer than ``after`` ([] when not an admin)."""
+    async def admin_log(
+        self, channel: int, after: int
+    ) -> list[MemberEvent] | None:
+        """Join/leave events newer than ``after``; None when unreadable.
+
+        The one read where empty and unreadable must not look alike: the
+        greeter takes its FIRST successful read as the baseline it will
+        never greet, so an unreadable log answering [] would silently
+        baseline the account past everyone who joined before it.
+        """
+        await self.gate.wait(READ)
         try:
             return [
                 _event(row)
@@ -319,7 +328,7 @@ class Account:
             ]
         except Exception:  # noqa: BLE001 -- not admin / unreachable: skip
             _LOG.warning('admin log of %s unreadable (admin?)', channel)
-            return []
+            return None
 
     # --- writes ----------------------------------------------------------
 
@@ -364,6 +373,16 @@ class Account:
             self.client.send_message(user_id, text.body, **_send_kwargs(text)),
         )
         return sent is not None
+
+    def strained(self, kind: str) -> bool:
+        """Whether Telegram recently told us to slow this lane down.
+
+        The gate widens a lane on a FloodWait and eases back after clean
+        requests, so a widened lane IS the "we are being throttled" signal
+        -- which the DM path needs, because carrying on DMing straight
+        after a flood is how a user account earns a spam ban.
+        """
+        return self.gate.slack(kind) > 1.0
 
     async def _send_threaded(self, chat: int, text: Text) -> int:
         """Reply inside a discussion thread, so it lands in the comments."""
@@ -691,7 +710,21 @@ def _event(raw: object) -> MemberEvent:
     )
 
 
-def connect(session: Path, api_id: int, api_hash: str) -> TelegramClient:
+@dataclass(frozen=True)
+class Login:
+    """What it takes to open a session: where it lives and who we are.
+
+    ``flood_sleep`` is the operator's knob for the behaviour described in
+    ``connect`` -- how long a FloodWait is waited out rather than raised.
+    """
+
+    session: Path
+    api_id: int
+    api_hash: str
+    flood_sleep: float = DEFAULT_FLOOD_SLEEP
+
+
+def connect(login: Login) -> TelegramClient:
     """Build the client: gentle under floods, crash-safe session.
 
     Two account-friendliness measures live here because both entry points
@@ -709,19 +742,26 @@ def connect(session: Path, api_id: int, api_hash: str) -> TelegramClient:
     from telethon import TelegramClient
 
     client = TelegramClient(
-        str(session),
-        api_id,
-        api_hash,
-        flood_sleep_threshold=DEFAULT_FLOOD_SLEEP,
+        str(login.session),
+        login.api_id,
+        login.api_hash,
+        flood_sleep_threshold=login.flood_sleep,
     )
     _wal(client)
     return client
 
 
 def _wal(client: TelegramClient) -> None:
-    """Put the session's SQLite file into WAL mode, if it has one."""
+    """Put the session's SQLite file into WAL mode, if it has one.
+
+    Best effort: an in-memory session has no connection to harden, and a
+    Telethon internal that moved just leaves the default journal in place
+    -- a slower session file, never a broken run.
+    """
     conn = getattr(getattr(client.session, '_conn', None), 'execute', None)
     if conn is None:
+        _LOG.warning('session: no file to harden; default journal kept')
         return
     conn('PRAGMA journal_mode=WAL')
     conn('PRAGMA synchronous=NORMAL')
+    _LOG.info('session: WAL journal enabled (crash-safe on hard exit)')

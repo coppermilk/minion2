@@ -101,17 +101,19 @@ class AudienceLog:
         )
         self._maybe_enrich(msg.sender_id)
 
-    def note_membership(self, event: tuple[int, int, bool, bool]) -> None:
+    def note_membership(self, event: userchat.MemberEvent) -> None:
         """Greeter sink: persist a join/leave (idempotent on admin_log_id)."""
-        admin_log_id, user_id, joined, left = event
-        if not self.deps.enabled or user_id <= 0:
+        if not self.deps.enabled or event.user_id <= 0:
             return
         self.deps.store.record_membership(
             users.MembershipEvent(
-                user_id, joined=joined, left=left, admin_log_id=admin_log_id
+                event.user_id,
+                joined=event.joined,
+                left=event.left,
+                admin_log_id=event.id,
             )
         )
-        self._maybe_enrich(user_id)
+        self._maybe_enrich(event.user_id)
 
     def close(self) -> None:
         """Drop in-flight lookups and release the SQLite handle."""

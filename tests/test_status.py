@@ -14,31 +14,28 @@ import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from tests.conftest import install_telethon_stub
-
 if TYPE_CHECKING:
     from pathlib import Path
 
     import pytest
 
-install_telethon_stub()
 
-from minions.userbot import main  # noqa: E402
-from minions.userbot.core.humanize import Variety  # noqa: E402
-from minions.userbot.core.models import Config  # noqa: E402
-from minions.userbot.core.models import Consts  # noqa: E402
-from minions.userbot.core.models import Group  # noqa: E402
-from minions.userbot.core.models import Posted  # noqa: E402
-from minions.userbot.core.render import Glyphs  # noqa: E402
-from minions.userbot.core.state import StateStore  # noqa: E402
-from minions.userbot.engines import greeter  # noqa: E402
-from minions.userbot.engines import reactions  # noqa: E402
-from minions.userbot.engines import stories  # noqa: E402
-from minions.userbot.glue import aggregator as aggregator_glue  # noqa: E402
-from minions.userbot.glue import reactions as reactions_glue  # noqa: E402
-from minions.userbot.glue import stories as stories_glue  # noqa: E402
-from minions.userbot.glue import users as users_glue  # noqa: E402
-from minions.userbot.glue.status import StatusReport  # noqa: E402
+from minions.userbot import main
+from minions.userbot.core.humanize import Variety
+from minions.userbot.core.models import Config
+from minions.userbot.core.models import Consts
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Posted
+from minions.userbot.core.render import Glyphs
+from minions.userbot.core.state import StateStore
+from minions.userbot.engines import greeter
+from minions.userbot.engines import reactions
+from minions.userbot.engines import stories
+from minions.userbot.glue import aggregator as aggregator_glue
+from minions.userbot.glue import reactions as reactions_glue
+from minions.userbot.glue import stories as stories_glue
+from minions.userbot.glue import users as users_glue
+from minions.userbot.glue.status import StatusReport
 
 NOW = 1_760_000_000.0  # a fixed clock, so every eta in the text is stable
 SOURCE = -1001

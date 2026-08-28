@@ -16,21 +16,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.conftest import install_telethon_stub
-
-install_telethon_stub()
-
-from minions.userbot.core import config  # noqa: E402
-from minions.userbot.core import matching  # noqa: E402
-from minions.userbot.core import render  # noqa: E402
-from minions.userbot.core import statefile  # noqa: E402
-from minions.userbot.core.models import Config  # noqa: E402
-from minions.userbot.core.models import Group  # noqa: E402
-from minions.userbot.core.models import Item  # noqa: E402
-from minions.userbot.core.models import Posted  # noqa: E402
-from minions.userbot.glue import aggregator  # noqa: E402
-from minions.userbot.glue.commands import CommandRouter  # noqa: E402
-from minions.userbot.glue.profiles import ServiceModes  # noqa: E402
+from minions.userbot.core import config
+from minions.userbot.core import matching
+from minions.userbot.core import render
+from minions.userbot.core import statefile
+from minions.userbot.core.models import Config
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Item
+from minions.userbot.core.models import Posted
+from minions.userbot.glue import aggregator
+from minions.userbot.glue.commands import CommandRouter
+from minions.userbot.glue.profiles import ServiceModes
 
 CONSTS = config.load_constants(config.CONSTANTS_PATH)
 

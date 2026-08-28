@@ -1,10 +1,12 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The subscriber greeter (minions/userbot/greeter.py).
+"""The subscriber greeter (minions/userbot/engines/greeter.py).
 
-Telethon-free: the client is duck-typed, so a fake async client drives the
-admin-log detection, the silent baseline, the welcome/farewell logic and the
-anti-flood caps.
+Telethon-free: a fake async client under a real Account drives the admin-log
+detection, the silent baseline, the welcome/farewell logic and the anti-flood
+caps. The Account is real rather than stubbed so these tests also cover the
+conversions the greeter now depends on -- an admin-log row into a MemberEvent,
+a FloodWait into a widened gate.
 """
 
 from __future__ import annotations
@@ -17,6 +19,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Never
 
+from minion_core.adapters import userchat
+from minion_core.pace import Gate
+from minion_core.pace import Pace
 from minions.userbot.engines import greeter
 
 _CAP_PER_CYCLE = 2
@@ -99,16 +104,26 @@ class _FakeClient:
             username=self.usernames.get(uid, ''),
         )
 
-    async def send_message(self, uid: int, text: str, **_kw: object) -> None:
+    async def send_message(self, uid: int, text: str, **_kw: object) -> object:
         exc = self.fail.get(uid)
         if exc is not None:
             raise exc
         self.dms.append((uid, text))
+        # Telethon answers a send with the Message it created, and the
+        # adapter reads "did it go out" off that answer.
+        return types.SimpleNamespace(id=len(self.dms))
+
+
+def _account(client: object) -> userchat.Account:
+    """Wrap a fake client in a real, unpaced Account."""
+    return userchat.Account(client, Gate({}, Pace()))
 
 
 def _greeter(tmp_path: Path, client: object, **over: object) -> object:
     return greeter.Greeter(
-        client, _params(**over), greeter.GreeterIO(tmp_path / 'g.json')
+        _account(client),
+        _params(**over),
+        greeter.GreeterIO(tmp_path / 'g.json'),
     )
 
 
@@ -116,17 +131,22 @@ def test_on_event_sink_fires_for_every_event_incl_baseline(
     tmp_path: Path,
 ) -> None:
     # The users DB taps this sink: it must see every fetched event as a
-    # (admin_log_id, user_id, joined, left) tuple -- even on the silent
-    # baseline run where nobody is greeted.
+    # MemberEvent -- even on the silent baseline run where nobody is
+    # greeted.
     """Check on event sink fires for every event incl baseline."""
-    seen: list[tuple[int, int, bool, bool]] = []
+    seen: list[userchat.MemberEvent] = []
     client = _FakeClient([_join(1, 100), _leave(2, 100)])
     g = greeter.Greeter(
-        client, _params(), greeter.GreeterIO(tmp_path / 'g.json', seen.append)
+        _account(client),
+        _params(),
+        greeter.GreeterIO(tmp_path / 'g.json', seen.append),
     )
     asyncio.run(g.sync())  # baseline: no DMs, but the sink still fires
     assert client.dms == []
-    assert seen == [(1, 100, True, False), (2, 100, False, True)]
+    assert seen == [
+        userchat.MemberEvent(1, 100, joined=True),
+        userchat.MemberEvent(2, 100, left=True),
+    ]
 
 
 def test_first_run_is_a_silent_baseline(tmp_path: Path) -> None:
@@ -297,11 +317,13 @@ def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
     """Check state persists cursor and counter."""
     path = tmp_path / 'g.json'
     client = _FakeClient([_join(1, 1)])
-    g = greeter.Greeter(client, _params(), greeter.GreeterIO(path))
+    g = greeter.Greeter(_account(client), _params(), greeter.GreeterIO(path))
     asyncio.run(g.sync())
     g.state.dm_today = 3
     g._save()
-    fresh = greeter.Greeter(client, _params(), greeter.GreeterIO(path))
+    fresh = greeter.Greeter(
+        _account(client), _params(), greeter.GreeterIO(path)
+    )
     assert fresh.state.started
     assert fresh.state.last_event_id == 1
     assert fresh.state.dm_today == _DM_TODAY
@@ -311,11 +333,13 @@ def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
     """Check channel switch resets the baseline."""
     path = tmp_path / 'g.json'
     client = _FakeClient([_join(9, 1)])
-    g = greeter.Greeter(client, _params(channel=-100), greeter.GreeterIO(path))
+    g = greeter.Greeter(
+        _account(client), _params(channel=-100), greeter.GreeterIO(path)
+    )
     asyncio.run(g.sync())  # baseline on channel -100 (cursor 9)
     assert g.state.started
     g2 = greeter.Greeter(
-        client, _params(channel=-200), greeter.GreeterIO(path)
+        _account(client), _params(channel=-200), greeter.GreeterIO(path)
     )
     assert g2.state.started is False  # different channel -> re-baseline
     assert g2.state.last_event_id == 0
@@ -375,7 +399,7 @@ def test_sleep_defers_events_until_wake(tmp_path: Path) -> None:
     """A join outside the window is deferred; the cursor does not advance."""
     client = _FakeClient([_join(1, 100)])
     g = greeter.Greeter(
-        client,
+        _account(client),
         _params(wake_start_hour=7.0, wake_end_hour=17.0),
         greeter.GreeterIO(tmp_path / 'g.json'),
     )
@@ -395,7 +419,7 @@ def test_sync_now_reports_asleep_with_deferred_count(tmp_path: Path) -> None:
     """/greetnow while asleep says so and how many events wait."""
     client = _FakeClient([_join(1, 100)])
     g = greeter.Greeter(
-        client,
+        _account(client),
         _params(wake_start_hour=7.0, wake_end_hour=17.0),
         greeter.GreeterIO(tmp_path / 'g.json'),
     )

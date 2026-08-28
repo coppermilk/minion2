@@ -16,20 +16,17 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from tests.conftest import install_telethon_stub
-
 if TYPE_CHECKING:
     import pytest
 
-install_telethon_stub()
 
-from minions.userbot.core.matching import is_recent_repost  # noqa: E402
-from minions.userbot.core.models import Config  # noqa: E402
-from minions.userbot.core.models import Group  # noqa: E402
-from minions.userbot.core.models import Item  # noqa: E402
-from minions.userbot.core.models import Posted  # noqa: E402
-from minions.userbot.engines import premium_emoji  # noqa: E402
-from minions.userbot.glue import aggregator  # noqa: E402
+from minions.userbot.core.matching import is_recent_repost
+from minions.userbot.core.models import Config
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Item
+from minions.userbot.core.models import Posted
+from minions.userbot.engines import premium_emoji
+from minions.userbot.glue import aggregator
 
 
 def _post(title: str, age_days: float) -> Posted:

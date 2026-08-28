@@ -84,7 +84,7 @@ class LinkAggregator:
     def cancel(self) -> None:
         """Cancel every in-flight group timeout (before a mode switch)."""
         for group in self.groups:
-            cancel(getattr(group, 'task', None))
+            cancel(group.task)
 
     async def on_message(self, msg: userchat.Msg) -> None:
         """Route one incoming message into its video group."""

@@ -26,7 +26,7 @@ Safety built in here:
     * Privacy failures are skipped; a flood error backs off the cycle.
     * Disabled by default.
 
-Telethon-free (the client is passed in and duck-typed), so the event-handling
+Telethon-free (every request goes through the adapter), so the event-handling
 logic is unit-testable. All texts live in the constants JSON, keeping this
 source ASCII.
 """
@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from minion_core.adapters import userchat
 from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import statefile
@@ -90,20 +91,6 @@ class _FloodStopError(Exception):
     """Raised to abort a DM cycle when Telegram flags us for flooding."""
 
 
-def _norm_event(event: object) -> tuple[int, int, bool, bool]:
-    """(event_id, user_id, joined, left) from a Telethon AdminLogEvent."""
-    joined = bool(
-        getattr(event, 'joined', False)
-        or getattr(event, 'joined_invite', False)
-    )
-    return (
-        int(getattr(event, 'id', 0) or 0),
-        int(getattr(event, 'user_id', 0) or 0),
-        joined,
-        bool(getattr(event, 'left', False)),
-    )
-
-
 def load_greeter_params(
     data: dict[str, object], default_channel: int, mode: str = 'live'
 ) -> GreeterParams:
@@ -139,21 +126,21 @@ class GreeterIO:
     """
 
     path: Path
-    on_event: Callable[[tuple[int, int, bool, bool]], None] | None = None
+    on_event: Callable[[userchat.MemberEvent], None] | None = None
 
 
 class Greeter:
     """Watch a channel's members and DM joiners/leavers (safely, opt-in).
 
-    ``client`` is a Telethon client (duck-typed); ``io`` carries the state
-    file and the optional users-DB event sink.
+    ``account`` is the one door to Telegram; ``io`` carries the state file
+    and the optional users-DB event sink.
     """
 
     def __init__(
-        self, client: object, params: GreeterParams, io: GreeterIO
+        self, account: userchat.Account, params: GreeterParams, io: GreeterIO
     ) -> None:
-        """Bind the client, the tuning params, and the I/O wiring."""
-        self.client = client
+        """Bind the account, the tuning params, and the I/O wiring."""
+        self.account = account
         self.params = params
         self.path = io.path
         self.state = self._load()
@@ -192,7 +179,8 @@ class Greeter:
         self._emit(events)  # feed the users DB before any baseline/DM logic
         if not self.state.started:
             newest = max(
-                (eid for eid, *_ in events), default=self.state.last_event_id
+                (event.id for event in events),
+                default=self.state.last_event_id,
             )
             self.state.last_event_id = newest
             self.state.started = True
@@ -237,7 +225,7 @@ class Greeter:
             self.next_sync = time.time() + self.params.poll_sec
             await asyncio.sleep(self.params.poll_sec)
 
-    def _emit(self, events: list[tuple[int, int, bool, bool]]) -> None:
+    def _emit(self, events: list[userchat.MemberEvent]) -> None:
         """Hand every fetched event to the sink (the users DB), if wired.
 
         Fired for ALL events -- baseline and re-reads included -- so the DB
@@ -251,30 +239,17 @@ class Greeter:
                 self._on_event(event)
             except Exception:
                 log.exception(
-                    'greeter: users sink failed for event %d', event[0]
+                    'greeter: users sink failed for event %d', event.id
                 )
 
-    async def _fetch_events(self) -> list[tuple[int, int, bool, bool]] | None:
+    async def _fetch_events(self) -> list[userchat.MemberEvent] | None:
         """Return new admin-log join/leave events (id > cursor), or None."""
-        try:
-            return [
-                _norm_event(event)
-                async for event in self.client.iter_admin_log(
-                    self.params.channel,
-                    min_id=self.state.last_event_id,
-                    join=True,
-                    leave=True,
-                )
-            ]
-        except Exception:  # noqa: BLE001 -- not admin / unreachable: skip cycle
-            log.warning(
-                'greeter: cannot read admin log of %s (admin?)',
-                self.params.channel,
-            )
-            return None
+        return await self.account.admin_log(
+            self.params.channel, self.state.last_event_id
+        )
 
     async def _process_events(
-        self, events: list[tuple[int, int, bool, bool]]
+        self, events: list[userchat.MemberEvent]
     ) -> None:
         """Greet each new event oldest-first; defer the rest when the cap hits.
 
@@ -293,16 +268,18 @@ class Greeter:
                 len(events),
             )
             return
-        ordered = sorted(events)
+        ordered = sorted(events, key=lambda event: event.id)
         sent = 0
         handled = 0
-        for eid, uid, joined, left in ordered:
+        for event in ordered:
             try:
-                did = await self._handle(uid, joined=joined, left=left)
+                did = await self._handle(
+                    event.user_id, joined=event.joined, left=event.left
+                )
             except _FloodStopError:
                 log.warning('greeter: cap hit; the rest wait for a later poll')
                 break
-            self.state.last_event_id = max(self.state.last_event_id, eid)
+            self.state.last_event_id = max(self.state.last_event_id, event.id)
             handled += 1
             sent += int(did)
             if sent >= self.params.max_dm_per_run:
@@ -340,17 +317,14 @@ class Greeter:
             raise _FloodStopError
         await self._rate_limit()
         body = await self._personalize(uid, text)
-        try:
-            # parse_mode='html' renders <tg-emoji> emoji and <a> links;
-            # link_preview=False stops the return link expanding a preview.
-            await self.client.send_message(
-                uid, body, parse_mode='html', link_preview=False
-            )
-        except Exception as exc:
-            name = type(exc).__name__
-            log.warning('greeter: DM to %s failed (%s)', uid, name)
-            if 'Flood' in name:
-                raise _FloodStopError from exc
+        # html=True renders <tg-emoji> emoji and <a> links; no preview,
+        # so the return link does not expand into a card.
+        if not await self.account.dm(uid, userchat.Text(body, html=True)):
+            log.warning('greeter: DM to %s did not go out', uid)
+            if self.account.strained(userchat.DM):
+                # Telegram just told us to slow down. Carrying on DMing
+                # now is what turns a flood wait into a spam ban.
+                raise _FloodStopError
             return False
         self.state.dm_today += 1
         self._save()
@@ -376,12 +350,8 @@ class Greeter:
         """(@username, t.me/username) for the channel, resolved once."""
         if self._channel_at or self._channel_url:
             return self._channel_at, self._channel_url
-        username = ''
-        try:
-            entity = await self.client.get_entity(self.params.channel)
-            username = str(getattr(entity, 'username', '') or '')
-        except Exception:  # noqa: BLE001 -- unresolvable: leave placeholders empty
-            log.warning('greeter: cannot resolve channel username')
+        peer = await self.account.peer(self.params.channel)
+        username = peer.username if peer is not None else ''
         if username:
             self._channel_at = '@' + username
             self._channel_url = 'https://t.me/' + username
@@ -389,11 +359,8 @@ class Greeter:
 
     async def _first_name(self, uid: int) -> str:
         """Return the user's first name (HTML-escaped), or the fallback."""
-        try:
-            entity = await self.client.get_entity(uid)
-        except Exception:  # noqa: BLE001 -- unresolvable name: use the fallback
-            return html.escape(self.params.fallback_name)
-        raw = str(getattr(entity, 'first_name', '') or '').strip()
+        peer = await self.account.peer(uid)
+        raw = peer.first_name.strip() if peer is not None else ''
         return html.escape(raw or self.params.fallback_name)
 
     def _daily_budget_left(self) -> bool:

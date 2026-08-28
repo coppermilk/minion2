@@ -45,7 +45,6 @@ from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
-from minions.userbot.core.client import build_client
 from minions.userbot.core.config import CONSTANTS_FILE
 from minions.userbot.core.config import STATE_FILE
 from minions.userbot.core.config import apply_persona
@@ -69,6 +68,7 @@ from minions.userbot.engines import greeter
 from minions.userbot.engines import reactions
 from minions.userbot.engines import stories
 from minions.userbot.engines import users
+from minions.userbot.engines.premium_emoji import PremiumMessage
 from minions.userbot.engines.premium_emoji import build_premium_message
 from minions.userbot.glue.aggregator import AggregatorDeps
 from minions.userbot.glue.aggregator import LinkAggregator
@@ -87,8 +87,6 @@ from minions.userbot.glue.users import AudienceLog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from telethon import TelegramClient
 
     from minions.userbot.core import relationship
 
@@ -110,10 +108,9 @@ class Userbot:
     status/heartbeat loop.
     """
 
-    def __init__(self, client: TelegramClient, config: Config) -> None:
+    def __init__(self, account: userchat.Account, config: Config) -> None:
         """Load the constants and assemble every service."""
         here = Path(__file__)
-        self.client = client
         self.config = config
         self.consts = load_constants(here.with_name(CONSTANTS_FILE))
         self.settings = read_json(here.with_name(CONSTANTS_FILE))
@@ -138,9 +135,10 @@ class Userbot:
         self.rescan_task: asyncio.Task[None] | None = None
         self.stories_task: asyncio.Task[None] | None = None
         rt = codec.section(self.settings, 'runtime')
-        # One door to Telegram, one gate in front of it. Everything this
-        # host and its services send should end up going through here.
-        self.account = userchat.Account(client, userchat.paces(rt))
+        # One door to Telegram, one gate in front of it: every service this
+        # host builds is handed the same account, so there is no second way
+        # out and nothing that skips the pacing.
+        self.account = account
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
         # The liveness probe (get_me) is the only ALWAYS-ON Telegram request;
         # firing it every 60s status tick hammered the server for no reason.
@@ -244,7 +242,7 @@ class Userbot:
             enabled=self.modes.enabled('greeter'),
         )
         self.greeter = greeter.Greeter(
-            self.client,
+            self.account,
             greeter_params,
             greeter.GreeterIO(
                 self.modes.service_dir('greeter') / 'greeter_state.json',
@@ -267,7 +265,7 @@ class Userbot:
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
         self.cabinet = Cabinet(
             CabinetDeps(
-                client=self.client,
+                account=self.account,
                 chat=self.config.source,
                 roster=comod.CabinetRoster(pdir / 'comod.json'),
                 params=comod.load_comod_params(self.settings),
@@ -303,19 +301,24 @@ class Userbot:
     async def _send_status(self, text: str) -> None:
         """Send an operator report, rendering its premium-emoji markup.
 
-        /status, /requeue and /reactnow embed `<tg-emoji>` tags for the chosen
-        reactions/likes and the pool previews; build_premium_message turns them
-        into
-        custom-emoji entities, so the REAL premium emoji show (a non-premium
-        viewer still sees the fallback glyph). Text without tags sends plain.
+        /status, /requeue and /reactnow embed `<tg-emoji>` tags for the
+        chosen reactions/likes and the pool previews; build_premium_message
+        turns them into custom-emoji spans, so the REAL premium emoji show
+        (a non-premium viewer still sees the fallback glyph). Text without
+        tags sends plain.
         """
-        message = build_premium_message(text)
-        await self.client.send_message(
+        await self.show(build_premium_message(text))
+
+    async def show(self, message: PremiumMessage) -> None:
+        """Send an already-composed premium message to the operator."""
+        await self.account.send(
             self.config.source,
-            message.text,
-            formatting_entities=userchat.entities(message.text, message.spans),
-            link_preview=False,
+            userchat.Text(message.text, message.spans),
         )
+
+    async def say(self, text: str) -> None:
+        """Send a plain operator line to the source chat."""
+        await self.account.send(self.config.source, userchat.Text(text))
 
     async def chat_labels(self) -> dict[int, str]:
         """Resolve every chat shown in /status to a readable @name or title."""
@@ -357,16 +360,12 @@ class Userbot:
 
     async def _chat_label(self, chat_id: int) -> str:
         """Return a chat's @username (or "title") for /status, else id."""
-        try:
-            entity = await self.client.get_entity(chat_id)
-        except Exception:  # noqa: BLE001 -- not cached/reachable: show the id
+        peer = await self.account.peer(chat_id)
+        if peer is None:
             return str(chat_id)
-        username = getattr(entity, 'username', None)
-        if username:
-            return f'@{username} ({chat_id})'
-        title = getattr(entity, 'title', None) or getattr(
-            entity, 'first_name', None
-        )
+        if peer.username:
+            return f'@{peer.username} ({chat_id})'
+        title = peer.title or peer.first_name
         return f'"{title}" ({chat_id})' if title else str(chat_id)
 
     async def status_loop(self) -> None:
@@ -425,13 +424,26 @@ class Userbot:
         all already proves the event loop is not stalled.
         """
         try:
-            await asyncio.wait_for(
-                self.client.get_me(), timeout=self._probe_timeout
+            alive = await asyncio.wait_for(
+                self.account.me(), timeout=self._probe_timeout
             )
-        except Exception:  # noqa: BLE001 -- wedged/unreachable: let it go stale
+        except TimeoutError:
+            alive = None
+        if alive is None:
             log.warning('watchdog: liveness probe failed; heartbeat stale')
             return
         touch_health()
+
+
+def _login(session: Path, api_id: str, api_hash: str) -> userchat.Login:
+    """Build the session credentials, flood knob included."""
+    rt = load_runtime()
+    threshold = rt.get(
+        'flood_sleep_threshold_sec', userchat.DEFAULT_FLOOD_SLEEP
+    )
+    return userchat.Login(
+        session, int(api_id), api_hash, float(str(threshold))
+    )
 
 
 async def main() -> None:
@@ -448,8 +460,9 @@ async def main() -> None:
 
     session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
-    client = build_client(session_path, int(api_id), api_hash)
-    bot = Userbot(client, config)
+    client = userchat.connect(_login(session_path, api_id, api_hash))
+    account = userchat.Account(client, userchat.paces(load_runtime()))
+    bot = Userbot(account, config)
 
     # Listen everywhere the account can see: the /emojis preview command works
     # from ANY chat and for ANYONE (it renders back into the source chat);

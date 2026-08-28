@@ -90,9 +90,7 @@ class ServiceModes:
         and destination take effect while the others keep their own modes.
         """
         if self.mode_of(name) == mode:
-            await self.bot.client.send_message(
-                self.bot.config.source, f'{name}: already {mode}'
-            )
+            await self.bot.say(f'{name}: already {mode}')
             return
         self.by_service[name] = mode
         self.save()
@@ -100,9 +98,7 @@ class ServiceModes:
         self.bot.build_profile()
         await self.start_profile(source_backfill=False)
         log.info('service %s -> %s', name, mode)
-        await self.bot.client.send_message(
-            self.bot.config.source, f'{name}: {mode}'
-        )
+        await self.bot.say(f'{name}: {mode}')
 
     async def switch_all(self, mode: str) -> None:
         """Switch every ACTIVE service to MODE (the /test and /live commands).
@@ -123,9 +119,8 @@ class ServiceModes:
         labels = await self.bot.chat_labels()
         targets = self.bot.live_targets()
         dest = ', '.join(labels.get(t, str(t)) for t in targets)
-        await self.bot.client.send_message(
-            self.bot.config.source,
-            f'Mode: {self.bot.mode.upper()}. ALL posts now go to: {dest}',
+        await self.bot.say(
+            f'Mode: {self.bot.mode.upper()}. ALL posts now go to: {dest}'
         )
         log.info('mode -> %s, posting to %s', self.bot.mode, targets)
 

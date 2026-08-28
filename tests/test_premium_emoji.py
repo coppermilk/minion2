@@ -22,6 +22,7 @@ from tests.conftest import install_telethon_stub
 
 install_telethon_stub()
 
+
 FIRE = chr(0x1F525)  # non-BMP: one character, two UTF-16 units
 HEART = chr(0x1F49B)  # non-BMP
 CHECK = chr(0x2714)  # BMP: one character, one UTF-16 unit

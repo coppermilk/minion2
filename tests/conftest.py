@@ -40,12 +40,16 @@ class _AnyMeta(type):
 
 
 def install_telethon_stub() -> None:
-    """Register fake Telethon modules so ``aggregator.main`` imports w/o it.
+    """Register fake Telethon modules for the one test that needs them.
 
-    Telethon is a runtime-only extra (``tg``), absent from the test extras,
-    yet the aggregator binds a handful of its names at import. Each stub
-    answers any ``from telethon... import X`` with a throwaway class. Call it
-    before importing ``minions.userbot.main``; idempotent.
+    Telethon is a runtime-only extra (``tg``), absent from the test extras.
+    Only ``test_premium_emoji`` still calls this, and only because it is
+    ABOUT the vendor conversion -- it asserts the offsets and refs the
+    adapter puts into real ``MessageEntity*`` constructors. Every other
+    test now reaches Telegram through ``Account`` and never names the
+    vendor, which is the measurable form of "one door". Each stub answers
+    any ``from telethon... import X`` with a throwaway recording class;
+    idempotent.
     """
     if 'telethon' in sys.modules:
         return

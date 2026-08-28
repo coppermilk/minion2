@@ -13,12 +13,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from minion_core.adapters import userchat
 from minions.userbot.core.render import compose
 from minions.userbot.core.render import render_constants
 from minions.userbot.core.render import sample_groups
 
 if TYPE_CHECKING:
+    from minion_core.adapters import userchat
     from minions.userbot.main import Userbot
 
 log = logging.getLogger('userbot')
@@ -191,28 +191,18 @@ class CommandRouter:
             return False
         if not text.startswith('/') or ' ' in text or not text[1:].isalpha():
             return False
-        await self.bot.client.send_message(
-            self.bot.config.source, self.bot.consts.help_hint
-        )
+        await self.bot.say(self.bot.consts.help_hint)
         return True
 
     async def help_report(self) -> None:
         """Send the plain-language command menu (/help and /start)."""
-        await self.bot.client.send_message(
-            self.bot.config.source,
-            self.bot.consts.help_text,
-            link_preview=False,
-        )
+        await self.bot.say(self.bot.consts.help_text)
         log.info('sent help menu to %s', self.bot.config.source)
 
     async def show_constants(self) -> None:
         """Post a preview of the whole unified emoji array to the watcher."""
         message = render_constants(self.bot.consts)
-        await self.bot.client.send_message(
-            self.bot.config.source,
-            message.text,
-            formatting_entities=userchat.entities(message.text, message.spans),
-        )
+        await self.bot.show(message)
         log.info(
             'sent premium constants preview to %s', self.bot.config.source
         )
@@ -224,14 +214,7 @@ class CommandRouter:
             message = compose(
                 group, self.bot.config.platforms, self.bot.consts
             )
-            await self.bot.client.send_message(
-                self.bot.config.source,
-                message.text,
-                formatting_entities=userchat.entities(
-                    message.text, message.spans
-                ),
-                link_preview=False,
-            )
+            await self.bot.show(message)
         log.info(
             'sent %d QC preview posts to %s',
             len(groups),
@@ -249,5 +232,5 @@ class CommandRouter:
     async def greet_now(self) -> None:
         """Force the greeter to poll+process now (the /greetnow command)."""
         summary = await self.bot.greeter.sync_now()
-        await self.bot.client.send_message(self.bot.config.source, summary)
+        await self.bot.say(summary)
         log.info('greetnow: %s', summary)

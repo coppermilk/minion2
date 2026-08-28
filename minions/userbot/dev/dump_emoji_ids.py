@@ -19,10 +19,10 @@ import asyncio
 import logging
 import os
 
-from telethon import TelegramClient
 from telethon import events
 from telethon.tl.types import MessageEntityCustomEmoji
 
+from minion_core.adapters import userchat
 from minions.userbot.core.config import load_env
 from minions.userbot.core.config import resolve_session_path
 
@@ -67,7 +67,12 @@ async def main() -> None:
 
     session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
-    client = TelegramClient(str(session_path), int(api_id), api_hash)
+    # Through connect(), not a bare TelegramClient: this opens the SAME
+    # session file the bot uses, and opening it without the WAL journal is
+    # how that file gets corrupted.
+    client = userchat.connect(
+        userchat.Login(session_path, int(api_id), api_hash)
+    )
     client.add_event_handler(_report, events.NewMessage(outgoing=True))
 
     await client.start()

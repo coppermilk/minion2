@@ -18,14 +18,11 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from minion_core.adapters import files
+from minion_core.adapters import userchat
 from minions.userbot.core.config import PACKAGE_DIR
 from minions.userbot.engines import comod
-
-if TYPE_CHECKING:
-    from telethon import TelegramClient
 
 log = logging.getLogger('userbot')
 
@@ -34,7 +31,7 @@ log = logging.getLogger('userbot')
 class CabinetDeps:
     """Everything the cabinet may reach; nothing else is in scope."""
 
-    client: TelegramClient
+    account: userchat.Account
     chat: int  # where the cabinet posts (the source control chat)
     roster: comod.CabinetRoster
     params: comod.ComodParams
@@ -64,8 +61,8 @@ class Cabinet:
             target = args[1].lstrip('@') if len(args) > 1 else ''
             if not target:
                 hint = str(self.deps.params.templates.get('kick_hint', ''))
-                await self.deps.client.send_message(
-                    self.deps.params_chat(), hint
+                await self.deps.account.send(
+                    self.deps.params_chat(), userchat.Text(hint)
                 )
                 return
             self.deps.roster.remove(target)
@@ -90,19 +87,13 @@ class Cabinet:
         chat = self.deps.params_chat()
         image = self._render_cabinet(residents)
         n = len(residents)
+        card = userchat.Text(caption, html=True)
         if image is not None:
-            try:
-                await self.deps.client.send_file(
-                    chat, str(image), caption=caption, parse_mode='html'
-                )
-            except Exception:  # noqa: BLE001 -- bad render falls back to text
-                log.warning('comod: image send failed; posting as text')
-            else:
+            if await self.deps.account.send_photo(chat, image, card):
                 log.info('comod: posted cabinet (%d in) to %s', n, chat)
                 return
-        await self.deps.client.send_message(
-            chat, caption, parse_mode='html', link_preview=False
-        )
+            log.warning('comod: image send failed; posting as text')
+        await self.deps.account.send(chat, card)
         log.info('comod: posted cabinet text (%d in) to %s', n, chat)
 
     def _render_cabinet(self, residents: list[tuple[str, str]]) -> Path | None:
@@ -189,8 +180,9 @@ class Cabinet:
         entries = self.deps.roster.entries(time.time())
         chat = self.deps.params_chat()
         if not entries:
-            await self.deps.client.send_message(
-                chat, str(tpl.get('propiska_empty', '')), parse_mode='html'
+            await self.deps.account.send(
+                chat,
+                userchat.Text(str(tpl.get('propiska_empty', '')), html=True),
             )
             return
         line = str(tpl.get('propiska_line', '{heart} {nick} {date}'))
@@ -205,9 +197,7 @@ class Cabinet:
         head = str(tpl.get('propiska_head', ''))
         body = '\n'.join(rows)
         text = f'{head}\n{body}' if head else body
-        await self.deps.client.send_message(
-            chat, text, parse_mode='html', link_preview=False
-        )
+        await self.deps.account.send(chat, userchat.Text(text, html=True))
         log.info('comod: posted propiska (%d) to %s', len(entries), chat)
 
     def _heart_html(self) -> str:
