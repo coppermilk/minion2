@@ -105,14 +105,14 @@ def load_greeter_params(
     time, so the poll is only the diff-based safety net.
     """
     cfg = codec.engine(data, 'greeter')
-    default_poll = float(cfg.get('poll_sec') or GreeterParams.poll_sec)
+    default_poll = codec.num(cfg.get('poll_sec')) or GreeterParams.poll_sec
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
     return codec.decode(
         GreeterParams,
         cfg,
         {
-            'channel': int(cfg.get('channel') or default_channel),
-            'poll_sec': float(cfg.get(poll_key) or default_poll),
+            'channel': codec.whole(cfg.get('channel')) or default_channel,
+            'poll_sec': codec.num(cfg.get(poll_key)) or default_poll,
         },
     )
 
@@ -394,7 +394,7 @@ class Greeter:
         raw = statefile.read_state(self.path)
         if not raw:  # before the 'last_event_id' probe: nothing is not legacy
             return GreeterState()
-        stored = int(raw.get('channel', 0) or 0)
+        stored = codec.whole(raw.get('channel'))
         if stored and stored != self.params.channel:
             log.warning(
                 'greeter: state was for channel %s, now %s -- re-baselining',
@@ -402,16 +402,16 @@ class Greeter:
                 self.params.channel,
             )
             return GreeterState()
-        carried = {int(m) for m in (raw.get('left') or [])}
+        carried = {codec.whole(m) for m in codec.rows(raw.get('left'))}
         if 'last_event_id' not in raw:
             log.info('greeter: migrating to admin-log, re-baselining')
             return GreeterState(left=carried)
         return GreeterState(
             left=carried,
             started=bool(raw.get('started', False)),
-            last_event_id=int(raw.get('last_event_id', 0) or 0),
-            dm_day=str(raw.get('dm_day', '')),
-            dm_today=int(raw.get('dm_today', 0)),
+            last_event_id=codec.whole(raw.get('last_event_id')),
+            dm_day=codec.text(raw.get('dm_day')),
+            dm_today=codec.whole(raw.get('dm_today')),
         )
 
     def _save(self) -> None:

@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
+from minions.userbot.core import codec
+from minions.userbot.core.models import Emoji
 from minions.userbot.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
@@ -64,7 +66,7 @@ PROJECT_ENV = Path(__file__).resolve().parents[2] / '.env'
 class Consts:
     """Editable texts and the leading premium emoji, loaded from JSON."""
 
-    emoji: object
+    emoji: Emoji
     header: str
     currency: str
     quote: str
@@ -107,20 +109,31 @@ def _read_json(path: Path) -> dict[str, object]:
     return {}
 
 
+def _emoji(entry: dict[str, object]) -> Emoji:
+    """Read the leading premium emoji from its {id, fallback} block."""
+    return Emoji(
+        id=codec.text(entry.get('id')),
+        fallback=codec.text(entry.get('fallback')),
+    )
+
+
 def _load_constants(path: Path) -> Consts:
     """Load the shout-out constants from JSON, ignoring unknown keys."""
     data = _read_json(path)
-    reactions = [str(r) for r in (data.get('donate_reactions') or [''])]
+    reactions = [str(r) for r in codec.rows(data.get('donate_reactions'))]
     return Consts(
-        emoji=data.get('donate_emoji') or '',
-        header=str(data.get('donate_header') or '{name}: {amount}'),
-        currency=str(data.get('donate_currency', '')),
-        quote=str(data.get('donate_quote') or '{message}'),
+        emoji=_emoji(codec.table(data.get('donate_emoji'))),
+        header=codec.text(data.get('donate_header')) or '{name}: {amount}',
+        currency=codec.text(data.get('donate_currency')),
+        quote=codec.text(data.get('donate_quote')) or '{message}',
         reactions=reactions or [''],
-        separator=str(data.get('donate_separator', '')),
-        arrow=str(data.get('donate_arrow') or ' -> '),
-        link_text=str(data.get('donate_link_text') or 'link'),
-        links=[dict(row) for row in (data.get('donate_links') or [])],
+        separator=codec.text(data.get('donate_separator')),
+        arrow=codec.text(data.get('donate_arrow')) or ' -> ',
+        link_text=codec.text(data.get('donate_link_text')) or 'link',
+        links=[
+            {k: str(v) for k, v in codec.table(row).items()}
+            for row in codec.rows(data.get('donate_links'))
+        ],
         usage=str(
             data.get('donate_usage')
             or 'Usage: /donate <name> <amount> <message>'

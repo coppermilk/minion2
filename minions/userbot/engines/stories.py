@@ -602,12 +602,12 @@ class StoryBrain:
         rows = raw.get('log')
         return StoryState(
             last_view=float(raw.get('last_view', 0.0)),  # type: ignore[arg-type]
-            next_session_at=float(block.get('next_at', 0.0)),
-            session_start_at=float(block.get('start_at', 0.0)),
-            session_last_at=float(block.get('last_at', 0.0)),
-            total_views=int(raw.get('total_views', 0)),  # type: ignore[arg-type]
-            log=[_view(r) for r in (rows if isinstance(rows, list) else [])],
-            last_react=float(raw.get('last_react', 0.0)),  # type: ignore[arg-type]
+            next_session_at=codec.num(block.get('next_at')),
+            session_start_at=codec.num(block.get('start_at')),
+            session_last_at=codec.num(block.get('last_at')),
+            total_views=codec.whole(raw.get('total_views')),
+            log=[_view(r) for r in codec.rows(rows)],
+            last_react=codec.num(raw.get('last_react')),
         )
 
     def _save(self) -> None:
@@ -660,9 +660,9 @@ def load_story_params(
     """
     cfg = codec.engine(data, 'stories')
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
-    default_poll = float(cfg.get('poll_sec', StoryParams.poll_sec))
+    default_poll = codec.num(cfg.get('poll_sec'), StoryParams.poll_sec)
     return codec.decode(
         StoryParams,
         cfg,
-        {'poll_sec': float(cfg.get(poll_key, default_poll))},
+        {'poll_sec': codec.num(cfg.get(poll_key), default_poll)},
     )

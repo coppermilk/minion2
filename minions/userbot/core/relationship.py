@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
+from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import state
 
@@ -244,10 +245,10 @@ class Ledger:
 
     def restore(self, cursor: Mapping[str, object]) -> None:
         """Reload the daily counters from the engine's cursor block."""
-        self.take_day = str(cursor.get('take_day', ''))
-        self.take_today = int(cursor.get('take_today', 0) or 0)
-        self.recip_day = str(cursor.get('recip_day', ''))
-        self.recip_today = int(cursor.get('recip_today', 0) or 0)
+        self.take_day = codec.text(cursor.get('take_day'))
+        self.take_today = codec.whole(cursor.get('take_today'))
+        self.recip_day = codec.text(cursor.get('recip_day'))
+        self.recip_today = codec.whole(cursor.get('recip_today'))
 
 
 def warmth(ledger: Ledger, control: Control) -> list[Warmth]:

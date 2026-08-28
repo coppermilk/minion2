@@ -24,6 +24,7 @@ from minions.userbot import main
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Consts
+from minions.userbot.core.models import Emoji
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
 from minions.userbot.core.render import Glyphs
@@ -148,8 +149,8 @@ def _bot(tmp_path: Path) -> main.Userbot:
         active_start=7.0,
         active_end=17.0,
         tz_offset_hours=0.0,
-        pool=(reactions.ReactionEmoji('11', 'a', 1.0, ()),),
-        like_pool=(reactions.ReactionEmoji('22', 'b', 1.0, ()),),
+        pool=(Emoji('11', 'a', base=1.0, tags=()),),
+        like_pool=(Emoji('22', 'b', base=1.0, tags=()),),
     )
     store = StateStore(tmp_path / 'peers.db', tmp_path / 'cursors.json')
     brain = reactions.ReactionBrain(params, store)

@@ -244,9 +244,7 @@ class StoryWatch:
         if recent:
             lines.append('  recent views:')
             lines += [
-                f'    - {e.get("label") or e.get("peer_id")}:'
-                f' {e.get("count")} story(s)'
-                f' {iso(float(str(e.get("ts", 0))))}'
+                f'    - {e.label or e.peer_id}: {e.count} story(s) {iso(e.ts)}'
                 for e in recent
             ]
         else:

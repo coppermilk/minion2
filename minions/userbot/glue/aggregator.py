@@ -19,6 +19,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
+from minions.userbot.core import codec
 from minions.userbot.core.matching import action_ok
 from minions.userbot.core.matching import duration_seconds
 from minions.userbot.core.matching import extract_fields
@@ -381,16 +382,23 @@ class LinkAggregator:
 
     def _restore_posted(self, data: dict[str, object]) -> None:
         """Load the posted log; migrate an old processed_ids-only file."""
-        self.posted = [posted_from_dict(p) for p in data.get('posted') or []]
+        self.posted = [
+            posted_from_dict(codec.table(p))
+            for p in codec.rows(data.get('posted'))
+        ]
         self.processed_ids = {i for p in self.posted for i in p.msg_ids}
         # Back-compat: an old file has no posted log, only raw processed_ids --
         # seed the dedup set from it so a restart still never re-posts.
-        self.processed_ids |= set(data.get('processed_ids') or [])
+        self.processed_ids |= {
+            codec.whole(i) for i in codec.rows(data.get('processed_ids'))
+        }
 
     def _restore_pending(self, data: dict[str, object]) -> None:
         """Load pending groups (new 'pending' key or old 'groups') + re-arm."""
-        raw_groups = data.get('pending') or data.get('groups') or []
+        raw_groups = codec.rows(data.get('pending')) or codec.rows(
+            data.get('groups')
+        )
         for raw in raw_groups:
-            group = pending_from_dict(raw)
+            group = pending_from_dict(codec.table(raw))
             self.groups.append(group)
             self._arm(group)

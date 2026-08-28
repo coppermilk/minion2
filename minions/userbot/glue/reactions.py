@@ -23,6 +23,7 @@ from minion_core.adapters import userchat
 from minions.userbot.core import tasks
 from minions.userbot.core.matching import needs_human
 from minions.userbot.core.models import Comment
+from minions.userbot.core.models import Emoji
 from minions.userbot.core.render import Glyphs
 from minions.userbot.core.render import emoji_markup
 from minions.userbot.core.render import trim
@@ -185,7 +186,7 @@ class CommentWatch:
             root=comment.root,
             when=when,
             text=comment.text,
-            emojis=tuple((s.emoji_id, s.fallback) for s in specs),
+            emojis=tuple((s.id, s.fallback) for s in specs),
             kind=kind,
         )
         self.deps.brain.add_pending(reaction)
@@ -193,7 +194,7 @@ class CommentWatch:
 
     def _choose_reaction(
         self, person: str, comment: Comment
-    ) -> tuple[list[reactions.ReactionEmoji], str] | None:
+    ) -> tuple[list[Emoji], str] | None:
         """Pick (emoji specs, kind) for this comment: a like or a sticker.
 
         A thread STICKER is a message-shaped reply, so it only fits plain
@@ -512,8 +513,7 @@ class CommentWatch:
         if not reaction.emojis:
             return
         emoji_id, fallback = reaction.emojis[0]
-        spec = {'id': emoji_id, 'fallback': fallback}
-        message = RichText().emoji(spec).build()
+        message = RichText().emoji(Emoji(emoji_id, fallback)).build()
         threaded = bool(reaction.root) and reaction.root != reaction.reply_to
         text = userchat.Text(
             message.text,
@@ -560,7 +560,7 @@ class CommentWatch:
         if not self.deps.brain.params.react_to_posts:
             return
         specs = self.deps.brain.pick_like(f'{target}:{post_id}')
-        emojis = tuple((s.emoji_id, s.fallback) for s in specs)
+        emojis = tuple((s.id, s.fallback) for s in specs)
         if await self.deps.account.react(target, post_id, emojis):
             glyphs = ''.join(fb for _, fb in emojis)
             log.info(

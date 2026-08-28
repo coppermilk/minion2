@@ -35,6 +35,8 @@ from minion_core.richtext import Span
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from minions.userbot.core.models import Emoji
+
 # <tg-emoji emoji-id="5334681713316479679">X</tg-emoji>
 _TG_EMOJI_RE = re.compile(
     r'<tg-emoji\s+emoji-id="(?P<id>\d+)"\s*>(?P<fallback>.*?)</tg-emoji>',
@@ -167,14 +169,18 @@ class RichText:
         self._at += len(value)
         return self
 
-    def emoji(self, spec: str | dict[str, object]) -> RichText:
-        """Append an emoji: a plain glyph, or a premium ``{id, fallback}``."""
-        if isinstance(spec, dict):
-            fallback = str(spec.get('fallback') or ' ')
-            emoji_id = str(spec.get('id'))
-            self._spans.append(Span(EMOJI, self._at, len(fallback), emoji_id))
-            return self.text(fallback)
-        return self.text(str(spec))
+    def emoji(self, emoji: Emoji) -> RichText:
+        """Append one catalog emoji: premium when it has an id, else plain.
+
+        An entry with no id (including the empty one a missing catalog
+        role falls back to) contributes only its glyph, so an unconfigured
+        decoration renders as nothing rather than as a hole.
+        """
+        if not emoji.id:
+            return self.text(emoji.fallback)
+        glyph = emoji.fallback or ' '
+        self._spans.append(Span(EMOJI, self._at, len(glyph), emoji.id))
+        return self.text(glyph)
 
     def link(self, label: str, url: str) -> RichText:
         """Append an underlined text link."""

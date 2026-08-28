@@ -64,9 +64,9 @@ class ServiceModes:
         relaxed (default 1 hour). Both fall back to ``rescan_sec``.
         """
         cfg = codec.engine(self.bot.settings, 'reactions')
-        default = float(cfg.get('rescan_sec', 300.0))
+        default = codec.num(cfg.get('rescan_sec'), 300.0)
         key = 'rescan_sec_test' if mode == 'test' else 'rescan_sec_live'
-        return float(cfg.get(key, default))
+        return codec.num(cfg.get(key), default)
 
     def channel_for(self, mode: str) -> int:
         """Return the greeter's default channel for MODE (test = test chat)."""

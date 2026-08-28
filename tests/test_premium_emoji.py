@@ -19,6 +19,7 @@ from minion_core.richtext import EMOJI
 from minion_core.richtext import LINK
 from minion_core.richtext import UNDERLINE
 from minion_core.richtext import Span
+from minions.userbot.core.models import Emoji
 from minions.userbot.engines import premium_emoji
 from tests.conftest import install_telethon_stub
 
@@ -112,8 +113,8 @@ def test_rich_text_builder() -> None:
     message = (
         premium_emoji.RichText()
         .text(f'{FIRE}a ')
-        .emoji({'id': CAT_ID, 'fallback': HEART})
-        .emoji(CHECK)
+        .emoji(Emoji(CAT_ID, HEART))
+        .emoji(Emoji(fallback=CHECK))
         .link(f'{FIRE}link', 'https://example.org/')
         .text('!')
         .build()

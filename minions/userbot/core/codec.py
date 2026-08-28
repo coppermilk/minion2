@@ -19,32 +19,63 @@ from __future__ import annotations
 
 from dataclasses import fields
 from typing import TYPE_CHECKING
+from typing import Any
 from typing import TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from collections.abc import Iterable
     from collections.abc import Mapping
 
 T = TypeVar('T')
 
 
+def num(value: object, fallback: float = 0.0) -> float:
+    """Read one JSON value as a float, ``fallback`` when it is not one.
+
+    The five readers below are the whole reason the rest of this package
+    can be type-checked. A parsed JSON value is ``object``, and code that
+    calls ``float(x)`` or ``x.get(k)`` on one is asserting a shape the
+    file is free not to have -- which is a crash on a typo in a config an
+    operator edits by hand. Reading through here answers "what does this
+    key mean if the file is wrong", once, per kind.
+    """
+    return float(value) if isinstance(value, (int, float)) else fallback
+
+
+def whole(value: object, fallback: int = 0) -> int:
+    """Read one JSON value as an int, ``fallback`` when it is not one."""
+    return int(value) if isinstance(value, (int, float)) else fallback
+
+
+def text(value: object, fallback: str = '') -> str:
+    """Read one JSON value as a string, ``fallback`` when it is absent."""
+    return str(value) if value is not None else fallback
+
+
+def rows(value: object) -> list[object]:
+    """Read one JSON value as an array; an empty one when it is not."""
+    return list(value) if isinstance(value, list) else []
+
+
+def table(value: object) -> dict[str, object]:
+    """Read one JSON value as an object; an empty one when it is not."""
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _ints(value: object) -> frozenset[int]:
     """Read a JSON list of hours into a frozen set of ints."""
-    items: Iterable[object] = value if isinstance(value, list) else []
-    return frozenset(int(x) for x in items)  # type: ignore[call-overload]
+    return frozenset(whole(x) for x in rows(value))
 
 
 def _strs(value: object) -> tuple[str, ...]:
     """Read a JSON list into a tuple of strings."""
-    items: Iterable[object] = value if isinstance(value, list) else []
-    return tuple(str(x) for x in items)
+    return tuple(str(x) for x in rows(value))
 
 
-READERS: Mapping[str, Callable[[object], object]] = {
+READERS: Mapping[str, Callable[[Any], object]] = {
     'bool': bool,
-    'int': int,
-    'float': float,
+    'int': whole,
+    'float': num,
     'str': str,
     'frozenset[int]': _ints,
     'tuple[str, ...]': _strs,

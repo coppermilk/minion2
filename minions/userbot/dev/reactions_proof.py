@@ -44,11 +44,15 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from minions.userbot.core.config import CONSTANTS_PATH
 from minions.userbot.core.config import read_json
 from minions.userbot.core.state import StateStore
 from minions.userbot.engines import reactions
+
+if TYPE_CHECKING:
+    from minions.userbot.core.models import Emoji
 
 # A deterministic seed and a fixed "now" so the proof reproduces byte for byte.
 # Midday on a weekday, inside the active window, so reactions are answered
@@ -85,9 +89,7 @@ def _load_params() -> reactions.ReactionParams:
     return reactions.load_reaction_params(read_json(CONSTANTS_PATH))
 
 
-def _payload(
-    specs: list[reactions.ReactionEmoji], reaction: reactions.Reaction
-) -> str:
+def _payload(specs: list[Emoji], reaction: reactions.Reaction) -> str:
     """Return the exact request main would send, rendered for the proof.
 
     'react': a ``ReactionCustomEmoji`` placed ON the comment message in one
@@ -98,7 +100,7 @@ def _payload(
     """
     glyphs = ' '.join(s.fallback for s in specs)
     if reaction.kind == 'reply':
-        ids = ', '.join(s.emoji_id for s in specs)
+        ids = ', '.join(s.id for s in specs)
         return (
             f'      request  : SendMessage(peer={reaction.chat}, '
             f'reply_to=msg {reaction.reply_to}, top_msg_id={reaction.root})\n'
@@ -107,7 +109,7 @@ def _payload(
             f'IN the thread of post {reaction.root})'
         )
     reactions = ', '.join(
-        f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
+        f'ReactionCustomEmoji(document_id={s.id})' for s in specs
     )
     return (
         f'      request  : SendReaction(peer={reaction.chat}, '
@@ -128,7 +130,7 @@ def _post_reaction(
     """
     specs = brain.pick_like(f'{channel}:{post_id}')
     reactions = ', '.join(
-        f'ReactionCustomEmoji(document_id={s.emoji_id})' for s in specs
+        f'ReactionCustomEmoji(document_id={s.id})' for s in specs
     )
     glyphs = ' '.join(s.fallback for s in specs)
     print(
@@ -197,7 +199,7 @@ def _comment(
         root=c.root,
         when=when,
         text=c.text,
-        emojis=tuple((s.emoji_id, s.fallback) for s in specs),
+        emojis=tuple((s.id, s.fallback) for s in specs),
         kind=kind,
     )
     brain.add_pending(reaction)
@@ -215,7 +217,7 @@ def _comment(
 
 def _banner(params: reactions.ReactionParams) -> None:
     """Print the header block: what this is and the live config it reads."""
-    likes = ', '.join(f'{c.emoji_id}({c.fallback})' for c in params.like_pool)
+    likes = ', '.join(f'{c.id}({c.fallback})' for c in params.like_pool)
     print('=' * 72)
     print('PROOF OF WORK -- LIKE REACTIONS on comments (deterministic)')
     print('=' * 72)

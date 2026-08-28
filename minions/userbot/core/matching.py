@@ -19,6 +19,7 @@ from minions.userbot.core.models import parse_iso
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from collections.abc import Mapping
 
     from minions.userbot.core.models import Consts
     from minions.userbot.core.models import Group
@@ -107,7 +108,7 @@ def duration_seconds(text: str) -> int:
     return seconds
 
 
-def action_ok(data: dict[str, object], consts: Consts) -> bool:
+def action_ok(data: Mapping[str, object], consts: Consts) -> bool:
     """Whether the message's action is the one we act on (or no filter set)."""
     if not consts.action_value:
         return True
@@ -134,7 +135,7 @@ def extract_fields(text: str, keys: Iterable[str]) -> dict[str, str]:
 
 
 def parse_item(
-    data: dict[str, object], msg_id: int, fields: dict[str, str]
+    data: Mapping[str, object], msg_id: int, fields: Mapping[str, str]
 ) -> Item | None:
     """Build an Item from a parsed JSON object, or None if incomplete.
 
@@ -156,7 +157,7 @@ def parse_item(
     )
 
 
-def _pick(data: dict[str, object], *keys: str) -> str:
+def _pick(data: Mapping[str, object], *keys: str) -> str:
     """First non-empty value among ``keys`` (handles optional/renamed keys)."""
     for key in keys:
         value = str(data.get(key) or '').strip()

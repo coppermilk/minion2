@@ -19,6 +19,7 @@ from minions.userbot.core import codec
 from minions.userbot.core.models import DEFAULT_FIELDS
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Consts
+from minions.userbot.core.models import Emoji
 
 log = logging.getLogger('userbot')
 
@@ -82,7 +83,7 @@ def _str_list(value: object, default: str) -> list[str]:
     """Return a list of label strings from a JSON list (or a single string)."""
     if isinstance(value, str):
         return [value]
-    return [str(v) for v in value] if value else [default]
+    return [str(v) for v in codec.rows(value)] or [default]
 
 
 # Every premium emoji lives in ONE top-level "emoji" array in the JSON, each
@@ -92,17 +93,26 @@ def _str_list(value: object, default: str) -> list[str]:
 # this order.
 
 
-def emoji_catalog(data: dict[str, object]) -> list[dict[str, object]]:
-    """Return the unified top-level emoji array (each entry a dict)."""
-    raw = data.get('emoji')
-    if not isinstance(raw, list):
-        return []
-    return [dict(e) for e in raw if isinstance(e, dict)]
+def emoji_catalog(data: dict[str, object]) -> list[Emoji]:
+    """Return the unified top-level emoji array, in file order."""
+    return [_emoji(codec.table(e)) for e in codec.rows(data.get('emoji'))]
 
 
-def emoji_of(catalog: list[dict[str, object]], etype: str) -> list[dict]:
-    """Every emoji entry of one ``type`` from the unified catalog."""
-    return [e for e in catalog if e.get('type') == etype]
+def _emoji(entry: dict[str, object]) -> Emoji:
+    """Read one catalog entry; every field optional, none of them fatal."""
+    return Emoji(
+        id=codec.text(entry.get('id')),
+        fallback=codec.text(entry.get('fallback')),
+        kind=codec.text(entry.get('type')),
+        name=codec.text(entry.get('name')),
+        base=codec.num(entry.get('base'), 1.0) or 1.0,
+        tags=tuple(str(t) for t in codec.rows(entry.get('tags'))),
+    )
+
+
+def emoji_of(catalog: list[Emoji], kind: str) -> list[Emoji]:
+    """Every emoji entry of one role from the unified catalog."""
+    return [e for e in catalog if e.kind == kind]
 
 
 def _engine(data: dict[str, object], name: str) -> dict[str, object]:
@@ -138,7 +148,8 @@ def _fan_window(  # noqa: PLR0913,PLR0917 -- the window's start/end/quiet read b
     greeter = _engine(data, 'greeter')
     greeter.setdefault('wake_start_hour', start)
     greeter.setdefault('wake_end_hour', end)
-    outside = [h for h in range(24) if not (start <= h < end)]
+    low, high = codec.num(start), codec.num(end)
+    outside = [h for h in range(24) if not (low <= h < high)]
     _engine(data, 'stories').setdefault(
         'quiet_hours', outside if quiet is None else quiet
     )
@@ -212,36 +223,47 @@ def load_constants(path: Path) -> Consts:
     poster = codec.engine(data, 'aggregator')
     post = codec.section(data, 'post')
     texts = codec.section(data, 'texts')
-    samples = dict(post.get('sample_titles') or {})  # type: ignore[arg-type]
+    samples = codec.table(post.get('sample_titles'))
     catalog = emoji_catalog(data)
-    platforms = emoji_of(catalog, 'platform')
     return Consts(
-        fields={**DEFAULT_FIELDS, **(poster.get('fields') or {})},
-        action_value=str(poster.get('action_value', '')),
-        author=str(post.get('author', '')),
-        announce=list(post.get('announce') or ['']),
-        love=emoji_of(catalog, 'love') or [''],
-        lead=emoji_of(catalog, 'lead') or [''],
-        arrow_down=emoji_of(catalog, 'arrow') or [''],
+        fields={**DEFAULT_FIELDS, **_str_map(poster.get('fields'))},
+        action_value=codec.text(poster.get('action_value')),
+        author=codec.text(post.get('author')),
+        announce=[str(a) for a in codec.rows(post.get('announce'))] or [''],
+        love=emoji_of(catalog, 'love') or [Emoji()],
+        lead=emoji_of(catalog, 'lead') or [Emoji()],
+        arrow_down=emoji_of(catalog, 'arrow') or [Emoji()],
         view_label=_str_list(post.get('view_label'), 'View'),
-        column_separator=str(post.get('column_separator', '  |  ')),
-        rows=list(post.get('rows') or []),
-        platform_emoji={str(e['name']): e for e in platforms if e.get('name')},
-        sample_short=str(samples.get('short') or 'Sample short video'),
-        sample_long=str(samples.get('long') or 'Sample long video'),
-        status_help=str(texts.get('status_help') or ''),
-        help_text=str(texts.get('help') or ''),
-        help_hint=str(texts.get('help_hint') or 'Unknown command. Try /help'),
+        column_separator=codec.text(post.get('column_separator'), '  |  '),
+        rows=[
+            [str(c) for c in codec.rows(r)]
+            for r in codec.rows(post.get('rows'))
+        ],
+        platform_emoji={
+            e.name: e for e in emoji_of(catalog, 'platform') if e.name
+        },
+        sample_short=codec.text(samples.get('short'), 'Sample short video'),
+        sample_long=codec.text(samples.get('long'), 'Sample long video'),
+        status_help=codec.text(texts.get('status_help')),
+        help_text=codec.text(texts.get('help')),
+        help_hint=codec.text(
+            texts.get('help_hint'), 'Unknown command. Try /help'
+        ),
         human_words=tuple(
-            str(w).lower() for w in (texts.get('human_words') or [])
+            str(w).lower() for w in codec.rows(texts.get('human_words'))
         ),
         status={
-            str(k): str(v)
-            for k, v in (texts.get('status') or {}).items()
-            if not str(k).startswith('_')
+            k: str(v)
+            for k, v in codec.table(texts.get('status')).items()
+            if not k.startswith('_')
         },
         emoji_all=catalog,
     )
+
+
+def _str_map(value: object) -> dict[str, str]:
+    """Read a JSON object as a plain string-to-string mapping."""
+    return {k: str(v) for k, v in codec.table(value).items()}
 
 
 def load_runtime() -> dict[str, object]:
@@ -356,17 +378,18 @@ def load_config() -> Config:
             targets=_targets(),
             test_target=_test_target(),
             platforms=platforms,
-            threshold=float(poster.get('title_match') or 0.9),
+            threshold=codec.num(poster.get('title_match')) or 0.9,
             # Three hours by default: platforms can arrive far apart. The wait
             # is a local timer (asyncio.sleep), so it costs Telegram nothing.
-            timeout=float(poster.get('timeout_sec') or 10800),
+            timeout=codec.num(poster.get('timeout_sec')) or 10800,
             # Recent source messages to scan at startup for unprocessed ones.
-            backfill=int(poster.get('backfill') or 100),
+            backfill=codec.whole(poster.get('backfill')) or 100,
             # A video at/above this many seconds is dropped (not a Short).
-            max_duration=int(poster.get('max_duration_sec') or MAX_SHORT_SEC),
+            max_duration=codec.whole(poster.get('max_duration_sec'))
+            or MAX_SHORT_SEC,
             # A week by default: a title posted in the last week is not posted
             # again (matches a typical chat auto-delete window). 0 disables.
-            repost_guard=float(poster.get('repost_guard_sec', 604800)),
+            repost_guard=codec.num(poster.get('repost_guard_sec'), 604800),
             # Also block a title matching any of the last N posted videos, no
             # matter how long ago -- a clock-independent floor so a
             # re-delivered video cannot slip back in until N distinct videos
@@ -374,7 +397,9 @@ def load_config() -> Config:
             # the timeout, then the same title's later platforms (or an
             # auto-delete re-emit) are skipped, not re-posted. 5 by default;
             # 0 disables this window and leaves only the time guard.
-            repost_guard_count=int(poster.get('repost_guard_count', 5)),
+            repost_guard_count=codec.whole(
+                poster.get('repost_guard_count'), 5
+            ),
         )
     except (TypeError, ValueError) as exc:
         msg = f'{CONSTANTS_FILE}: a numeric knob is not a number ({exc})'

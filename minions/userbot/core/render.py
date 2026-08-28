@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.matching import HASHTAG_RE
 from minions.userbot.core.matching import primary
+from minions.userbot.core.models import Emoji
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.engines.premium_emoji import RichText
@@ -107,7 +108,7 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
     for row in rows:
         last = len(row) - 1
         for index, (key, label) in enumerate(row):
-            rich.emoji(consts.platform_emoji.get(key, '')).text(' ')
+            rich.emoji(consts.platform_emoji.get(key, Emoji())).text(' ')
             rich.link(label, group.items[key].url)
             if index != last:
                 pad = ' ' * (widths[index] - len(label))
@@ -116,14 +117,13 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
             rich.text('\n')
 
 
-def _catalog_suffix(entry: dict[str, object]) -> str:
+def _catalog_suffix(entry: Emoji) -> str:
     """Return the trailing id + platform / reaction tags for one entry."""
-    parts = [str(entry.get('id', '?'))]
-    if entry.get('name'):
-        parts.append(str(entry['name']))
-    tags = entry.get('tags')
-    if tags:
-        parts.append('[' + ','.join(str(t) for t in tags) + ']')
+    parts = [entry.id or '?']
+    if entry.name:
+        parts.append(entry.name)
+    if entry.tags:
+        parts.append('[' + ','.join(entry.tags) + ']')
     return ' '.join(parts)
 
 
@@ -131,9 +131,9 @@ def render_constants(consts: Consts) -> PremiumMessage:
     """Render the whole unified emoji array for /emojis, grouped by type."""
     rich = RichText()
     rich.text(f'Premium emoji ({len(consts.emoji_all)})\n\n')
-    by_type: dict[str, list[dict[str, object]]] = {}
+    by_type: dict[str, list[Emoji]] = {}
     for entry in consts.emoji_all:
-        by_type.setdefault(str(entry.get('type', 'other')), []).append(entry)
+        by_type.setdefault(entry.kind or 'other', []).append(entry)
     extra = [t for t in by_type if t not in _EMOJI_ORDER]
     for etype in (*_EMOJI_ORDER, *extra):
         items = by_type.get(etype)

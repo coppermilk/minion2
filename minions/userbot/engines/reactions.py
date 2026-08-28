@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
 from minions.userbot.core import codec
+from minions.userbot.core import config
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
 from minions.userbot.core import state as state_store
@@ -65,6 +66,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from collections.abc import Mapping
     from datetime import datetime
+
+    from minions.userbot.core.models import Emoji
 
 ENGINE = 'reactions'
 """This engine's name in the shared state store."""
@@ -88,16 +91,6 @@ _SATURDAY = 5
 _NOON = 12
 # Calendar month numbers used as context switches.
 _DECEMBER = 12
-
-
-@dataclass(frozen=True)
-class ReactionEmoji:
-    """One premium reaction emoji in the pool, with its selection knobs."""
-
-    emoji_id: str
-    fallback: str
-    base: float  # a priori preference (favourites > 1)
-    tags: tuple[str, ...]  # e.g. ('sleepy',), ('bodry', 'newyear')
 
 
 @dataclass(frozen=True)
@@ -147,15 +140,15 @@ def _reaction(raw: object) -> Reaction | None:
     if not isinstance(raw, dict):
         return None
     try:
-        reply_to = int(raw['reply_to'])  # type: ignore[arg-type]
-        chat = int(raw['chat'])  # type: ignore[arg-type]
+        reply_to = codec.whole(raw['reply_to'])
+        chat = codec.whole(raw['chat'])
     except (KeyError, TypeError, ValueError):
         return None
     return Reaction(
         chat=chat,
         reply_to=reply_to,
-        root=int(raw.get('root', reply_to)),  # type: ignore[arg-type]
-        when=float(raw.get('when', 0.0)),  # type: ignore[arg-type]
+        root=codec.whole(raw.get('root'), reply_to),
+        when=codec.num(raw.get('when')),
         text=str(raw.get('text', '')),
         emojis=_emojis_from_row(raw.get('emojis')),
         kind=str(raw.get('kind', 'react')),
@@ -240,13 +233,13 @@ class ReactionParams:
     session_idle_sec: float = 900.0  # a longer silence ends the session
     session_max_sec: float = 1200.0  # hard cap on one session's span
     max_reply_delay_sec: float = 21600.0  # older than this -> too stale
-    pool: tuple[ReactionEmoji, ...] = ()
+    pool: tuple[Emoji, ...] = ()
     # The LIKE pool: the emoji placed as the default reaction. Chosen
     # pseudo-randomly but DETERMINISTICALLY -- seeded by the target id, so the
     # same comment/post always yields the same like: varied across targets, yet
     # recomputable after a restart (no persisted cursor). Separate from the
     # reaction ``pool``.
-    like_pool: tuple[ReactionEmoji, ...] = ()
+    like_pool: tuple[Emoji, ...] = ()
     # How often (seconds) the bot re-scans the targets on its own -- picking up
     # posts created (and commented on) while it runs, without waiting for a
     # restart or a manual /requeue. 0 turns the auto-rescan off.
@@ -384,7 +377,7 @@ def _context_tags(ts: float, params: ReactionParams) -> frozenset[str]:
     return frozenset(tags)
 
 
-def _mood_bias(reaction: ReactionEmoji, mood: float) -> float:
+def _mood_bias(reaction: Emoji, mood: float) -> float:
     """Tilt to lively reactions when mood is high, sleepy when low."""
     if 'bodry' in reaction.tags:
         return math.exp(mood)
@@ -694,7 +687,7 @@ class ReactionBrain:
             return None
         return weighted_choice(self.rng, slots, weights)
 
-    def pick_like(self, key: str) -> list[ReactionEmoji]:
+    def pick_like(self, key: str) -> list[Emoji]:
         """One like for a target, WEIGHTED and DETERMINISTIC in ``key``.
 
         Drawn from the like pool through the same human machinery as the
@@ -709,7 +702,7 @@ class ReactionBrain:
         """
         return self._choose(self.params.like_pool, key)
 
-    def pick_reaction(self, key: str) -> list[ReactionEmoji]:
+    def pick_reaction(self, key: str) -> list[Emoji]:
         """Pick the thread sticker, WEIGHTED and DETERMINISTIC in ``key``.
 
         Same as ``pick_like`` but drawn from the reaction ``pool``, so a
@@ -722,9 +715,7 @@ class ReactionBrain:
         """
         return self._choose(self.params.pool, key)
 
-    def _choose(
-        self, pool: tuple[ReactionEmoji, ...], key: str
-    ) -> list[ReactionEmoji]:
+    def _choose(self, pool: tuple[Emoji, ...], key: str) -> list[Emoji]:
         """Weighted, reproducible-in-key draw of one emoji; records recency.
 
         Shared by ``pick_like`` and ``pick_reaction``. Weights come from
@@ -741,7 +732,7 @@ class ReactionBrain:
         weights = [self._weight(reaction, now) for reaction in pool]
         roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible-in-key
         chosen = weighted_choice(roll, pool, weights)
-        self.state.reaction_last[chosen.emoji_id] = now  # principle 3: recency
+        self.state.reaction_last[chosen.id] = now  # principle 3: recency
         self._save()
         return [chosen]
 
@@ -834,9 +825,9 @@ class ReactionBrain:
         """Return the persona timezone offset (for the daily counters)."""
         return self.params.tz_offset_hours
 
-    def _weight(self, reaction: ReactionEmoji, now: float) -> float:
+    def _weight(self, reaction: Emoji, now: float) -> float:
         """Return the selection weight: base*recency*mood*context (3,4,5)."""
-        dt = now - self.state.reaction_last.get(reaction.emoji_id, 0.0)
+        dt = now - self.state.reaction_last.get(reaction.id, 0.0)
         weight = reaction.base * recency_penalty(
             dt, self.params.recency_half_life_sec
         )
@@ -860,7 +851,7 @@ class ReactionBrain:
         self.ledger.restore(raw)
         if not raw:
             return ReactionState()
-        queued = [_reaction(row) for row in _rows(raw.get('queue'))]
+        queued = [_reaction(row) for row in codec.rows(raw.get('queue'))]
         return ReactionState(
             mood=float(raw.get('mood', 0.0)),  # type: ignore[arg-type]
             mood_day=str(raw.get('mood_day', '')),
@@ -868,10 +859,13 @@ class ReactionBrain:
             session_start_at=_at(raw, 'start_at'),
             session_last_at=_at(raw, 'last_at'),
             reaction_last=_floats(raw.get('emoji_last')),
-            posts=[(int(c), int(m)) for c, m in _rows(raw.get('posts'))],
+            posts=[
+                (codec.whole(c), codec.whole(m))
+                for c, m in _pairs(raw.get('posts'))
+            ],
             pending=[q for q in queued if q is not None],
             alive=_floats(raw.get('alive')),
-            alive_ts=float(raw.get('alive_at', 0.0)),  # type: ignore[arg-type]
+            alive_ts=codec.num(raw.get('alive_at')),
         )
 
     def _save(self) -> None:
@@ -896,9 +890,17 @@ class ReactionBrain:
         )
 
 
-def _rows(raw: object) -> list[object]:
-    """Return a persisted list, or an empty one for anything else."""
-    return raw if isinstance(raw, list) else []
+_PAIR = 2
+"""A persisted (chat, post) row is exactly two numbers."""
+
+
+def _pairs(raw: object) -> list[tuple[object, object]]:
+    """Return a persisted list of two-item rows, skipping anything else."""
+    return [
+        (row[0], row[1])
+        for row in codec.rows(raw)
+        if isinstance(row, (list, tuple)) and len(row) == _PAIR
+    ]
 
 
 def _floats(raw: object) -> dict[str, float]:
@@ -915,38 +917,20 @@ def _at(cursor: Mapping[str, object], key: str) -> float:
     return float(block.get(key, 0.0))
 
 
-def _emoji(raw: dict[str, object]) -> ReactionEmoji:
-    """One ReactionEmoji from its JSON dict (unknown keys ignored)."""
-    tags = raw.get('tags') or []
-    return ReactionEmoji(
-        emoji_id=str(raw.get('id', '')),
-        fallback=str(raw.get('fallback') or ' '),
-        base=float(raw.get('base') or 1.0),
-        tags=tuple(str(t) for t in tags),
-    )
-
-
 def _peaks(
     value: object,
 ) -> tuple[tuple[float, float, float], ...]:
     """Parse a JSON list of [mean, sigma, weight] peaks."""
-    rows = value if isinstance(value, list) else []
     out = []
-    for row in rows:
-        mean, sigma, weight = row
-        out.append((float(mean), float(sigma), float(weight)))
+    for row in codec.rows(value):
+        mean, sigma, weight = codec.rows(row)
+        out.append((codec.num(mean), codec.num(sigma), codec.num(weight)))
     return tuple(out)
 
 
-def _pool(data: dict[str, object], etype: str) -> tuple[ReactionEmoji, ...]:
+def _pool(data: dict[str, object], kind: str) -> tuple[Emoji, ...]:
     """Build one emoji pool from the unified top-level ``emoji`` array."""
-    top = data.get('emoji')
-    rows = top if isinstance(top, list) else []
-    return tuple(
-        _emoji(e)
-        for e in rows
-        if isinstance(e, dict) and e.get('type') == etype
-    )
+    return tuple(config.emoji_of(config.emoji_catalog(data), kind))
 
 
 def load_reaction_params(data: dict[str, object]) -> ReactionParams:
@@ -975,14 +959,17 @@ def load_reaction_params(data: dict[str, object]) -> ReactionParams:
             # literally now would start scheduling reactions overnight. Kept
             # deliberately; drop the ``or`` to honour a blank list.
             'quiet_hours': frozenset(
-                int(h)
-                for h in (cfg.get('quiet_hours') or ReactionParams.quiet_hours)
+                codec.whole(h)
+                for h in (
+                    codec.rows(cfg.get('quiet_hours'))
+                    or ReactionParams.quiet_hours
+                )
             ),
-            'active_start': float(
-                cfg.get('active_start_hour', ReactionParams.active_start)
+            'active_start': codec.num(
+                cfg.get('active_start_hour'), ReactionParams.active_start
             ),
-            'active_end': float(
-                cfg.get('active_end_hour', ReactionParams.active_end)
+            'active_end': codec.num(
+                cfg.get('active_end_hour'), ReactionParams.active_end
             ),
         },
     )

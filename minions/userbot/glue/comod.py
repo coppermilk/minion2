@@ -62,7 +62,7 @@ class Cabinet:
             if not target:
                 hint = str(self.deps.params.templates.get('kick_hint', ''))
                 await self.deps.account.send(
-                    self.deps.params_chat(), userchat.Text(hint)
+                    self.deps.chat, userchat.Text(hint)
                 )
                 return
             self.deps.roster.remove(target)
@@ -84,7 +84,7 @@ class Cabinet:
         active = self.deps.roster.active(now)
         residents = comod.by_amount(active)[: self.deps.params.max_shelves]
         caption = self._cabinet_caption(residents)
-        chat = self.deps.params_chat()
+        chat = self.deps.chat
         image = self._render_cabinet(residents)
         n = len(residents)
         card = userchat.Text(caption, html=True)
@@ -102,7 +102,7 @@ class Cabinet:
         None whenever no template photo is configured (or is missing) or the
         draw fails -- the caller then posts a plain-text roster instead.
         """
-        template = self.deps.params_asset(self.deps.params.template_path)
+        template = self._comod_asset(self.deps.params.template_path)
         if template is None or not template.is_file():
             return None
         out = self.deps.work_dir / 'comod_render.jpg'
@@ -114,10 +114,8 @@ class Cabinet:
                     # Biggest amount on the biggest shelf (area-ranked).
                     comod.assign_labels(residents, self.deps.params.slots),
                     list(self.deps.params.slots),
-                    font_path=self.deps.params_font(
-                        self.deps.params.font_path
-                    ),
-                    cyrillic_font_path=self.deps.params_font(
+                    font_path=self._comod_font(self.deps.params.font_path),
+                    cyrillic_font_path=self._comod_font(
                         self.deps.params.font_cyrillic_path
                     ),
                     ref_size=self.deps.params.ref_size,
@@ -148,7 +146,7 @@ class Cabinet:
 
         Empty lets ``render_cabinet`` fall back to its system-font search.
         """
-        path = self.deps.params_asset(rel)
+        path = self._comod_asset(rel)
         return str(path) if path is not None and path.is_file() else ''
 
     def _cabinet_caption(self, residents: list[tuple[str, str]]) -> str:
@@ -178,7 +176,7 @@ class Cabinet:
         """
         tpl = self.deps.params.templates
         entries = self.deps.roster.entries(time.time())
-        chat = self.deps.params_chat()
+        chat = self.deps.chat
         if not entries:
             await self.deps.account.send(
                 chat,

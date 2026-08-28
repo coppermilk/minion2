@@ -114,7 +114,7 @@ class CabinetRoster:
         fresh = {
             n: e
             for n, e in roster.items()
-            if now - float(e['at']) < COMOD_TTL_SEC
+            if now - codec.num(e['at']) < COMOD_TTL_SEC
         }
         self._write(fresh)
 
@@ -140,9 +140,9 @@ class CabinetRoster:
         """
         roster = self._load()
         fresh = [
-            (float(e['at']), n, str(e['amount']))
+            (codec.num(e['at']), n, str(e['amount']))
             for n, e in roster.items()
-            if now - float(e['at']) < COMOD_TTL_SEC
+            if now - codec.num(e['at']) < COMOD_TTL_SEC
         ]
         fresh.sort(key=lambda row: row[0], reverse=True)
         return [(nick, amount, at) for at, nick, amount in fresh]
@@ -198,26 +198,25 @@ def _tz_offset(data: dict[str, object]) -> float:
 def load_comod_params(data: dict[str, object]) -> ComodParams:
     """Load the cabinet's params from the constants JSON 'comod' section."""
     cfg = codec.engine(data, 'comod')
-    templates = cfg.get('templates')
-    templates = templates if isinstance(templates, dict) else {}
-    render = cfg.get('render') if isinstance(cfg.get('render'), dict) else {}
-    render = render or {}
+    render = codec.table(cfg.get('render'))
     slots = _slots(render.get('slots'))
     return ComodParams(
-        templates=templates,
-        donate_link=str(cfg.get('donate_link', '')),
-        amazon_link=str(cfg.get('amazon_link', '')),
-        template_path=str(render.get('template', '')),
-        font_path=str(render.get('font', '')),
-        font_cyrillic_path=str(render.get('font_cyrillic', '')),
-        base_size=int(render.get('base_size') or 40),
-        amount_scale=float(render.get('amount_scale') or 0.75),
+        templates={
+            k: str(v) for k, v in codec.table(cfg.get('templates')).items()
+        },
+        donate_link=codec.text(cfg.get('donate_link')),
+        amazon_link=codec.text(cfg.get('amazon_link')),
+        template_path=codec.text(render.get('template')),
+        font_path=codec.text(render.get('font')),
+        font_cyrillic_path=codec.text(render.get('font_cyrillic')),
+        base_size=codec.whole(render.get('base_size')) or 40,
+        amount_scale=codec.num(render.get('amount_scale')) or 0.75,
         ref_size=(
-            int(render.get('ref_width') or 1080),
-            int(render.get('ref_height') or 1350),
+            codec.whole(render.get('ref_width')) or 1080,
+            codec.whole(render.get('ref_height')) or 1350,
         ),
         slots=slots,
-        max_shelves=int(render.get('max_shelves') or len(slots)),
+        max_shelves=codec.whole(render.get('max_shelves')) or len(slots),
         text_color=_color(render.get('text_color'), (255, 255, 255)),
         shadow_color=_color(render.get('shadow_color'), (0, 0, 0)),
         hearts=_hearts(cfg.get('hearts')),

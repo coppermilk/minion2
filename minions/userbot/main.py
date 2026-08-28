@@ -139,13 +139,13 @@ class Userbot:
         # host builds is handed the same account, so there is no second way
         # out and nothing that skips the pacing.
         self.account = account
-        self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
+        self._probe_timeout = codec.num(rt.get('probe_timeout_sec'), 30.0)
         # The liveness probe (get_me) is the only ALWAYS-ON Telegram request;
         # firing it every 60s status tick hammered the server for no reason.
         # Space it to its own gentler cadence -- still well inside the watchdog
         # window -- while the 60s tick keeps doing its LOCAL bookkeeping
         # (uptime learning, pending log) at full resolution.
-        self._probe_interval = float(rt.get('probe_interval_sec', 300.0))
+        self._probe_interval = codec.num(rt.get('probe_interval_sec'), 300.0)
         self._last_probe = 0.0
         self.build_profile()
 
@@ -438,12 +438,10 @@ class Userbot:
 def _login(session: Path, api_id: str, api_hash: str) -> userchat.Login:
     """Build the session credentials, flood knob included."""
     rt = load_runtime()
-    threshold = rt.get(
-        'flood_sleep_threshold_sec', userchat.DEFAULT_FLOOD_SLEEP
+    threshold = codec.num(
+        rt.get('flood_sleep_threshold_sec'), userchat.DEFAULT_FLOOD_SLEEP
     )
-    return userchat.Login(
-        session, int(api_id), api_hash, float(str(threshold))
-    )
+    return userchat.Login(session, int(api_id), api_hash, threshold)
 
 
 async def main() -> None:
@@ -494,7 +492,7 @@ async def main() -> None:
     # heartbeat later goes stale -- a hang no restart: policy could catch --
     # so Docker's restart: always recreates the container.
     touch_health()
-    watchdog_sec = float(load_runtime().get('watchdog_sec', 600.0))
+    watchdog_sec = codec.num(load_runtime().get('watchdog_sec'), 600.0)
     threading.Thread(
         target=watchdog, args=(watchdog_sec,), daemon=True
     ).start()

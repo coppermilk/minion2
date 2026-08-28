@@ -13,6 +13,7 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from minions.userbot.core.models import Emoji
 from minions.userbot.core.state import StateStore
 from minions.userbot.engines import reactions
 
@@ -67,13 +68,13 @@ def _params(**over: object) -> object:
         'session_max_sec': 1200.0,
         'max_reply_delay_sec': 86400.0,
         'pool': (
-            reactions.ReactionEmoji('1', 'a', 1.0, ('bodry',)),
-            reactions.ReactionEmoji('2', 'b', 1.0, ('sleepy',)),
+            Emoji('1', 'a', base=1.0, tags=('bodry',)),
+            Emoji('2', 'b', base=1.0, tags=('sleepy',)),
         ),
         'like_pool': (
-            reactions.ReactionEmoji('L1', 'x', 1.0, ()),
-            reactions.ReactionEmoji('L2', 'y', 1.0, ()),
-            reactions.ReactionEmoji('L3', 'z', 1.0, ()),
+            Emoji('L1', 'x', base=1.0, tags=()),
+            Emoji('L2', 'y', base=1.0, tags=()),
+            Emoji('L3', 'z', base=1.0, tags=()),
         ),
         'rescan_sec': 300.0,
     }
@@ -146,8 +147,8 @@ def test_just_used_reaction_is_avoided(tmp_path: Path) -> None:
     brain = _brain(
         tmp_path,
         pool=(
-            reactions.ReactionEmoji('fresh', 'f', 1.0, ('x',)),
-            reactions.ReactionEmoji('used', 'u', 1.0, ('x',)),
+            Emoji('fresh', 'f', base=1.0, tags=('x',)),
+            Emoji('used', 'u', base=1.0, tags=('x',)),
         ),
     )
     now = _ts()
@@ -161,8 +162,8 @@ def test_favourite_base_is_chosen_more(tmp_path: Path) -> None:
     brain = _brain(
         tmp_path,
         pool=(
-            reactions.ReactionEmoji('fav', 'f', 6.0, ('x',)),
-            reactions.ReactionEmoji('rare', 'r', 1.0, ('x',)),
+            Emoji('fav', 'f', base=6.0, tags=('x',)),
+            Emoji('rare', 'r', base=1.0, tags=('x',)),
         ),
     )
     fav, rare = brain.params.pool
@@ -450,8 +451,8 @@ def test_due_now_sets_all_pending_to_now(tmp_path: Path) -> None:
 def test_pick_like_returns_one_from_the_pool(tmp_path: Path) -> None:
     """Check pick like returns one from the pool."""
     brain = _brain(tmp_path)
-    ids = {c.emoji_id for c in brain.params.like_pool}
-    assert brain.pick_like('chat:5001')[0].emoji_id in ids
+    ids = {c.id for c in brain.params.like_pool}
+    assert brain.pick_like('chat:5001')[0].id in ids
 
 
 def test_pick_is_reproducible_for_equal_state(tmp_path: Path) -> None:
@@ -465,8 +466,8 @@ def test_pick_is_reproducible_for_equal_state(tmp_path: Path) -> None:
         _params(), _store(tmp_path / 'b'), random.Random(0)
     )
     a.clock = b.clock = _ts
-    assert a.pick_like('k')[0].emoji_id == b.pick_like('k')[0].emoji_id
-    assert a.pick_reaction('k')[0].emoji_id == b.pick_reaction('k')[0].emoji_id
+    assert a.pick_like('k')[0].id == b.pick_like('k')[0].id
+    assert a.pick_reaction('k')[0].id == b.pick_reaction('k')[0].id
 
 
 def test_pick_avoids_repeats_within_a_burst(tmp_path: Path) -> None:
@@ -476,11 +477,10 @@ def test_pick_avoids_repeats_within_a_burst(tmp_path: Path) -> None:
     # pool at least as large as the burst, every reaction is a different glyph.
     """Check pick avoids repeats within a burst."""
     pool = tuple(
-        reactions.ReactionEmoji(f'L{i}', chr(97 + i), 1.0, ())
-        for i in range(6)
+        Emoji(f'L{i}', chr(97 + i), base=1.0, tags=()) for i in range(6)
     )
     brain = _brain(tmp_path, like_pool=pool)
-    picks = [brain.pick_like(f'k{i}')[0].emoji_id for i in range(6)]
+    picks = [brain.pick_like(f'k{i}')[0].id for i in range(6)]
     assert len(set(picks)) == _BURST_SIZE  # no repeats across the burst
 
 
@@ -489,7 +489,7 @@ def test_pick_records_recency_and_persists(tmp_path: Path) -> None:
     store = _store(tmp_path)
     brain = reactions.ReactionBrain(_params(), store, random.Random(0))
     brain.clock = _ts
-    chosen = brain.pick_like('k')[0].emoji_id
+    chosen = brain.pick_like('k')[0].id
     assert brain.state.reaction_last[chosen] == _ts()
     fresh = reactions.ReactionBrain(_params(), store, random.Random(0))
     assert (
@@ -500,7 +500,7 @@ def test_pick_records_recency_and_persists(tmp_path: Path) -> None:
 def test_pick_like_varies_across_keys(tmp_path: Path) -> None:
     """Check pick like varies across keys."""
     brain = _brain(tmp_path)
-    seen = {brain.pick_like(f'k{i}')[0].emoji_id for i in range(50)}
+    seen = {brain.pick_like(f'k{i}')[0].id for i in range(50)}
     assert len(seen) > 1  # weighted draw: not the same like for every target
 
 
@@ -518,8 +518,8 @@ def test_pick_reaction_returns_one_from_the_reaction_pool(
 ) -> None:
     """Check pick reaction returns one from the reaction pool."""
     brain = _brain(tmp_path)
-    ids = {c.emoji_id for c in brain.params.pool}
-    assert brain.pick_reaction('chat:5001')[0].emoji_id in ids
+    ids = {c.id for c in brain.params.pool}
+    assert brain.pick_reaction('chat:5001')[0].id in ids
 
 
 def test_pending_kind_round_trips(tmp_path: Path) -> None:
@@ -543,8 +543,8 @@ def test_load_reads_the_like_pool() -> None:
             ],
         }
     )
-    assert [c.emoji_id for c in params.like_pool] == ['7']
-    assert [c.emoji_id for c in params.pool] == ['9']
+    assert [c.id for c in params.like_pool] == ['7']
+    assert [c.id for c in params.pool] == ['9']
 
 
 # --- principle 9 support: state persists across restarts
@@ -608,7 +608,7 @@ def test_load_reaction_params_reads_the_pool() -> None:
     )
     assert params.enabled is True
     assert len(params.pool) == 1  # only the type=reaction entry
-    assert params.pool[0].emoji_id == '9'
+    assert params.pool[0].id == '9'
     assert params.pool[0].tags == ('bodry',)
 
 

@@ -14,6 +14,7 @@ import json
 import time
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import codec
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.core.models import Posted
@@ -66,8 +67,8 @@ def posted_from_dict(raw: dict[str, object]) -> Posted:
     return Posted(
         title=str(raw.get('title', '')),
         at=str(raw.get('at', '')),
-        links=dict(raw.get('links') or {}),
-        msg_ids=[int(i) for i in (raw.get('msg_ids') or [])],
+        links={k: str(v) for k, v in codec.table(raw.get('links')).items()},
+        msg_ids=[codec.whole(i) for i in codec.rows(raw.get('msg_ids'))],
     )
 
 
@@ -93,30 +94,35 @@ def pending_dict(
     }
 
 
+def _item(key: str, title: str, value: dict[str, object]) -> Item:
+    """Rebuild one platform's item from its pending block."""
+    return Item(
+        key=key,
+        platform=key,
+        title=title,
+        url=codec.text(value.get('url')),
+        thumbnail=codec.text(value.get('thumbnail')),
+        duration=codec.text(value.get('duration')),
+        msg_id=codec.whole(value.get('msg_id')),
+    )
+
+
 def pending_from_dict(raw: dict[str, object]) -> Group:
     """Rebuild a Group from a pending dict (or an old-schema group dict)."""
     title = str(raw.get('title', ''))
     items = {
-        key: Item(
-            key=key,
-            platform=key,
-            title=title,
-            url=str(value.get('url', '')),
-            thumbnail=str(value.get('thumbnail', '')),
-            duration=str(value.get('duration', '')),
-            msg_id=int(value.get('msg_id', 0)),
-        )
-        for key, value in (raw.get('items') or {}).items()
+        key: _item(key, title, codec.table(value))
+        for key, value in codec.table(raw.get('items')).items()
     }
     since = raw.get('since')
     created_at = (
         parse_iso(str(since))
         if since is not None
-        else float(raw.get('created_at') or time.time())
+        else codec.num(raw.get('created_at')) or time.time()
     )
     return Group(
         title=title,
         items=items,
-        msg_ids=set(raw.get('msg_ids') or []),
+        msg_ids={codec.whole(i) for i in codec.rows(raw.get('msg_ids'))},
         created_at=created_at,
     )

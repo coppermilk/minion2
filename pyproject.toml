@@ -165,6 +165,10 @@ module = [
     'transformers.*',
     'facenet_pytorch.*',
     'google.*',
+    # Telethon ships no stubs. It is imported at exactly one site
+    # (minion_core/adapters/userchat.py, enforced by test_architecture),
+    # so the unchecked surface is that file's vendor calls -- everything
+    # above it deals in this project's own value types.
     'telethon.*',
 ]
 ignore_missing_imports = true
@@ -179,15 +183,6 @@ ignore_missing_imports = true
 module = ['services.*']
 follow_imports = 'skip'
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# The aggregator userbot rides the kernel package tree (minions/userbot) but
-# is a standalone Telethon app, not part of the strict kernel gate -- exactly
-# like services.* above. Telethon is untyped and its event/message objects are
-# duck-typed here, so keep it out of strict checking; ruff (ALL) still lints it.
-# The donate userbot is a sibling Telethon app on its own account, same story.
-module = ['minions.userbot.*', 'minions.donate.*']
-ignore_errors = true
 
 # -------------------------------------------------------------- pytest
 [tool.pytest.ini_options]

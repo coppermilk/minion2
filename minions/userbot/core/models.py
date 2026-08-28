@@ -71,10 +71,6 @@ class Config:
     # source floods that the time window can miss.
     repost_guard: float
     repost_guard_count: int
-    # Minimum seconds between consecutive GetDiscussionMessageRequest calls
-    # (resolving a post's comment thread). They fire in bursts -- the last
-    # watch_posts posts per target on every startup and rescan -- and Telegram
-    # flood-limits them, so we space them out process-wide. 0 disables.
 
 
 @dataclass(frozen=True)
@@ -122,6 +118,29 @@ class Comment:
 
 
 @dataclass(frozen=True)
+class Emoji:
+    """One entry of the unified premium-emoji catalog.
+
+    The whole catalog is a single JSON array, each entry tagged with the
+    role it plays; this is that entry, whichever role it is. The reaction
+    engine used to call the identical record a ``ReactionEmoji`` while the
+    post renderer passed it around as a bare dict -- one concept wearing
+    two costumes, and the dict half is what made this package unreadable
+    to a type checker.
+
+    ``id`` empty means "not a premium emoji": the ``fallback`` glyph is
+    sent as plain text, which is also how an absent entry renders.
+    """
+
+    id: str = ''
+    fallback: str = ''
+    kind: str = ''  # love | lead | arrow | platform | reaction | like
+    name: str = ''  # the platform it stands for, when kind is 'platform'
+    base: float = 1.0  # a priori preference in a reaction pool
+    tags: tuple[str, ...] = ()  # e.g. ('sleepy',), ('bodry', 'newyear')
+
+
+@dataclass(frozen=True)
 class Consts:
     """Randomizable texts and emoji for the post, loaded from JSON."""
 
@@ -129,13 +148,13 @@ class Consts:
     action_value: str
     author: str
     announce: list[str]
-    love: list[object]
-    lead: list[object]  # random premium emoji that leads the caption line
-    arrow_down: list[object]
+    love: list[Emoji]
+    lead: list[Emoji]  # random premium emoji that leads the caption line
+    arrow_down: list[Emoji]
     view_label: list[str]
     column_separator: str
     rows: list[list[str]]
-    platform_emoji: dict[str, object]
+    platform_emoji: dict[str, Emoji]
     sample_short: str
     sample_long: str
     status_help: str  # the /status legend (expected behaviour), from JSON
@@ -149,6 +168,4 @@ class Consts:
     # title/routing/videos/reactions/
     # greeter/users/legend section glyphs + on/off dots + bullet/arrow.
     status: dict[str, str]
-    emoji_all: list[
-        dict[str, object]
-    ]  # unified emoji catalog (new JSON), else []
+    emoji_all: list[Emoji]  # the whole catalog, in file order

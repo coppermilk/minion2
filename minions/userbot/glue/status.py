@@ -30,7 +30,7 @@ STATUS_WARM_PEERS = 3
 
 if TYPE_CHECKING:
     from minions.userbot.core import relationship
-    from minions.userbot.engines import reactions
+    from minions.userbot.core.models import Emoji
     from minions.userbot.main import Userbot
 
 
@@ -49,9 +49,9 @@ def _clock_eta(at: float, tz_offset: float) -> str:
     return f'{clock} (in {"now" if eta <= 0 else fmt_eta(eta)})'
 
 
-def _pool_markup(pool: tuple[reactions.ReactionEmoji, ...]) -> str:
+def _pool_markup(pool: tuple[Emoji, ...]) -> str:
     """Render a whole emoji pool as premium markup (a preview strip)."""
-    return ''.join(emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
+    return ''.join(emoji_markup(c.id, c.fallback) for c in pool) or '-'
 
 
 class StatusReport:
