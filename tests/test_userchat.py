@@ -76,6 +76,34 @@ def _message(**over: object) -> SimpleNamespace:
 # ------------------------------------------------------------- the values
 
 
+def _id(value: int) -> SimpleNamespace:
+    """Return a stub carrying just an id, as every send answer does."""
+    return SimpleNamespace(id=value)
+
+
+def test_the_sent_id_is_read_out_of_an_updates_envelope() -> None:
+    """A raw send answers with an Updates envelope, not a Message.
+
+    A convenience send hands back the Message; the raw request a THREADED
+    reply needs hands back Updates, which has no id of its own -- the new
+    id rides inside. Reading only the outer id would make a DELIVERED
+    sticker report 0, which is the caller's signal that nothing landed,
+    so the reply would go out a second time, flat.
+    """
+    inside = SimpleNamespace(updates=[SimpleNamespace(), _id(MSG)])
+    nested = SimpleNamespace(updates=[SimpleNamespace(message=_id(MSG))])
+    assert userchat._sent_id(_id(MSG)) == MSG
+    assert userchat._sent_id(inside) == MSG
+    assert userchat._sent_id(nested) == MSG
+    assert userchat._sent_id(None) == 0
+
+
+def test_a_send_that_did_not_go_out_reports_nothing() -> None:
+    """A refused send answers 0, which is what re-queues the work."""
+    account = _account(send_message=lambda *a, **k: _boom())
+    assert asyncio.run(account.send(CHAT, userchat.Text('x'))) == 0
+
+
 def test_a_first_level_comment_still_finds_its_post() -> None:
     """Msg.root falls back to reply_to_msg_id -- the common comment shape.
 

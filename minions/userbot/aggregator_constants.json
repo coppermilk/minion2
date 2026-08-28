@@ -12,6 +12,7 @@
     "watchdog_sec": 600,
     "probe_timeout_sec": 30,
     "probe_interval_sec": 300,
+    "thread_gap_sec": 2.0,
     "flood_sleep_threshold_sec": 3600
   },
   "engines": {
@@ -23,7 +24,6 @@
       "max_duration_sec": 180,
       "repost_guard_sec": 604800,
       "repost_guard_count": 5,
-      "discussion_gap_sec": 2.0,
       "fields": {
         "action": "action",
         "platform": "platform",

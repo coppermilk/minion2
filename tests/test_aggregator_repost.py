@@ -30,7 +30,6 @@ from minions.userbot.core.models import Item  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
 from minions.userbot.engines import premium_emoji  # noqa: E402
 from minions.userbot.glue import aggregator  # noqa: E402
-from minions.userbot.glue import reactions as reactions_glue  # noqa: E402
 
 
 def _post(title: str, age_days: float) -> Posted:
@@ -192,7 +191,6 @@ def _bare_aggregator(fake: _FakeFlush) -> aggregator.LinkAggregator:
                 max_duration=180,
                 repost_guard=604800.0,
                 repost_guard_count=5,
-                discussion_gap=0.0,
             ),
             consts=None,  # only compose reads it, and we patch compose
             state_path=None,  # _save is faked
@@ -288,55 +286,6 @@ def test_flush_requeues_when_nothing_delivered(
     assert 'record' not in fake.order
     assert 'arm' in fake.order  # re-armed
     assert 'save' in fake.order  # the re-queue is persisted
-
-
-def _watch_with_gap(gap: float) -> reactions_glue.CommentWatch:
-    """Build a comment watcher whose only live setting is the flood gap."""
-    return reactions_glue.CommentWatch(
-        reactions_glue.CommentDeps(
-            client=None,
-            brain=None,
-            targets=tuple,
-            announce=None,
-            discussion_gap=gap,
-        )
-    )
-
-
-def test_discussion_throttle_spaces_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A call soon after the previous one waits out the remaining gap."""
-    slept: list[float] = []
-
-    async def _fake_sleep(sec: float) -> None:
-        slept.append(sec)
-
-    monkeypatch.setattr(reactions_glue.asyncio, 'sleep', _fake_sleep)
-    gap = 2.0
-    watch = _watch_with_gap(gap)
-    watch._last_discussion = time.time()  # a call just happened
-
-    asyncio.run(watch._throttle_discussion())
-
-    assert slept
-    assert 0 < slept[0] <= gap
-
-
-def test_discussion_throttle_disabled_when_zero(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A zero gap disables the throttle -- no sleep at all."""
-    slept: list[float] = []
-
-    async def _fake_sleep(sec: float) -> None:
-        slept.append(sec)
-
-    monkeypatch.setattr(reactions_glue.asyncio, 'sleep', _fake_sleep)
-
-    asyncio.run(_watch_with_gap(0.0)._throttle_discussion())
-
-    assert slept == []
 
 
 class _FakeAccount:

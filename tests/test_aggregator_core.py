@@ -48,7 +48,6 @@ def _config(**over: object) -> Config:
         'max_duration': 180,
         'repost_guard': 604800.0,
         'repost_guard_count': 5,
-        'discussion_gap': 0.0,
     }
     base.update(over)
     return Config(**base)  # type: ignore[arg-type]

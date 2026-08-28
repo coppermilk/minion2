@@ -189,13 +189,12 @@ class Userbot:
         )
         self.comment_watch = CommentWatch(
             CommentDeps(
-                client=self.client,
+                account=self.account,
                 brain=self.reactions,
                 targets=self.live_targets,
                 announce=self._send_status,
                 glyphs=Glyphs(self.report.bullet(), self.report.arrow()),
                 human_words=self.consts.human_words,
-                discussion_gap=self.config.discussion_gap,
                 rescan_sec=self.modes.rescan_interval(
                     self.modes.mode_of('reactions')
                 ),

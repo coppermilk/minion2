@@ -112,7 +112,6 @@ def _bot(tmp_path: Path) -> main.Userbot:
         max_duration=180,
         repost_guard=604800.0,
         repost_guard_count=5,
-        discussion_gap=2.0,
     )
     bot.mode = 'live'
     service_modes = {
@@ -178,7 +177,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
     bot.reactions = brain
     bot.comment_watch = reactions_glue.CommentWatch(
         reactions_glue.CommentDeps(
-            client=SimpleNamespace(),
+            account=None,
             brain=brain,
             targets=lambda: (TARGET,),
             announce=_unused_announce,

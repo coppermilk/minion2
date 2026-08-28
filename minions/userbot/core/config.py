@@ -375,9 +375,6 @@ def load_config() -> Config:
             # auto-delete re-emit) are skipped, not re-posted. 5 by default;
             # 0 disables this window and leaves only the time guard.
             repost_guard_count=int(poster.get('repost_guard_count', 5)),
-            # Space out discussion-thread lookups so reaction seeding on
-            # startup/rescan does not trip flood waits. 2s default; 0 disables.
-            discussion_gap=float(poster.get('discussion_gap_sec', 2.0)),
         )
     except (TypeError, ValueError) as exc:
         msg = f'{CONSTANTS_FILE}: a numeric knob is not a number ({exc})'
@@ -401,7 +398,6 @@ def _validate_config(config: Config) -> None:
         ('backfill', float(config.backfill)),
         ('repost_guard_sec', config.repost_guard),
         ('repost_guard_count', float(config.repost_guard_count)),
-        ('discussion_gap_sec', config.discussion_gap),
     )
     problems += [
         f'{name} must be >= 0, got {value}'

@@ -63,6 +63,7 @@ if TYPE_CHECKING:
 _LOG = logging.getLogger('userchat')
 
 READ = 'read'
+THREAD = 'thread'
 WRITE = 'write'
 REACT = 'react'
 STORY = 'story'
@@ -199,6 +200,12 @@ def paces(runtime: dict[str, object]) -> Gate:
     return Gate(
         {
             READ: Pace(num('read_gap_sec', 1.0), int(num('read_per_min', 30))),
+            # Resolving a post's comment thread is the call that actually
+            # trips Telegram: it fires in bursts (every watched post, on
+            # every startup and rescan), so it gets its own slower lane.
+            THREAD: Pace(
+                num('thread_gap_sec', 2.0), int(num('thread_per_min', 20))
+            ),
             WRITE: Pace(
                 num('write_gap_sec', 3.0), int(num('write_per_min', 15))
             ),
@@ -292,7 +299,7 @@ class Account:
         from telethon.tl.functions.messages import GetDiscussionMessageRequest
 
         got = await self._call(
-            READ, self.client(GetDiscussionMessageRequest(channel, post_id))
+            THREAD, self.client(GetDiscussionMessageRequest(channel, post_id))
         )
         rows = getattr(got, 'messages', None) or []
         if not rows:
@@ -324,7 +331,7 @@ class Account:
             WRITE,
             self.client.send_message(chat, text.body, **_send_kwargs(text)),
         )
-        return int(getattr(sent, 'id', 0) or 0)
+        return _sent_id(sent)
 
     async def send_photo(
         self, chat: int, photo: str | Path, text: Text
@@ -344,7 +351,7 @@ class Account:
                 **_caption_kwargs(text),
             ),
         )
-        return int(getattr(sent, 'id', 0) or 0)
+        return _sent_id(sent)
 
     async def dm(self, user_id: int, text: Text) -> bool:
         """Send a direct message; False when it was refused or capped.
@@ -377,7 +384,7 @@ class Account:
                 )
             ),
         )
-        return int(getattr(sent, 'id', 0) or 0)
+        return _sent_id(sent)
 
     # --- reactions -------------------------------------------------------
 
@@ -568,6 +575,29 @@ def _caption_kwargs(text: Text) -> dict[str, object]:
     if text.html:
         return {'parse_mode': 'html'}
     return {'formatting_entities': entities(text.body, text.spans)}
+
+
+def _sent_id(got: object) -> int:
+    """Return the id of a message we just sent; 0 when it did not go out.
+
+    A convenience send answers with the Message itself, but a raw request
+    -- which is how a threaded reply has to be sent -- answers with an
+    Updates envelope that has no ``id`` of its own; the new id rides
+    inside it. Reading only the outer ``id`` made a SUCCESSFUL threaded
+    send report 0, and 0 is the caller's signal that nothing landed, so a
+    delivered sticker would have been sent a second time, flat.
+    """
+    direct = int(getattr(got, 'id', 0) or 0)
+    if direct:
+        return direct
+    for update in getattr(got, 'updates', None) or []:
+        inner = getattr(update, 'message', None)
+        found = int(getattr(update, 'id', 0) or 0) or int(
+            getattr(inner, 'id', 0) or 0
+        )
+        if found:
+            return found
+    return 0
 
 
 def _peer(raw: object) -> Peer:

@@ -90,7 +90,6 @@ class Config:
     # (resolving a post's comment thread). They fire in bursts -- the last
     # watch_posts posts per target on every startup and rescan -- and Telegram
     # flood-limits them, so we space them out process-wide. 0 disables.
-    discussion_gap: float
 
 
 @dataclass(frozen=True)

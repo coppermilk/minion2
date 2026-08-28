@@ -16,14 +16,8 @@ import logging
 import time
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from typing import TYPE_CHECKING
-
-from telethon.tl.functions.messages import GetDiscussionMessageRequest
-from telethon.tl.functions.messages import SendMessageRequest
-from telethon.tl.functions.messages import SendReactionRequest
-from telethon.tl.types import InputReplyToMessage
-from telethon.tl.types import ReactionCustomEmoji
-from telethon.tl.types import ReactionEmoji
 
 from minion_core.adapters import userchat
 from minions.userbot.core import tasks
@@ -40,9 +34,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
 
-    from telethon import TelegramClient
-
-    from minions.userbot.engines.premium_emoji import PremiumMessage
 
 log = logging.getLogger('userbot')
 
@@ -74,13 +65,12 @@ def _queued_markup(queued: reactions.Reaction) -> str:
 class CommentDeps:
     """Everything the comment watcher may reach; nothing else is in scope."""
 
-    client: TelegramClient
+    account: userchat.Account
     brain: reactions.ReactionBrain
     targets: Callable[[], tuple[int, ...]]  # the profile's live targets
     announce: Callable[[str], Awaitable[None]]  # operator reply, premium
     glyphs: Glyphs = field(default_factory=Glyphs)
     human_words: tuple[str, ...] = ()  # terms that suppress a sticker
-    discussion_gap: float = 2.0  # flood throttle between thread lookups
     rescan_sec: float = 300.0  # 0 turns the auto-rescan off
 
 
@@ -93,8 +83,6 @@ class CommentWatch:
     _timers: set[asyncio.Task[None]] = field(default_factory=set)
     # pre-fire thread refresh debounce, keyed by thread root
     _thread_seen: dict[int, float] = field(default_factory=dict)
-    # ts of the last GetDiscussionMessageRequest, for the flood throttle
-    _last_discussion: float = 0.0
 
     def queued_rows(self) -> list[str]:
         """One capped row per queued reaction, for /status and /requeue."""
@@ -255,26 +243,23 @@ class CommentWatch:
             'reactions: watch-list has %d post(s)', len(self.deps.brain.posts)
         )
 
-    async def _recent_target_posts(self, target: int, want: int) -> object:
-        """Return the last ``want`` posts in a target (channel/group)."""
-        if self.deps.brain.params.comments_in_discussion:
-            return await self.deps.client.get_messages(target, limit=want)
-        return await self.deps.client.get_messages(
-            target, limit=want, from_user='me'
-        )
-
     async def _seed_target_posts(self, target: int) -> None:
-        """Register a target's last posts into the reaction watch-list."""
-        want = self.deps.brain.params.watch_posts
-        try:
-            history = await self._recent_target_posts(target, want)
-        except Exception:  # noqa: BLE001 -- unreachable target: skip, no crash
-            log.warning('reactions: could not read %s post history', target)
-            return
-        for message in reversed(list(history)):  # oldest first -> newest last
-            msg_id = int(getattr(message, 'id', 0) or 0)
-            if msg_id:
-                await self._watch_post(target, msg_id)
+        """Register a target's last posts into the reaction watch-list.
+
+        In a channel with comments the posts are ours by definition; in a
+        plain group only our own messages are posts, hence ``mine``.
+        """
+        params = self.deps.brain.params
+        history = await self.deps.account.history(
+            target,
+            userchat.Slice(
+                limit=params.watch_posts,
+                mine=not params.comments_in_discussion,
+            ),
+        )
+        for message in reversed(history):  # oldest first -> newest last
+            if message.id:
+                await self._watch_post(target, message.id)
 
     async def seed_comments(self) -> None:
         """Schedule reactions for comments already under the watched posts.
@@ -323,30 +308,22 @@ class CommentWatch:
 
     async def _seed_thread_comments(self, chat: int, root: int) -> None:
         """Schedule reactions for the recent comments in one watched thread."""
-        try:
-            comments = await self.deps.client.get_messages(
-                chat, reply_to=root, limit=COMMENT_SCAN
-            )
-        except Exception:  # noqa: BLE001 -- no thread/unreachable: skip quietly
-            log.warning(
-                'reactions: could not read comments of %s/%s', chat, root
-            )
-            return
-        for message in reversed(list(comments)):  # oldest first
+        comments = await self.deps.account.history(
+            chat, userchat.Slice(limit=COMMENT_SCAN, under=root)
+        )
+        for message in reversed(comments):  # oldest first
             self._schedule_from_message(chat, root, message)
 
     def _schedule_from_message(
-        self, chat: int, root: int, message: object
+        self, chat: int, root: int, message: userchat.Msg
     ) -> None:
         """Schedule a reaction for one existing comment (skip our own)."""
-        if getattr(message, 'out', False):
+        if message.out or not message.sender_id or not message.id:
             return
-        person = str(getattr(message, 'sender_id', None) or '')
-        comment_id = int(getattr(message, 'id', 0) or 0)
-        if person and comment_id:
-            text = trim(str(getattr(message, 'message', '') or ''))
-            ref = Comment(chat=chat, root=root, msg_id=comment_id, text=text)
-            self._schedule_comment(ref, person, engaged=False)
+        ref = Comment(
+            chat=chat, root=root, msg_id=message.id, text=trim(message.text)
+        )
+        self._schedule_comment(ref, str(message.sender_id), engaged=False)
 
     async def requeue(self) -> None:
         """Rescan + refresh the pending-reaction queue (the /requeue cmd).
@@ -474,46 +451,18 @@ class CommentWatch:
         the comment, or this account's own reaction already sitting on it. The
         reaction has not been placed yet, so any such reply/reaction is the
         operator's own -- do not pile a reaction on top of it.
-        """
-        try:
-            history = await self.deps.client.get_messages(
-                chat, limit=MANUAL_REPLY_SCAN
-            )
-        except Exception:  # noqa: BLE001 -- unreachable: fail open, react anyway
-            log.warning(
-                'reaction: could not check a manual reply to %s', comment_id
-            )
-            return False
-        for message in history:
-            if not getattr(message, 'out', False):
-                continue
-            reply = getattr(message, 'reply_to', None)
-            if getattr(reply, 'reply_to_msg_id', None) == comment_id:
-                return True
-        return await self._own_reaction(chat, comment_id)
 
-    async def _own_reaction(self, chat: int, comment_id: int) -> bool:
-        """Whether this account's own reaction already sits on the comment.
-
-        The reliable signal is the reaction TALLY: Telegram sets
-        ``chosen_order`` on every ``results`` entry the current account
-        picked, so a non-None chosen_order means "we already reacted here" no
-        matter how many others reacted after (unlike ``recent_reactions``,
-        which is a short, capacity-capped list). We check the tally first and
-        fall back to ``recent_reactions[].my`` for older layers. Best-effort
-        and fail-open: an unreadable comment reacts anyway rather than wedging
-        the queue.
+        Fail-open by construction: an unreadable thread comes back empty and
+        an unreadable comment comes back None, so the reaction still fires
+        rather than wedging the queue.
         """
-        try:
-            message = await self.deps.client.get_messages(chat, ids=comment_id)
-        except Exception:  # noqa: BLE001 -- unreachable: fail open, react anyway
-            return False
-        reactions = getattr(message, 'reactions', None)
-        results = getattr(reactions, 'results', None) or []
-        if any(getattr(r, 'chosen_order', None) is not None for r in results):
+        history = await self.deps.account.history(
+            chat, userchat.Slice(limit=MANUAL_REPLY_SCAN)
+        )
+        if any(m.out and m.reply_to == comment_id for m in history):
             return True
-        recent = getattr(reactions, 'recent_reactions', None) or []
-        return any(getattr(r, 'my', False) for r in recent)
+        comment = await self.deps.account.message(chat, comment_id)
+        return comment is not None and comment.mine_reacted
 
     async def _deliver(self, reaction: reactions.Reaction) -> None:
         """Place the scheduled reaction: a like REACTION, or a thread STICKER.
@@ -539,7 +488,7 @@ class CommentWatch:
         thread. The emoji were picked when the comment was scheduled and stored
         on ``reaction``, so what lands is exactly what /status showed.
         """
-        placed = await self._react(
+        placed = await self.deps.account.react(
             reaction.chat, reaction.reply_to, reaction.emojis
         )
         if placed:
@@ -566,98 +515,30 @@ class CommentWatch:
         spec = {'id': emoji_id, 'fallback': fallback}
         message = RichText().emoji(spec).build()
         threaded = bool(reaction.root) and reaction.root != reaction.reply_to
-        if threaded:
-            try:
-                await self._reply_in_thread(reaction, message)
-            except Exception:  # noqa: BLE001 -- fall back to a flat reply
-                log.warning(
-                    'reaction: threaded sticker failed in %s; flat',
-                    reaction.chat,
-                )
-            else:
-                log.info(
-                    'reaction: sticker %s in thread %s of %s',
-                    fallback,
-                    reaction.root,
-                    reaction.chat,
-                )
-                return
-        await self.deps.client.send_message(
-            reaction.chat,
+        text = userchat.Text(
             message.text,
-            formatting_entities=userchat.entities(message.text, message.spans),
+            message.spans,
             reply_to=reaction.reply_to,
-            link_preview=False,
+            thread=reaction.root if threaded else 0,
         )
+        if threaded and await self.deps.account.send(reaction.chat, text):
+            log.info(
+                'reaction: sticker %s in thread %s of %s',
+                fallback,
+                reaction.root,
+                reaction.chat,
+            )
+            return
+        if threaded:
+            log.warning(
+                'reaction: threaded sticker failed in %s; flat', reaction.chat
+            )
+        await self.deps.account.send(reaction.chat, replace(text, thread=0))
         log.info(
             'reaction: sticker %s on comment %s in %s',
             fallback,
             reaction.reply_to,
             reaction.chat,
-        )
-
-    async def _reply_in_thread(
-        self, reaction: reactions.Reaction, message: PremiumMessage
-    ) -> None:
-        """Send ``message`` as a reply inside the comment thread (top=root)."""
-        reply = InputReplyToMessage(
-            reply_to_msg_id=reaction.reply_to, top_msg_id=reaction.root
-        )
-        await self.deps.client(
-            SendMessageRequest(
-                peer=reaction.chat,
-                message=message.text,
-                entities=userchat.entities(message.text, message.spans),
-                reply_to=reply,
-                no_webpage=True,
-            )
-        )
-
-    async def _react(
-        self, peer: int, msg_id: int, emojis: tuple[tuple[str, str], ...]
-    ) -> bool:
-        """Place the given premium reaction(s) as a reaction ON ``msg_id``.
-
-        ``emojis`` are the ``(id, fallback)`` reactions chosen up front. The
-        whole
-        set goes in ONE ``SendReaction`` call (reactions are atomic: one
-        request carries the account's whole reaction set on the message).
-        Returns whether anything was placed (False for an empty set). Shared by
-        the post-react and comment-react paths.
-        """
-        if not emojis:
-            return False
-        custom = [
-            ReactionCustomEmoji(document_id=int(eid)) for eid, _ in emojis
-        ]
-        try:
-            await self._send_reaction(peer, msg_id, custom)
-        except Exception:  # noqa: BLE001 -- custom emoji may be disallowed
-            # The chat may not allow CUSTOM-emoji reactions (or the account
-            # is not Premium): fall back to the plain-emoji version of the
-            # same reactions (the fallback glyphs), so a reaction
-            # still lands
-            # wherever standard reactions are allowed. If that fails too, it
-            # propagates to the caller's guard (logged, never fatal).
-            standard = [ReactionEmoji(emoticon=fb) for _, fb in emojis]
-            await self._send_reaction(peer, msg_id, standard)
-            log.info(
-                'reaction: custom rejected in %s; used standard emoji',
-                peer,
-            )
-        return True
-
-    async def _send_reaction(
-        self, peer: int, msg_id: int, reaction: list[object]
-    ) -> None:
-        """One SendReaction call placing ``reaction`` on ``msg_id``."""
-        await self.deps.client(
-            SendReactionRequest(
-                peer=peer,
-                msg_id=msg_id,
-                reaction=reaction,
-                add_to_recent=True,
-            )
         )
 
     async def on_posted(self, target: int, post_id: int) -> None:
@@ -671,10 +552,8 @@ class CommentWatch:
         Optional (``react_to_posts``, default off): reacting to our own posts
         is an extra, separate from the engine's real job of reacting to
         commenters. When on, there is no human-like wait -- the post is ours,
-        so the reaction goes on straight away. A failure never blocks the post
-        -- it
-        is logged and swallowed, unlike the comment path which owns its own
-        retry/skip machinery.
+        so the reaction goes on straight away. A failure never blocks the
+        post: the adapter logs it and answers False.
         """
         if not self.deps.brain.params.enabled or not post_id:
             return
@@ -682,16 +561,7 @@ class CommentWatch:
             return
         specs = self.deps.brain.pick_like(f'{target}:{post_id}')
         emojis = tuple((s.emoji_id, s.fallback) for s in specs)
-        try:
-            placed = await self._react(target, post_id, emojis)
-        except Exception:  # noqa: BLE001 -- reacting must never break posting
-            log.warning(
-                'reaction: could not react to new post %s in %s',
-                post_id,
-                target,
-            )
-            return
-        if placed:
+        if await self.deps.account.react(target, post_id, emojis):
             glyphs = ''.join(fb for _, fb in emojis)
             log.info(
                 'reaction: reacted %s to new post %s in %s',
@@ -713,44 +583,8 @@ class CommentWatch:
             # Channel: only watch a post whose discussion thread resolves; a
             # post with comments off (or deleted) adds nothing rather than a
             # useless channel-id entry that could evict a real one.
-            thread = await self._discussion_thread(target, post_id)
+            thread = await self.deps.account.discussion_thread(target, post_id)
             if thread is not None:
                 self.deps.brain.note_post(*thread)
             return
         self.deps.brain.note_post(target, post_id)
-
-    async def _throttle_discussion(self) -> None:
-        """Space out GetDiscussionMessageRequest calls (Telegram flood guard).
-
-        These resolve a post's comment thread and are fired in bursts -- the
-        last ``watch_posts`` posts per target on every startup and rescan --
-        which trips Telegram's flood wait. Keep at least ``discussion_gap``
-        seconds between consecutive calls, process-wide. 0 disables it.
-        """
-        gap = self.deps.discussion_gap
-        if gap <= 0:
-            return
-        wait = gap - (time.time() - self._last_discussion)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._last_discussion = time.time()
-
-    async def _discussion_thread(
-        self, channel: int, post_id: int
-    ) -> tuple[int, int] | None:
-        """(discussion_chat_id, thread_root_id) for a channel post, or None."""
-        await self._throttle_discussion()
-        try:
-            disc = await self.deps.client(
-                GetDiscussionMessageRequest(peer=channel, msg_id=post_id)
-            )
-        except Exception:  # noqa: BLE001 -- not a channel / no linked group
-            log.warning('reactions: no discussion thread for post %s', post_id)
-            return None
-        messages = getattr(disc, 'messages', None) or []
-        if not messages:
-            return None
-        root = messages[0]
-        chat_id = int(getattr(root, 'chat_id', 0) or 0)
-        root_id = int(getattr(root, 'id', 0) or 0)
-        return (chat_id, root_id) if chat_id and root_id else None
