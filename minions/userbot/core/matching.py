@@ -198,18 +198,3 @@ def needs_human(text: str, words: tuple[str, ...]) -> bool:
     if any(u in low for u in _LINK_MARKERS):
         return True
     return any(w in low for w in words)
-
-
-def thread_top(reply: object) -> int | None:
-    """Return the thread-root id a reply belongs to (comment target), or None.
-
-    A comment on a channel post is a reply in the discussion group: its
-    ``reply_to_top_id`` is the post's thread root; a first-level comment has
-    only ``reply_to_msg_id`` (the same root). Either way this yields the id the
-    engine watches, so nested and top-level comments both map to their post.
-    """
-    top = getattr(reply, 'reply_to_top_id', None)
-    if top is not None:
-        return int(top)
-    msg = getattr(reply, 'reply_to_msg_id', None)
-    return int(msg) if msg is not None else None

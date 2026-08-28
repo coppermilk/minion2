@@ -28,7 +28,6 @@ from telethon.tl.types import ReactionEmoji
 from minion_core.adapters import userchat
 from minions.userbot.core import tasks
 from minions.userbot.core.matching import needs_human
-from minions.userbot.core.matching import thread_top
 from minions.userbot.core.models import Comment
 from minions.userbot.core.render import Glyphs
 from minions.userbot.core.render import emoji_markup
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from telethon import TelegramClient
-    from telethon import events
 
     from minions.userbot.engines.premium_emoji import PremiumMessage
 
@@ -124,7 +122,7 @@ class CommentWatch:
             f' {what} {b} post {queued.root} {b} {when}'
         )
 
-    def on_message(self, event: events.NewMessage.Event) -> None:
+    def on_message(self, msg: userchat.Msg) -> None:
         """If this message comments on one of our posts, schedule a reaction.
 
         A "comment" is a reply whose target is one of the last posts. Each
@@ -134,29 +132,21 @@ class CommentWatch:
         eligible again. The engine decides whether and when (it may return
         nothing -- skipped, silent day, already reacted here).
         """
-        if getattr(event.message, 'out', False):
+        if msg.out or not msg.sender_id:
             return  # our own message (a post) -- never reaction it
-        reply = getattr(event.message, 'reply_to', None)
-        top = thread_top(reply)
-        chat = int(event.chat_id or 0)
-        if not self.deps.brain.is_comment(chat, top):
-            return
-        person = str(getattr(event, 'sender_id', None) or '')
-        if not person:
+        if not self.deps.brain.is_comment(msg.chat_id, msg.root):
             return
         # Feedback (principle 8): a reply to our freshest post reads as active
         # engagement, so the reaction comes faster.
-        engaged = bool(self.deps.brain.posts) and self.deps.brain.posts[
-            -1
-        ] == (
-            chat,
-            top,
-        )
-        text = trim(str(getattr(event.message, 'message', '') or ''))
+        posts = self.deps.brain.posts
+        engaged = bool(posts) and posts[-1] == (msg.chat_id, msg.root)
         ref = Comment(
-            chat=chat, root=top, msg_id=int(event.message.id), text=text
+            chat=msg.chat_id,
+            root=msg.root,
+            msg_id=msg.id,
+            text=trim(msg.text),
         )
-        self._schedule_comment(ref, person, engaged=engaged)
+        self._schedule_comment(ref, str(msg.sender_id), engaged=engaged)
 
     def _schedule_comment(
         self, comment: Comment, person: str, *, engaged: bool

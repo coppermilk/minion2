@@ -62,6 +62,7 @@ class AggregatorDeps:
     """Everything the poster may reach; nothing else is in scope."""
 
     client: TelegramClient
+    account: userchat.Account
     config: Config
     consts: Consts
     state_path: Path
@@ -88,15 +89,15 @@ class LinkAggregator:
         for group in self.groups:
             cancel(getattr(group, 'task', None))
 
-    async def on_message(self, message: object) -> None:
+    async def on_message(self, msg: userchat.Msg) -> None:
         """Route one incoming message into its video group."""
-        msg_id = int(getattr(message, 'id', 0) or 0)
-        preview = (getattr(message, 'message', '') or '').replace('\n', ' ')
-        log.info('received msg %s: %.120s', msg_id, preview)
-        if msg_id in self.processed_ids:
-            log.info('msg %s: already posted, skipping', msg_id)
+        log.info(
+            'received msg %s: %.120s', msg.id, msg.text.replace('\n', ' ')
+        )
+        if msg.id in self.processed_ids:
+            log.info('msg %s: already posted, skipping', msg.id)
             return
-        item = self._accept(message)
+        item = self._accept(msg)
         if item is None:
             return
         group = self._group_for(item)
@@ -120,10 +121,10 @@ class LinkAggregator:
         if not missing:
             await self._flush(group)
 
-    def _accept(self, message: object) -> Item | None:
+    def _accept(self, msg: userchat.Msg) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
-        msg_id = int(getattr(message, 'id', 0) or 0)
-        text = getattr(message, 'message', '') or ''
+        msg_id = msg.id
+        text = msg.text
         data = extract_fields(text, self.deps.field_keys)
         if not data:
             log.info('msg %s: no recognizable fields, ignoring', msg_id)
@@ -309,13 +310,9 @@ class LinkAggregator:
             limit,
             self.deps.config.source,
         )
-        try:
-            history = await self.deps.client.get_messages(
-                self.deps.config.source, limit=limit
-            )
-        except Exception:  # noqa: BLE001 -- source may be unreachable at start
-            log.warning('backfill: could not read source history')
-            return
+        history = await self.deps.account.history(
+            self.deps.config.source, userchat.Slice(limit=limit)
+        )
         for message in reversed(history):  # oldest first
             await self.on_message(message)
         log.info('backfill: done (%d messages scanned)', len(history))

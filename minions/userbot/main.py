@@ -43,9 +43,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from telethon import TelegramClient
-from telethon import events
-
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
 from minions.userbot.core.client import build_client
@@ -90,6 +87,8 @@ from minions.userbot.glue.users import AudienceLog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from telethon import TelegramClient
 
     from minions.userbot.core import relationship
 
@@ -139,6 +138,9 @@ class Userbot:
         self.rescan_task: asyncio.Task[None] | None = None
         self.stories_task: asyncio.Task[None] | None = None
         rt = codec.section(self.settings, 'runtime')
+        # One door to Telegram, one gate in front of it. Everything this
+        # host and its services send should end up going through here.
+        self.account = userchat.Account(client, userchat.paces(rt))
         self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
         # The liveness probe (get_me) is the only ALWAYS-ON Telegram request;
         # firing it every 60s status tick hammered the server for no reason.
@@ -253,6 +255,7 @@ class Userbot:
         self.aggregator = LinkAggregator(
             AggregatorDeps(
                 client=self.client,
+                account=self.account,
                 config=self.config,
                 consts=self.consts,
                 state_path=pdir / STATE_FILE,
@@ -274,24 +277,24 @@ class Userbot:
             )
         )
 
-    async def handle(self, event: events.NewMessage.Event) -> None:
-        """Dispatch one event: a /command, a comment reaction, or aggregation.
+    async def handle(self, msg: userchat.Msg) -> None:
+        """Dispatch one message: a /command, a comment, or aggregation.
 
         Commands (/emojis, /preview, /status) work from ANY chat and for
         ANYONE and always render into the source chat; the reaction engine
         watches
         replies to our own posts (any chat); aggregation stays source-scoped.
         """
-        text = (event.raw_text or '').strip().lower()
+        text = msg.text.strip().lower()
         if await self.router.handle(text):
             return
-        if await self.router.nudge_unknown(event, text):
+        if await self.router.nudge_unknown(msg, text):
             return
-        self.audience.record_message(event)
+        self.audience.record_message(msg)
         if self.reactions.params.enabled:
-            self.comment_watch.on_message(event)
-        if event.chat_id == self.config.source:
-            await self.aggregator.on_message(event.message)
+            self.comment_watch.on_message(msg)
+        if msg.chat_id == self.config.source:
+            await self.aggregator.on_message(msg)
 
     async def status_report(self) -> None:
         """Post the pending/posted/reaction diagnostics to the source chat."""
@@ -453,7 +456,7 @@ async def main() -> None:
     # Listen everywhere the account can see: the /emojis preview command works
     # from ANY chat and for ANYONE (it renders back into the source chat);
     # aggregation itself stays scoped to the source chat inside bot.handle.
-    client.add_event_handler(bot.handle, events.NewMessage())
+    bot.account.on_message(bot.handle)
 
     # TELEGRAM_PASSWORD supplies the 2FA/cloud password non-interactively;
     # unset, Telethon prompts for it (getpass) only if the account has 2FA.

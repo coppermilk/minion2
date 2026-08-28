@@ -126,6 +126,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
     bot.aggregator = aggregator_glue.LinkAggregator(
         aggregator_glue.AggregatorDeps(
             client=SimpleNamespace(),
+            account=None,
             config=bot.config,
             consts=bot.consts,
             state_path=tmp_path / 'agg.json',

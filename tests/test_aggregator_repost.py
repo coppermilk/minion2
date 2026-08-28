@@ -179,6 +179,7 @@ def _bare_aggregator(fake: _FakeFlush) -> aggregator.LinkAggregator:
     agg = aggregator.LinkAggregator(
         aggregator.AggregatorDeps(
             client=None,
+            account=None,
             config=Config(
                 source=0,
                 targets=(),

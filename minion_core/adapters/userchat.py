@@ -51,6 +51,7 @@ from minion_core.richtext import LINK
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
+    from collections.abc import Callable
     from collections.abc import Sequence
     from datetime import datetime
     from pathlib import Path
@@ -105,9 +106,14 @@ class Peer:
 class Msg:
     """One message, reduced to what this project ever reads off one.
 
-    ``root`` is the discussion thread the message hangs under (its
-    ``reply_to_top_id``), which is how a comment is tied back to its post;
-    ``reply_to`` is the message it answers directly.
+    ``root`` is the post a comment hangs under, and the reason the field
+    exists: a comment on a channel post is a reply in the discussion group,
+    where a NESTED comment carries ``reply_to_top_id`` but a FIRST-LEVEL
+    one carries only ``reply_to_msg_id`` -- the same root, under another
+    name. Reading just the first would leave every top-level comment
+    rooted at 0, which is to say invisible to the engine that answers
+    them. ``reply_to`` is the message it answers directly; ``root`` is 0
+    when the message is not a reply at all.
     """
 
     id: int
@@ -223,6 +229,25 @@ class Account:
 
     client: TelegramClient
     gate: Gate = field(default_factory=lambda: paces({}))
+
+    # --- incoming --------------------------------------------------------
+
+    def on_message(self, handler: Callable[[Msg], Awaitable[None]]) -> None:
+        """Deliver every incoming message to ``handler`` as a typed ``Msg``.
+
+        The other half of the door, and the leakier one: an incoming
+        Telethon event used to travel three layers deep -- the host read
+        ``raw_text`` off it, then handed the same object to the comment
+        watcher and the audience log, each of which duck-typed its own
+        fields again. Converting once, here, is what makes the layers
+        above able to state what they receive.
+        """
+        from telethon import events
+
+        async def deliver(event: object) -> None:
+            await handler(_msg(getattr(event, 'message', event)))
+
+        self.client.add_event_handler(deliver, events.NewMessage())
 
     # --- reads -----------------------------------------------------------
 
@@ -560,10 +585,18 @@ def _msg(raw: object) -> Msg:
         out=bool(getattr(raw, 'out', False)),
         sender_id=int(getattr(raw, 'sender_id', 0) or 0),
         reply_to=int(getattr(reply, 'reply_to_msg_id', 0) or 0),
-        root=int(getattr(reply, 'reply_to_top_id', 0) or 0),
+        root=_root(reply),
         date=getattr(raw, 'date', None),
         mine_reacted=_mine(getattr(raw, 'reactions', None)),
     )
+
+
+def _root(reply: object) -> int:
+    """Return the post id a reply hangs under (see ``Msg.root``); 0 if none."""
+    top = getattr(reply, 'reply_to_top_id', None)
+    if top is not None:
+        return int(top)
+    return int(getattr(reply, 'reply_to_msg_id', 0) or 0)
 
 
 def _mine(reactions: object) -> bool:

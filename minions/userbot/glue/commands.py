@@ -19,8 +19,6 @@ from minions.userbot.core.render import render_constants
 from minions.userbot.core.render import sample_groups
 
 if TYPE_CHECKING:
-    from telethon import events
-
     from minions.userbot.main import Userbot
 
 log = logging.getLogger('userbot')
@@ -187,11 +185,9 @@ class CommandRouter:
         await self.bot.modes.set(*parsed)
         return True
 
-    async def nudge_unknown(
-        self, event: events.NewMessage.Event, text: str
-    ) -> bool:
+    async def nudge_unknown(self, msg: userchat.Msg, text: str) -> bool:
         """In the source chat, nudge a lone unknown /command toward /help."""
-        if event.chat_id != self.bot.config.source:
+        if msg.chat_id != self.bot.config.source:
             return False
         if not text.startswith('/') or ' ' in text or not text[1:].isalpha():
             return False

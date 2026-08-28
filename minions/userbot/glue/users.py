@@ -15,7 +15,6 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import tasks
-from minions.userbot.core.matching import thread_top
 from minions.userbot.core.models import iso
 from minions.userbot.engines import users
 
@@ -24,7 +23,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from telethon import TelegramClient
-    from telethon import events
+
+    from minion_core.adapters import userchat
 
 log = logging.getLogger('userbot')
 
@@ -69,7 +69,7 @@ class AudienceLog:
     deps: AudienceDeps
     _lookups: set[asyncio.Task[None]] = field(default_factory=set)
 
-    def record_message(self, event: events.NewMessage.Event) -> None:
+    def record_message(self, msg: userchat.Msg) -> None:
         """Log a seen audience message (a source or discussion comment).
 
         Records non-own messages in the source chat or a watched discussion
@@ -77,26 +77,22 @@ class AudienceLog:
         count and storing the text unless ``store_text`` is off, then
         enriching the sender's identity lazily. Idempotent per (chat, msg_id).
         """
-        message = event.message
-        if not self.deps.enabled or getattr(message, 'out', False):
+        if not self.deps.enabled or msg.out or msg.sender_id <= 0:
             return
-        uid = int(getattr(event, 'sender_id', 0) or 0)
-        chat = int(event.chat_id or 0)
-        if uid <= 0 or (
-            chat != self.deps.source and chat not in self.deps.watched()
+        if msg.chat_id != self.deps.source and (
+            msg.chat_id not in self.deps.watched()
         ):
             return
-        body = str(getattr(message, 'message', '') or '')
         self.deps.store.record_message(
             users.SeenMessage(
-                uid,
-                chat,
-                int(getattr(message, 'id', 0) or 0),
-                root=int(thread_top(getattr(message, 'reply_to', None)) or 0),
-                text=body if self.deps.store_text else '',
+                msg.sender_id,
+                msg.chat_id,
+                msg.id,
+                root=msg.root,
+                text=msg.text if self.deps.store_text else '',
             )
         )
-        self._maybe_enrich(uid)
+        self._maybe_enrich(msg.sender_id)
 
     def note_membership(self, event: tuple[int, int, bool, bool]) -> None:
         """Greeter sink: persist a join/leave (idempotent on admin_log_id)."""

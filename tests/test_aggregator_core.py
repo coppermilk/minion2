@@ -249,6 +249,7 @@ def _bare_core() -> aggregator.LinkAggregator:
     agg = aggregator.LinkAggregator(
         aggregator.AggregatorDeps(
             client=None,
+            account=None,
             config=_config(),
             consts=CONSTS,
             state_path=None,

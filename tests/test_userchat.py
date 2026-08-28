@@ -22,6 +22,7 @@ from minion_core.pace import Pace
 
 CHAT = -1001
 MSG = 77
+POST = 42
 TWO = 2
 
 
@@ -73,6 +74,31 @@ def _message(**over: object) -> SimpleNamespace:
 
 
 # ------------------------------------------------------------- the values
+
+
+def test_a_first_level_comment_still_finds_its_post() -> None:
+    """Msg.root falls back to reply_to_msg_id -- the common comment shape.
+
+    A nested comment carries reply_to_top_id; a first-level one carries
+    only reply_to_msg_id, and it names the same post. Reading just the
+    first would root every top-level comment at 0, and the like engine
+    matches a comment to a post BY that root -- so it would quietly stop
+    answering exactly the comments people write most.
+    """
+    flat = _message(reply_to=SimpleNamespace(reply_to_msg_id=POST))
+    account = _account(get_messages=lambda *a, **k: _answer([flat]))
+    got = asyncio.run(account.history(CHAT, userchat.Slice(limit=1)))
+    assert got[0].root == POST
+    assert got[0].reply_to == POST
+
+
+def test_a_message_that_answers_nothing_has_no_root() -> None:
+    """A plain message roots at 0, so it can never match a tracked post."""
+    account = _account(
+        get_messages=lambda *a, **k: _answer([_message(reply_to=None)])
+    )
+    got = asyncio.run(account.history(CHAT, userchat.Slice(limit=1)))
+    assert got[0].root == 0
 
 
 def test_a_message_becomes_a_typed_msg() -> None:
