@@ -38,13 +38,24 @@ def num(value: object, fallback: float = 0.0) -> float:
     file is free not to have -- which is a crash on a typo in a config an
     operator edits by hand. Reading through here answers "what does this
     key mean if the file is wrong", once, per kind.
+
+    A NUMERIC STRING counts as a number. These files are readable JSON on
+    purpose, so that a person can edit them, and a person types ``"77"``
+    as readily as ``77``. Refusing that would not be strict, it would be
+    a cursor silently reset to zero -- which for the greeter means
+    re-reading the whole admin log and DMing everyone in it.
     """
-    return float(value) if isinstance(value, (int, float)) else fallback
+    if isinstance(value, (int, float, str)):
+        try:
+            return float(value)
+        except ValueError:
+            return fallback
+    return fallback
 
 
 def whole(value: object, fallback: int = 0) -> int:
-    """Read one JSON value as an int, ``fallback`` when it is not one."""
-    return int(value) if isinstance(value, (int, float)) else fallback
+    """Read one JSON value as an int, truncating; ``fallback`` if unusable."""
+    return int(num(value, fallback))
 
 
 def text(value: object, fallback: str = '') -> str:
