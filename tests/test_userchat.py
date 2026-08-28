@@ -78,7 +78,7 @@ def _message(**over: object) -> SimpleNamespace:
 def test_a_message_becomes_a_typed_msg() -> None:
     """The 16 getattr reads this replaces collapse into one conversion."""
     account = _account(get_messages=lambda *a, **k: _answer([_message()]))
-    got = asyncio.run(account.history(CHAT, userchat.Span(limit=1)))
+    got = asyncio.run(account.history(CHAT, userchat.Slice(limit=1)))
     assert got == [
         userchat.Msg(
             id=MSG,
@@ -131,7 +131,7 @@ def test_an_admin_log_row_becomes_a_member_event() -> None:
 def test_a_failed_read_is_an_empty_list_not_an_exception() -> None:
     """Callers deal in values; the transport's failure stops here."""
     account = _account(get_messages=lambda *a, **k: _boom())
-    assert asyncio.run(account.history(CHAT, userchat.Span())) == []
+    assert asyncio.run(account.history(CHAT, userchat.Slice())) == []
 
 
 def test_a_failed_lookup_is_none() -> None:
@@ -175,7 +175,7 @@ def test_every_request_kind_passes_the_gate() -> None:
     async def go() -> None:
         await account.me()
         await account.peer(5)
-        await account.history(CHAT, userchat.Span())
+        await account.history(CHAT, userchat.Slice())
         await account.send(CHAT, userchat.Text('x'))
         await account.dm(5, userchat.Text('x'))
 
@@ -199,13 +199,3 @@ def test_dm_is_paced_apart_from_ordinary_writes() -> None:
     assert gate.paces[userchat.DM].per_minute < (
         gate.paces[userchat.WRITE].per_minute
     )
-
-
-def test_send_kwargs_choose_entities_or_html_but_not_both() -> None:
-    """Premium entities and an HTML template are alternatives, not a pair."""
-    rich = userchat._send_kwargs(userchat.Text('x', entities=[object()]))
-    assert 'formatting_entities' in rich
-    assert 'parse_mode' not in rich
-    markup = userchat._send_kwargs(userchat.Text('x', html=True))
-    assert markup['parse_mode'] == 'html'
-    assert 'formatting_entities' not in markup

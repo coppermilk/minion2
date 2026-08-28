@@ -25,6 +25,7 @@ from telethon.tl.types import InputReplyToMessage
 from telethon.tl.types import ReactionCustomEmoji
 from telethon.tl.types import ReactionEmoji
 
+from minion_core.adapters import userchat
 from minions.userbot.core import tasks
 from minions.userbot.core.matching import needs_human
 from minions.userbot.core.matching import thread_top
@@ -594,7 +595,7 @@ class CommentWatch:
         await self.deps.client.send_message(
             reaction.chat,
             message.text,
-            formatting_entities=message.entities,
+            formatting_entities=userchat.entities(message.text, message.spans),
             reply_to=reaction.reply_to,
             link_preview=False,
         )
@@ -616,7 +617,7 @@ class CommentWatch:
             SendMessageRequest(
                 peer=reaction.chat,
                 message=message.text,
-                entities=message.entities,
+                entities=userchat.entities(message.text, message.spans),
                 reply_to=reply,
                 no_webpage=True,
             )

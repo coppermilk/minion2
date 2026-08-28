@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from minion_core.adapters import userchat
 from minions.userbot.core.render import compose
 from minions.userbot.core.render import render_constants
 from minions.userbot.core.render import sample_groups
@@ -214,7 +215,7 @@ class CommandRouter:
         await self.bot.client.send_message(
             self.bot.config.source,
             message.text,
-            formatting_entities=message.entities,
+            formatting_entities=userchat.entities(message.text, message.spans),
         )
         log.info(
             'sent premium constants preview to %s', self.bot.config.source
@@ -230,7 +231,9 @@ class CommandRouter:
             await self.bot.client.send_message(
                 self.bot.config.source,
                 message.text,
-                formatting_entities=message.entities,
+                formatting_entities=userchat.entities(
+                    message.text, message.spans
+                ),
                 link_preview=False,
             )
         log.info(

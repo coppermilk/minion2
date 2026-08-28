@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from minion_core.adapters import userchat
 from minions.userbot.core.matching import action_ok
 from minions.userbot.core.matching import duration_seconds
 from minions.userbot.core.matching import extract_fields
@@ -350,14 +351,16 @@ class LinkAggregator:
                     target,
                     thumb,
                     caption=message.text,
-                    formatting_entities=message.entities,
+                    formatting_entities=userchat.entities(
+                        message.text, message.spans
+                    ),
                 )
             except Exception:  # noqa: BLE001 -- bad thumb falls back to text
                 log.warning('thumbnail send failed; posting as text')
         return await self.deps.client.send_message(
             target,
             message.text,
-            formatting_entities=message.entities,
+            formatting_entities=userchat.entities(message.text, message.spans),
             link_preview=False,
         )
 

@@ -46,6 +46,8 @@ from typing import TYPE_CHECKING
 
 from minion_core.pace import Gate
 from minion_core.pace import Pace
+from minion_core.richtext import EMOJI
+from minion_core.richtext import LINK
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -54,6 +56,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from telethon import TelegramClient
+
+    from minion_core.richtext import Span
 
 _LOG = logging.getLogger('userchat')
 
@@ -144,7 +148,7 @@ class MemberEvent:
 
 
 @dataclass(frozen=True)
-class Span:
+class Slice:
     """Which slice of a chat's history to read.
 
     ``mine`` restricts to our own messages (finding our posts in a channel);
@@ -161,13 +165,13 @@ class Span:
 class Text:
     """A message to send, with however it wants to be formatted.
 
-    ``entities`` carries premium-emoji formatting built upstream; ``html``
+    ``spans`` carries premium-emoji formatting built upstream; ``html``
     is the alternative for templates that ship markup. ``thread`` makes the
     reply land inside a discussion thread rather than flat.
     """
 
     body: str
-    entities: Sequence[object] = ()
+    spans: Sequence[Span] = ()
     reply_to: int = 0
     thread: int = 0
     html: bool = False
@@ -232,7 +236,7 @@ class Account:
         got = await self._call(READ, self.client.get_entity(chat))
         return _peer(got) if got is not None else None
 
-    async def history(self, chat: int, span: Span) -> list[Msg]:
+    async def history(self, chat: int, span: Slice) -> list[Msg]:
         """Read a slice of a chat's history, newest first ([] on failure)."""
         kwargs: dict[str, object] = {'limit': span.limit}
         if span.under:
@@ -249,7 +253,7 @@ class Account:
 
     async def message(self, chat: int, msg_id: int) -> Msg | None:
         """Read one message by id, or None when it is gone."""
-        rows = await self.history(chat, Span(ids=msg_id))
+        rows = await self.history(chat, Slice(ids=msg_id))
         return rows[0] if rows else None
 
     async def discussion_thread(
@@ -333,7 +337,7 @@ class Account:
                 SendMessageRequest(
                     peer=chat,
                     message=text.body,
-                    entities=list(text.entities) or None,
+                    entities=entities(text.body, text.spans) or None,
                     reply_to=InputReplyToMessage(
                         reply_to_msg_id=text.reply_to, top_msg_id=text.thread
                     ),
@@ -477,13 +481,51 @@ class Account:
         return got
 
 
+def _units(text: str) -> int:
+    """Length of ``text`` in UTF-16 code units -- Telegram's entity unit."""
+    return len(text.encode('utf-16-le')) // 2
+
+
+def entities(text: str, spans: Sequence[Span]) -> list[object]:
+    """Convert character-offset spans into Telegram message entities.
+
+    THE conversion, and the reason the door is worth having. Telegram
+    measures an entity in UTF-16 code units; everything above counts Python
+    characters, and the two differ on exactly the non-BMP characters this
+    account sends all day. Getting it wrong raises nothing -- it delivers a
+    message whose colored glyph sits on the wrong letter -- so the
+    arithmetic lives here once, under a test that pins the offsets.
+    """
+    from telethon.tl.types import MessageEntityCustomEmoji
+    from telethon.tl.types import MessageEntityTextUrl
+    from telethon.tl.types import MessageEntityUnderline
+
+    out: list[object] = []
+    for span in spans:
+        at = _units(text[: span.at])
+        size = _units(text[span.at : span.at + span.length])
+        if span.kind == EMOJI:
+            out.append(
+                MessageEntityCustomEmoji(
+                    offset=at, length=size, document_id=int(span.ref)
+                )
+            )
+        elif span.kind == LINK:
+            out.append(
+                MessageEntityTextUrl(offset=at, length=size, url=span.ref)
+            )
+        else:
+            out.append(MessageEntityUnderline(offset=at, length=size))
+    return out
+
+
 def _send_kwargs(text: Text) -> dict[str, object]:
     """Return the keyword arguments one Text implies for a plain send."""
     kwargs: dict[str, object] = {'link_preview': text.preview}
     if text.html:
         kwargs['parse_mode'] = 'html'
-    elif text.entities:
-        kwargs['formatting_entities'] = list(text.entities)
+    elif text.spans:
+        kwargs['formatting_entities'] = entities(text.body, text.spans)
     if text.reply_to:
         kwargs['reply_to'] = text.reply_to
     return kwargs
@@ -493,7 +535,7 @@ def _caption_kwargs(text: Text) -> dict[str, object]:
     """Return the keyword arguments a Text implies for a photo caption."""
     if text.html:
         return {'parse_mode': 'html'}
-    return {'formatting_entities': list(text.entities)}
+    return {'formatting_entities': entities(text.body, text.spans)}
 
 
 def _peer(raw: object) -> Peer:

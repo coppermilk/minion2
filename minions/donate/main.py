@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 
+from minion_core.adapters import userchat
 from minions.userbot.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
@@ -207,7 +208,7 @@ class DonateBot:
         await self.client.send_message(
             target,
             message.text,
-            formatting_entities=message.entities,
+            formatting_entities=userchat.entities(message.text, message.spans),
             link_preview=False,
         )
         log.info('donate: rendered shout-out for %r', donation.name)

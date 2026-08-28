@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 from telethon import TelegramClient
 from telethon import events
 
+from minion_core.adapters import userchat
 from minions.userbot.core import codec
 from minions.userbot.core.client import build_client
 from minions.userbot.core.config import CONSTANTS_FILE
@@ -311,7 +312,7 @@ class Userbot:
         await self.client.send_message(
             self.config.source,
             message.text,
-            formatting_entities=message.entities,
+            formatting_entities=userchat.entities(message.text, message.spans),
             link_preview=False,
         )
 

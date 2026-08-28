@@ -17,11 +17,26 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+class _Any:
+    """A stub instance that remembers how it was constructed.
+
+    Telethon request and entity types are plain records, so a double that
+    stores what it was handed lets a test read back the arguments the code
+    under test computed -- entity offsets, above all.
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        """Keep the positional arguments and expose the keywords as fields."""
+        self.args = args
+        for name, value in kwargs.items():
+            setattr(self, name, value)
+
+
 class _AnyMeta(type):
     """A class whose every attribute is another such class (nested access)."""
 
     def __getattr__(cls, name: str) -> type:
-        return _AnyMeta(name, (), {})
+        return _AnyMeta(name, (_Any,), {})
 
 
 def install_telethon_stub() -> None:
@@ -45,7 +60,7 @@ def install_telethon_stub() -> None:
         'telethon.tl.types',
     ):
         module = types.ModuleType(name)
-        module.__getattr__ = lambda attr: _AnyMeta(attr, (), {})
+        module.__getattr__ = lambda attr: _AnyMeta(attr, (_Any,), {})
         module.__path__ = []  # type: ignore[attr-defined]
         sys.modules[name] = module
 
