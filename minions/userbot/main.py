@@ -254,7 +254,6 @@ class Userbot:
         )
         self.aggregator = LinkAggregator(
             AggregatorDeps(
-                client=self.client,
                 account=self.account,
                 config=self.config,
                 consts=self.consts,

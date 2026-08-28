@@ -44,8 +44,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from telethon import TelegramClient
-
     from minions.userbot.core.humanize import Variety
     from minions.userbot.core.models import Config
     from minions.userbot.core.models import Consts
@@ -61,7 +59,6 @@ POSTED_CAP = 300
 class AggregatorDeps:
     """Everything the poster may reach; nothing else is in scope."""
 
-    client: TelegramClient
     account: userchat.Account
     config: Config
     consts: Consts
@@ -330,36 +327,24 @@ class LinkAggregator:
         """
         posts: list[tuple[int, int]] = []
         for target in self.deps.targets():
-            try:
-                sent = await self._send_post(target, message, thumb)
-            except Exception:
-                log.exception('send to %s failed', target)
-                continue
-            posts.append((target, int(getattr(sent, 'id', 0) or 0)))
+            post_id = await self._send_post(target, message, thumb)
+            if post_id:
+                posts.append((target, post_id))
+            else:
+                log.warning('send to %s did not go out', target)
         return posts
 
     async def _send_post(
         self, target: int, message: PremiumMessage, thumb: str
-    ) -> object:
-        """Send one post as a photo (thumb) or text; return the message."""
+    ) -> int:
+        """Send one post as a photo (thumb) or text; 0 if neither landed."""
+        text = userchat.Text(message.text, message.spans)
         if thumb:
-            try:
-                return await self.deps.client.send_file(
-                    target,
-                    thumb,
-                    caption=message.text,
-                    formatting_entities=userchat.entities(
-                        message.text, message.spans
-                    ),
-                )
-            except Exception:  # noqa: BLE001 -- bad thumb falls back to text
-                log.warning('thumbnail send failed; posting as text')
-        return await self.deps.client.send_message(
-            target,
-            message.text,
-            formatting_entities=userchat.entities(message.text, message.spans),
-            link_preview=False,
-        )
+            post_id = await self.deps.account.send_photo(target, thumb, text)
+            if post_id:
+                return post_id
+            log.warning('thumbnail send failed; posting as text')
+        return await self.deps.account.send(target, text)
 
     def _save(self) -> None:
         """Persist state to disk as readable, indented JSON (atomic)."""

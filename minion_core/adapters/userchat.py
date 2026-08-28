@@ -326,8 +326,15 @@ class Account:
         )
         return int(getattr(sent, 'id', 0) or 0)
 
-    async def send_photo(self, chat: int, photo: Path, text: Text) -> int:
-        """Send a photo with a caption; 0 when it did not go out."""
+    async def send_photo(
+        self, chat: int, photo: str | Path, text: Text
+    ) -> int:
+        """Send a photo with a caption; 0 when it did not go out.
+
+        ``photo`` is a local file or a URL Telegram fetches itself -- the
+        aggregator posts a YouTube thumbnail by url. It stays a str here
+        rather than a Path because Path() collapses the // in a url.
+        """
         sent = await self._call(
             WRITE,
             self.client.send_file(

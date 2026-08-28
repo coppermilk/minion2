@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -27,6 +28,7 @@ from minions.userbot.core.models import Config  # noqa: E402
 from minions.userbot.core.models import Group  # noqa: E402
 from minions.userbot.core.models import Item  # noqa: E402
 from minions.userbot.core.models import Posted  # noqa: E402
+from minions.userbot.engines import premium_emoji  # noqa: E402
 from minions.userbot.glue import aggregator  # noqa: E402
 from minions.userbot.glue import reactions as reactions_glue  # noqa: E402
 
@@ -178,7 +180,6 @@ def _bare_aggregator(fake: _FakeFlush) -> aggregator.LinkAggregator:
     """
     agg = aggregator.LinkAggregator(
         aggregator.AggregatorDeps(
-            client=None,
             account=None,
             config=Config(
                 source=0,
@@ -336,3 +337,77 @@ def test_discussion_throttle_disabled_when_zero(
     asyncio.run(_watch_with_gap(0.0)._throttle_discussion())
 
     assert slept == []
+
+
+class _FakeAccount:
+    """An Account that reports what went out, and what it was asked to send."""
+
+    def __init__(self, *, photo_id: int = 0, text_id: int = 0) -> None:
+        """Answer send_photo with ``photo_id`` and send with ``text_id``."""
+        self.photo_id = photo_id
+        self.text_id = text_id
+        self.calls: list[str] = []
+
+    async def send_photo(self, chat: int, photo: str, text: object) -> int:
+        """Record the photo attempt and answer with the canned id."""
+        self.calls.append(f'photo:{chat}:{photo}')
+        return self.photo_id
+
+    async def send(self, chat: int, text: object) -> int:
+        """Record the text attempt and answer with the canned id."""
+        self.calls.append(f'text:{chat}')
+        return self.text_id
+
+
+def _delivering(account: _FakeAccount) -> aggregator.LinkAggregator:
+    """Return a poster wired to ``account``, with two targets."""
+    agg = _bare_aggregator(_FakeFlush([]))
+    # _bare_aggregator stubs delivery out; here delivery IS the subject.
+    del agg._deliver_post
+    agg.deps = replace(agg.deps, account=account, targets=lambda: (11, 22))
+    return agg
+
+
+def _deliver(agg: aggregator.LinkAggregator, thumb: str) -> object:
+    """Run one delivery of a trivial message with ``thumb``."""
+    message = premium_emoji.PremiumMessage('body')
+    return asyncio.run(agg._deliver_post(message, thumb))
+
+
+def test_a_thumbnail_post_never_also_sends_the_text() -> None:
+    """A photo that lands is the whole post -- no second, text copy."""
+    account = _FakeAccount(photo_id=500)
+    assert _deliver(_delivering(account), 'https://img/1.jpg') == [
+        (11, 500),
+        (22, 500),
+    ]
+    assert account.calls == [
+        'photo:11:https://img/1.jpg',
+        'photo:22:https://img/1.jpg',
+    ]
+
+
+def test_a_refused_thumbnail_falls_back_to_text() -> None:
+    """The adapter answers 0 rather than raising, so 0 IS the fallback."""
+    account = _FakeAccount(photo_id=0, text_id=700)
+    assert _deliver(_delivering(account), 'https://img/bad.jpg') == [
+        (11, 700),
+        (22, 700),
+    ]
+    assert account.calls[:2] == [
+        'photo:11:https://img/bad.jpg',
+        'text:11',
+    ]
+
+
+def test_nothing_delivered_means_nothing_recorded() -> None:
+    """An empty result is what tells the caller to re-queue the group.
+
+    The old code reached this by catching an exception per target; the
+    adapter degrades instead, so the check is now "did it come back with
+    an id" -- and a post recorded under id 0 would be a post the reaction
+    engine then watches at message 0.
+    """
+    account = _FakeAccount(photo_id=0, text_id=0)
+    assert _deliver(_delivering(account), '') == []
+    assert account.calls == ['text:11', 'text:22']

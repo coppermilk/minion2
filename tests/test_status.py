@@ -125,7 +125,6 @@ def _bot(tmp_path: Path) -> main.Userbot:
     bot.modes = SimpleNamespace(mode_of=service_modes.__getitem__)
     bot.aggregator = aggregator_glue.LinkAggregator(
         aggregator_glue.AggregatorDeps(
-            client=SimpleNamespace(),
             account=None,
             config=bot.config,
             consts=bot.consts,
