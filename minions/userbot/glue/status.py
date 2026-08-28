@@ -523,8 +523,15 @@ class StatusReport:
         return self._in(at - time.time()) if at > 0 else 'first run'
 
     def _in(self, seconds: float) -> str:
-        """Return a countdown, or 'now' for something already due."""
-        return 'now' if seconds <= 0 else f'in {fmt_eta(seconds)}'
+        """Return a countdown, or 'now' for anything under a second.
+
+        Sub-second waits are why the threshold is not zero: fmt_eta floors
+        to whole seconds, so half a second rendered as "in 0s" -- which
+        reads like a broken counter rather than "free". The gate lands
+        there constantly, because resolving the report's own chat names
+        uses it moments before the report prints it.
+        """
+        return 'now' if seconds < 1 else f'in {fmt_eta(seconds)}'
 
     def _pace_lines(self) -> list[str]:
         """Return the gate's lanes: when each may fire, and any widening.

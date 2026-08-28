@@ -256,6 +256,8 @@ def _bot(tmp_path: Path) -> main.Userbot:
             Lane('dm', 44.0, 2.0),
             Lane('read', 0.0, 1.0),
             Lane('write', 3.0, 1.0),
+            # Under a second: reads as free, not as 'in 0s'.
+            Lane('story', 0.4, 1.0),
         ]
     )
     bot.report = StatusReport(bot)
@@ -307,7 +309,7 @@ nothing new 1
 . tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
 . reactions rescan -> in 2m 0s . stories poll -> in 15m 0s . greeter check \
 -> in 1m 0s
-. pace . dm in 44s . read now . write in 3s
+. pace . dm in 44s . read now . write in 3s . story now
 . widened by a flood . dm x2.0
 
 [C] Services
