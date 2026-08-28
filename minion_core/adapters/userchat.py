@@ -48,6 +48,8 @@ from minion_core.pace import Gate
 from minion_core.pace import Pace
 from minion_core.richtext import EMOJI
 from minion_core.richtext import LINK
+from minion_core.richtext import UNDERLINE
+from minion_core.richtext import Span
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -58,7 +60,6 @@ if TYPE_CHECKING:
 
     from telethon import TelegramClient
 
-    from minion_core.richtext import Span
 
 _LOG = logging.getLogger('userchat')
 
@@ -126,6 +127,7 @@ class Msg:
     root: int = 0
     date: datetime | None = None
     mine_reacted: bool = False
+    spans: tuple[Span, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -539,9 +541,13 @@ class Account:
         return got
 
 
+_UTF16 = 'utf-16-le'
+"""Telegram measures every entity offset in units of this encoding."""
+
+
 def _units(text: str) -> int:
     """Length of ``text`` in UTF-16 code units -- Telegram's entity unit."""
-    return len(text.encode('utf-16-le')) // 2
+    return len(text.encode(_UTF16)) // 2
 
 
 def entities(text: str, spans: Sequence[Span]) -> list[object]:
@@ -644,6 +650,7 @@ def _msg(raw: object) -> Msg:
         root=_root(reply),
         date=getattr(raw, 'date', None),
         mine_reacted=_mine(getattr(raw, 'reactions', None)),
+        spans=_spans(raw),
     )
 
 
@@ -653,6 +660,55 @@ def _root(reply: object) -> int:
     if top is not None:
         return int(top)
     return int(getattr(reply, 'reply_to_msg_id', 0) or 0)
+
+
+def _spans(raw: object) -> tuple[Span, ...]:
+    """Read an incoming message's formatting back into neutral spans.
+
+    The inverse of ``entities``: UTF-16 offsets in, characters out, same
+    vocabulary. A door that only converts outgoing formatting is half a
+    door -- the id of a premium emoji someone SENT us is exactly what the
+    operator's dump tool is for, and it should not have to name the vendor
+    to read one.
+    """
+    text = str(getattr(raw, 'message', '') or '')
+    out: list[Span] = []
+    for entity in getattr(raw, 'entities', None) or []:
+        kind, ref = _mark(entity)
+        if kind:
+            at = _chars(text, 0, int(getattr(entity, 'offset', 0) or 0))
+            size = _chars(
+                text,
+                int(getattr(entity, 'offset', 0) or 0),
+                int(getattr(entity, 'length', 0) or 0),
+            )
+            out.append(Span(kind, at, size, ref))
+    return tuple(out)
+
+
+def _mark(entity: object) -> tuple[str, str]:
+    """Return one entity's (kind, ref); ('', '') for one we do not model."""
+    emoji = getattr(entity, 'document_id', None)
+    if emoji is not None:
+        return EMOJI, str(emoji)
+    url = getattr(entity, 'url', None)
+    if url is not None:
+        return LINK, str(url)
+    if type(entity).__name__.endswith('Underline'):
+        return UNDERLINE, ''
+    return '', ''
+
+
+def _chars(text: str, offset: int, length: int) -> int:
+    """Length in CHARACTERS of the UTF-16 slice [offset, offset+length).
+
+    ``errors='ignore'`` covers an offset that would split a surrogate
+    pair. Telegram never sends one; a malformed entity that did would
+    otherwise raise here and take the whole history read down with it.
+    """
+    units = text.encode(_UTF16)
+    piece = units[offset * 2 : (offset + length) * 2]
+    return len(piece.decode(_UTF16, errors='ignore'))
 
 
 def _mine(reactions: object) -> bool:

@@ -12,6 +12,8 @@ from the implementation that predates the split.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from minion_core.adapters import userchat
 from minion_core.richtext import EMOJI
 from minion_core.richtext import LINK
@@ -138,3 +140,30 @@ def test_send_kwargs_choose_spans_or_html_but_not_both() -> None:
     markup = userchat._send_kwargs(userchat.Text(HEART, html=True))
     assert markup['parse_mode'] == 'html'
     assert 'formatting_entities' not in markup
+
+
+def test_incoming_formatting_comes_back_as_the_same_spans() -> None:
+    """The door converts both ways, in one vocabulary.
+
+    An entity Telegram sends us is read back into the span that would
+    have produced it -- UTF-16 in, characters out -- so the round trip
+    is the identity on everything the project models.
+    """
+    message = premium_emoji.build_premium_message(MARKUP)
+    raw = SimpleNamespace(
+        id=1,
+        message=message.text,
+        entities=userchat.entities(message.text, message.spans),
+        reply_to=None,
+        reactions=None,
+        date=None,
+    )
+    assert userchat._msg(raw).spans == message.spans
+
+
+def test_a_message_with_no_formatting_carries_no_spans() -> None:
+    """The common case costs nothing and says nothing."""
+    plain = SimpleNamespace(
+        id=1, message='hi', entities=None, reply_to=None, reactions=None
+    )
+    assert userchat._msg(plain).spans == ()
