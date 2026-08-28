@@ -17,6 +17,7 @@ from itertools import pairwise
 
 import pytest
 
+from minion_core.pace import FLOOD_WIDEN
 from minion_core.pace import WINDOW_SEC
 from minion_core.pace import Gate
 from minion_core.pace import Pace
@@ -186,3 +187,43 @@ def test_slack_is_never_below_nominal(kind: str) -> None:
     bench = _bench(**{kind: Pace()})
     bench.run(kind, 200)
     assert bench.gate.slack(kind) == 1.0
+
+
+# ------------------------------------------------------- reading the gate
+
+
+def test_free_in_reserves_nothing() -> None:
+    """Reading the gate must not spend the slots it is describing.
+
+    /status renders every lane on each call, so if free_in booked a slot
+    the report would throttle the bot -- and the more often an operator
+    looked at it, the slower the account would get.
+    """
+    bench = _bench(read=Pace(min_gap_sec=GAP))
+    before = [bench.gate.free_in('read') for _ in range(5)]
+    assert before == [0.0] * 5  # idle lane, and still idle after 5 reads
+    assert bench.run('read', 2) == [0.0, GAP]  # unchanged by the reading
+
+
+def test_free_in_reports_the_wait_a_request_would_face() -> None:
+    """After a request, the lane says how long the next one must wait."""
+    bench = _bench(read=Pace(min_gap_sec=GAP))
+    bench.run('read', 1)
+    assert bench.gate.free_in('read') == GAP
+
+
+def test_free_in_includes_the_overall_pace() -> None:
+    """A lane with no pace of its own still answers the account ceiling."""
+    bench = _Bench(Gate({}, overall=Pace(min_gap_sec=GAP)))
+    bench.run('read', 1)
+    assert bench.gate.free_in('story') == GAP
+
+
+def test_lanes_report_every_paced_kind_and_its_widening() -> None:
+    """A flooded lane shows up widened, which is the FloodWait made visible."""
+    bench = _bench(read=Pace(min_gap_sec=GAP), dm=Pace(min_gap_sec=GAP))
+    bench.gate.flooded('dm')
+    lanes = {lane.kind: lane for lane in bench.gate.lanes()}
+    assert sorted(lanes) == ['dm', 'read']
+    assert lanes['dm'].slack == FLOOD_WIDEN
+    assert lanes['read'].slack == 1.0

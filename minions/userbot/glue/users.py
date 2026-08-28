@@ -115,6 +115,10 @@ class AudienceLog:
         )
         self._maybe_enrich(event.user_id)
 
+    def waiting(self) -> int:
+        """Return how many strangers are queued for an identity lookup."""
+        return len(self._waiting)
+
     def close(self) -> None:
         """Drop in-flight lookups and release the SQLite handle."""
         tasks.cancel_all(self._lookups)

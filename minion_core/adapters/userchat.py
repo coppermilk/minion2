@@ -45,6 +45,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minion_core.pace import Gate
+from minion_core.pace import Lane
 from minion_core.pace import Pace
 from minion_core.richtext import EMOJI
 from minion_core.richtext import LINK
@@ -375,6 +376,10 @@ class Account:
             self.client.send_message(user_id, text.body, **_send_kwargs(text)),
         )
         return sent is not None
+
+    def pacing(self) -> list[Lane]:
+        """Report every lane of the gate, for an operator readout."""
+        return self.gate.lanes()
 
     def strained(self, kind: str) -> bool:
         """Whether Telegram recently told us to slow this lane down.

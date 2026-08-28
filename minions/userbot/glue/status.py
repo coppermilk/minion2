@@ -31,6 +31,7 @@ STATUS_WARM_PEERS = 3
 if TYPE_CHECKING:
     from minions.userbot.core import relationship
     from minions.userbot.core.models import Emoji
+    from minions.userbot.engines import stories
     from minions.userbot.main import Userbot
 
 
@@ -47,6 +48,17 @@ def _clock_eta(at: float, tz_offset: float) -> str:
     clock = datetime.fromtimestamp(at, tz=zone).strftime('%H:%M')
     eta = at - time.time()
     return f'{clock} (in {"now" if eta <= 0 else fmt_eta(eta)})'
+
+
+def _waiting(row: stories.Seen) -> bool:
+    """Whether a peer has something new that we are not opening."""
+    return bool(row.unseen) and not row.viewing
+
+
+def _glance_order(row: stories.Seen) -> tuple[int, int]:
+    """Sort a glance: who we are opening first, then who is waiting."""
+    rank = 1 if _waiting(row) else (0 if row.viewing else 2)
+    return (rank, -row.unseen)
 
 
 def _pool_markup(pool: tuple[Emoji, ...]) -> str:
@@ -104,6 +116,8 @@ class StatusReport:
             self._users_line(),
             *self._stories_lines(labels),
             '',
+            *self._schedule_lines(),
+            '',
             *self._services_lines(),
         ]
         if self.bot.consts.status_help:
@@ -129,33 +143,29 @@ class StatusReport:
         )
         if not gp.enabled:
             return [head]
-        return [head, self._greeter_schedule_line()]
+        return [head, *self._greeter_sleep_lines()]
 
-    def _greeter_schedule_line(self) -> str:
-        """Return the greeter's awake/asleep state and its next action time.
+    def _greeter_sleep_lines(self) -> list[str]:
+        """Say so when the greeter is asleep, and what is waiting on it.
 
-        When asleep (outside the persona wake window) DMs are held, so this
-        says so, when it wakes, and how many events are queued -- answering
-        "is anything queued?" instead of a silent, idle-looking greeter.
+        Outside the persona's wake window DMs are held, so this names the
+        window, when it opens, and how many events are queued -- without
+        it a held greeter and a broken one look the same. The awake case
+        needs no line here: its countdown lives in Schedule.
         """
         gp = self.bot.greeter.params
-        b = self.bullet()
         now = time.time()
-        if not self.bot.greeter.awake(now):
-            window = f'{gp.wake_start_hour:g}-{gp.wake_end_hour:g}h'
-            return (
+        if self.bot.greeter.awake(now):
+            return []
+        window = f'{gp.wake_start_hour:g}-{gp.wake_end_hour:g}h'
+        b = self.bullet()
+        return [
+            (
                 f'{b} asleep (wake {window}) {self.arrow()} '
                 f'wakes {self._greeter_wake_eta(now)} '
                 f'{b} {self.bot.greeter.deferred} queued'
             )
-        period = int(gp.poll_sec)
-        nxt = self.bot.greeter.next_sync
-        if nxt <= 0:
-            return f'{b} check {period}s {b} next: first run'
-        return (
-            f'{b} check {period}s {self.arrow()} '
-            f'next {_clock_eta(nxt, gp.tz_offset_hours)}'
-        )
+        ]
 
     def _greeter_wake_eta(self, now: float) -> str:
         """Return 'HH:MM (in Xd Yh)' for the greeter's next wake-up."""
@@ -267,7 +277,7 @@ class StatusReport:
                 f'{len(brain.state.pending)}'
             ),
             f'{b} window {window} (prior) {b} learned {learned}',
-            self._react_rescan_line(),
+            *([line] if (line := self._react_rescan_line()) else []),
             *self._react_attach_lines(),
             *self._last_posts_lines(labels),
             *self._pending_react_lines(),
@@ -316,18 +326,10 @@ class StatusReport:
         return [today, *self._warmth_lines(brain.warmth(), 'commenters')]
 
     def _react_rescan_line(self) -> str:
-        """Return the auto-rescan period and the countdown to the next one."""
-        b = self.bullet()
-        period = int(self.bot.comment_watch.deps.rescan_sec)
-        if period <= 0:
-            return f'{b} rescan: off (use /requeue)'
-        nxt = self.bot.comment_watch.next_rescan
-        if nxt <= 0:
-            return f'{b} rescan {period}s {b} next: first run'
-        tz = self.bot.reactions.params.tz_offset_hours
-        return (
-            f'{b} rescan {period}s {self.arrow()} next {_clock_eta(nxt, tz)}'
-        )
+        """Say when the auto-rescan is OFF; its countdown lives in Schedule."""
+        if self.bot.comment_watch.deps.rescan_sec > 0:
+            return ''
+        return f'{self.bullet()} rescan: off (use /requeue)'
 
     def _pending_react_lines(self) -> list[str]:
         """Return queued reactions: which lands on which comment, when."""
@@ -367,61 +369,184 @@ class StatusReport:
         return lines
 
     def _stories_lines(self, labels: dict[int, str]) -> list[str]:
-        """Return the story-viewer section: header plus the view queue."""
+        """Return the story-viewer section: header, the glance, attachment."""
         if not self.bot.stories.params.enabled:
             off = f'{self._dot(on=False)} off'
             return [self._header('stories', 'Stories', off)]
         return [
             self._stories_line(),
-            *self._stories_queue_lines(labels),
+            *self._glance_lines(labels),
             *self._warmth_lines(self.bot.stories.warmth(), 'peers'),
         ]
 
     def _stories_line(self) -> str:
-        """Return the story-viewer header: on, count, next view, next poll."""
+        """Return the story-viewer header: on, counts, the next view."""
         now = time.time()
         tz = self.bot.stories.params.tz_offset_hours
-        today = self.bot.stories.views_today(now, tz)
-        reacted = self.bot.stories.reacts_today(now, tz)
         cap = self.bot.stories.params.react_max_per_day
         parts = [
             f'{self._dot(on=True)} on',
-            f'{today} today',
-            f'{reacted}/{cap} reacted',
+            f'{self.bot.stories.views_today(now, tz)} today',
+            f'{self.bot.stories.reacts_today(now, tz)}/{cap} reacted',
             f'{len(self.bot.story_watch.pending)} queued',
         ]
         whens = [v.when for v in self.bot.story_watch.pending]
         if whens:
-            eta = min(whens) - now
-            when = 'now' if eta <= 0 else f'in {fmt_eta(eta)}'
-            parts.append(f'next view {self.arrow()} {when}')
-        else:
-            # Empty queue: say WHY (asleep, cooldown, silent day) so it is not
-            # a mystery -- the same reason the poll logs.
-            reason = self.bot.stories.blocked_reason(now)
-            if reason:
-                parts.append(f'idle ({reason})')
-        nxt = self.bot.story_watch.next_poll
-        poll_eta = nxt - now if nxt else 0.0
-        if poll_eta > 0:
-            parts.append(f'next poll {self.arrow()} in {fmt_eta(poll_eta)}')
+            due = self._in(min(whens) - now)
+            parts.append(f'next view {self.arrow()} {due}')
         return self._header('stories', 'Stories', *parts)
 
-    def _stories_queue_lines(self, labels: dict[int, str]) -> list[str]:
-        """Return the queued story views: whose, how many, and the ETA."""
-        if not self.bot.story_watch.pending:
-            return []
-        now = time.time()
+    def _glance_lines(self, labels: dict[int, str]) -> list[str]:
+        """Return who has stories up right now and our verdict on each.
+
+        The operator can see these people in Telegram; before this the
+        report named only the ones we chose, so an ignored person and an
+        idle engine looked identical. Rendered from the last poll's
+        snapshot with its age beside it -- /status must not re-read the
+        feed just to look current.
+        """
+        glance = self.bot.stories.last_glance
         b = self.bullet()
-        rows = []
-        for view in sorted(self.bot.story_watch.pending, key=lambda v: v.when):
-            who = labels.get(view.peer_id, str(view.peer_id))
-            eta = view.when - now
-            when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
-            rows.append(
-                f'    {who} {b} {len(view.story_ids)} story(s) {b} {when}'
+        if not glance.at:
+            return [f'{b} glance: none yet']
+        head = f'{b} glance {fmt_eta(time.time() - glance.at)} ago {b} '
+        if not glance.peers:
+            return [head + 'nobody has stories up']
+        rows = [
+            self._peer_row(row, labels)
+            for row in sorted(glance.peers, key=_glance_order)
+        ]
+        return [
+            head + self._glance_counts(glance),
+            f'{b} with stories now:',
+            *_capped(rows),
+        ]
+
+    def _glance_counts(self, glance: stories.Glance) -> str:
+        """Return the one-line tally of the last glance's verdicts."""
+        peers = glance.peers
+        hidden = sum(1 for row in peers if row.hidden)
+        seen = f'{len(peers)} with stories'
+        if hidden:
+            seen += f' ({hidden} archived)'
+        b = self.bullet()
+        tally = f' {b} '.join(
+            (
+                f'viewing {sum(1 for r in peers if r.viewing)}',
+                f'passed {sum(1 for r in peers if _waiting(r))}',
+                f'nothing new {sum(1 for r in peers if not r.unseen)}',
             )
-        return [f'{b} queued:', *_capped(rows)]
+        )
+        blocked = f' {b} {glance.blocked}' if glance.blocked else ''
+        return f'{seen} {b} {tally}{blocked}'
+
+    def _peer_row(self, row: stories.Seen, labels: dict[int, str]) -> str:
+        """Return one person's line: what they have up, and what we do."""
+        b = self.bullet()
+        who = labels.get(row.peer_id) or str(row.peer_id)
+        parts = [
+            f'{row.active} up',
+            f'{row.unseen} new' if row.unseen else '-',
+            self._peer_verdict(row),
+        ]
+        if row.hidden:
+            parts.append('archived feed')
+        return f'    {who} {b} ' + f' {b} '.join(parts)
+
+    def _peer_verdict(self, row: stories.Seen) -> str:
+        """Return what we are doing about one peer, with an ETA if queued."""
+        if not row.viewing:
+            return row.verdict
+        return f'viewing {row.viewing}{self._view_eta(row.peer_id)}'
+
+    def _view_eta(self, peer_id: int) -> str:
+        """Return ' in ~3m 10s' for a queued peer, or '' when it is gone."""
+        for view in self.bot.story_watch.pending:
+            if view.peer_id == peer_id:
+                eta = view.when - time.time()
+                return ' due now' if eta <= 0 else f' in ~{fmt_eta(eta)}'
+        return ''
+
+    def _schedule_lines(self) -> list[str]:
+        """Return the Schedule section: when each loop next runs, and the pace.
+
+        Every background loop in one place, because the question an
+        operator actually has is "is anything still running?", and six
+        countdowns scattered across six sections cannot answer it. A loop
+        that is off says so rather than showing a countdown that will
+        never reach zero.
+        """
+        b = self.bullet()
+        waiting = self.bot.audience.waiting()
+        host = f' {b} '.join(
+            (
+                f'tick {self.arrow()} {self._due(self.bot.next_tick)}',
+                f'probe {self.arrow()} {self._due(self.bot.next_probe())}',
+                f'lookups {waiting} queued',
+            )
+        )
+        loops = f' {b} '.join(
+            f'{name} {self.arrow()} {self._due(at) if running else "off"}'
+            for name, at, running in self._loops()
+        )
+        return [
+            self._header('schedule', 'Schedule'),
+            f'{b} {host}',
+            f'{b} {loops}',
+            *self._pace_lines(),
+        ]
+
+    def _loops(self) -> list[tuple[str, float, bool]]:
+        """Return (label, next run, running) for each engine's own loop."""
+        bot = self.bot
+        return [
+            (
+                'reactions rescan',
+                bot.comment_watch.next_rescan,
+                bot.reactions.params.enabled
+                and bot.comment_watch.deps.rescan_sec > 0,
+            ),
+            (
+                'stories poll',
+                bot.story_watch.next_poll,
+                bot.stories.params.enabled and bot.stories.params.poll_sec > 0,
+            ),
+            (
+                'greeter check',
+                bot.greeter.next_sync,
+                bot.greeter.params.enabled,
+            ),
+        ]
+
+    def _due(self, at: float) -> str:
+        """Return a countdown to a scheduled moment; 'first run' before one."""
+        return self._in(at - time.time()) if at > 0 else 'first run'
+
+    def _in(self, seconds: float) -> str:
+        """Return a countdown, or 'now' for something already due."""
+        return 'now' if seconds <= 0 else f'in {fmt_eta(seconds)}'
+
+    def _pace_lines(self) -> list[str]:
+        """Return the gate's lanes: when each may fire, and any widening.
+
+        The only place a FloodWait is visible without reading the log. A
+        lane shows a DURATION, never a clock time: the gate runs on a
+        monotonic clock and this report on the wall clock, and mixing the
+        two would print a plausible, wrong time.
+        """
+        lanes = self.bot.account.pacing()
+        if not lanes:
+            return []
+        b = self.bullet()
+        ready = f' {b} '.join(
+            f'{lane.kind} {self._in(lane.free_in)}' for lane in lanes
+        )
+        rows = [f'{b} pace {b} {ready}']
+        hot = [lane for lane in lanes if lane.slack > 1.0]
+        if hot:
+            widened = f' {b} '.join(f'{x.kind} x{x.slack:.1f}' for x in hot)
+            rows.append(f'{b} widened by a flood {b} {widened}')
+        return rows
 
     def _users_line(self) -> str:
         """Return a one-line users summary for /status ('off' if disabled)."""

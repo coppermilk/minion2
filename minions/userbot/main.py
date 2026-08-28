@@ -147,6 +147,9 @@ class Userbot:
         # (uptime learning, pending log) at full resolution.
         self._probe_interval = codec.num(rt.get('probe_interval_sec'), 300.0)
         self._last_probe = 0.0
+        # The one loop that did not publish its next run; /status shows it
+        # beside the others so a stalled tick is visible, not inferred.
+        self.next_tick = 0.0
         self.build_profile()
 
     def _store(self, service_dir: Path) -> StateStore:
@@ -328,7 +331,30 @@ class Userbot:
             ids.add(self.config.test_target)
         ids |= {chat for chat, _ in self.reactions.posts}
         ids |= {v.peer_id for v in self.story_watch.pending}
-        return {cid: await self._chat_label(cid) for cid in ids}
+        await self._name_glance_peers()
+        cached = self.stories.known_labels()
+        return {**cached, **{cid: await self._chat_label(cid) for cid in ids}}
+
+    async def _name_glance_peers(self) -> None:
+        """Put @names on a few of the people who have stories up.
+
+        The glance lists people we have never opened, so nothing has ever
+        cached their name. Resolving all of them on every /status would be
+        exactly the burst the request gate exists to prevent, so a bounded
+        handful is resolved per report and remembered; a few reports in,
+        the whole list is named and it costs nothing again.
+        """
+        if not self.stories.params.enabled:
+            return
+        known = self.stories.known_labels()
+        unnamed = [
+            row.peer_id
+            for row in self.stories.last_glance.peers
+            if row.peer_id not in known
+        ]
+        for peer_id in unnamed[:STATUS_WARM_PEERS]:
+            label = await self._chat_label(peer_id)
+            self.stories.remember(str(peer_id), label)
 
     async def _resolve_attach_labels(self) -> None:
         """Cache the shown peers' @names via the shared chat-label helper.
@@ -371,12 +397,19 @@ class Userbot:
     async def status_loop(self) -> None:
         """Periodically log pending videos, learn uptime, beat the watchdog."""
         while True:
+            self.next_tick = time.time() + STATUS_INTERVAL
             await asyncio.sleep(STATUS_INTERVAL)
             now = time.time()
             await self._maybe_probe(now)
             if self.reactions.params.enabled:
                 self.reactions.mark_alive(now)  # learn actual on-hours
             self._log_pending()
+
+    def next_probe(self) -> float:
+        """Return when the liveness probe fires next (0 before the first)."""
+        if not self._last_probe:
+            return 0.0
+        return self._last_probe + self._probe_interval
 
     async def _maybe_probe(self, now: float) -> None:
         """Probe Telegram only every _probe_interval, not every 60s tick.

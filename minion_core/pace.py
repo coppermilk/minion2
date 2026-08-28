@@ -66,6 +66,22 @@ class Pace:
     per_minute: int = 0
 
 
+@dataclass(frozen=True)
+class Lane:
+    """One lane of the gate as an operator report sees it.
+
+    ``free_in`` is a DURATION, never a clock time, and deliberately so:
+    the gate runs on ``time.monotonic`` (a wall-clock step must not
+    release a burst) while a report prints wall-clock times, and the two
+    cannot be mixed. ``slack`` above 1.0 means Telegram sent a FloodWait
+    on this lane recently and the spacing is still widened.
+    """
+
+    kind: str
+    free_in: float
+    slack: float = 1.0
+
+
 @dataclass
 class Gate:
     """Serialise outbound requests to a pace, per kind and overall.
@@ -114,6 +130,27 @@ class Gate:
     def slack(self, kind: str) -> float:
         """Return the multiplier in force for ``kind`` (1.0 = nominal)."""
         return self._slack.get(kind, 1.0)
+
+    def free_in(self, kind: str) -> float:
+        """Seconds until a request of ``kind`` could go out; 0 = now.
+
+        A READING, not a reservation: it asks the same question ``wait``
+        asks but books nothing, so rendering the gate in an operator
+        report cannot itself consume the slots it is describing.
+        """
+        now = self.clock()
+        at = max(
+            self._free(kind, self.paces.get(kind, Pace()), now),
+            self._free('', self.overall, now),
+        )
+        return max(0.0, at - now)
+
+    def lanes(self) -> list[Lane]:
+        """Return every paced kind as it looks from outside, in name order."""
+        return [
+            Lane(kind, self.free_in(kind), self.slack(kind))
+            for kind in sorted(self.paces)
+        ]
 
     def _reserve(self, kind: str) -> float:
         """Claim the next free moment for ``kind``; return when it is."""

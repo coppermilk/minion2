@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import pytest
 
 
+from minion_core.pace import Lane
 from minions.userbot import main
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import Config
@@ -41,6 +42,10 @@ from minions.userbot.glue.status import StatusReport
 NOW = 1_760_000_000.0  # a fixed clock, so every eta in the text is stable
 SOURCE = -1001
 TARGET = -1002
+PEER_A = 5001
+PEER_B = 5002
+PEER_C = 5003
+PEER_D = 5004
 
 
 async def _unused_posted(target: int, post_id: int) -> None:
@@ -84,6 +89,7 @@ def _consts() -> Consts:
             'greeter': '[G]',
             'users': '[U]',
             'stories': '[S]',
+            'schedule': '[H]',
             'services': '[C]',
             'legend': '[L]',
             'on': '(+)',
@@ -115,7 +121,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
     service_modes = {
         'aggregator': 'live',
         'reactions': 'live',
-        'stories': 'off',
+        'stories': 'live',
         'users': 'off',
         'greeter': 'live',
     }
@@ -185,7 +191,21 @@ def _bot(tmp_path: Path) -> main.Userbot:
         next_rescan=NOW + 120,
     )
 
-    bot.stories = stories.StoryBrain(stories.StoryParams(enabled=False), store)
+    bot.stories = stories.StoryBrain(
+        stories.StoryParams(enabled=True, poll_sec=1800.0), store
+    )
+    # One glance covering every verdict a peer can get: being opened,
+    # passed over this time, and nothing we have not already seen -- plus
+    # one from the archived feed, which is watched on the same maths.
+    bot.stories.last_glance = stories.Glance(
+        at=NOW - 250,
+        peers=(
+            stories.Seen(PEER_A, 5, 5, 3, stories.VIEWING),
+            stories.Seen(PEER_B, 4, 4, 0, stories.PASSED),
+            stories.Seen(PEER_C, 2, 2, 0, stories.PASSED, hidden=True),
+            stories.Seen(PEER_D, 3, 0, 0, stories.NOTHING_NEW),
+        ),
+    )
     bot.story_watch = stories_glue.StoryWatch(
         stories_glue.StoryDeps(
             account=None,
@@ -194,6 +214,10 @@ def _bot(tmp_path: Path) -> main.Userbot:
             label=_unused_label,
         )
     )
+    bot.story_watch.next_poll = NOW + 900
+    bot.story_watch.pending = [
+        stories.StoryView(PEER_A, (51, 52, 53), 53, NOW + 190)
+    ]
 
     gparams = greeter.GreeterParams(
         enabled=True,
@@ -221,6 +245,19 @@ def _bot(tmp_path: Path) -> main.Userbot:
             watched=set,
         )
     )
+    # The host's own loop and probe, and the gate behind the door: fixed
+    # so every countdown in the golden text is stable. One lane is widened
+    # so the flood line is covered too.
+    bot.next_tick = NOW + 42
+    bot._last_probe = NOW - 100
+    bot._probe_interval = 300.0
+    bot.account = SimpleNamespace(
+        pacing=lambda: [
+            Lane('dm', 44.0, 2.0),
+            Lane('read', 0.0, 1.0),
+            Lane('write', 3.0, 1.0),
+        ]
+    )
     bot.report = StatusReport(bot)
     return bot
 
@@ -233,8 +270,8 @@ GOLDEN = """\
 . target: @dst (-1002)
 . posting -> @dst (-1002)
 
-[V] Videos . pending 1 (timeout 3h 0m) . posted 1 . rejected 1 . guard \
-168h 0m/last 5
+[V] Videos . pending 1 (timeout 3h 0m) . posted 1 . rejected 1 . guard 168h \
+0m/last 5
 . "Waiting one" have [-] wait [tiktok, youtube] -> ~2h 50m
 . "Posted one" . 2026-08-01 . 1 links
 
@@ -243,29 +280,42 @@ GOLDEN = """\
 . reactions -> <tg-emoji emoji-id="11">a</tg-emoji>
 . mood 0.25 . answered 1 . pending 1
 . window 7-17h (prior) . learned 12h, 13h
-. rescan 300s -> next 08:55 (in 2m 0s)
 . today likes 0/400 . stickers 0/40
 . attach 1 commenters -> p~0.75 r~0.00
     @alice  A 0.00 . p 0.75 r 0.00
 . watching 1 posts:
     @dst (-1002): 77
 . queued:
-    <tg-emoji emoji-id="11">a</tg-emoji> like -> "nice one" . post 77 . \
-in ~5m 0s
+    <tg-emoji emoji-id="11">a</tg-emoji> like -> "nice one" . post 77 . in \
+~5m 0s
 . /reactnow . /requeue
 
 [G] Greeter . (+) on . DMs 2/5 . last event 41
-. check 600s -> next 08:54 (in 1m 0s)
 
 [U] Users DB . (-) off
-[S] Stories . (-) off
+[S] Stories . (+) on . 0 today . 0/50 reacted . 1 queued . next view -> in \
+3m 10s
+. glance 4m 10s ago . 4 with stories (1 archived) . viewing 1 . passed 2 . \
+nothing new 1
+. with stories now:
+    @alice . 5 up . 5 new . viewing 3 in ~3m 10s
+    @bob . 4 up . 4 new . passed this glance
+    @carol . 2 up . 2 new . passed this glance . archived feed
+    @dave . 3 up . - . nothing new
+
+[H] Schedule
+. tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
+. reactions rescan -> in 2m 0s . stories poll -> in 15m 0s . greeter check \
+-> in 1m 0s
+. pace . dm in 44s . read now . write in 3s
+. widened by a flood . dm x2.0
 
 [C] Services
 . (+) aggregator: LIVE
    /aggregator_on  /aggregator_off  /aggregator_test  /aggregator_live
 . (+) reactions: LIVE
    /reactions_on  /reactions_off  /reactions_test  /reactions_live
-. (-) stories: OFF
+. (+) stories: LIVE
    /stories_on  /stories_off  /stories_test  /stories_live
 . (-) users: OFF
    /users_on  /users_off  /users_test  /users_live
@@ -281,5 +331,36 @@ def test_status_text_is_unchanged(
     """The whole /status render, pinned. A diff here is a deliberate change."""
     monkeypatch.setattr(time, 'time', lambda: NOW)
     bot = _bot(tmp_path)
-    labels = {SOURCE: '@src (-1001)', TARGET: '@dst (-1002)'}
+    labels = {
+        SOURCE: '@src (-1001)',
+        TARGET: '@dst (-1002)',
+        PEER_A: '@alice',
+        PEER_B: '@bob',
+        PEER_C: '@carol',
+        PEER_D: '@dave',
+    }
     assert bot.report.text(labels) == GOLDEN
+
+
+def test_rendering_the_report_makes_no_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The report reads state; it must not go and ask Telegram anything.
+
+    /status is the command an operator hits most, and the story glance is
+    a snapshot ON PURPOSE: re-reading the feed to look current would put
+    two story requests behind every report, on an account this whole
+    boundary exists to keep quiet.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    asked: list[str] = []
+    bot.account = SimpleNamespace(
+        pacing=lambda: [Lane('read', 0.0, 1.0)],
+        peer=lambda cid: asked.append(str(cid)),
+        stories_feed=lambda **_: asked.append('feed'),
+    )
+
+    bot.report.text({SOURCE: '@src', TARGET: '@dst'})
+
+    assert asked == []

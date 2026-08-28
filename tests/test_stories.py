@@ -11,6 +11,7 @@ opening/marking against Telegram; none of that is exercised here.
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -485,3 +486,81 @@ def test_include_archived_defaults_off(tmp_path: Path) -> None:
         {'engines': {'stories': {'include_archived': True}}}
     )
     assert on.include_archived
+
+
+# --- the glance: who we are opening, and who we are not
+
+
+def _verdicts(brain: stories.StoryBrain) -> dict[int, str]:
+    """Return the last glance's verdict per peer."""
+    return {row.peer_id: row.verdict for row in brain.last_glance.peers}
+
+
+def test_every_peer_with_stories_gets_exactly_one_verdict(
+    tmp_path: Path,
+) -> None:
+    """The glance accounts for everyone the feed showed, once each.
+
+    This is the whole point of the readout: an operator looking at
+    Telegram sees these people, and /status has to say something about
+    each of them rather than only about the ones we chose.
+    """
+    brain = _brain(tmp_path, per_session_max=1, skip_peer_prob=0.9)
+    brain.mark_viewed(3, (30, 31), ts=_NOON)  # 3 has nothing new
+    cands = [
+        _cand(1, (10, 11), last_ts=_NOON),
+        _cand(2, (20,), last_ts=_NOON - 1),
+        _cand(3, (30, 31), last_ts=_NOON - 2),
+    ]
+    views = brain.plan(cands, now=_NOON)
+
+    glance = brain.last_glance
+    assert glance.at == _NOON
+    assert [row.peer_id for row in glance.peers] == [1, 2, 3]
+    assert _verdicts(brain)[3] == stories.NOTHING_NEW
+    # Whoever is queued is 'viewing' and reports how many we will open;
+    # everyone else with unseen stories was passed.
+    opened = {v.peer_id: len(v.story_ids) for v in views}
+    for row in glance.peers:
+        if row.peer_id in opened:
+            assert row.verdict == stories.VIEWING
+            assert row.viewing == opened[row.peer_id]
+        else:
+            assert row.viewing == 0
+            assert row.verdict in {stories.PASSED, stories.NOTHING_NEW}
+
+
+def test_a_blocked_session_says_why_for_everyone(tmp_path: Path) -> None:
+    """Quiet hours name themselves on every peer, not just on the header."""
+    brain = _brain(tmp_path, quiet_hours=frozenset({12}))
+    assert brain.plan([_cand(1, (10,))], now=_NOON) == []
+    glance = brain.last_glance
+    assert glance.blocked
+    assert _verdicts(brain) == {1: glance.blocked}
+    assert all(row.viewing == 0 for row in glance.peers)
+
+
+def test_the_archived_feed_is_marked_as_such(tmp_path: Path) -> None:
+    """A peer from the hidden feed is flagged, so the list matches Telegram."""
+    brain = _brain(tmp_path)
+    archived = replace(_cand(2, (20,)), hidden=True)
+    brain.plan([_cand(1, (10,)), archived], now=_NOON)
+    flags = {row.peer_id: row.hidden for row in brain.last_glance.peers}
+    assert flags == {1: False, 2: True}
+
+
+def test_the_glance_counts_what_is_up_and_what_is_new(tmp_path: Path) -> None:
+    """Active is what they posted; unseen is what we have not opened."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(1, (10,), ts=_NOON)
+    brain.plan([_cand(1, (10, 11, 12))], now=_NOON)
+    row = brain.last_glance.peers[0]
+    assert (row.active, row.unseen) == (_THREE, _TWO)
+
+
+def test_an_empty_feed_leaves_an_empty_glance(tmp_path: Path) -> None:
+    """Nobody has stories: the readout says so rather than going stale."""
+    brain = _brain(tmp_path)
+    brain.plan([], now=_NOON)
+    assert brain.last_glance.peers == ()
+    assert brain.last_glance.at == _NOON

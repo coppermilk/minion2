@@ -147,6 +147,54 @@ class StoryCandidate:
     max_id: int
     last_ts: float = 0.0
     label: str = ''  # @name / title, for the log (never shown to the peer)
+    hidden: bool = False  # came from the archived feed, not the main one
+
+
+VIEWING = 'viewing'
+PASSED = 'passed this glance'
+NOTHING_NEW = 'nothing new'
+"""What a glance can conclude about one peer who has stories up."""
+
+
+def _verdict(unseen: int, viewing: int, blocked: str) -> str:
+    """Return why one peer is, or is not, being opened this glance."""
+    if viewing:
+        return VIEWING
+    if not unseen:
+        return NOTHING_NEW
+    return blocked or PASSED
+
+
+@dataclass(frozen=True)
+class Seen:
+    """One peer with active stories, and what the last glance decided.
+
+    The operator can see who has stories in Telegram; without this they
+    cannot see what the bot decided about them, which makes an idle
+    queue indistinguishable from an ignored person.
+    """
+
+    peer_id: int
+    active: int = 0  # stories they have up right now
+    unseen: int = 0  # of those, ones we have never opened
+    viewing: int = 0  # how many we will open this glance
+    verdict: str = NOTHING_NEW
+    hidden: bool = False  # from the archived feed, not the main one
+
+
+@dataclass(frozen=True)
+class Glance:
+    """What the last poll saw and decided -- a readout, never state.
+
+    In memory only: it describes one pass and is worthless after a
+    restart, so it has no business in the state file. ``at`` is what
+    lets a report say how stale it is, which matters because /status
+    must not re-read the feed just to look current.
+    """
+
+    at: float = 0.0
+    peers: tuple[Seen, ...] = ()
+    blocked: str = ''  # why nothing was planned at all, if so
 
 
 @dataclass(frozen=True)
@@ -222,6 +270,7 @@ class StoryBrain:
         self.clock = time.time
         self.ledger = relationship.Ledger(store, ENGINE)
         self.state = self._load()
+        self.last_glance = Glance()
 
     def unseen(self, cand: StoryCandidate) -> tuple[int, ...]:
         """Return the candidate's story ids we have not viewed yet."""
@@ -241,10 +290,25 @@ class StoryBrain:
         Otherwise picks a small, freshest-first, partly-skipped subset of the
         peers with unseen stories, staggered across a short viewing session.
         Marks nothing seen; ``mark_viewed`` does that once a read succeeds.
+
+        Whatever it decides is also recorded in ``last_glance``, so /status
+        can say who we are opening and who we are not -- the decision is
+        made here and was previously thrown away.
         """
         now = self.clock() if now is None else now
-        if not self._session_open(now):
-            return []
+        blocked = self.blocked_reason(now) or ''
+        views = [] if blocked else self._plan_views(candidates, now)
+        self.last_glance = Glance(
+            at=now,
+            peers=self._seen_rows(candidates, views, blocked),
+            blocked=blocked,
+        )
+        return views
+
+    def _plan_views(
+        self, candidates: list[StoryCandidate], now: float
+    ) -> list[StoryView]:
+        """Choose and lay out this session's views (the session is open)."""
         eligible = self._eligible(candidates)
         if not eligible:
             return []
@@ -258,13 +322,33 @@ class StoryBrain:
             if self.params.view_all
             else self._pick_peers(eligible)
         )
-        if not chosen:
-            return []
-        return self._lay_out(chosen, now)
+        return self._lay_out(chosen, now) if chosen else []
 
-    def _session_open(self, now: float) -> bool:
-        """Return whether a viewing session may run right now."""
-        return self.blocked_reason(now) is None
+    def _seen_rows(
+        self,
+        candidates: list[StoryCandidate],
+        views: list[StoryView],
+        blocked: str,
+    ) -> tuple[Seen, ...]:
+        """Describe every peer who has stories up, and our verdict on each.
+
+        Every candidate lands in exactly one bucket. The verdict is the
+        honest reason we are not opening someone: nothing we have not
+        already seen, passed this glance, or the whole session blocked
+        (quiet hours, cooldown, silent day).
+        """
+        opening = {view.peer_id: len(view.story_ids) for view in views}
+        return tuple(
+            Seen(
+                peer_id=cand.peer_id,
+                active=len(cand.story_ids),
+                unseen=(unseen := len(self.unseen(cand))),
+                viewing=(count := opening.get(cand.peer_id, 0)),
+                verdict=_verdict(unseen, count, blocked),
+                hidden=cand.hidden,
+            )
+            for cand in candidates
+        )
 
     def blocked_reason(self, now: float | None = None) -> str | None:
         """Return why no session may open now, or None when one may.
@@ -576,6 +660,19 @@ class StoryBrain:
             return
         self.ledger.remember(peer, label)
         self._save()
+
+    def known_labels(self) -> dict[int, str]:
+        """Return the @names we have cached, by peer id (no requests).
+
+        The glance lists people we have never viewed, so their names are
+        not in the view log; they are cached here the first time /status
+        resolves one, and read back from the store after that.
+        """
+        return {
+            int(row.peer_id): row.label
+            for row in self.store.peers(ENGINE)
+            if row.label and row.label != row.peer_id
+        }
 
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.

@@ -96,7 +96,7 @@ class StoryWatch:
                 self.deps.brain.blocked_reason() or 'all skipped this glance'
             )
             log.info(
-                'stories: %d peer(s) with unseen stories, queued 0 (%s)',
+                'stories: %d peer(s) with stories, queued 0 (%s)',
                 len(candidates),
                 reason,
             )
@@ -105,20 +105,20 @@ class StoryWatch:
             self.pending.append(view)  # shown as the /status queue
             tasks.spawn(self._views, self._view_later(view))
         log.info(
-            'stories: %d peer(s) with unseen stories, queued %d',
+            'stories: %d peer(s) with stories, queued %d',
             len(candidates),
             len(views),
         )
 
     async def _candidates(self) -> list[stories.StoryCandidate]:
-        """Return the feed's peers that still have unseen stories.
+        """Return every peer the feed shows with stories up right now.
 
-        Reads Telegram's active-stories feed (contacts / followed peers only),
-        turns each peer into a ``StoryCandidate`` and keeps just those with at
-        least one story id past our persisted seen set -- so we pick up what is
-        genuinely new instead of walking the whole contact list. When
-        ``include_archived`` is on, the hidden feed (people whose chats were
-        moved to the Archive) is polled too and merged in, deduped by peer.
+        Reads Telegram's active-stories feed (contacts / followed peers
+        only) and turns each peer into a ``StoryCandidate``. When
+        ``include_archived`` is on, the hidden feed (people whose chats
+        were moved to the Archive) is polled too and merged in, deduped
+        by peer -- and each candidate remembers which feed it came from,
+        because the operator sees those as two separate rows in Telegram.
         """
         out: dict[int, stories.StoryCandidate] = {}
         await self._collect_feed(out, hidden=False)
@@ -131,36 +131,40 @@ class StoryWatch:
     ) -> None:
         """Read one stories feed (main or hidden) into ``out``, keyed by peer.
 
-        ``hidden`` selects the archived-contacts feed. Unseen-only; a peer
-        already collected from the other feed is not overwritten.
+        ``hidden`` selects the archived-contacts feed; a peer already
+        collected from the other feed is not overwritten.
+
+        EVERYONE with stories up is collected, including peers whose
+        stories we have already seen. The planner filters those out again
+        a moment later (``_eligible``), so nothing about what we view
+        changes -- but /status can now say something about every person
+        the operator can see in Telegram, instead of going quiet about
+        the ones we are not opening.
         """
         which = 'hidden' if hidden else 'main'
         feed = await self.deps.account.stories_feed(hidden=hidden)
-        added = 0
+        fresh = 0
         for peer_stories in feed:
-            cand = self._candidate(peer_stories)
-            if (
-                cand is not None
-                and cand.peer_id not in out
-                and self.deps.brain.unseen(cand)
-            ):
+            cand = self._candidate(peer_stories, hidden=hidden)
+            if cand is not None and cand.peer_id not in out:
                 out[cand.peer_id] = cand
-                added += 1
+                fresh += bool(self.deps.brain.unseen(cand))
         log.info(
             'stories: %s feed has %d peer(s) with stories, %d new-to-us',
             which,
             len(feed),
-            added,
+            fresh,
         )
 
     def _candidate(
-        self, peer_stories: userchat.PeerStories
+        self, peer_stories: userchat.PeerStories, *, hidden: bool = False
     ) -> stories.StoryCandidate | None:
         """Build a ``StoryCandidate`` from one feed entry, or None if empty."""
         ids = tuple(story.id for story in peer_stories.stories)
         if not ids:
             return None
         return stories.StoryCandidate(
+            hidden=hidden,
             peer_id=peer_stories.peer_id,
             story_ids=ids,
             max_id=max(ids),
