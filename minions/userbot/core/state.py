@@ -106,6 +106,27 @@ deployed ``peers.db`` would keep the original seven columns and the first
 bump naming a new one would fail. Adding what is missing is the migration.
 """
 
+JOURNAL = 'DELETE'
+"""How SQLite journals a write -- deliberately NOT the WAL default.
+
+WAL keeps recent writes in a sibling ``peers.db-wal`` until a checkpoint, so
+the ``.db`` alone is stale, sometimes by everything: the watchdog ends this
+process with ``os._exit``, which never closes the connection, so no
+checkpoint ever runs. A backup or a hand copy of ``peers.db`` then carries
+a valid database with zero rows, which is exactly as alarming as it sounds
+and gives no hint that the data is in the file next door.
+
+WAL buys nothing here to pay for that. It exists for concurrent readers
+during a write, and this is one process holding one connection per state
+directory -- /status reads through the same object that writes. In DELETE
+mode the journal is transient, the two sibling files never appear, and the
+``.db`` is complete after every commit. Writes fsync one at a time, which
+at a few dozen events a day is not a cost worth measuring.
+
+Switching an existing WAL database is safe and automatic: SQLite
+checkpoints it on the mode change and removes the sibling files.
+"""
+
 _BUMP_SQL = (  # noqa: S608 -- the column names are COUNTERS, never input
     'INSERT INTO peers (engine, peer_id, {cols}, last_at, take_at) '
     'VALUES (?, ?, {marks}, ?, ?) '
@@ -170,7 +191,7 @@ class StateStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._migrate()
-        self._conn.execute('PRAGMA journal_mode=WAL')
+        self._conn.execute(f'PRAGMA journal_mode={JOURNAL}')
         self._conn.commit()
         self._cursors = self._read_cursors()
         self._dirty = False

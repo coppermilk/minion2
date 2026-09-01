@@ -27,6 +27,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import state
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
@@ -115,7 +117,10 @@ class UserStore:
         self._conn = sqlite3.connect(str(path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
-        self._conn.execute('PRAGMA journal_mode=WAL')
+        # DELETE, not the WAL default, for the reason state.JOURNAL spells
+        # out: this process is killed by the watchdog without closing, so a
+        # WAL is never checkpointed and users.db alone reads as empty.
+        self._conn.execute(f'PRAGMA journal_mode={state.JOURNAL}')
         self._conn.commit()
         self.clock = time.time
 

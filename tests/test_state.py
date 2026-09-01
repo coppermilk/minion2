@@ -287,3 +287,38 @@ def test_migrating_twice_changes_nothing(tmp_path: Path) -> None:
 
     row = _store(tmp_path).peer('reactions', 'old')
     assert (row.gap_n, row.gap_sum) == (1, 60.0)
+
+
+# ------------------------------------------------- the file is the database
+
+
+def test_the_database_file_stands_alone(tmp_path: Path) -> None:
+    """A copy of peers.db carries the rows, with no sibling files needed.
+
+    Under WAL it did not: recent writes sat in peers.db-wal until a
+    checkpoint, and the watchdog ends this process with os._exit, so no
+    checkpoint ever ran. Copying peers.db then produced a valid database
+    with nothing in it -- and nothing said the data was in the file next
+    door. Asserted by copying ONLY the .db, exactly as a backup does.
+    """
+    store = _store(tmp_path)
+    store.bump('stories', '77', {'offered': TOP_N, 'taken': 1})
+    store.mark('stories', '77:1')
+    # deliberately NOT closed: the crash path is what the WAL trap needed
+
+    copy = tmp_path / 'copied.db'
+    copy.write_bytes((tmp_path / 'peers.db').read_bytes())
+    alone = sqlite3.connect(f'file:{copy}?mode=ro', uri=True)
+
+    assert alone.execute('SELECT count(*) FROM peers').fetchone()[0] == 1
+    assert alone.execute('SELECT count(*) FROM marks').fetchone()[0] == 1
+
+
+def test_no_sibling_journal_files_are_left_behind(tmp_path: Path) -> None:
+    """peers.db is the whole story -- no -wal, no -shm to copy alongside."""
+    store = _store(tmp_path)
+    store.bump('stories', '77', {'offered': 1})
+
+    siblings = sorted(p.name for p in tmp_path.glob('peers.db-*'))
+
+    assert siblings == []
