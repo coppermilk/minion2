@@ -26,11 +26,12 @@ so -- steering timing toward a target would make the timing regular, which is
 the one thing Whitchurch (2011) and Ferster & Skinner (1957) say costs you.
 ``core/attachment.py`` carries the citations for all four.
 
-The counts live in ``core/state.StateStore``, one row per (engine, peer),
-so a bump writes one row rather than rewriting every peer the account has
-ever met. The two engines used to serialise this same shape into two files
-under different names -- ``commented/engaged/stickered`` against
-``offered/viewed/reacted`` -- which is one concept wearing two costumes.
+The counts live in ``core/state.StateStore``, one row per peer in the
+engine's own database, so a bump writes one row rather than rewriting every
+peer the account has ever met. The two engines used to serialise this same
+shape into two files under different names -- ``commented/engaged/stickered``
+against ``offered/viewed/reacted`` -- which is one concept wearing two
+costumes.
 The daily caps are NOT per peer, so they stay here as plain fields and ride
 the engine's cursor block.
 
@@ -118,7 +119,7 @@ def _rolled(day: str, today: int, stamp: str) -> tuple[str, int]:
 
 @dataclass
 class Ledger:
-    """Per-peer relationship memory, kept in the shared state store.
+    """Per-peer relationship memory, kept in the engine's state store.
 
     ``offered`` is how many chances a peer gave us (their stories, their
     comments); ``taken`` how many we engaged (viewed, liked); ``recip`` how
@@ -133,7 +134,6 @@ class Ledger:
     """
 
     store: state.StateStore
-    engine: str
     take_day: str = ''
     take_today: int = 0
     recip_day: str = ''
@@ -141,7 +141,7 @@ class Ledger:
 
     def row(self, peer: str) -> state.PeerRow:
         """Return a peer's standing (all zeroes if we have not met them)."""
-        return self.store.peer(self.engine, peer)
+        return self.store.peer(peer)
 
     def take_prob(self, peer: str, control: Control) -> float:
         """Exposure probability for one more of ``peer``'s offers.
@@ -177,7 +177,7 @@ class Ledger:
         recency order without touching ``take_at``, which only our own
         engagements advance.
         """
-        self.store.bump(self.engine, peer, {'offered': n}, now)
+        self.store.bump(peer, {'offered': n}, now)
 
     def add_take(  # noqa: PLR0913 -- peer + count + (control, now) read best flat
         self, peer: str, n: int, control: Control, now: float
@@ -185,13 +185,13 @@ class Ledger:
         """Record ``n`` exposures actually taken (also counts them offered)."""
         counts: dict[str, float] = {'offered': n, 'taken': n}
         counts |= _gap_stats(self._gap(peer, now), n, control.burst_gap_sec)
-        self.store.bump(self.engine, peer, counts, now, take_at=now)
+        self.store.bump(peer, counts, now)
 
     def bump_take(self, peer: str, control: Control, now: float) -> None:
         """Count one already-offered exposure as taken (decide-time commit)."""
         counts: dict[str, float] = {'taken': 1}
         counts |= _gap_stats(self._gap(peer, now), 1, control.burst_gap_sec)
-        self.store.bump(self.engine, peer, counts, now, take_at=now)
+        self.store.bump(peer, counts, now)
 
     def _gap(self, peer: str, now: float) -> float:
         """Seconds since we last engaged ``peer``; 0 when this is the first.
@@ -205,7 +205,7 @@ class Ledger:
 
     def bump_recip(self, peer: str, now: float | None = None) -> None:
         """Count one reciprocation whose daily slot is already spent."""
-        self.store.bump(self.engine, peer, {'recip': 1}, now)
+        self.store.bump(peer, {'recip': 1}, now)
 
     def add_recip(  # noqa: PLR0913 -- peer + count + (now, tz) read best flat
         self, peer: str, n: int, now: float, tz: float
@@ -216,7 +216,7 @@ class Ledger:
             self.recip_day, self.recip_today, stamp
         )
         self.recip_today += n
-        self.store.bump(self.engine, peer, {'recip': n}, now)
+        self.store.bump(peer, {'recip': n}, now)
 
     def spend_take(self, control: Control, now: float, tz: float) -> bool:
         """Consume one take slot from today's budget; False when capped."""
@@ -265,11 +265,11 @@ class Ledger:
 
     def remember(self, peer: str, label: str) -> None:
         """Cache ``peer``'s display label (@name / title) for /status."""
-        self.store.remember(self.engine, peer, label)
+        self.store.remember(peer, label)
 
     def evict(self, peer: str) -> None:
         """Drop a peer's counters and cached name (rolled off the set)."""
-        self.store.forget(self.engine, peer)
+        self.store.forget(peer)
 
     def counters(self) -> dict[str, object]:
         """Return the daily counters for the engine's cursor block."""
@@ -350,7 +350,7 @@ def warmth(ledger: Ledger, control: Control) -> list[Warmth]:
     factors; a peer needs at least one recorded offer to appear.
     """
     rows: list[Warmth] = []
-    for row in ledger.store.peers(ledger.engine):
+    for row in ledger.store.peers():
         if row.offered <= 0:
             continue
         p = row.taken / row.offered

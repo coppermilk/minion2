@@ -164,13 +164,13 @@ def _bot(tmp_path: Path) -> main.Userbot:
         pool=(Emoji('11', 'a', base=1.0, tags=()),),
         like_pool=(Emoji('22', 'b', base=1.0, tags=()),),
     )
-    store = StateStore(tmp_path / 'peers.db', tmp_path / 'cursors.json')
+    store = StateStore(tmp_path / 'reactions.db')
     brain = reactions.ReactionBrain(params, store)
     brain.clock = lambda: NOW
     brain.state.mood = 0.25
     brain.state.alive = {'12': 5.0, '13': 3.0}
     brain.state.posts = [(TARGET, 77)]
-    store.mark(reactions.ENGINE, f'{TARGET}:77:alice')
+    store.mark(f'{TARGET}:77:alice')
     brain.state.pending = [
         reactions.Reaction(
             chat=TARGET,
@@ -198,7 +198,8 @@ def _bot(tmp_path: Path) -> main.Userbot:
     )
 
     bot.stories = stories.StoryBrain(
-        stories.StoryParams(enabled=True, poll_sec=1800.0), store
+        stories.StoryParams(enabled=True, poll_sec=1800.0),
+        StateStore(tmp_path / 'stories.db'),  # its own file, as in production
     )
     # One glance covering every verdict a peer can get: being opened,
     # passed over this time, and nothing we have not already seen -- plus

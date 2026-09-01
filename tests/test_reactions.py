@@ -87,7 +87,7 @@ def _params(**over: object) -> object:
 def _store(tmp_path: Path) -> StateStore:
     """Return a state store over a temp dir (reopening reads it back)."""
     tmp_path.mkdir(parents=True, exist_ok=True)
-    return StateStore(tmp_path / 'peers.db', tmp_path / 'cursors.json')
+    return StateStore(tmp_path / 'reactions.db')
 
 
 def _brain(tmp_path: Path, seed: int = 0, **over: object) -> object:
@@ -240,9 +240,7 @@ def test_skip_probability_drops_a_comment(tmp_path: Path) -> None:
     """Check skip probability drops a comment."""
     brain = _brain(tmp_path, skip_prob=1.0)
     assert brain.schedule('u', engaged=False) is None
-    assert (
-        brain.store.marked(reactions.ENGINE, 'u') is False
-    )  # a skip is not a "reacted" person
+    assert brain.store.marked('u') is False  # a skip is not a "reacted" person
 
 
 def test_silent_day_yields_no_reaction(tmp_path: Path) -> None:
@@ -255,7 +253,7 @@ def test_like_all_bypasses_skip_and_silent_day(tmp_path: Path) -> None:
     """like_all likes every comment, even under a full skip / silent day."""
     brain = _brain(tmp_path, like_all=True, skip_prob=1.0, silent_day_prob=1.0)
     assert brain.schedule('u', engaged=False) is not None
-    assert brain.store.marked(reactions.ENGINE, 'u') is True
+    assert brain.store.marked('u') is True
     # Dedup still holds: the same key is not liked twice.
     assert brain.schedule('u', engaged=False) is None
 
@@ -287,7 +285,7 @@ def test_a_comment_out_of_reach_goes_stale(tmp_path: Path) -> None:
     brain.clock = lambda: _ts(hour=20)  # host down; window 07:00 is >1h off
     assert brain.schedule('late', engaged=False) is None
     assert (
-        brain.store.marked(reactions.ENGINE, 'late') is False
+        brain.store.marked('late') is False
     )  # stale, not a committed reaction
 
 
@@ -328,10 +326,10 @@ def test_reacted_keys_are_pruned_when_a_post_rolls_off(tmp_path: Path) -> None:
     brain = _brain(tmp_path, watch_posts=2)
     brain.note_post(1, 10)
     assert brain.schedule('1:10:alice', engaged=False) is not None
-    assert brain.store.marked(reactions.ENGINE, '1:10:alice') is True
+    assert brain.store.marked('1:10:alice') is True
     brain.note_post(1, 11)
     brain.note_post(1, 12)  # window is [11, 12] now -> post 10 rolled off
-    assert brain.store.marked(reactions.ENGINE, '1:10:alice') is False
+    assert brain.store.marked('1:10:alice') is False
 
 
 # --- adaptive uptime: cold start follows the declared window, then learns
@@ -560,21 +558,23 @@ def test_state_round_trips_through_the_store(tmp_path: Path) -> None:
     brain.state.reaction_last = {'1': 123.0}
     brain.state.next_session_at = 999.0
     brain._save()
-    store.mark(reactions.ENGINE, 'x')
+    store.mark('x')
 
     fresh = reactions.ReactionBrain(_params(), store, random.Random(0))
     assert fresh.state.mood == _HALF
     assert fresh.state.reaction_last == {'1': 123.0}
     assert fresh.state.next_session_at == _SESSION_AT
-    assert fresh.store.marked(reactions.ENGINE, 'x') is True
+    assert fresh.store.marked('x') is True
 
 
 def test_corrupt_cursors_start_fresh(tmp_path: Path) -> None:
-    """An unreadable twin degrades to defaults; it is never the truth."""
-    (tmp_path / 'cursors.json').write_text('{ not json', encoding='utf-8')
-    brain = reactions.ReactionBrain(
-        _params(), _store(tmp_path), random.Random(0)
+    """An unreadable cursor block degrades to defaults, never to a crash."""
+    store = _store(tmp_path)
+    store._conn.execute(
+        "INSERT INTO cursor (id, blob) VALUES (1, '{ not json')"
     )
+    store._conn.commit()
+    brain = reactions.ReactionBrain(_params(), store, random.Random(0))
     assert brain.state.mood == 0.0
     assert brain.answered() == 0
 

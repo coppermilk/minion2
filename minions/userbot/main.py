@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
+from minions.userbot.core import state
 from minions.userbot.core import statefile
 from minions.userbot.core.config import CONSTANTS_FILE
 from minions.userbot.core.config import LEGACY_STATE_FILE
@@ -169,18 +170,20 @@ class Userbot:
         statefile.adopt(path, pdir / legacy)
         return path
 
-    def _store(self, service_dir: Path) -> StateStore:
-        """Return the state store for one service's profile directory.
+    def _store(self, service: str) -> StateStore:
+        """Return one service's state store: one database, named for it.
 
-        One store per directory, shared by every engine that lands there:
-        live and test each get their own, exactly as the JSON files did.
+        Keyed by PATH, not by name, because a service's directory follows
+        its mode: flipping stories to test must open the test file, and the
+        live one has to stay open for whoever is still live.
         """
-        store = self._stores.get(service_dir)
+        pdir = self.modes.service_dir(service)
+        path = pdir / f'{service}.db'
+        store = self._stores.get(path)
         if store is None:
-            store = StateStore(
-                service_dir / 'peers.db', service_dir / 'cursors.json'
-            )
-            self._stores[service_dir] = store
+            state.adopt(pdir)  # split an old shared peers.db, once
+            store = StateStore(path)
+            self._stores[path] = store
         return store
 
     def build_profile(self) -> None:
@@ -201,9 +204,8 @@ class Userbot:
             reactions.load_reaction_params(self.settings),
             enabled=self.modes.enabled('reactions'),
         )
-        react_dir = self.modes.service_dir('reactions')
         self.reactions = reactions.ReactionBrain(
-            reaction_params, self._store(react_dir)
+            reaction_params, self._store('reactions')
         )
         self.comment_watch = CommentWatch(
             CommentDeps(
@@ -227,9 +229,7 @@ class Userbot:
             ),
             enabled=self.modes.enabled('stories'),
         )
-        self.stories = stories.StoryBrain(
-            story_params, self._store(self.modes.service_dir('stories'))
-        )
+        self.stories = stories.StoryBrain(story_params, self._store('stories'))
         self.story_watch = StoryWatch(
             StoryDeps(
                 account=self.account,

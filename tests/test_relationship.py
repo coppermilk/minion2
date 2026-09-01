@@ -31,8 +31,8 @@ _CONTROL = relationship.Control(wundt=attachment.WundtParams())
 
 def _ledger(tmp_path: Path) -> relationship.Ledger:
     """Return a ledger over a fresh store (the counters live in SQLite)."""
-    store = StateStore(tmp_path / 'peers.db', tmp_path / 'cursors.json')
-    return relationship.Ledger(store, 'reactions')
+    store = StateStore(tmp_path / 'reactions.db')
+    return relationship.Ledger(store)
 
 
 def _steer_only() -> relationship.Control:

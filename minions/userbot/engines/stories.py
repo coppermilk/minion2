@@ -54,10 +54,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-ENGINE = 'stories'
-"""This engine's name in the shared state store."""
-
-
 def _seen_key(peer_id: int, story_id: int) -> str:
     """Return the dedup key for one story of one peer."""
     return f'{peer_id}:{story_id}'
@@ -289,7 +285,7 @@ class StoryBrain:
         self.store = store
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto
         self.clock = time.time
-        self.ledger = relationship.Ledger(store, ENGINE)
+        self.ledger = relationship.Ledger(store)
         self.state = self._load()
         self.last_glance = Glance()
 
@@ -298,7 +294,7 @@ class StoryBrain:
         return tuple(
             sid
             for sid in cand.story_ids
-            if not self.store.marked(ENGINE, _seen_key(cand.peer_id, sid))
+            if not self.store.marked(_seen_key(cand.peer_id, sid))
         )
 
     def plan(
@@ -506,9 +502,7 @@ class StoryBrain:
         poll (which would drive p back to 1); it counts as offered, not viewed.
         """
         fresh = [
-            sid
-            for sid in skip_ids
-            if self.store.mark(ENGINE, _seen_key(peer_id, sid))
+            sid for sid in skip_ids if self.store.mark(_seen_key(peer_id, sid))
         ]
         if not fresh:
             return
@@ -621,14 +615,14 @@ class StoryBrain:
         fresh = [
             sid
             for sid in story_ids
-            if self.store.mark(ENGINE, _seen_key(peer_id, sid))
+            if self.store.mark(_seen_key(peer_id, sid))
         ]
         if not fresh:
             return
         key = str(peer_id)
         self.ledger.add_take(key, len(fresh), self._control(), now)
         self.ledger.remember(key, label)  # @name for /status
-        self.store.trim_marks(ENGINE, f'{peer_id}:', self.params.seen_per_peer)
+        self.store.trim_marks(f'{peer_id}:', self.params.seen_per_peer)
         self._trim_peers()
         self.state.last_view = now
         self.state.total_views += len(fresh)
@@ -656,10 +650,8 @@ class StoryBrain:
         seen marks the dropped peers keyed, since the store does not know
         their format.
         """
-        for peer in self.store.trim_peers(
-            ENGINE, self.params.max_peers_tracked
-        ):
-            self.store.drop_marks(ENGINE, f'{peer}:')
+        for peer in self.store.trim_peers(self.params.max_peers_tracked):
+            self.store.drop_marks(f'{peer}:')
 
     def recent_log(self, limit: int) -> list[ViewLog]:
         """Return recent views, newest first (for /status, /stories)."""
@@ -698,7 +690,7 @@ class StoryBrain:
         """
         return {
             int(row.peer_id): row.label
-            for row in self.store.peers(ENGINE)
+            for row in self.store.peers()
             if row.label and row.label != row.peer_id
         }
 
@@ -718,7 +710,7 @@ class StoryBrain:
 
     def _load(self) -> StoryState:
         """Reload the cursors, or start fresh when the store has none."""
-        raw = self.store.cursor(ENGINE)
+        raw = self.store.cursor()
         self.ledger.restore(raw)
         if not raw:
             return StoryState()
@@ -736,9 +728,8 @@ class StoryBrain:
         )
 
     def _save(self) -> None:
-        """Publish the cursors to the store (the twin is rebuilt later)."""
+        """Publish the cursor block to this engine's database."""
         self.store.put_cursor(
-            ENGINE,
             {
                 'last_view': self.state.last_view,
                 'session': {

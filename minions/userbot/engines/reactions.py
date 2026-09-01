@@ -69,9 +69,6 @@ if TYPE_CHECKING:
 
     from minions.userbot.core.models import Emoji
 
-ENGINE = 'reactions'
-"""This engine's name in the shared state store."""
-
 # When a session start lands in a dead hour we sample a real send moment on
 # this grid across the reachable awake time (see _place); 5 min is fine-grained
 # enough to spread a morning burst without leaving a HH:00 fingerprint.
@@ -409,7 +406,7 @@ class ReactionBrain:
         self.store = store
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto
         self.clock = time.time
-        self.ledger = relationship.Ledger(store, ENGINE)
+        self.ledger = relationship.Ledger(store)
         self.state = self._load()
 
     @property
@@ -431,14 +428,12 @@ class ReactionBrain:
             self.state.posts.remove(pair)
         self.state.posts.append(pair)
         del self.state.posts[: -self.params.watch_posts]  # keep the last N
-        self.store.keep_marks(
-            ENGINE, tuple(f'{c}:{m}:' for c, m in self.state.posts)
-        )
+        self.store.keep_marks(tuple(f'{c}:{m}:' for c, m in self.state.posts))
         self._save()
 
     def answered(self) -> int:
         """How many (post, commenter) pairs have already been reacted to."""
-        return self.store.count_marks(ENGINE)
+        return self.store.count_marks()
 
     def is_comment(self, chat: int, reply_to: int | None) -> bool:
         """Whether a reply in ``chat`` targets one of the tracked posts."""
@@ -510,7 +505,7 @@ class ReactionBrain:
         reacted on success. Returns the unix ts at which ``emit`` should run.
         """
         now = self.clock()
-        if not self.params.enabled or self.store.marked(ENGINE, key):
+        if not self.params.enabled or self.store.marked(key):
             return None
         # like_all likes every comment: place it at the next awake moment
         # (always lands). Otherwise the human-like gates may drop it.
@@ -521,7 +516,7 @@ class ReactionBrain:
         )
         if when is None:
             return None
-        self.store.mark(ENGINE, key)
+        self.store.mark(key)
         self._save()
         return when
 
@@ -855,7 +850,7 @@ class ReactionBrain:
 
     def _load(self) -> ReactionState:
         """Reload the cursors, or start fresh when the store has none."""
-        raw = self.store.cursor(ENGINE)
+        raw = self.store.cursor()
         self.ledger.restore(raw)
         if not raw:
             return ReactionState()
@@ -877,9 +872,8 @@ class ReactionBrain:
         )
 
     def _save(self) -> None:
-        """Publish the cursors to the store (the twin is rebuilt later)."""
+        """Publish the cursor block to this engine's database."""
         self.store.put_cursor(
-            ENGINE,
             {
                 'mood': self.state.mood,
                 'mood_day': self.state.mood_day,

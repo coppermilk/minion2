@@ -69,7 +69,7 @@ def _params(**over: object) -> stories.StoryParams:
 
 def _store(tmp_path: Path) -> StateStore:
     """Return a state store over a temp dir (reopening reads it back)."""
-    return StateStore(tmp_path / 'peers.db', tmp_path / 'cursors.json')
+    return StateStore(tmp_path / 'stories.db')
 
 
 def _brain(tmp_path: Path, **over: object) -> stories.StoryBrain:
@@ -85,8 +85,7 @@ def _seen(brain: stories.StoryBrain, peer: int) -> set[int]:
     return {
         int(row['key'].split(':')[1])
         for row in brain.store._conn.execute(
-            'SELECT key FROM marks WHERE engine = ? AND key LIKE ?',
-            (stories.ENGINE, f'{peer}:%'),
+            'SELECT key FROM marks WHERE key LIKE ?', (f'{peer}:%',)
         )
     }
 
@@ -417,7 +416,7 @@ def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
     brain = _brain(tmp_path, max_peers_tracked=2)
     for peer in (1, 2, 3):  # a minute apart, so "least recent" is a fact
         brain.mark_viewed(peer, (1,), ts=_NOON + peer * 60)
-    assert {r.peer_id for r in brain.store.peers(stories.ENGINE)} == {
+    assert {r.peer_id for r in brain.store.peers()} == {
         '2',
         '3',
     }  # peer 1 evicted
