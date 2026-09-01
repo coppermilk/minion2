@@ -11,7 +11,6 @@ reaction side: ``on_posted``, called once per delivered post.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -38,6 +37,7 @@ from minions.userbot.core.statefile import pending_dict
 from minions.userbot.core.statefile import pending_from_dict
 from minions.userbot.core.statefile import posted_dict
 from minions.userbot.core.statefile import posted_from_dict
+from minions.userbot.core.statefile import read_state_strict
 from minions.userbot.core.statefile import write_state
 
 if TYPE_CHECKING:
@@ -379,16 +379,17 @@ class LinkAggregator:
     def restore(self) -> None:
         """Reload saved state and re-arm timers (call once at startup).
 
-        Reads strictly, NOT via ``read_state``: an unreadable file coming
-        back empty would read as "nothing was ever posted", disarm the
-        re-post guard and re-post the backlog. A parse error propagates.
+        Reads strictly, NOT via ``read_state``: a store that comes back
+        empty because it could not be opened would read as "nothing was
+        ever posted", disarm the re-post guard and re-post the backlog. A
+        read error propagates instead.
         """
         if not self.deps.state_path.exists():
             return
-        data = json.loads(self.deps.state_path.read_text(encoding='utf-8'))
+        data = read_state_strict(self.deps.state_path)
         # A file written before the cap holds a sorted list; it loads as-is
         # and only loses the true recency order once.
-        self.rejected = [str(t) for t in (data.get('rejected') or [])]
+        self.rejected = [str(t) for t in codec.rows(data.get('rejected'))]
         del self.rejected[:-REJECTED_CAP]
         self._restore_posted(data)
         self._restore_pending(data)

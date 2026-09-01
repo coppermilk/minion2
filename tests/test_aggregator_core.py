@@ -11,8 +11,9 @@ attributes the method under test touches -- no live client.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -27,6 +28,9 @@ from minions.userbot.core.models import Posted
 from minions.userbot.glue import aggregator
 from minions.userbot.glue.commands import CommandRouter
 from minions.userbot.glue.profiles import ServiceModes
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 CONSTS = config.load_constants(config.CONSTANTS_PATH)
 
@@ -208,27 +212,51 @@ def test_write_state_round_trips_and_leaves_no_temp(tmp_path: Path) -> None:
     assert not (tmp_path / 'state.tmp').exists()
 
 
-def test_write_state_keeps_the_old_file_when_the_move_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_write_cut_short_keeps_the_old_state_whole(
+    tmp_path: Path,
 ) -> None:
-    """A kill between writing and moving leaves the old state whole (CT-A).
+    """A kill part-way through a write leaves the previous state (CT-A).
 
-    The watchdog turns a hang into a hard ``os._exit(1)``, so a write
-    interrupted part-way is a case that happens. Injecting a failure at the
-    ``replace`` proves the new bytes land in a sibling temp file first --
-    the previous state is never the thing being overwritten.
+    The watchdog turns a hang into a hard ``os._exit(1)``, so an interrupted
+    write is a case that happens. It used to be survived by writing a
+    sibling temp file and renaming it; the store survives it by being one
+    transaction, and an uncommitted transaction IS what a killed process
+    leaves. Written here without a commit, exactly as that kill would.
     """
-    path = tmp_path / 'state.json'
+    path = tmp_path / 'state.db'
     statefile.write_state(path, {'n': 1})
 
-    def boom(self: Path, target: Path) -> Path:
-        msg = f'interrupted moving {self} onto {target}'
-        raise OSError(msg)
+    dying = sqlite3.connect(str(path))
+    dying.execute(
+        'INSERT INTO state (id, blob) VALUES (1, ?) '
+        'ON CONFLICT (id) DO UPDATE SET blob = excluded.blob',
+        (json.dumps({'n': 2}),),
+    )
+    dying.close()  # no commit: the process died holding the transaction
 
-    monkeypatch.setattr(Path, 'replace', boom)
-    with pytest.raises(OSError, match='interrupted moving'):
-        statefile.write_state(path, {'n': 2})
     assert statefile.read_state(path) == {'n': 1}
+
+
+def test_a_pre_database_state_file_is_adopted_once(tmp_path: Path) -> None:
+    """The JSON a service used to write is imported, then set aside.
+
+    Three services wrote hand-rolled JSON under three naming conventions,
+    so each names its own former file and it is read exactly once. A second
+    call must not undo newer state by re-importing the stale copy.
+    """
+    legacy = tmp_path / 'greeter_state.json'
+    legacy.write_text(json.dumps({'last_event_id': 41}), encoding='utf-8')
+    path = tmp_path / 'greeter.db'
+
+    statefile.adopt(path, legacy)
+
+    assert statefile.read_state(path) == {'last_event_id': 41}
+    assert not legacy.exists()  # set aside as .bak, not left to confuse
+    assert (tmp_path / 'greeter_state.json.bak').exists()
+
+    statefile.write_state(path, {'last_event_id': 99})
+    statefile.adopt(path, legacy)
+    assert statefile.read_state(path) == {'last_event_id': 99}
 
 
 # ------------------------------------------------------- Userbot core flow

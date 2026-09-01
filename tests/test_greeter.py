@@ -12,7 +12,6 @@ a FloodWait into a widened gate.
 from __future__ import annotations
 
 import asyncio
-import json
 import types
 from datetime import UTC
 from datetime import datetime
@@ -22,6 +21,7 @@ from typing import Never
 from minion_core.adapters import userchat
 from minion_core.pace import Gate
 from minion_core.pace import Pace
+from minions.userbot.core import statefile
 from minions.userbot.engines import greeter
 
 _CAP_PER_CYCLE = 2
@@ -347,18 +347,16 @@ def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
 
 def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
     """Check old member state migrates and rebaselines."""
-    path = tmp_path / 'g.json'
-    # An old member-diff state file (has 'members', no 'last_event_id').
-    path.write_text(
-        json.dumps(
-            {
-                'channel': -100,
-                'members': [1, 2, 3],
-                'left': [9],
-                'started': True,
-            }
-        ),
-        encoding='utf-8',
+    path = tmp_path / 'greeter.db'
+    # An old member-diff state (has 'members', no 'last_event_id').
+    statefile.write_state(
+        path,
+        {
+            'channel': -100,
+            'members': [1, 2, 3],
+            'left': [9],
+            'started': True,
+        },
     )
     g = greeter.Greeter(
         _FakeClient(), _params(channel=-100), greeter.GreeterIO(path)

@@ -45,7 +45,9 @@ from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
+from minions.userbot.core import statefile
 from minions.userbot.core.config import CONSTANTS_FILE
+from minions.userbot.core.config import LEGACY_STATE_FILE
 from minions.userbot.core.config import STATE_FILE
 from minions.userbot.core.config import apply_persona
 from minions.userbot.core.config import load_config
@@ -152,6 +154,21 @@ class Userbot:
         self.next_tick = 0.0
         self.build_profile()
 
+    def _service_db(
+        self, service: str, legacy: str, where: Path | None = None
+    ) -> Path:
+        """Return one service's database path, adopting its old JSON once.
+
+        The state directory holds one file per service, named for it. Three
+        services used to write hand-rolled JSON under three different
+        conventions, so each names the file it used to have and it is
+        imported on the first start that finds it.
+        """
+        pdir = self.modes.service_dir(service) if where is None else where
+        path = pdir / f'{service}.db'
+        statefile.adopt(path, pdir / legacy)
+        return path
+
     def _store(self, service_dir: Path) -> StateStore:
         """Return the state store for one service's profile directory.
 
@@ -248,7 +265,7 @@ class Userbot:
             self.account,
             greeter_params,
             greeter.GreeterIO(
-                self.modes.service_dir('greeter') / 'greeter_state.json',
+                self._service_db('greeter', 'greeter_state.json'),
                 self.audience.note_membership,
             ),
         )
@@ -257,7 +274,9 @@ class Userbot:
                 account=self.account,
                 config=self.config,
                 consts=self.consts,
-                state_path=pdir / STATE_FILE,
+                state_path=self._service_db(
+                    'aggregator', LEGACY_STATE_FILE, pdir
+                ),
                 targets=self.live_targets,
                 on_posted=self.comment_watch.on_posted,
                 field_keys=self._field_keys,
@@ -270,7 +289,9 @@ class Userbot:
             CabinetDeps(
                 account=self.account,
                 chat=self.config.source,
-                roster=comod.CabinetRoster(pdir / 'comod.json'),
+                roster=comod.CabinetRoster(
+                    self._service_db('comod', 'comod.json', pdir)
+                ),
                 params=comod.load_comod_params(self.settings),
                 work_dir=pdir,
             )

@@ -39,7 +39,10 @@ MAX_SHORT_SEC = 180
 # Data files at the package root: the editable constants and the saved state.
 CONSTANTS_FILE = 'aggregator_constants.json'
 CONSTANTS_PATH = PACKAGE_DIR / CONSTANTS_FILE
-STATE_FILE = 'aggregator_state.json'
+STATE_FILE = 'aggregator.db'
+# What this service's state was called before the directory grew one file
+# per service. Adopted once on first start (``statefile.adopt``).
+LEGACY_STATE_FILE = 'aggregator_state.json'
 # Which profile is active (live/test). Lives in the base state dir, OUTSIDE the
 # per-profile state, so we know which profile to load at startup.
 MODE_FILE = 'aggregator_mode.json'
