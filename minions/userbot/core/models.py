@@ -26,7 +26,15 @@ def iso(ts: float) -> str:
 
 
 def parse_iso(text: str) -> float:
-    """Return an ISO-8601 UTC string to a unix timestamp (0 on bad)."""
+    """Return an ISO-8601 UTC string as a unix timestamp; NOW if unreadable.
+
+    Not 0, and the difference matters: the only caller is the re-post guard,
+    which asks ``now - parse_iso(post.at) <= window``. Reading a corrupt
+    stamp as now makes that record look freshly posted and BLOCKS the
+    re-post; reading it as 0 would make it ancient and let a duplicate
+    through. A state file damaged mid-write should cost a missed post, not a
+    double one, so the guard errs shut.
+    """
     try:
         return datetime.fromisoformat(text).timestamp()
     except (ValueError, TypeError):
@@ -164,8 +172,10 @@ class Consts:
     # terms + any non-ASCII marks): a sticker is suppressed there, a plain
     # reaction goes instead. Non-ASCII, so it lives in the JSON, not here.
     human_words: tuple[str, ...]
-    # /status icons (emoji, so JSON not source):
-    # title/routing/videos/reactions/
-    # greeter/users/legend section glyphs + on/off dots + bullet/arrow.
+    # /status icons (emoji, so JSON not source): one glyph per section --
+    # title, routing, videos, reactions, greeter, users, stories, schedule,
+    # services, legend -- plus the on/off dots and the bullet/arrow. A key
+    # the report asks for and the file lacks renders that section bare;
+    # tests/test_status.py holds the guard that keeps the two in step.
     status: dict[str, str]
     emoji_all: list[Emoji]  # the whole catalog, in file order

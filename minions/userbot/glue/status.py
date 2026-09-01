@@ -168,7 +168,11 @@ class StatusReport:
         ]
 
     def _greeter_wake_eta(self, now: float) -> str:
-        """Return 'HH:MM (in Xd Yh)' for the greeter's next wake-up."""
+        """Return 'HH:MM (in 14h 30m)' for the greeter's next wake-up.
+
+        Hours are the coarsest unit ``fmt_eta`` prints, and the next wake is
+        under a day away by construction, so there is never a days field.
+        """
         gp = self.bot.greeter.params
         local = humanize.local(now, gp.tz_offset_hours)
         wake = local.replace(

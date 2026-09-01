@@ -216,7 +216,8 @@ without reading the log.
 From **any** chat, rendered back into the source chat: `/help` (or `/start`),
 `/status`, `/preview`, `/emojis`, `/reactnow`, `/requeue`, `/greetnow`,
 `/stories`, `/users`, `/comod ...`, `/propiska_shkaf_month`, `/test` / `/live`
-(switch the whole bot's profile), `/features`, and per-service toggles
-`/<name>_on|off|test|live` (`name` in `aggregator, reactions, stories, users,
-greeter`). A toggle **persists** to `aggregator_mode.json` and takes effect at
-once.
+(switch the whole bot's profile), `/features` and `/services` (both render the
+whole `/status`, which is where the service table lives), and per-service
+toggles `/<name>_on|off|test|live` (`name` in `aggregator, reactions, stories,
+users, greeter`). A toggle **persists** to `aggregator_mode.json` and takes
+effect at once.

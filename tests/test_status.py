@@ -10,6 +10,8 @@ shows up as a diff, and a deliberate change is a one-line update here.
 
 from __future__ import annotations
 
+import ast
+import pathlib
 import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
 
 from minion_core.pace import Lane
 from minions.userbot import main
+from minions.userbot.core import config
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Consts
@@ -35,6 +38,7 @@ from minions.userbot.engines import reactions
 from minions.userbot.engines import stories
 from minions.userbot.glue import aggregator as aggregator_glue
 from minions.userbot.glue import reactions as reactions_glue
+from minions.userbot.glue import status
 from minions.userbot.glue import stories as stories_glue
 from minions.userbot.glue import users as users_glue
 from minions.userbot.glue.status import StatusReport
@@ -366,3 +370,35 @@ def test_rendering_the_report_makes_no_requests(
     bot.report.text({SOURCE: '@src', TARGET: '@dst'})
 
     assert asked == []
+
+
+# --- the fixture above is not the file the bot ships -----------------------
+
+
+def _glyph_keys_the_report_asks_for() -> set[str]:
+    """Every status key ``glue/status.py`` looks up, read off its own AST."""
+    source = pathlib.Path(status.__file__).read_text('utf-8')
+    wanted = set()
+    for node in ast.walk(ast.parse(source)):
+        called = isinstance(node, ast.Call) and isinstance(
+            node.func, ast.Attribute
+        )
+        if not called or node.func.attr not in {'_glyph', '_header'}:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant):
+            wanted.add(first.value)
+    return wanted
+
+
+def test_the_shipped_constants_carry_every_status_glyph() -> None:
+    """The real JSON covers every icon the report asks for.
+
+    GOLDEN above renders from a fixture that lists all the keys, so it passes
+    whatever the shipped file contains -- which is how 'services' came to be
+    the one section with no icon in production while the test showed [C].
+    Two sources, and until now nothing compared them.
+    """
+    shipped = config.load_constants(config.CONSTANTS_PATH).status
+    missing = _glyph_keys_the_report_asks_for() - set(shipped)
+    assert not missing, f'texts.status is missing {sorted(missing)}'

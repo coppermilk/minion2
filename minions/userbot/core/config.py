@@ -320,18 +320,36 @@ def resolve_session_path() -> Path:
     return drive / 'telethon' if drive is not None else DEFAULT_SESSION_PATH
 
 
-def resolve_state_path(default: Path) -> Path:
-    """Where the state file lives (override, else <DRIVE>, else the package).
+def state_base() -> Path | None:
+    """Return where this deploy keeps its state, or None if unset.
 
-    Same rule as the session: an explicit AGGREGATOR_STATE_DIR wins, else it
-    sits under <DRIVE>/bots/aggregator (Windows Google Drive or the NAS /data
-    mount, so it survives a `compose down/up`), else next to the package.
+    An explicit AGGREGATOR_STATE_DIR wins, else <DRIVE>/bots/aggregator
+    (Windows Google Drive or the NAS /data mount, so it survives a
+    `compose down/up`), else nothing and the caller falls back.
+
+    The one rule, in one place. The process-level files -- the log and the
+    watchdog heartbeat -- used to resolve it again in ``core/runtime.py``,
+    and the copy had drifted: it skipped ``expanduser``, so a DRIVE written
+    with a ``~`` put the log in a directory literally named ``~`` while the
+    state went to the home directory. Creating the directory is left to each
+    caller, because they do not agree on what to do when that fails.
     """
     override = os.environ.get('AGGREGATOR_STATE_DIR')
-    directory = Path(override) if override else _drive_dir()
+    if override:
+        return Path(override).expanduser()
+    return _drive_dir()
+
+
+def resolve_state_path(default: Path) -> Path:
+    """Where the state file lives (``state_base``, else beside the package).
+
+    A directory that cannot be created raises rather than silently falling
+    back: state landing somewhere other than where the operator pointed is
+    the kind of quiet success that loses a week of posts.
+    """
+    directory = state_base()
     if directory is None:
         return default
-    directory = directory.expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     return directory / STATE_FILE
 
