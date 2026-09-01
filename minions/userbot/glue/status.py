@@ -323,8 +323,9 @@ class StatusReport:
         answered = sum(w.r for w in warm) / len(warm)
         warmth = sum(w.index for w in warm) / len(warm)
         return (
-            f'{b} all {len(warm)} {noun} {b} {self._glyph("watched", "w")} '
-            f'{seen:.0%} {self._glyph("liked", "l")} {answered:.0%} '
+            f'{b} all time {b} {len(warm)} {noun} '
+            f'{b} {self._glyph("watched", "w")} {seen:.0%} '
+            f'{self._glyph("liked", "l")} {answered:.0%} '
             f'{b} warmth {warmth:.2f}'
         )
 
@@ -417,10 +418,15 @@ class StatusReport:
         if not self.bot.stories.params.enabled:
             off = f'{self._dot(on=False)} off'
             return [self._header('stories', 'Stories', off)]
-        # The glance already lists these people WITH their standing, and
-        # closes on the ledger's aggregate. Adding _warmth_lines here printed
-        # that aggregate a second time and then the same names again.
-        return [self._stories_line(), *self._glance_lines(labels)]
+        # Summary first, then this pass: the aggregate is about EVERY person
+        # we have ever engaged, the glance about the few with stories up now.
+        # Sitting inside the glance block it read as a fourth group of it,
+        # which is how a count of 9 came to sit under a heading saying 4.
+        return [
+            self._stories_line(),
+            *([line] if (line := self._attach()) else []),
+            *self._glance_lines(labels),
+        ]
 
     def _stories_line(self) -> str:
         """Return the story-viewer header: on, counts, the next view."""
@@ -454,16 +460,10 @@ class StatusReport:
         head = f'{b} glance {fmt_eta(time.time() - glance.at)} ago {b} '
         if not glance.peers:
             return [head + 'nobody has stories up']
-        hidden = sum(1 for row in glance.peers if row.hidden)
-        count = f'{len(glance.peers)} with stories'
-        if hidden:
-            count += f' ({hidden} archived)'
         return [
-            head + count,
+            head + self._glance_count(glance),
             *self._opening_lines(glance, labels),
             *self._held_lines(glance, labels),
-            *self._nothing_new_line(glance, labels),
-            *([attach] if (attach := self._attach()) else []),
         ]
 
     def _attach(self) -> str:
@@ -515,20 +515,19 @@ class StatusReport:
             ),
         ]
 
-    def _nothing_new_line(
-        self, glance: stories.Glance, labels: dict[int, str]
-    ) -> list[str]:
-        """Return one collapsed line for peers we have already answered.
+    def _glance_count(self, glance: stories.Glance) -> str:
+        """Return how many people have stories up, and how many are old news.
 
-        Names only: there is nothing to decide about them this pass, so a
-        row each would be several lines saying nothing.
+        Someone whose every story we have already opened is named nowhere:
+        there is no decision to show and nothing pending, so a list of them
+        was a list of non-events. The COUNT still earns its place -- without
+        it, a glance that lists no groups cannot be told from a stalled one.
         """
-        rows = [row for row in glance.peers if not row.unseen]
-        if not rows:
-            return []
-        b = self.bullet()
-        who = f' {b} '.join(self._who(row, labels) for row in rows)
-        return [f'{b} nothing new ({len(rows)}): {who}']
+        seen = sum(1 for row in glance.peers if not row.unseen)
+        count = f'{len(glance.peers)} with stories'
+        if not seen:
+            return count
+        return f'{count} {self.bullet()} {seen} already seen'
 
     def _who(self, row: stories.Seen, labels: dict[int, str]) -> str:
         """Return a peer's @name, falling back to the bare id, plus a flag."""

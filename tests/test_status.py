@@ -303,7 +303,7 @@ GOLDEN = """\
 . mood 0.25 . answered 1 . pending 1
 . window 7-17h (prior) . learned 12h, 13h
 . today likes 0/400 . stickers 0/40
-. all 1 commenters . [w] 75% [l] 0% . warmth 0.00
+. all time . 1 commenters . [w] 75% [l] 0% . warmth 0.00
     @alice . [w] 75% [l] 0%
 . watching 1 posts:
     @dst (-1002): 77
@@ -317,13 +317,12 @@ GOLDEN = """\
 [U] Users DB . (-) off
 [S] Stories . (+) on . 0 today . 0/50 reacted . 1 queued . next view -> in \
 3m 10s
-. glance 4m 10s ago . 4 with stories (1 archived)
+. glance 4m 10s ago . 4 with stories . 1 already seen
 . viewing (1):
     @alice . 3 of 5 new . [w] 80% [l] 25% . in ~3m 10s
 . passed this glance (2):
     @bob . 4 new . [w] 33% [l] 0%
     @carol (archived) . 2 new . first time
-. nothing new (1): @dave
 
 [H] Schedule
 . tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
@@ -516,3 +515,30 @@ def test_a_viewing_row_counts_the_new_stories_not_all_of_them(
 
     assert '3 of 4 new' in got
     assert '9' not in got.split('viewing (1):')[1].splitlines()[1]
+
+
+def test_a_glance_with_nothing_to_do_is_counted_not_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """People whose every story we have opened are counted, never named.
+
+    Listing them was a list of non-events: no decision to show, nothing
+    pending, and the number was already the total minus the two groups. The
+    COUNT stays, because a glance that shows no groups at all otherwise
+    reads the same whether everything is answered or the engine is stuck.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    bot.stories.last_glance = stories.Glance(
+        at=NOW - 10,
+        peers=(
+            stories.Seen(PEER_A, active=3, unseen=0),
+            stories.Seen(PEER_B, active=1, unseen=0),
+        ),
+    )
+
+    got = _section(bot.report.text({PEER_A: '@alice', PEER_B: '@bob'}), '[S]')
+
+    assert '2 with stories . 2 already seen' in got
+    assert '@alice' not in got
+    assert 'viewing' not in got
