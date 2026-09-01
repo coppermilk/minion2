@@ -67,22 +67,18 @@ COMMAND_PROPISKA = '/propiska_shkaf_month'
 # the mode survives a restart.
 COMMAND_TEST = '/test'
 COMMAND_LIVE = '/live'
-# /features lists the toggleable features and whether each is on. Every feature
-# also gets a runtime switch pair '/<name>_on' and '/<name>_off' (e.g.
-# /stories_off) that flips its enabled flag, persists the choice (it survives a
-# restart, overriding the JSON default), and restarts the profile's loops so
-# the change takes effect at once. The togglable feature sections, by name:
+# /services and its older name /features both render the WHOLE /status, which
+# is where the service table lives; neither prints a table of its own any more.
 COMMAND_FEATURES = '/features'
-FEATURE_NAMES = ('reactions', 'stories', 'users', 'greeter')
-# /services prints a table of every service, its mode, and the ready tap
-# commands. Each service takes '/<service>_<action>' where action is
-# on|off|test|live (on aliases live) -- so one service can be sandboxed on its
-# own (test = its own state, and for the poster/greeter its own destination)
-# while the others stay live. The poster ('aggregator') is a service too, so it
-# finally has an off. Underscore form (not '/<service> <mode>') so Telegram
-# renders each as a single tappable command.
 COMMAND_SERVICES = '/services'
-SERVICE_NAMES = ('aggregator', *FEATURE_NAMES)
+# Every service takes '/<service>_<action>' where action is on|off|test|live
+# (on aliases live) -- so one service can be sandboxed on its own (test = its
+# own state, and for the poster/greeter its own destination) while the others
+# stay live. A toggle persists, overriding the JSON default, and restarts the
+# profile's loops so the change takes effect at once. The poster ('aggregator')
+# is a service too, so it finally has an off. Underscore form (not
+# '/<service> <mode>') so Telegram renders each as a single tappable command.
+SERVICE_NAMES = ('aggregator', 'reactions', 'stories', 'users', 'greeter')
 SERVICE_MODES = ('off', 'test', 'live')
 # Tap-command action word -> the mode it sets (rendered in this order).
 SERVICE_ACTIONS = {'on': 'live', 'off': 'off', 'test': 'test', 'live': 'live'}

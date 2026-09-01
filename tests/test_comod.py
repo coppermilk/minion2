@@ -115,15 +115,17 @@ def test_load_tolerates_missing_and_corrupt(tmp_path: Path) -> None:
     assert roster.active(1.0) == []
 
 
-def test_labels_for_stacks_amount_under_nick() -> None:
+def test_a_label_stacks_the_amount_under_the_nick() -> None:
     """The amount sits on its own line under the nick; else nick only."""
-    labels = comod.labels_for([('Nick_01', '50'), ('Bob', '')])
+    slots = ((0, 0, 40, 40), (0, 40, 40, 80))
+    labels = comod.assign_labels([('Nick_01', '50'), ('Bob', '')], slots)
     assert labels == ['Nick_01\n$50', 'Bob']
 
 
-def test_labels_for_dedups_a_typed_dollar() -> None:
+def test_a_label_does_not_double_a_typed_dollar() -> None:
     """A '$' the operator already typed is not doubled."""
-    assert comod.labels_for([('Bob', '$40')]) == ['Bob\n$40']
+    slots = ((0, 0, 40, 40),)
+    assert comod.assign_labels([('Bob', '$40')], slots) == ['Bob\n$40']
 
 
 def test_load_comod_params_defaults() -> None:

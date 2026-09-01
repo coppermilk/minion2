@@ -132,7 +132,7 @@ def _engine(data: dict[str, object], name: str) -> dict[str, object]:
     return got
 
 
-def _fan_window(  # noqa: PLR0913,PLR0917 -- the window's start/end/quiet read best flat
+def _fan_window(  # noqa: PLR0913 -- the window's start/end/quiet read best flat
     data: dict[str, object], start: object, end: object, quiet: object
 ) -> None:
     """Fan the waking window into reactions/greeter and stories' quiet hours.
@@ -155,7 +155,7 @@ def _fan_window(  # noqa: PLR0913,PLR0917 -- the window's start/end/quiet read b
     )
 
 
-def _fan_key(  # noqa: PLR0913,PLR0917 -- data + the (names, key, value) fan read flat
+def _fan_key(  # noqa: PLR0913 -- data + the (names, key, value) fan read flat
     data: dict[str, object],
     names: tuple[str, ...],
     key: str,

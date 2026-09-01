@@ -42,7 +42,7 @@ minions/userbot/
     stories (StoryWatch), comod (Cabinet), users (AudienceLog),
     status (StatusReport), commands (CommandRouter), profiles (ServiceModes)
   dev/                    # developer tools, not the running bot
-    reactions_proof, dump_emoji_ids
+    dump_emoji_ids
 ```
 
 The principle: `core/` is pure logic/maths/IO, `engines/` are the domain brains,
@@ -165,9 +165,6 @@ human. The engine is Telethon-free (`engines/reactions.py`, unit-tested in
 `tests/test_reactions.py`) and driven from the `reactions` section of the JSON.
 The reaction glyphs are simply the `type: "reaction"` entries of the unified
 `emoji` array -- put cats there, or daisies; the code is content-neutral.
-
-A runnable, network-free proof of the whole path is
-`python -m minions.userbot.dev.reactions_proof`.
 
 **Persona label (optional).** The commands are neutral: `/reactnow` fires the
 queue now, `/reactions_on` / `/reactions_off` toggle the engine. Set

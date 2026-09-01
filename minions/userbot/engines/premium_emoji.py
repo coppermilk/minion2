@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from minion_core.richtext import EMOJI
@@ -33,8 +32,6 @@ from minion_core.richtext import UNDERLINE
 from minion_core.richtext import Span
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from minions.userbot.core.models import Emoji
 
 # <tg-emoji emoji-id="5334681713316479679">X</tg-emoji>
@@ -50,22 +47,6 @@ class PremiumMessage:
 
     text: str
     spans: tuple[Span, ...] = ()
-
-
-@dataclass(frozen=True)
-class Social:
-    """One social-bar entry: a colored glyph that links to a platform.
-
-    ``emoji_id`` is a premium custom-emoji document id -- the colored
-    platform logo. When it is ``None`` the plain ``fallback`` glyph shows
-    instead, so the bar still renders before you have all the ids. A
-    non-empty ``url`` makes the glyph tappable.
-    """
-
-    name: str
-    emoji_id: int | None
-    fallback: str
-    url: str = ''
 
 
 def build_premium_message(markup: str) -> PremiumMessage:
@@ -92,61 +73,6 @@ def build_premium_message(markup: str) -> PremiumMessage:
 
     parts.append(markup[cursor:])
     return PremiumMessage(''.join(parts), tuple(spans))
-
-
-def build_social_bar(
-    entries: Sequence[Social],
-    *,
-    separator: str = '   ',
-) -> PremiumMessage:
-    """Render a row of colored, tappable premium-emoji "buttons".
-
-    A Telegram user account cannot send real inline buttons (bot-only), and
-    button labels never render premium emoji -- so the closest thing is a
-    line of premium emoji, each linked to its platform. Every glyph carries
-    a custom-emoji span (its color) and, when a url is set, a link span on
-    the same characters (its tap target).
-    """
-    parts: list[str] = []
-    spans: list[Span] = []
-    at = 0
-
-    for index, entry in enumerate(entries):
-        if index:  # a separator sits between glyphs, not before the first
-            at += len(separator)
-            parts.append(separator)
-        size = len(entry.fallback)
-        if entry.emoji_id is not None:
-            spans.append(Span(EMOJI, at, size, str(entry.emoji_id)))
-        if entry.url:
-            spans.append(Span(LINK, at, size, entry.url))
-        parts.append(entry.fallback)
-        at += size
-
-    return PremiumMessage(''.join(parts), tuple(spans))
-
-
-def build_post_with_bar(
-    markup: str,
-    entries: Sequence[Social],
-    *,
-    separator: str = '\n\n',
-) -> PremiumMessage:
-    """Return a post plus a social bar as a signature line beneath it.
-
-    ``markup`` is the post body (it may itself contain ``<tg-emoji>`` tags);
-    ``entries`` become the footer row. The bar's spans are shifted past the
-    post text and the separator, so the whole thing sends as ONE message --
-    the post on top, the row of colored premium-emoji links as its caption
-    underneath.
-    """
-    post = build_premium_message(markup)
-    bar = build_social_bar(entries)
-    shift = len(post.text) + len(separator)
-    return PremiumMessage(
-        post.text + separator + bar.text,
-        (*post.spans, *(replace(s, at=s.at + shift) for s in bar.spans)),
-    )
 
 
 class RichText:

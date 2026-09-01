@@ -250,15 +250,6 @@ def by_amount(residents: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return sorted(residents, key=lambda r: _amount_value(r[1]), reverse=True)
 
 
-def labels_for(residents: list[tuple[str, str]]) -> list[str]:
-    r"""Each resident as a shelf label, nick over amount.
-
-    The amount goes on its own line UNDER the nick (rendered centered), so a
-    label is ``"nick\n$amount"`` -- or just the nick when no amount was given.
-    """
-    return [_label(nick, amount) for nick, amount in residents]
-
-
 def assign_labels(
     residents: list[tuple[str, str]],
     slots: tuple[tuple[int, int, int, int], ...],

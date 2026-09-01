@@ -31,20 +31,12 @@ HEART = chr(0x1F49B)  # non-BMP
 CHECK = chr(0x2714)  # BMP: one character, one UTF-16 unit
 
 CAT_ID = '5334681713316479679'
-TG_ID = '5309876543210987654'
-VK_ID = '5111111111111111111'
 
 MARKUP = (
     f'{FIRE} start <tg-emoji emoji-id="{CAT_ID}">{HEART}'
     f'</tg-emoji> tail {CHECK}'
 )
 BODY = f'{FIRE} start {HEART} tail {CHECK}'
-
-BAR = [
-    premium_emoji.Social('tg', int(TG_ID), FIRE, 'https://t.me/x'),
-    premium_emoji.Social('yt', None, CHECK, 'https://y.tv/z'),
-    premium_emoji.Social('vk', int(VK_ID), HEART, ''),
-]
 
 
 def _triples(
@@ -70,42 +62,6 @@ def test_markup_entities_count_utf16_units() -> None:
     """The adapter side offsets in UTF-16: the same emoji sits at unit 9."""
     message = premium_emoji.build_premium_message(MARKUP)
     assert _triples(message) == [('CustomEmoji', 9, 2, int(CAT_ID))]
-
-
-def test_social_bar_spans() -> None:
-    """A bar glyph carries its color and its tap target on one span."""
-    message = premium_emoji.build_social_bar(BAR)
-    assert message.text == f'{FIRE}   {CHECK}   {HEART}'
-    assert message.spans == (
-        Span(EMOJI, 0, 1, TG_ID),
-        Span(LINK, 0, 1, 'https://t.me/x'),
-        Span(LINK, 4, 1, 'https://y.tv/z'),
-        Span(EMOJI, 8, 1, VK_ID),
-    )
-
-
-def test_social_bar_entities() -> None:
-    """The same bar in Telegram's units, entry by entry."""
-    message = premium_emoji.build_social_bar(BAR)
-    assert _triples(message) == [
-        ('CustomEmoji', 0, 2, int(TG_ID)),
-        ('TextUrl', 0, 2, 'https://t.me/x'),
-        ('TextUrl', 5, 1, 'https://y.tv/z'),
-        ('CustomEmoji', 9, 2, int(VK_ID)),
-    ]
-
-
-def test_post_with_bar_shifts_the_footer() -> None:
-    """The footer's spans move past the post body and the separator."""
-    message = premium_emoji.build_post_with_bar(MARKUP, BAR)
-    assert message.text == f'{BODY}\n\n{FIRE}   {CHECK}   {HEART}'
-    assert _triples(message) == [
-        ('CustomEmoji', 9, 2, int(CAT_ID)),
-        ('CustomEmoji', 20, 2, int(TG_ID)),
-        ('TextUrl', 20, 2, 'https://t.me/x'),
-        ('TextUrl', 25, 1, 'https://y.tv/z'),
-        ('CustomEmoji', 29, 2, int(VK_ID)),
-    ]
 
 
 def test_rich_text_builder() -> None:
