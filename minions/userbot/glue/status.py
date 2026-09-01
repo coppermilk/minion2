@@ -288,6 +288,18 @@ class StatusReport:
             f'{b} /reactnow {b} /requeue',
         ]
 
+    def _attach_line(self, warm: list[relationship.Warmth], noun: str) -> str:
+        """Return the ledger's one-line aggregate: how many, and the means."""
+        if not warm:
+            return ''
+        b = self.bullet()
+        mean_p = sum(w.p for w in warm) / len(warm)
+        mean_r = sum(w.r for w in warm) / len(warm)
+        return (
+            f'{b} attach {len(warm)} {noun} {self.arrow()} '
+            f'p~{mean_p:.2f} r~{mean_r:.2f}'
+        )
+
     def _warmth_lines(
         self, warm: list[relationship.Warmth], noun: str
     ) -> list[str]:
@@ -305,13 +317,8 @@ class StatusReport:
         if not warm:
             return []
         b = self.bullet()
-        mean_p = sum(w.p for w in warm) / len(warm)
-        mean_r = sum(w.r for w in warm) / len(warm)
         return [
-            (
-                f'{b} attach {len(warm)} {noun} {self.arrow()} '
-                f'p~{mean_p:.2f} r~{mean_r:.2f}'
-            ),
+            self._attach_line(warm, noun),
             *(
                 f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'
                 for w in warm[:STATUS_WARM_PEERS]
@@ -404,13 +411,12 @@ class StatusReport:
         return self._header('stories', 'Stories', *parts)
 
     def _glance_lines(self, labels: dict[int, str]) -> list[str]:
-        """Return who has stories up right now and our verdict on each.
+        """Return who has stories up now, grouped by what we do about them.
 
-        The operator can see these people in Telegram; before this the
-        report named only the ones we chose, so an ignored person and an
-        idle engine looked identical. Rendered from the last poll's
-        snapshot with its age beside it -- /status must not re-read the
-        feed just to look current.
+        Grouped rather than listed flat, because the question is "who are
+        we opening and who are we not", and a header answers it before you
+        read a single row. Rendered from the last poll's snapshot with its
+        age beside it -- /status must not re-read the feed to look current.
         """
         glance = self.bot.stories.last_glance
         b = self.bullet()
@@ -419,59 +425,111 @@ class StatusReport:
         head = f'{b} glance {fmt_eta(time.time() - glance.at)} ago {b} '
         if not glance.peers:
             return [head + 'nobody has stories up']
-        rows = [
-            self._peer_row(row, labels)
-            for row in sorted(glance.peers, key=_glance_order)
-        ]
-        return [
-            head + self._glance_counts(glance),
-            f'{b} with stories now:',
-            *_capped(rows),
-        ]
-
-    def _glance_counts(self, glance: stories.Glance) -> str:
-        """Return the one-line tally of the last glance's verdicts."""
-        peers = glance.peers
-        hidden = sum(1 for row in peers if row.hidden)
-        seen = f'{len(peers)} with stories'
+        hidden = sum(1 for row in glance.peers if row.hidden)
+        count = f'{len(glance.peers)} with stories'
         if hidden:
-            seen += f' ({hidden} archived)'
-        b = self.bullet()
-        tally = f' {b} '.join(
-            (
-                f'viewing {sum(1 for r in peers if r.viewing)}',
-                f'passed {sum(1 for r in peers if _waiting(r))}',
-                f'nothing new {sum(1 for r in peers if not r.unseen)}',
-            )
-        )
-        blocked = f' {b} {glance.blocked}' if glance.blocked else ''
-        return f'{seen} {b} {tally}{blocked}'
-
-    def _peer_row(self, row: stories.Seen, labels: dict[int, str]) -> str:
-        """Return one person's line: what they have up, and what we do."""
-        b = self.bullet()
-        who = labels.get(row.peer_id) or str(row.peer_id)
-        parts = [
-            f'{row.active} up',
-            f'{row.unseen} new' if row.unseen else '-',
-            self._peer_verdict(row),
+            count += f' ({hidden} archived)'
+        return [
+            head + count,
+            *self._opening_lines(glance, labels),
+            *self._held_lines(glance, labels),
+            *self._nothing_new_line(glance, labels),
+            *([attach] if (attach := self._attach()) else []),
         ]
-        if row.hidden:
-            parts.append('archived feed')
-        return f'    {who} {b} ' + f' {b} '.join(parts)
 
-    def _peer_verdict(self, row: stories.Seen) -> str:
-        """Return what we are doing about one peer, with an ETA if queued."""
-        if not row.viewing:
-            return row.verdict
-        return f'viewing {row.viewing}{self._view_eta(row.peer_id)}'
+    def _attach(self) -> str:
+        """Return the story ledger's aggregate line (blank when empty)."""
+        return self._attach_line(self.bot.stories.warmth(), 'peers')
+
+    def _opening_lines(
+        self, glance: stories.Glance, labels: dict[int, str]
+    ) -> list[str]:
+        """Return the people whose stories we are opening this glance."""
+        rows = [row for row in glance.peers if row.viewing]
+        if not rows:
+            return []
+        b = self.bullet()
+        return [
+            f'{b} viewing ({len(rows)}):',
+            *_capped(
+                [
+                    f'    {self._who(row, labels)} {b} '
+                    f'{row.viewing} of {row.active} up {b} '
+                    f'{self._record(row)}{self._view_eta(row.peer_id)}'
+                    for row in sorted(rows, key=lambda r: -r.viewing)
+                ]
+            ),
+        ]
+
+    def _held_lines(
+        self, glance: stories.Glance, labels: dict[int, str]
+    ) -> list[str]:
+        """Return the people who have something new we are not opening.
+
+        The header carries WHY: a blocked session names its reason once
+        (quiet hours, a cooldown, a silent day) instead of repeating it on
+        every row, which is the duplication this layout exists to remove.
+        """
+        rows = [row for row in glance.peers if _waiting(row)]
+        if not rows:
+            return []
+        b = self.bullet()
+        why = glance.blocked or 'passed this glance'
+        return [
+            f'{b} {why} ({len(rows)}):',
+            *_capped(
+                [
+                    f'    {self._who(row, labels)} {b} '
+                    f'{row.unseen} new {b} {self._record(row)}'
+                    for row in sorted(rows, key=lambda r: -r.unseen)
+                ]
+            ),
+        ]
+
+    def _nothing_new_line(
+        self, glance: stories.Glance, labels: dict[int, str]
+    ) -> list[str]:
+        """Return one collapsed line for peers we have already answered.
+
+        Names only: there is nothing to decide about them this pass, so a
+        row each would be several lines saying nothing.
+        """
+        rows = [row for row in glance.peers if not row.unseen]
+        if not rows:
+            return []
+        b = self.bullet()
+        who = f' {b} '.join(self._who(row, labels) for row in rows)
+        return [f'{b} nothing new ({len(rows)}): {who}']
+
+    def _who(self, row: stories.Seen, labels: dict[int, str]) -> str:
+        """Return a peer's @name, falling back to the bare id, plus a flag."""
+        name = labels.get(row.peer_id) or str(row.peer_id)
+        return f'{name} (archived)' if row.hidden else name
+
+    def _record(self, row: stories.Seen) -> str:
+        """Return a peer's all-time record, or say we have no history.
+
+        "first time" rather than 0%: a person we have never engaged reads
+        completely differently from one we have been steadily skipping,
+        and a bare zero cannot tell them apart.
+        """
+        held = row.standing
+        if not held.offered:
+            return 'first time'
+        watched = 100 * held.viewed / held.offered
+        liked = 100 * held.reacted / held.viewed if held.viewed else 0.0
+        eye = self._glyph('watched', 'w')
+        thumb = self._glyph('liked', 'l')
+        return f'{eye} {watched:.0f}% {thumb} {liked:.0f}%'
 
     def _view_eta(self, peer_id: int) -> str:
-        """Return ' in ~3m 10s' for a queued peer, or '' when it is gone."""
+        """Return ' . in ~3m 10s' for a queued peer, '' once it has fired."""
+        b = self.bullet()
         for view in self.bot.story_watch.pending:
             if view.peer_id == peer_id:
                 eta = view.when - time.time()
-                return ' due now' if eta <= 0 else f' in ~{fmt_eta(eta)}'
+                due = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
+                return f' {b} {due}'
         return ''
 
     def _schedule_lines(self) -> list[str]:

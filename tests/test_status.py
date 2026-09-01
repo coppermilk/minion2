@@ -94,6 +94,8 @@ def _consts() -> Consts:
             'users': '[U]',
             'stories': '[S]',
             'schedule': '[H]',
+            'watched': '[w]',
+            'liked': '[l]',
             'services': '[C]',
             'legend': '[L]',
             'on': '(+)',
@@ -204,8 +206,22 @@ def _bot(tmp_path: Path) -> main.Userbot:
     bot.stories.last_glance = stories.Glance(
         at=NOW - 250,
         peers=(
-            stories.Seen(PEER_A, 5, 5, 3, stories.VIEWING),
-            stories.Seen(PEER_B, 4, 4, 0, stories.PASSED),
+            stories.Seen(
+                PEER_A,
+                5,
+                5,
+                3,
+                stories.VIEWING,
+                standing=stories.Standing(offered=10, viewed=8, reacted=2),
+            ),
+            stories.Seen(
+                PEER_B,
+                4,
+                4,
+                0,
+                stories.PASSED,
+                standing=stories.Standing(offered=6, viewed=2),
+            ),
             stories.Seen(PEER_C, 2, 2, 0, stories.PASSED, hidden=True),
             stories.Seen(PEER_D, 3, 0, 0, stories.NOTHING_NEW),
         ),
@@ -301,13 +317,13 @@ GOLDEN = """\
 [U] Users DB . (-) off
 [S] Stories . (+) on . 0 today . 0/50 reacted . 1 queued . next view -> in \
 3m 10s
-. glance 4m 10s ago . 4 with stories (1 archived) . viewing 1 . passed 2 . \
-nothing new 1
-. with stories now:
-    @alice . 5 up . 5 new . viewing 3 in ~3m 10s
-    @bob . 4 up . 4 new . passed this glance
-    @carol . 2 up . 2 new . passed this glance . archived feed
-    @dave . 3 up . - . nothing new
+. glance 4m 10s ago . 4 with stories (1 archived)
+. viewing (1):
+    @alice . 3 of 5 up . [w] 80% [l] 25% . in ~3m 10s
+. passed this glance (2):
+    @bob . 4 new . [w] 33% [l] 0%
+    @carol (archived) . 2 new . first time
+. nothing new (1): @dave
 
 [H] Schedule
 . tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
@@ -370,6 +386,34 @@ def test_rendering_the_report_makes_no_requests(
     bot.report.text({SOURCE: '@src', TARGET: '@dst'})
 
     assert asked == []
+
+
+def test_a_blocked_session_names_its_reason_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A held session says why in the group header, not on every row.
+
+    Repeating "cooldown 4949s" against each person is exactly the
+    duplication this layout replaced: the reason is a property of the
+    session, not of the people.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    bot.stories.last_glance = stories.Glance(
+        at=NOW - 10,
+        peers=(
+            stories.Seen(PEER_A, 2, 2, 0, 'cooldown 4949s'),
+            stories.Seen(PEER_B, 1, 1, 0, 'cooldown 4949s'),
+        ),
+        blocked='cooldown 4949s',
+    )
+    bot.story_watch.pending = []
+
+    got = bot.report.text({PEER_A: '@alice', PEER_B: '@bob'})
+
+    assert '. cooldown 4949s (2):' in got
+    assert got.count('cooldown 4949s') == 1
+    assert '    @alice . 2 new . first time' in got
 
 
 # --- the fixture above is not the file the bot ships -----------------------

@@ -172,6 +172,20 @@ def _verdict(unseen: int, viewing: int, blocked: str) -> str:
 
 
 @dataclass(frozen=True)
+class Standing:
+    """One peer's all-time record with us, as of this glance.
+
+    ``offered`` at zero means we have never engaged them at all -- a
+    first sighting, which reads very differently from a peer we have
+    deliberately been skipping, and the two used to look identical.
+    """
+
+    offered: int = 0
+    viewed: int = 0
+    reacted: int = 0
+
+
+@dataclass(frozen=True)
 class Seen:
     """One peer with active stories, and what the last glance decided.
 
@@ -186,6 +200,7 @@ class Seen:
     viewing: int = 0  # how many we will open this glance
     verdict: str = NOTHING_NEW
     hidden: bool = False  # from the archived feed, not the main one
+    standing: Standing = field(default_factory=Standing)
 
 
 @dataclass(frozen=True)
@@ -352,9 +367,15 @@ class StoryBrain:
                 viewing=(count := opening.get(cand.peer_id, 0)),
                 verdict=_verdict(unseen, count, blocked),
                 hidden=cand.hidden,
+                standing=self._standing(cand.peer_id),
             )
             for cand in candidates
         )
+
+    def _standing(self, peer_id: int) -> Standing:
+        """Return one peer's all-time record, for the glance readout."""
+        row = self.ledger.row(str(peer_id))
+        return Standing(row.offered, row.taken, row.recip)
 
     def blocked_reason(self, now: float | None = None) -> str | None:
         """Return why no session may open now, or None when one may.

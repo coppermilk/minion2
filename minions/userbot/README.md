@@ -195,14 +195,32 @@ default and lives only on your own state disk. Read it with `/users`.
 Two sections answer the questions that used to need the log.
 
 **Stories** lists everyone who has stories up right now -- the same people you
-see in Telegram, archived feed included -- and what the bot decided about each:
-`viewing 3 in ~3m 10s`, `passed this glance`, `nothing new`, or the reason the
-whole session is held (quiet hours, cooldown, silent day). It is a snapshot from
-the last poll with its age beside it (`glance 4m 10s ago`), on purpose: the
+see in Telegram, archived feed included -- grouped by what the bot decided:
+
+    . glance 4m 10s ago . 4 with stories (1 archived)
+    . viewing (1):
+        @alice . 3 of 5 up . 80% . 25% . in ~3m 10s
+    . passed this glance (2):
+        @bob . 4 new . 45% . 0%
+        @carol (archived) . 2 new . first time
+    . nothing new (1): @dave
+
+One row per person, one place. The two percentages are that peer's ALL-TIME
+record: how much of what they offered we opened, and how much of what we opened
+we reacted to -- the two fractions the Berlyne control steers. `first time` says
+we have no history at all with them, which reads very differently from a steady
+0% and used to be indistinguishable from it.
+
+A held session names its reason ONCE, in the group header (`cooldown 4949s (3):`)
+rather than against every person: the cooldown is a property of the session, not
+of the people. `nothing new` collapses to a single line of names, because there
+is no decision to show.
+
+It is a snapshot from the last poll with its age beside it, on purpose: the
 report never re-reads the feed, because two story requests behind every `/status`
 is exactly the traffic the request gate exists to prevent.
 
-An archived peer is watched on the same maths as anyone else; the `archived feed`
+An archived peer is watched on the same maths as anyone else; the `(archived)`
 marker says where we saw them, not that they are treated differently.
 
 **Schedule** collects every background loop's next run -- host tick, liveness
