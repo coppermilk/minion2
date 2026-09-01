@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import pytest
 
 
+from minions.userbot.core import matching
 from minions.userbot.core.matching import is_recent_repost
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Group
@@ -357,3 +358,33 @@ def test_nothing_delivered_means_nothing_recorded() -> None:
     account = _FakeAccount(photo_id=0, text_id=0)
     assert _deliver(_delivering(account), '') == []
     assert account.calls == ['text:11', 'text:22']
+
+
+# --- the rejected memory is bounded ---------------------------------------
+
+_OVER_CAP = aggregator.REJECTED_CAP + 100
+
+
+def test_rejected_titles_stop_growing_forever() -> None:
+    """The non-Short memory is capped, newest kept.
+
+    It is the one piece of poster state that used to grow for as long as the
+    bot ran -- a title per rejected video, persisted, never trimmed, while
+    the posted log beside it was capped at 300 all along.
+    """
+    agg = _bare_aggregator(_FakeFlush([]))
+    for i in range(_OVER_CAP):
+        agg._reject(f'a long video number {i}')
+    assert len(agg.rejected) == aggregator.REJECTED_CAP
+    assert agg.rejected[-1] == matching.norm(
+        f'a long video number {_OVER_CAP - 1}'
+    )  # the newest survived
+    assert matching.norm('a long video number 0') not in agg.rejected
+
+
+def test_a_rejected_title_is_remembered_once() -> None:
+    """Re-rejecting the same video does not spend a slot twice."""
+    agg = _bare_aggregator(_FakeFlush([]))
+    for _ in range(5):
+        agg._reject('the same long video')
+    assert agg.rejected == [matching.norm('the same long video')]

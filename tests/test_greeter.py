@@ -365,7 +365,7 @@ def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
     )
     assert g.state.started is False  # re-baseline (no mass DM)
     assert g.state.last_event_id == 0
-    assert g.state.left == {9}  # welcome_back memory carried over
+    assert g.state.left == [9]  # welcome_back memory carried over
 
 
 def test_load_greeter_params_defaults_off_with_target_channel() -> None:
@@ -430,3 +430,40 @@ def test_sync_now_reports_asleep_with_deferred_count(tmp_path: Path) -> None:
     assert 'asleep' in summary
     assert g.deferred == 1
     assert client.dms == []
+
+
+# --- the welcome_back memory is bounded -----------------------------------
+
+_OVER_LEFT_CAP = greeter.LEFT_CAP + 100
+
+
+def test_departures_stop_growing_forever(tmp_path: Path) -> None:
+    """The welcome_back memory is capped, newest kept.
+
+    Every subscriber who ever unsubscribed used to be persisted for good, in
+    a channel whose whole business is turnover.
+    """
+    g = greeter.Greeter(
+        _FakeClient(),
+        _params(channel=-100),
+        greeter.GreeterIO(tmp_path / 'greeter_state.json'),
+    )
+    for uid in range(_OVER_LEFT_CAP):
+        g._note_departure(uid)
+    assert len(g.state.left) == greeter.LEFT_CAP
+    assert g.state.left[-1] == _OVER_LEFT_CAP - 1  # the newest survived
+    assert 0 not in g.state.left  # the oldest rolled off
+
+
+def test_a_returning_subscriber_is_forgotten_once(tmp_path: Path) -> None:
+    """Coming back drops the departure; leaving again re-adds it, once."""
+    g = greeter.Greeter(
+        _FakeClient(),
+        _params(channel=-100),
+        greeter.GreeterIO(tmp_path / 'greeter_state.json'),
+    )
+    g._note_departure(7)
+    g._note_departure(7)  # the same person leaving twice is one memory
+    assert g.state.left == [7]
+    g._forget_departure(7)
+    assert g.state.left == []

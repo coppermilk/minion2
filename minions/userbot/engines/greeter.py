@@ -61,7 +61,10 @@ class GreeterParams:
     enabled: bool = False
     channel: int = 0  # the channel to watch (JSON value, else the target)
     welcome: str = 'Welcome!'
-    welcome_back: str = ''  # for someone who LEFT and later re-subscribed
+    # For someone who LEFT and later re-subscribed. Empty (as shipped) makes
+    # both branches of _welcome_text send the same text -- that is the
+    # operator's choice, not a bug, and setting it is all it takes.
+    welcome_back: str = ''
     farewell: str = ''
     fallback_name: str = 'friend'  # fills {name} when the name will not
     poll_sec: float = 600.0
@@ -80,11 +83,21 @@ class GreeterParams:
 class GreeterState:
     """Persisted: welcome-back memory, baseline flag, cursor, DM counter."""
 
-    left: set[int] = field(default_factory=set)  # unsubscribed -> welcome_back
+    # Unsubscribed, oldest first, capped at LEFT_CAP: they get welcome_back
+    # if they return while still remembered, else the plain welcome.
+    left: list[int] = field(default_factory=list)
     started: bool = False  # the silent baseline has been established
     last_event_id: int = 0  # highest admin-log event id already handled
     dm_day: str = ''  # UTC date of dm_today
     dm_today: int = 0  # DMs already sent today (against max_dm_per_day)
+
+
+# Departed subscribers remembered for a welcome_back, newest last. Unbounded
+# it was the one part of greeter state that grew for as long as the channel
+# had turnover; 500 matches the story engine's tracked-peer ceiling. Someone
+# who rolled off and later returns is greeted as new, which is the mild end
+# of getting it wrong.
+LEFT_CAP = 500
 
 
 class _FloodStopError(Exception):
@@ -293,12 +306,23 @@ class Greeter:
             return False
         if joined:
             sent = await self._dm(uid, self._welcome_text(uid))
-            self.state.left.discard(uid)  # they came back
+            self._forget_departure(uid)  # they came back
             return sent
-        self.state.left.add(uid)  # remember for a welcome_back later
+        self._note_departure(uid)  # remember for a welcome_back later
         if not self.params.farewell:
             return False
         return await self._dm(uid, self.params.farewell)
+
+    def _note_departure(self, uid: int) -> None:
+        """Remember one departure for a later welcome_back, within the cap."""
+        self._forget_departure(uid)  # keep it once, and keep it newest
+        self.state.left.append(uid)
+        del self.state.left[:-LEFT_CAP]
+
+    def _forget_departure(self, uid: int) -> None:
+        """Drop one departure from the memory (they came back)."""
+        if uid in self.state.left:
+            self.state.left.remove(uid)
 
     def _welcome_text(self, uid: int) -> str:
         """Return welcome_back for a returning subscriber, else welcome."""
@@ -402,7 +426,8 @@ class Greeter:
                 self.params.channel,
             )
             return GreeterState()
-        carried = {codec.whole(m) for m in codec.rows(raw.get('left'))}
+        carried = [codec.whole(m) for m in codec.rows(raw.get('left'))]
+        del carried[:-LEFT_CAP]
         if 'last_event_id' not in raw:
             log.info('greeter: migrating to admin-log, re-baselining')
             return GreeterState(left=carried)
@@ -418,7 +443,8 @@ class Greeter:
         """Persist the state atomically as readable JSON."""
         data = {
             'channel': self.params.channel,  # the channel this is for
-            'left': sorted(self.state.left),
+            # Insertion order, NOT sorted: the cap keeps the newest.
+            'left': list(self.state.left),
             'started': self.state.started,
             'last_event_id': self.state.last_event_id,
             'dm_day': self.state.dm_day,

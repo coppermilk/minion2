@@ -54,6 +54,13 @@ log = logging.getLogger('userbot')
 
 # Posted videos kept in the readable log; doubles as the restart-dedup window.
 POSTED_CAP = 300
+# Rejected titles kept, newest last. The memory only has to outlive a group's
+# collection window (timeout_sec, three hours), because all it does is silence
+# the OTHER platforms' messages about a video already judged too long -- some
+# of which arrive without a duration of their own. Unbounded, it was the one
+# part of this state that grew for as long as the bot ran; 300 is the same
+# ceiling the posted log uses and is orders of magnitude more than the job.
+REJECTED_CAP = 300
 
 
 @dataclass(frozen=True)
@@ -78,7 +85,8 @@ class LinkAggregator:
     deps: AggregatorDeps
     groups: list[Group] = field(default_factory=list)
     posted: list[Posted] = field(default_factory=list)
-    rejected: set[str] = field(default_factory=set)
+    # Normalized titles of videos dropped as too long, oldest first, capped.
+    rejected: list[str] = field(default_factory=list)
     # source ids already posted (the backfill dedup)
     processed_ids: set[int] = field(default_factory=set)
 
@@ -160,8 +168,15 @@ class LinkAggregator:
         return item
 
     def _reject(self, title: str) -> None:
-        """Remember a non-Short video and drop any group open for it."""
-        self.rejected.add(norm(title))
+        """Remember a non-Short video and drop any group open for it.
+
+        Newest last, capped: a title that rolled off is simply judged again
+        from the message's own duration if it ever comes back.
+        """
+        key = norm(title)
+        if key not in self.rejected:
+            self.rejected.append(key)
+            del self.rejected[:-REJECTED_CAP]
         group = self._match(title)
         if group is not None and group in self.groups:
             self.groups.remove(group)
@@ -355,7 +370,9 @@ class LinkAggregator:
                 pending_dict(g, self.deps.config.platforms)
                 for g in self.groups
             ],
-            'rejected': sorted(self.rejected),
+            # Insertion order, NOT sorted: the cap keeps the newest, so the
+            # order is what makes "newest" mean anything after a restart.
+            'rejected': list(self.rejected),
         }
         write_state(self.deps.state_path, data)
 
@@ -369,7 +386,10 @@ class LinkAggregator:
         if not self.deps.state_path.exists():
             return
         data = json.loads(self.deps.state_path.read_text(encoding='utf-8'))
-        self.rejected = set(data.get('rejected') or [])
+        # A file written before the cap holds a sorted list; it loads as-is
+        # and only loses the true recency order once.
+        self.rejected = [str(t) for t in (data.get('rejected') or [])]
+        del self.rejected[:-REJECTED_CAP]
         self._restore_posted(data)
         self._restore_pending(data)
         log.info(
