@@ -175,7 +175,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
             emojis=(('11', 'a'),),
         ),
     ]
-    brain.ledger.add_take('alice', 3)
+    brain.ledger.add_take('alice', 3, brain._control(), NOW)
     brain.ledger.add_offer('alice', 1)
     brain.ledger.remember('alice', '@alice')
     bot.reactions = brain

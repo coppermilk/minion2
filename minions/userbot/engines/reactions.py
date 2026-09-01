@@ -748,14 +748,18 @@ class ReactionBrain:
             recip_gain=p.recip_control_gain,
             take_cap=p.like_max_per_day,
             recip_cap=p.sticker_max_per_day,
+            # One answering session IS the burst this engine clumps into, so
+            # the clumping factor reuses that gate rather than adding a knob.
+            burst_gap_sec=p.session_idle_sec,
         )
 
     def _grant_engage(self, person: str) -> bool:
         """Commit one engagement (like) to the ledger if the cap allows."""
         led = self.ledger
-        if not led.spend_take(self._control(), self.clock(), self._tz()):
+        control, now = self._control(), self.clock()
+        if not led.spend_take(control, now, self._tz()):
             return False
-        led.bump_take(person)
+        led.bump_take(person, control, now)
         return True
 
     def decide_engage(self, person: str) -> bool:
@@ -772,7 +776,8 @@ class ReactionBrain:
         first = led.row(person).offered == 0
         prob = led.take_prob(person, self._control())
         take = first or self.rng.random() < prob
-        led.add_offer(person)  # count this comment (recorded before granting)
+        # count this comment (recorded before granting)
+        led.add_offer(person, now=self.clock())
         ok = self._grant_engage(person) if take else False
         self._save()
         return ok
@@ -796,9 +801,10 @@ class ReactionBrain:
         prob = led.recip_prob(person, ctrl, taken_now=True)
         if self.rng.random() >= prob:
             return False
-        if not led.spend_recip(ctrl, self.clock(), self._tz()):
+        now = self.clock()
+        if not led.spend_recip(ctrl, now, self._tz()):
             return False
-        led.bump_recip(person)
+        led.bump_recip(person, now)
         self._save()
         return True
 

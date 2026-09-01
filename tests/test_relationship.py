@@ -65,7 +65,7 @@ def test_take_prob_converges_offered_taken_to_the_wundt_peak(
     peer = 'p'
     for _ in range(_STEPS):
         if rng.random() < led.take_prob(peer, ctrl):
-            led.bump_take(peer)
+            led.bump_take(peer, _CONTROL, _NOON)
         led.add_offer(peer)
     ratio = led.row(peer).taken / led.row(peer).offered
     assert abs(ratio - ctrl.take_target()) < _TOL
@@ -80,7 +80,7 @@ def test_recip_prob_converges_recip_taken_to_the_target(
     rng = random.Random(1)
     peer = 'p'
     for _ in range(_STEPS):
-        led.bump_take(peer)  # every step is a taken exposure
+        led.bump_take(peer, _CONTROL, _NOON)  # a taken exposure
         if rng.random() < led.recip_prob(peer, ctrl, taken_now=True):
             led.bump_recip(peer)
     ratio = led.row(peer).recip / led.row(peer).taken
@@ -118,7 +118,7 @@ def test_warmth_orders_by_recency_and_evict_drops_a_peer(
 ) -> None:
     """warmth() lists the most recent peer first; evict removes a peer."""
     led = _ledger(tmp_path)
-    led.add_take('early', 2)
+    led.add_take('early', 2, _CONTROL, _NOON)
     led.add_recip('early', 1, _NOON, _TZ)
     led.add_offer('late', 3)  # interacted with more recently
     rows = relationship.warmth(led, _CONTROL)
@@ -134,9 +134,113 @@ def test_remember_labels_warmth_and_ignores_the_bare_id(
 ) -> None:
     """A cached @name shows in warmth; a label equal to the id is ignored."""
     led = _ledger(tmp_path)
-    led.add_take('552', 1)
+    led.add_take('552', 1, _CONTROL, _NOON)
     led.remember('552', '@liriiu (552)')
     led.remember('552', '552')  # a failed resolve must not clobber the name
     assert next(r.label for r in relationship.warmth(led, _CONTROL)) == (
         '@liriiu (552)'
     )
+
+
+# --------------------------------------- the two factors we MEASURE
+# Irregularity (Whitchurch 2011; Ferster & Skinner 1957) and clumping
+# (Bornstein/Berlyne) are not steered toward a target -- they are read off the
+# gap statistics the store accumulates. These pin that the arithmetic reaches
+# them at all: without a test here the two factors are functions nobody feeds,
+# which is exactly the state they were in before.
+
+_DAY = 86400.0
+_BURST_GAP = 900.0
+_TOUCHES = 40
+_BATCH = 5
+_FLAT_TOL = 0.01
+_POISSON_MIN = 0.9
+
+
+def _moments(gaps: list[float]) -> list[float]:
+    """Turn a list of gaps into the absolute moments they produce."""
+    out, now = [], _NOON
+    for gap in gaps:
+        now += gap
+        out.append(now)
+    return out
+
+
+def _engage(led: relationship.Ledger, peer: str, gaps: list[float]) -> None:
+    """Engage ``peer`` once per gap, the way decide_engage does it.
+
+    An offer then a take, so the peer reaches ``warmth`` (which skips anyone
+    who never offered) and the timing lands on a real ledger row.
+    """
+    for at in _moments(gaps):
+        led.add_offer(peer)
+        led.bump_take(peer, _CONTROL, at)
+
+
+def _poisson(seed: int) -> list[float]:
+    """Memoryless gaps -- the reference this factor caps irregularity at."""
+    rng = random.Random(seed)
+    return [rng.expovariate(1 / _DAY) for _ in range(_TOUCHES)]
+
+
+def test_metronome_timing_reads_as_perfectly_regular(tmp_path: Path) -> None:
+    """Engaging on a fixed clock leaves irregularity at zero."""
+    led = _ledger(tmp_path)
+    _engage(led, 'clock', [_DAY] * _TOUCHES)
+    assert relationship._irregularity(led.row('clock')) < _FLAT_TOL
+
+
+def test_memoryless_timing_reads_as_fully_irregular(tmp_path: Path) -> None:
+    """A Poisson stream of gaps reaches the cap -- the Skinner reference."""
+    led = _ledger(tmp_path)
+    _engage(led, 'random', _poisson(7))
+    assert relationship._irregularity(led.row('random')) > _POISSON_MIN
+
+
+def test_attention_all_at_once_reads_as_fully_clumped(tmp_path: Path) -> None:
+    """Engagements inside one sitting are burst, whatever their count."""
+    led = _ledger(tmp_path)
+    _engage(led, 'binge', [60.0] * _TOUCHES)
+    assert relationship._clumping(led.row('binge')) == 1.0
+
+
+def test_attention_spread_out_reads_as_unclumped(tmp_path: Path) -> None:
+    """Gaps longer than burst_gap_sec are separate visits, not one."""
+    led = _ledger(tmp_path)
+    _engage(led, 'spread', [_BURST_GAP * 2] * _TOUCHES)
+    assert relationship._clumping(led.row('spread')) == 0.0
+
+
+def test_a_batch_of_views_is_one_sitting_not_many_gaps(
+    tmp_path: Path,
+) -> None:
+    """A story engine's batch adds ONE gap and n-1 burst, never n gaps.
+
+    Counting the dwell between two stories as an interval would read as wild
+    irregularity when it is in fact a single visit.
+    """
+    led = _ledger(tmp_path)
+    led.add_take('peer', 1, _CONTROL, _NOON)  # first visit: no gap behind it
+    led.add_take('peer', _BATCH, _CONTROL, _NOON + _DAY)
+    row = led.row('peer')
+    assert row.gap_n == 1  # one interval, not _BATCH of them
+    assert row.gap_sum == _DAY
+    assert row.burst == _BATCH - 1  # the batch's own members, nothing else
+
+
+def test_warmth_index_carries_the_measured_factors(tmp_path: Path) -> None:
+    """Two peers with identical p and r still differ in A~, by timing alone.
+
+    This is what wiring v and c buys: an account that shows up irregularly
+    and spread out is worth more than one that binges on a schedule, and the
+    partial index could not tell the two apart.
+    """
+    led = _ledger(tmp_path)
+    _engage(led, 'binge', [60.0] * _TOUCHES)
+    _engage(led, 'natural', _poisson(3))
+    for peer in ('binge', 'natural'):
+        led.add_recip(peer, _TOUCHES // 2, _NOON, _TZ)
+    scored = {row.label: row for row in relationship.warmth(led, _CONTROL)}
+    assert scored['binge'].p == scored['natural'].p  # same exposure
+    assert scored['binge'].r == scored['natural'].r  # same reciprocity
+    assert scored['natural'].index > scored['binge'].index

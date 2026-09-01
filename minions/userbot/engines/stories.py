@@ -130,6 +130,12 @@ class StoryParams:
     react_fraction_target: float = 0.20
     react_pool: tuple[str, ...] = ('\u270a', '\U0001f44d')
     react_max_per_day: int = 50
+    # Two views closer together than this are one sitting, not two visits.
+    # Feeds the clumping factor of the attachment model (relationship.py):
+    # attention that all arrives at once reaches tedium sooner than the same
+    # amount spread out. Well under spacing_log_mu, which is the gap BETWEEN
+    # sessions, so a real second visit is never mistaken for the same one.
+    burst_gap_sec: float = 900.0
 
 
 @dataclass(frozen=True)
@@ -435,6 +441,7 @@ class StoryBrain:
             recip_target=p.react_fraction_target,
             take_cap=0,
             recip_cap=p.react_max_per_day,
+            burst_gap_sec=p.burst_gap_sec,
         )
 
     def _tz(self) -> float:
@@ -484,7 +491,7 @@ class StoryBrain:
         ]
         if not fresh:
             return
-        self.ledger.add_offer(str(peer_id), len(fresh))
+        self.ledger.add_offer(str(peer_id), len(fresh), self.clock())
         self._trim_peers()
 
     def _react_budget(self, now: float) -> int:
@@ -598,7 +605,7 @@ class StoryBrain:
         if not fresh:
             return
         key = str(peer_id)
-        self.ledger.add_take(key, len(fresh))
+        self.ledger.add_take(key, len(fresh), self._control(), now)
         self.ledger.remember(key, label)  # @name for /status
         self.store.trim_marks(ENGINE, f'{peer_id}:', self.params.seen_per_peer)
         self._trim_peers()

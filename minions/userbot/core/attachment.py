@@ -2,22 +2,46 @@
 # Proprietary -- no use without the author's prior approval.
 """Berlyne attachment model: how much a viewer warms to the account.
 
-Pure, stdlib-only. Four factors multiply into one index, using the ORIGINAL
-functional forms (not a polynomial fitted to the same peak):
+Pure, stdlib-only. Four measured factors multiply into one index, each keeping
+the ORIGINAL functional form of the effect it stands for -- not a polynomial
+fitted to the same peak. Every one of them is somebody's published finding,
+so the citation lives here rather than in a commit message:
 
 - ``exposure(p)`` -- the Wundt/Berlyne curve: a logistic reward system minus a
-  logistic aversion (overexposure) system, normalized to its own max. This is
-  the genuine inverted-U, not ``p**2 * (1 - p)``. Viewing too little leaves a
-  stranger; viewing everything (p -> 1) falls down the aversion side (reads as
-  stalking). ``exposure_peak`` returns the p that maximizes it -- the view
-  target the story engine steers each peer toward.
-- ``recip(r)`` -- Reis & Shaver reciprocity: a saturating (negatively
-  accelerated) response to how often a view is answered with a reaction.
-- ``variety(v)`` -- Whitchurch (uncertainty raises attraction); linear.
-- ``mass_pen(c)`` -- a penalty for clearing everything in one burst; linear.
+  logistic aversion (overexposure) system, normalized to its own max. Zajonc
+  (1968) showed bare repeated contact raises liking; Bornstein's meta-analysis
+  (1989, 208 studies, r ~ 0.26) found the effect real but inverted-U, and
+  Berlyne (1970) gave the shape its mechanism -- habituation competing with
+  tedium. So this is the genuine inverted-U, not ``p**2 * (1 - p)``: engaging
+  too little leaves a stranger, engaging everything (p -> 1) falls down the
+  aversion side and reads as stalking. ``exposure_peak`` returns the p that
+  maximizes it -- the target both engines steer each peer toward.
+- ``recip(r)`` -- reciprocity, saturating (negatively accelerated). Reis &
+  Shaver (1988) put intimacy in the cycle "disclosure -> perceived partner
+  responsiveness", not in attention as such; Altman & Taylor (1973) describe
+  the deepening as layered, along breadth of topic and depth of disclosure.
+- ``variety(v)`` -- irregular timing, linear. Whitchurch, Wilson & Gilbert
+  (2011, Psych. Science) found uncertainty about another's interest raised
+  attraction ABOVE certainty of strong interest; Ferster & Skinner (1957)
+  established that variable schedules of reinforcement are the ones most
+  resistant to extinction.
+- ``mass_pen(c)`` -- a penalty for clearing everything in one burst, linear.
+  Same Bornstein/Berlyne pairing: massed repetition reaches tedium sooner than
+  the same number of contacts spread out. (Ebbinghaus 1885 is the familiar
+  spacing result, but that is MEMORY -- carried here as an analogy, not as
+  evidence about liking.)
 
-``p`` = fraction of a peer's stories viewed, ``v`` = timing irregularity,
-``r`` = fraction of views answered with a reaction, ``c`` = burst clumping.
+``p`` = fraction of a peer's offers we engaged, ``v`` = irregularity of our
+timing toward them, ``r`` = fraction of engagements answered with the stronger
+act, ``c`` = how much of our attention arrives in bursts.
+
+Where the numbers come from: ``p`` and ``r`` are ratios of plain ledger
+counters. ``v`` and ``c`` are derived in ``core/relationship.py`` from the
+per-peer gap statistics ``core/state.py`` accumulates -- so all four are
+measured, none assumed. One knob has NO study behind it and should not be
+mistaken for one: the weight given to a like versus a written reply is an
+extrapolation of Reis/Shaver and Altman/Taylor ("a like carries zero
+disclosure"), not a measured effect.
 """
 
 from __future__ import annotations
@@ -90,8 +114,27 @@ def mass_pen(c: float) -> float:
     return 1.0 - _MASS_PENALTY * c
 
 
-def attachment_index(  # noqa: PLR0913 -- the four model factors read best flat
-    p: float, v: float, r: float, c: float
-) -> float:
-    """Combine the four factors into one attachment index (>= 0)."""
-    return exposure(p) * variety(v) * recip(r) * mass_pen(c)
+@dataclass(frozen=True)
+class Factors:
+    """The four measured inputs of the attachment index, for one peer.
+
+    A value object rather than four positional floats: at a call site
+    ``Factors(p, v, r, c)`` cannot silently swap two of them, and the index
+    keeps room for the Wundt params without growing a parameter list.
+    """
+
+    p: float  # engaged / offered -- exposure
+    v: float  # irregularity of our timing toward them -- variety
+    r: float  # reciprocated / engaged -- reciprocity
+    c: float  # share of engagements arriving in a burst -- mass penalty
+
+
+def attachment_index(f: Factors, params: WundtParams = _DEFAULT) -> float:
+    """Combine the four factors into one attachment index (>= 0).
+
+    Bounded by [0, 1.6): ``exposure``, ``recip`` and ``mass_pen`` are each at
+    most 1, and ``variety`` reaches 1.6 at maximum irregularity.
+    """
+    return (
+        exposure(f.p, params) * variety(f.v) * recip(f.r) * mass_pen(f.c)
+    )

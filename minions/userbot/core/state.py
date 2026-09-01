@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS peers (
     taken   INTEGER NOT NULL DEFAULT 0,
     recip   INTEGER NOT NULL DEFAULT 0,
     last_at REAL    NOT NULL DEFAULT 0,
+    take_at REAL    NOT NULL DEFAULT 0,
+    gap_n   INTEGER NOT NULL DEFAULT 0,
+    gap_sum REAL    NOT NULL DEFAULT 0,
+    gap_sq  REAL    NOT NULL DEFAULT 0,
+    burst   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (engine, peer_id)
 );
 CREATE INDEX IF NOT EXISTS peers_recent ON peers (engine, last_at DESC);
@@ -70,6 +75,57 @@ CREATE TABLE IF NOT EXISTS marks (
 """
 
 
+COUNTERS = (
+    'offered',
+    'taken',
+    'recip',
+    'gap_n',
+    'gap_sum',
+    'gap_sq',
+    'burst',
+)
+"""Every per-peer column a bump adds to.
+
+All of them are ADDITIVE, which is the whole reason the timing statistics fit
+here: a running mean would need read-modify-write, but a sum does not, so the
+one ``INSERT ... ON CONFLICT DO UPDATE`` below still writes a single row per
+event whatever the audience size.
+"""
+
+ADDED_COLUMNS = {
+    'take_at': 'REAL NOT NULL DEFAULT 0',
+    'gap_n': 'INTEGER NOT NULL DEFAULT 0',
+    'gap_sum': 'REAL NOT NULL DEFAULT 0',
+    'gap_sq': 'REAL NOT NULL DEFAULT 0',
+    'burst': 'INTEGER NOT NULL DEFAULT 0',
+}
+"""Columns added to ``peers`` after the table had already shipped.
+
+``CREATE TABLE IF NOT EXISTS`` does nothing to a database that exists, so a
+deployed ``peers.db`` would keep the original seven columns and the first
+bump naming a new one would fail. Adding what is missing is the migration.
+"""
+
+_BUMP_SQL = (  # noqa: S608 -- the column names are COUNTERS, never input
+    'INSERT INTO peers (engine, peer_id, {cols}, last_at, take_at) '
+    'VALUES (?, ?, {marks}, ?, ?) '
+    'ON CONFLICT (engine, peer_id) DO UPDATE SET {sets}, '
+    'last_at = excluded.last_at, '
+    'take_at = max(take_at, excluded.take_at)'
+).format(
+    cols=', '.join(COUNTERS),
+    marks=', '.join('?' * len(COUNTERS)),
+    sets=', '.join(f'{name} = {name} + excluded.{name}' for name in COUNTERS),
+)
+"""One upsert over every counter, built from the list above.
+
+Three combine rules, and the difference between them is the point:
+``COUNTERS`` add up, ``last_at`` is overwritten with the caller's moment, and
+``take_at`` takes the later of the two -- so a bump that is not an engagement
+(an offer, say) can pass 0 and leave it alone.
+"""
+
+
 @dataclass(frozen=True)
 class PeerRow:
     """One peer's standing with one engine.
@@ -77,7 +133,14 @@ class PeerRow:
     ``offered`` is how many chances they gave us (their comments, their
     stories), ``taken`` how many we engaged, ``recip`` how many we answered
     with the stronger act. ``last_at`` orders the /status readout by recency
-    -- it used to depend on dict insertion order, which was silently fragile.
+    -- it used to depend on dict insertion order, which was silently fragile
+    -- and is also where the next gap is measured from.
+
+    The gap statistics are the raw material for the two attachment factors
+    that are about TIMING rather than counts (see ``core/relationship.py``):
+    the dispersion of ``gap_sum``/``gap_sq`` gives how irregular our attention
+    is, and ``burst`` how much of it arrives all at once. Sums, not a history,
+    so a peer costs the same four numbers forever.
     """
 
     peer_id: str
@@ -86,6 +149,11 @@ class PeerRow:
     taken: int = 0
     recip: int = 0
     last_at: float = 0.0
+    take_at: float = 0.0  # when WE last engaged; where the next gap starts
+    gap_n: int = 0  # gaps between our touches observed so far
+    gap_sum: float = 0.0  # their total, in seconds
+    gap_sq: float = 0.0  # the total of their squares, for the dispersion
+    burst: int = 0  # touches that joined an already-open session
 
 
 @dataclass
@@ -101,6 +169,7 @@ class StateStore:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.execute('PRAGMA journal_mode=WAL')
         self._conn.commit()
         self._cursors = self._read_cursors()
@@ -124,34 +193,38 @@ class StateStore:
             sql, args = sql + ' LIMIT ?', (engine, limit)
         return [_row(r) for r in self._conn.execute(sql, args)]
 
-    def bump(
-        self, engine: str, peer_id: str, counts: Mapping[str, int]
+    def bump(  # noqa: PLR0913 -- peer + counts + the two moments read best flat
+        self,
+        engine: str,
+        peer_id: str,
+        counts: Mapping[str, float],
+        at: float | None = None,
+        take_at: float = 0.0,
     ) -> None:
         """Add to a peer's counters, creating the row on first sight.
 
-        ``counts`` names the columns to add to (``offered``, ``taken``,
-        ``recip``); absent ones are left alone. One row is written, whatever
-        the audience size -- that is the whole point of this module.
+        ``counts`` names the columns to add to (any of ``COUNTERS``); absent
+        ones are left alone. The gap statistics are floats, the rest whole
+        numbers, and SQLite stores each by its column's affinity. One row is
+        written, whatever the audience size -- that is the whole point of
+        this module.
+
+        ``at`` is when the CALLER decided, and it is what ``last_at`` records.
+        The engines run on an injectable clock, so a store reading
+        ``time.time()`` here would measure every gap across two clocks -- the
+        same in production, wrong under a fixed test clock, which is exactly
+        the shape of bug that survives a test suite. Omitting it means now.
+
+        ``take_at`` is that same moment, but passed ONLY when the bump is an
+        engagement of ours. ``last_at`` cannot serve both: it answers "when
+        did anything happen with this peer" (which orders the readout and the
+        trim), and an offer lands at the very instant the engagement that
+        follows it needs to measure back from.
         """
-        fields = ('offered', 'taken', 'recip')
-        adds = {name: int(counts.get(name, 0)) for name in fields}
-        now = time.time()
+        adds = [counts.get(name, 0) for name in COUNTERS]
+        moment = time.time() if at is None else at
         self._conn.execute(
-            'INSERT INTO peers (engine, peer_id, offered, taken, recip, '
-            'last_at) VALUES (?, ?, ?, ?, ?, ?) '
-            'ON CONFLICT (engine, peer_id) DO UPDATE SET '
-            'offered = offered + excluded.offered, '
-            'taken = taken + excluded.taken, '
-            'recip = recip + excluded.recip, '
-            'last_at = excluded.last_at',
-            (
-                engine,
-                peer_id,
-                adds['offered'],
-                adds['taken'],
-                adds['recip'],
-                now,
-            ),
+            _BUMP_SQL, (engine, peer_id, *adds, moment, take_at)
         )
         self._commit()
 
@@ -305,6 +378,23 @@ class StateStore:
 
     # --- internals -------------------------------------------------------
 
+    def _migrate(self) -> None:
+        """Add any column this version needs that an older file lacks.
+
+        Idempotent: what is already there is left alone, so an existing
+        database keeps every count it has and starts the new ones at zero.
+        """
+        have = {
+            str(row['name'])
+            for row in self._conn.execute('PRAGMA table_info(peers)')
+        }
+        for name, decl in ADDED_COLUMNS.items():
+            if name not in have:
+                self._conn.execute(
+                    f'ALTER TABLE peers ADD COLUMN {name} {decl}'
+                )
+        self._conn.commit()
+
     def _commit(self) -> None:
         """Commit the write and note that the twin is now behind."""
         self._conn.commit()
@@ -333,4 +423,9 @@ def _row(row: sqlite3.Row) -> PeerRow:
         taken=int(row['taken']),
         recip=int(row['recip']),
         last_at=float(row['last_at']),
+        take_at=float(row['take_at']),
+        gap_n=int(row['gap_n']),
+        gap_sum=float(row['gap_sum']),
+        gap_sq=float(row['gap_sq']),
+        burst=int(row['burst']),
     )

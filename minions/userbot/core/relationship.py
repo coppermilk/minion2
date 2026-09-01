@@ -18,6 +18,14 @@ genuinely theirs: their own commit timing (the story engine decides at plan
 time and commits when a view/react actually lands; the like engine commits at
 decide time).
 
+Two of the model's four factors are STEERED here -- exposure and reciprocity,
+because a target exists to steer them to. The other two are only MEASURED, and
+that is not a lesser status: ``_irregularity`` and ``_clumping`` read the gap
+statistics the store accumulates and hand them to the same index. Deliberately
+so -- steering timing toward a target would make the timing regular, which is
+the one thing Whitchurch (2011) and Ferster & Skinner (1957) say costs you.
+``core/attachment.py`` carries the citations for all four.
+
 The counts live in ``core/state.StateStore``, one row per (engine, peer),
 so a bump writes one row rather than rewriting every peer the account has
 ever met. The two engines used to serialise this same shape into two files
@@ -31,6 +39,7 @@ Telethon-free, so every decision is unit-testable.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -62,9 +71,9 @@ def steer(current: float, target: float, gain: float) -> float:
 class Warmth:
     """One peer's attachment readout for /status: exposure, recip, index.
 
-    ``index`` is the partial Berlyne index exposure(p) * recip(r) -- the two
-    factors steered per peer (variety/mass_pen are not tracked per peer, so
-    they are left out rather than assumed).
+    ``index`` is the FULL Berlyne index over all four factors. ``p`` and ``r``
+    are the two we steer, so they are shown beside it; irregularity and
+    clumping are measured, not steered, and fold into ``index`` alone.
     """
 
     label: str
@@ -83,6 +92,9 @@ class Control:
     stalking/desperation). ``recip_target`` is the fraction of taken exposures
     answered with the stronger act (a heart, a sticker). ``take_cap`` /
     ``recip_cap`` are per-day ceilings on the two acts (0 = uncapped).
+    ``burst_gap_sec`` is how close two engagements must be to count as one
+    sitting rather than two -- it is what separates spread-out attention from
+    massed attention for the clumping factor.
     """
 
     wundt: attachment.WundtParams
@@ -91,6 +103,7 @@ class Control:
     recip_gain: float = 1.0
     take_cap: int = 0
     recip_cap: int = 0
+    burst_gap_sec: float = 900.0
 
     def take_target(self) -> float:
         """Return the exposure fraction to steer toward (the Wundt peak)."""
@@ -154,21 +167,44 @@ class Ledger:
         r_cur = row.recip / (taken or 1)
         return steer(r_cur, control.recip_target, control.recip_gain)
 
-    def add_offer(self, peer: str, n: int = 1) -> None:
-        """Record ``n`` more chances from ``peer`` (offers, not taken)."""
-        self.store.bump(self.engine, peer, {'offered': n})
+    def add_offer(
+        self, peer: str, n: int = 1, now: float | None = None
+    ) -> None:
+        """Record ``n`` more chances from ``peer`` (offers, not taken).
 
-    def add_take(self, peer: str, n: int) -> None:
+        ``now`` is the engine's moment; it moves the peer to the front of the
+        recency order without touching ``take_at``, which only our own
+        engagements advance.
+        """
+        self.store.bump(self.engine, peer, {'offered': n}, now)
+
+    def add_take(  # noqa: PLR0913 -- peer + count + (control, now) read best flat
+        self, peer: str, n: int, control: Control, now: float
+    ) -> None:
         """Record ``n`` exposures actually taken (also counts them offered)."""
-        self.store.bump(self.engine, peer, {'offered': n, 'taken': n})
+        counts: dict[str, float] = {'offered': n, 'taken': n}
+        counts |= _gap_stats(self._gap(peer, now), n, control.burst_gap_sec)
+        self.store.bump(self.engine, peer, counts, now, take_at=now)
 
-    def bump_take(self, peer: str) -> None:
+    def bump_take(self, peer: str, control: Control, now: float) -> None:
         """Count one already-offered exposure as taken (decide-time commit)."""
-        self.store.bump(self.engine, peer, {'taken': 1})
+        counts: dict[str, float] = {'taken': 1}
+        counts |= _gap_stats(self._gap(peer, now), 1, control.burst_gap_sec)
+        self.store.bump(self.engine, peer, counts, now, take_at=now)
 
-    def bump_recip(self, peer: str) -> None:
+    def _gap(self, peer: str, now: float) -> float:
+        """Seconds since we last engaged ``peer``; 0 when this is the first.
+
+        Measured from ``take_at``, not ``last_at``: the offer that precedes an
+        engagement lands at the same instant, so ``last_at`` would make every
+        gap zero.
+        """
+        last = self.row(peer).take_at
+        return now - last if last > 0.0 else 0.0
+
+    def bump_recip(self, peer: str, now: float | None = None) -> None:
         """Count one reciprocation whose daily slot is already spent."""
-        self.store.bump(self.engine, peer, {'recip': 1})
+        self.store.bump(self.engine, peer, {'recip': 1}, now)
 
     def add_recip(  # noqa: PLR0913 -- peer + count + (now, tz) read best flat
         self, peer: str, n: int, now: float, tz: float
@@ -179,7 +215,7 @@ class Ledger:
             self.recip_day, self.recip_today, stamp
         )
         self.recip_today += n
-        self.store.bump(self.engine, peer, {'recip': n})
+        self.store.bump(self.engine, peer, {'recip': n}, now)
 
     def spend_take(self, control: Control, now: float, tz: float) -> bool:
         """Consume one take slot from today's budget; False when capped."""
@@ -251,15 +287,66 @@ class Ledger:
         self.recip_today = codec.whole(cursor.get('recip_today'))
 
 
+_MIN_GAPS = 2
+"""Two intervals is the fewest that can have a spread between them."""
+
+
+def _gap_stats(gap: float, n: int, burst_gap: float) -> dict[str, float]:
+    """Additive timing deltas for ``n`` engagements arriving as one sitting.
+
+    A batch contributes ONE gap -- the wait since the previous sitting -- plus
+    ``n - 1`` engagements that are inside the current one by definition. Their
+    own spacing is the couple of seconds between two stories, and counting
+    those as gaps would read as wild irregularity instead of as a single
+    visit. The first engagement of all has no interval behind it to measure.
+    """
+    if gap <= 0.0:
+        return {'burst': n - 1}
+    return {
+        'gap_n': 1,
+        'gap_sum': gap,
+        'gap_sq': gap * gap,
+        'burst': int(gap < burst_gap) + n - 1,
+    }
+
+
+def _irregularity(row: state.PeerRow) -> float:
+    """How unpredictable our attention to this peer is, in [0, 1].
+
+    The coefficient of variation of the gaps, capped at 1. CV = 0 is a
+    metronome; CV = 1 is a memoryless (Poisson) process -- the variable
+    schedule Ferster & Skinner found hardest to extinguish, and the point past
+    which more raggedness carries no further signal. Sums, not a history: the
+    dispersion comes out of gap_sum/gap_sq, which cost two numbers per peer.
+    """
+    if row.gap_n < _MIN_GAPS:
+        return 0.0
+    mean = row.gap_sum / row.gap_n
+    if mean <= 0.0:
+        return 0.0
+    var = max(0.0, row.gap_sq / row.gap_n - mean * mean)
+    return min(1.0, math.sqrt(var) / mean)
+
+
+def _clumping(row: state.PeerRow) -> float:
+    """Return the share of our attention that arrived inside one sitting.
+
+    Every engagement but the first could have joined one, so that is the
+    denominator: 0 is attention spread out, 1 is all of it in single bursts.
+    """
+    if row.taken <= 1:
+        return 0.0
+    return min(1.0, row.burst / (row.taken - 1))
+
+
 def warmth(ledger: Ledger, control: Control) -> list[Warmth]:
     """Per-peer attachment readout, MOST RECENT peer first.
 
     Ordered by recency (the last-interacted-with peer first), not by score,
     so /status shows the people we just engaged rather than an all-time hall
     of fame -- and that order is now a column, where it used to depend on
-    dict insertion order. ``index`` is the partial Berlyne index
-    exposure(p) * recip(r); a peer needs at least one recorded offer to
-    appear.
+    dict insertion order. ``index`` is the full Berlyne index over all four
+    factors; a peer needs at least one recorded offer to appear.
     """
     rows: list[Warmth] = []
     for row in ledger.store.peers(ledger.engine):
@@ -267,6 +354,9 @@ def warmth(ledger: Ledger, control: Control) -> list[Warmth]:
             continue
         p = row.taken / row.offered
         r = row.recip / row.taken if row.taken else 0.0
-        idx = attachment.exposure(p, control.wundt) * attachment.recip(r)
+        factors = attachment.Factors(
+            p=p, v=_irregularity(row), r=r, c=_clumping(row)
+        )
+        idx = attachment.attachment_index(factors, control.wundt)
         rows.append(Warmth(row.label or row.peer_id, p, r, idx, row.offered))
     return rows

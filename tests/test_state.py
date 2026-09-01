@@ -11,6 +11,7 @@ write must touch one row.
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
@@ -223,3 +224,66 @@ def test_store_survives_reopen(tmp_path: Path, engine: str) -> None:
     assert reopened.peer(engine, '77').offered == TOP_N
     assert reopened.marked(engine, 'k') is True
     assert reopened.cursor(engine) == {'n': 1}
+
+
+# ------------------------------------------------------------- migration
+
+_LEGACY_SCHEMA = """
+CREATE TABLE peers (
+    engine  TEXT    NOT NULL,
+    peer_id TEXT    NOT NULL,
+    label   TEXT    NOT NULL DEFAULT '',
+    offered INTEGER NOT NULL DEFAULT 0,
+    taken   INTEGER NOT NULL DEFAULT 0,
+    recip   INTEGER NOT NULL DEFAULT 0,
+    last_at REAL    NOT NULL DEFAULT 0,
+    PRIMARY KEY (engine, peer_id)
+);
+"""
+"""The peers table as it shipped, before the timing columns existed."""
+
+LEGACY_OFFERED = 10
+LEGACY_TAKEN = 7
+LEGACY_RECIP = 2
+
+
+def _legacy_db(path: Path) -> None:
+    """Write a database at the pre-timing schema, with one peer in it."""
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_LEGACY_SCHEMA)
+    conn.execute(
+        'INSERT INTO peers (engine, peer_id, offered, taken, recip, last_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        ('reactions', 'old', LEGACY_OFFERED, LEGACY_TAKEN, LEGACY_RECIP, 5.0),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_a_deployed_database_gains_the_timing_columns(tmp_path: Path) -> None:
+    """An existing peers.db is migrated in place, keeping every count.
+
+    CREATE TABLE IF NOT EXISTS does nothing to a table that is already there,
+    so without the ALTER the first bump naming gap_n would fail on every
+    deployed install.
+    """
+    _legacy_db(tmp_path / 'peers.db')
+    row = _store(tmp_path).peer('reactions', 'old')
+    assert (row.offered, row.taken, row.recip) == (
+        LEGACY_OFFERED,
+        LEGACY_TAKEN,
+        LEGACY_RECIP,
+    )
+    assert row.last_at == 5.0  # noqa: PLR2004 -- the value written above
+    assert (row.gap_n, row.gap_sum, row.gap_sq, row.burst) == (0, 0.0, 0.0, 0)
+
+
+def test_migrating_twice_changes_nothing(tmp_path: Path) -> None:
+    """Reopening a migrated database is a no-op, not a duplicate column."""
+    _legacy_db(tmp_path / 'peers.db')
+    first = _store(tmp_path)
+    first.bump('reactions', 'old', {'gap_n': 1, 'gap_sum': 60.0})
+    first.close()
+
+    row = _store(tmp_path).peer('reactions', 'old')
+    assert (row.gap_n, row.gap_sum) == (1, 60.0)

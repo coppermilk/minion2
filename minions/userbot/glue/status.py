@@ -290,10 +290,13 @@ class StatusReport:
         """Return one Berlyne ledger's readout: aggregate, then recent peers.
 
         Exposure p = taken/offered (steered to the Wundt peak ~0.67),
-        reciprocity r = recip/taken (steered to 0.20); A~ is the partial
-        index exposure(p)*recip(r). The comment likes and the story views
-        keep the same ledger shape, so they read out through one function --
-        ``noun`` is all that differs. Labels are the ledger's cached @names.
+        reciprocity r = recip/taken (steered to 0.20); A~ is the FULL Berlyne
+        index over all four factors, so it also carries the two we measure but
+        do not steer -- how irregular our timing is and how much of it arrives
+        in bursts. That puts A~ in [0, 1.6), not [0, 1]: irregularity is a
+        bonus of up to 1.6x. The comment likes and the story views keep the
+        same ledger shape, so they read out through one function -- ``noun``
+        is all that differs. Labels are the ledger's cached @names.
         """
         if not warm:
             return []

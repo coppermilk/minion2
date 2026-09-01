@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The Berlyne attachment model (minions/userbot/engines/attachment.py).
+"""The Berlyne attachment model (minions/userbot/core/attachment.py).
 
 Pins the original functional forms: the Wundt exposure curve (a difference of
 two logistics, NOT p^2(1-p)), its ~0.675 peak, the saturating reciprocity
@@ -42,7 +42,8 @@ def test_recip_is_zero_without_reactions_and_saturates() -> None:
 
 def test_scenario_ranking_matches_the_model() -> None:
     """Once/day beats once/month beats 8x/day (the model's whole point)."""
-    once_month = attachment.attachment_index(p=0.95, v=0.50, r=0.75, c=0.0)
-    once_day = attachment.attachment_index(p=0.70, v=0.80, r=0.25, c=0.0)
-    eight_day = attachment.attachment_index(p=0.40, v=0.60, r=0.125, c=0.40)
+    index = attachment.attachment_index
+    once_month = index(attachment.Factors(p=0.95, v=0.50, r=0.75, c=0.0))
+    once_day = index(attachment.Factors(p=0.70, v=0.80, r=0.25, c=0.0))
+    eight_day = index(attachment.Factors(p=0.40, v=0.60, r=0.125, c=0.40))
     assert once_day > once_month > eight_day

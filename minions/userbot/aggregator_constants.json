@@ -135,7 +135,8 @@
         "✊",
         "👍"
       ],
-      "react_max_per_day": 70
+      "react_max_per_day": 70,
+      "burst_gap_sec": 900
     },
     "greeter": {
       "enabled": true,

@@ -8,6 +8,7 @@ design, so every one of the nine behavioural principles is checked here.
 
 from __future__ import annotations
 
+import itertools
 import random
 from datetime import UTC
 from datetime import datetime
@@ -26,6 +27,7 @@ _THREAD_ROOT = 800
 _WATCH_POSTS = 4
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -734,9 +736,20 @@ def test_remember_caches_commenter_name_and_persists(tmp_path: Path) -> None:
     assert next(w.label for w in fresh.warmth()) == '@vasya (770)'
 
 
+def _ticking(start: float) -> Callable[[], float]:
+    """Return a clock that advances a second per read.
+
+    Recency is a property of the ledger, not of how fast the test machine
+    runs, so a test asserting it supplies distinct moments of its own.
+    """
+    moment = itertools.count(int(start))
+    return lambda: float(next(moment))
+
+
 def test_warmth_lists_recent_commenters_first(tmp_path: Path) -> None:
     """warmth() lists the most recent commenter first with p/r/index."""
     brain = _no_caps(tmp_path, seed=5)
+    brain.clock = _ticking(_ts())
     for _ in range(40):
         if brain.decide_engage('a'):
             brain.decide_sticker('a', content_ok=True)

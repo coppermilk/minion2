@@ -376,8 +376,8 @@ def test_warmth_lists_recent_peers_first(tmp_path: Path) -> None:
     brain._record_skips(7, (100,))  # 1 offered, skipped
     brain.mark_viewed(7, (101, 102), label='@warm', ts=_NOON)
     brain.mark_reacted(7, 1, _NOON)
-    # peer 8 (more recent): viewed all, no reactions (r 0)
-    brain.mark_viewed(8, (200, 201), label='@cool', ts=_NOON)
+    # peer 8 (an hour later): viewed all, no reactions (r 0)
+    brain.mark_viewed(8, (200, 201), label='@cool', ts=_NOON + 3600)
     rows = brain.warmth()
     assert [w.label for w in rows] == ['@cool', '@warm']  # newest first
     cool, warm = rows
@@ -415,8 +415,8 @@ def test_seen_list_is_bounded_per_peer(tmp_path: Path) -> None:
 def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
     """Check tracked peers are lru bounded."""
     brain = _brain(tmp_path, max_peers_tracked=2)
-    for peer in (1, 2, 3):
-        brain.mark_viewed(peer, (1,), ts=_NOON)
+    for peer in (1, 2, 3):  # a minute apart, so "least recent" is a fact
+        brain.mark_viewed(peer, (1,), ts=_NOON + peer * 60)
     assert {r.peer_id for r in brain.store.peers(stories.ENGINE)} == {
         '2',
         '3',
