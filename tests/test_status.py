@@ -303,8 +303,8 @@ GOLDEN = """\
 . mood 0.25 . answered 1 . pending 1
 . window 7-17h (prior) . learned 12h, 13h
 . today likes 0/400 . stickers 0/40
-. attach 1 commenters -> p~0.75 r~0.00
-    @alice  A 0.00 . p 0.75 r 0.00
+. all 1 commenters . [w] 75% [l] 0% . warmth 0.00
+    @alice . [w] 75% [l] 0%
 . watching 1 posts:
     @dst (-1002): 77
 . queued:
@@ -319,7 +319,7 @@ GOLDEN = """\
 3m 10s
 . glance 4m 10s ago . 4 with stories (1 archived)
 . viewing (1):
-    @alice . 3 of 5 up . [w] 80% [l] 25% . in ~3m 10s
+    @alice . 3 of 5 new . [w] 80% [l] 25% . in ~3m 10s
 . passed this glance (2):
     @bob . 4 new . [w] 33% [l] 0%
     @carol (archived) . 2 new . first time
@@ -446,3 +446,73 @@ def test_the_shipped_constants_carry_every_status_glyph() -> None:
     shipped = config.load_constants(config.CONSTANTS_PATH).status
     missing = _glyph_keys_the_report_asks_for() - set(shipped)
     assert not missing, f'texts.status is missing {sorted(missing)}'
+
+
+# --- the story section names each person once -----------------------------
+
+
+def _section(text: str, head: str) -> str:
+    """Return one /status section, header to the blank line that ends it."""
+    return text.split(head, 1)[1].split('\n\n', 1)[0]
+
+
+def test_the_story_list_names_each_person_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One row per person, and one aggregate line under them.
+
+    The glance already carries each peer's standing and closes on the
+    ledger's aggregate. A second readout over the same ledger printed that
+    aggregate twice and then listed the same names again -- invisible to a
+    fixture whose story ledger is empty, which is why this one fills it.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    control, ledger = bot.stories._control(), bot.stories.ledger
+    for peer, taken in ((PEER_A, 4), (PEER_B, 2)):
+        ledger.add_take(str(peer), taken, control, NOW - 86400)
+        ledger.remember(str(peer), f'@peer{peer}')
+
+    got = _section(bot.report.text({PEER_A: '@alice', PEER_B: '@bob'}), '[S]')
+
+    assert got.count('@alice') == 1
+    assert got.count('@bob') == 1
+    assert len([ln for ln in got.splitlines() if ' all ' in ln]) == 1
+
+
+def test_a_person_in_the_list_is_named_not_numbered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The raw id is Routing's business, not the reader's.
+
+    _chat_label appends it because Routing is read to CONFIGURE chats; a
+    list of people is read to recognise them.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+
+    got = _section(bot.report.text({PEER_A: f'@alice ({PEER_A})'}), '[S]')
+
+    assert '@alice' in got
+    assert str(PEER_A) not in got
+
+
+def test_a_viewing_row_counts_the_new_stories_not_all_of_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening some of what is new, and skipping the rest, must be visible.
+
+    Counted against the peer's whole active set instead, "3 of 5" hid
+    whether the other two were old or deliberately passed over.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    bot.stories.last_glance = stories.Glance(
+        at=NOW - 10,
+        peers=(stories.Seen(PEER_A, active=9, unseen=4, viewing=3),),
+    )
+
+    got = _section(bot.report.text({PEER_A: '@alice'}), '[S]')
+
+    assert '3 of 4 new' in got
+    assert '9' not in got.split('viewing (1):')[1].splitlines()[1]

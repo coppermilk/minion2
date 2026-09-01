@@ -77,6 +77,7 @@ class Warmth:
     """
 
     label: str
+    peer_id: str  # the raw id, so a readout can strip it back off the label
     p: float  # taken / offered (exposure)
     r: float  # recip / taken (reciprocity)
     index: float
@@ -358,5 +359,9 @@ def warmth(ledger: Ledger, control: Control) -> list[Warmth]:
             p=p, v=_irregularity(row), r=r, c=_clumping(row)
         )
         idx = attachment.attachment_index(factors, control.wundt)
-        rows.append(Warmth(row.label or row.peer_id, p, r, idx, row.offered))
+        rows.append(
+            Warmth(
+                row.label or row.peer_id, row.peer_id, p, r, idx, row.offered
+            )
+        )
     return rows

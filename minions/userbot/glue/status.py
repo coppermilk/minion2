@@ -61,6 +61,19 @@ def _glance_order(row: stories.Seen) -> tuple[int, int]:
     return (rank, -row.unseen)
 
 
+def _bare(label: str, peer_id: object) -> str:
+    """Return a resolved label without the raw id the resolver appends.
+
+    ``_chat_label`` renders '@name (-100123)' because the Routing section is
+    read to CONFIGURE chats, where the id is the useful half. A list of
+    people is read to recognise them, where it is noise. Stripped by exact
+    suffix rather than by pattern, so a title that happens to end in
+    parentheses survives, and an unresolved peer still shows its bare id
+    because that is all we know about them.
+    """
+    return label.removesuffix(f' ({peer_id})')
+
+
 def _pool_markup(pool: tuple[Emoji, ...]) -> str:
     """Render a whole emoji pool as premium markup (a preview strip)."""
     return ''.join(emoji_markup(c.id, c.fallback) for c in pool) or '-'
@@ -288,16 +301,31 @@ class StatusReport:
             f'{b} /reactnow {b} /requeue',
         ]
 
-    def _attach_line(self, warm: list[relationship.Warmth], noun: str) -> str:
-        """Return the ledger's one-line aggregate: how many, and the means."""
+    def _attach_line(
+        self, warm: list[relationship.Warmth], noun: str
+    ) -> str:
+        """Return the whole ledger in one line: how many, and how we act.
+
+        The same two fractions the rows carry, so the reader learns them once:
+        of what these people offered us we took this share, and of what we
+        took we answered this share with the stronger act. ``warmth`` is the
+        Berlyne index over all four factors, and the only place the two we
+        measure rather than steer -- how irregular our timing is, how much of
+        it arrives in bursts -- are visible at all.
+
+        Blank when the ledger is empty -- a fresh profile has met nobody, and
+        the callers drop a blank line rather than print a row of zeroes.
+        """
         if not warm:
             return ''
         b = self.bullet()
-        mean_p = sum(w.p for w in warm) / len(warm)
-        mean_r = sum(w.r for w in warm) / len(warm)
+        seen = sum(w.p for w in warm) / len(warm)
+        answered = sum(w.r for w in warm) / len(warm)
+        warmth = sum(w.index for w in warm) / len(warm)
         return (
-            f'{b} attach {len(warm)} {noun} {self.arrow()} '
-            f'p~{mean_p:.2f} r~{mean_r:.2f}'
+            f'{b} all {len(warm)} {noun} {b} {self._glyph("watched", "w")} '
+            f'{seen:.0%} {self._glyph("liked", "l")} {answered:.0%} '
+            f'{b} warmth {warmth:.2f}'
         )
 
     def _warmth_lines(
@@ -317,10 +345,12 @@ class StatusReport:
         if not warm:
             return []
         b = self.bullet()
+        eye, thumb = self._glyph('watched', 'w'), self._glyph('liked', 'l')
         return [
             self._attach_line(warm, noun),
             *(
-                f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'
+                f'    {_bare(w.label, w.peer_id)} {b} '
+                f'{eye} {w.p:.0%} {thumb} {w.r:.0%}'
                 for w in warm[:STATUS_WARM_PEERS]
             ),
         ]
@@ -387,11 +417,10 @@ class StatusReport:
         if not self.bot.stories.params.enabled:
             off = f'{self._dot(on=False)} off'
             return [self._header('stories', 'Stories', off)]
-        return [
-            self._stories_line(),
-            *self._glance_lines(labels),
-            *self._warmth_lines(self.bot.stories.warmth(), 'peers'),
-        ]
+        # The glance already lists these people WITH their standing, and
+        # closes on the ledger's aggregate. Adding _warmth_lines here printed
+        # that aggregate a second time and then the same names again.
+        return [self._stories_line(), *self._glance_lines(labels)]
 
     def _stories_line(self) -> str:
         """Return the story-viewer header: on, counts, the next view."""
@@ -439,7 +468,7 @@ class StatusReport:
 
     def _attach(self) -> str:
         """Return the story ledger's aggregate line (blank when empty)."""
-        return self._attach_line(self.bot.stories.warmth(), 'peers')
+        return self._attach_line(self.bot.stories.warmth(), 'people')
 
     def _opening_lines(
         self, glance: stories.Glance, labels: dict[int, str]
@@ -454,7 +483,7 @@ class StatusReport:
             *_capped(
                 [
                     f'    {self._who(row, labels)} {b} '
-                    f'{row.viewing} of {row.active} up {b} '
+                    f'{row.viewing} of {row.unseen} new {b} '
                     f'{self._record(row)}{self._view_eta(row.peer_id)}'
                     for row in sorted(rows, key=lambda r: -r.viewing)
                 ]
@@ -503,7 +532,9 @@ class StatusReport:
 
     def _who(self, row: stories.Seen, labels: dict[int, str]) -> str:
         """Return a peer's @name, falling back to the bare id, plus a flag."""
-        name = labels.get(row.peer_id) or str(row.peer_id)
+        name = _bare(labels.get(row.peer_id, ''), row.peer_id) or str(
+            row.peer_id
+        )
         return f'{name} (archived)' if row.hidden else name
 
     def _record(self, row: stories.Seen) -> str:
