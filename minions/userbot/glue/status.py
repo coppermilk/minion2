@@ -437,8 +437,13 @@ class StatusReport:
             f'{self._dot(on=True)} on',
             f'{self.bot.stories.views_today(now, tz)} today',
             f'{self.bot.stories.reacts_today(now, tz)}/{cap} reacted',
-            f'{len(self.bot.story_watch.pending)} queued',
         ]
+        # Only when it happened: a standing "0 not placed" is noise, while
+        # any number here is the difference between a quiet engine and one
+        # whose every reaction Telegram is refusing.
+        if self.bot.story_watch.unplaced:
+            parts.append(f'{self.bot.story_watch.unplaced} not placed')
+        parts.append(f'{len(self.bot.story_watch.pending)} queued')
         whens = [v.when for v in self.bot.story_watch.pending]
         if whens:
             due = self._in(min(whens) - now)

@@ -472,13 +472,18 @@ class Account:
         return [row for row in found if row is not None]
 
     async def view_story(self, peer: object, story_id: int) -> bool:
-        """Register one story view (best effort; read_stories is the mark)."""
+        """Register one story view (best effort; read_stories is the mark).
+
+        A refusal is logged rather than swallowed. These are tens of calls a
+        day, not thousands, so one line per failure is a signal -- and it is
+        the only thing that tells a story Telegram would not open from one we
+        never asked about.
+        """
         from telethon.tl.functions.stories import IncrementStoryViewsRequest
 
         got = await self._call(
             STORY,
             self.client(IncrementStoryViewsRequest(peer=peer, id=[story_id])),
-            quiet=True,
         )
         return got is not None
 
@@ -494,7 +499,12 @@ class Account:
     async def react_to_story(
         self, peer: object, story_id: int, emoji: str
     ) -> bool:
-        """Leave one reaction on a story; False when it did not land."""
+        """Leave one reaction on a story; False when it did not land.
+
+        Capped at a few dozen a day, so a refusal is logged with the reason
+        Telethon gave. Without it "no reactions today" reads identically
+        whether none were planned or Telegram rejected every one.
+        """
         from telethon.tl.functions.stories import SendReactionRequest
         from telethon.tl.types import ReactionEmoji
 
@@ -507,7 +517,6 @@ class Account:
                     reaction=ReactionEmoji(emoticon=emoji),
                 )
             ),
-            quiet=True,
         )
         return got is not None
 

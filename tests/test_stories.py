@@ -564,3 +564,137 @@ def test_an_empty_feed_leaves_an_empty_glance(tmp_path: Path) -> None:
     brain.plan([], now=_NOON)
     assert brain.last_glance.peers == ()
     assert brain.last_glance.at == _NOON
+
+
+# --- the Telethon side: what Telegram refuses is not recorded -------------
+# The brain above is pure; these drive the glue, because the bug they pin is
+# in the seam. A story can expire between the plan and the send, and the
+# adapter reports that by RETURNING False rather than raising -- so the
+# except-guard the module relied on never fired and everything got marked
+# seen regardless.
+
+_STORY_A = 101
+_STORY_B = 102
+
+
+class _FakeAccount:
+    """Stand in for the one door to Telegram, refusing what it is told to."""
+
+    def __init__(self, refuse: set[int] | None = None) -> None:
+        self.refuse = refuse or set()
+        self.viewed: list[int] = []
+        self.reacted: list[int] = []
+        self.read_up_to = 0
+
+    async def input_peer(self, peer_id: int) -> object:
+        return peer_id
+
+    async def view_story(self, _peer: object, story_id: int) -> bool:
+        if story_id in self.refuse:
+            return False  # expired between the plan and the send
+        self.viewed.append(story_id)
+        return True
+
+    async def react_to_story(
+        self, _peer: object, story_id: int, _emoji: str
+    ) -> bool:
+        self.reacted.append(story_id)
+        return True
+
+    async def read_stories(self, _peer: object, max_id: int) -> bool:
+        self.read_up_to = max_id
+        return True
+
+
+def _watcher(
+    tmp_path: Path, account: _FakeAccount
+) -> tuple[object, stories.StoryBrain, _Names]:
+    """Build a story watcher over a real brain and a fake door."""
+    from minions.userbot.glue import stories as glue
+
+    brain = _brain(tmp_path, dwell_min_sec=0.0, dwell_max_sec=0.0)
+    names = _Names()
+    watch = glue.StoryWatch(
+        glue.StoryDeps(
+            account=account,  # type: ignore[arg-type]
+            brain=brain,
+            source=0,
+            label=names,
+        )
+    )
+    return watch, brain, names
+
+
+class _Names:
+    """The host's chat-label resolver, counting what it was asked.
+
+    Resolving a name is a Telegram round trip, so a view that recorded
+    nothing must not spend one.
+    """
+
+    def __init__(self) -> None:
+        self.asked = 0
+
+    async def __call__(self, peer_id: int) -> str:
+        self.asked += 1
+        return f'@peer{peer_id}'
+
+
+def _view(**over: object) -> stories.StoryView:
+    base: dict[str, object] = {
+        'peer_id': 7,
+        'story_ids': (_STORY_A, _STORY_B),
+        'max_id': _STORY_B,
+        'when': _NOON,
+        'label': '@peer7',
+    }
+    base.update(over)
+    return stories.StoryView(**base)  # type: ignore[arg-type]
+
+
+def test_a_story_that_expired_is_left_unseen(tmp_path: Path) -> None:
+    """A refused story is not recorded viewed, so the next poll may retry.
+
+    Marking it seen would record a view that never happened: the peer's
+    exposure climbs on it and the id is burnt for good.
+    """
+    import asyncio
+
+    account = _FakeAccount(refuse={_STORY_A})
+    watch, brain, _ = _watcher(tmp_path, account)
+
+    asyncio.run(watch._view_later(_view()))
+
+    assert account.viewed == [_STORY_B]
+    assert _seen(brain, 7) == {_STORY_B}  # the refused one stays open
+    assert brain.state.total_views == 1
+
+
+def test_a_story_refused_gets_no_reaction(tmp_path: Path) -> None:
+    """No reaction is placed on a story we were not allowed to open."""
+    import asyncio
+
+    account = _FakeAccount(refuse={_STORY_A})
+    watch, _, _ = _watcher(tmp_path, account)
+
+    asyncio.run(watch._view_later(_view(react_ids=(_STORY_A, _STORY_B))))
+
+    assert account.reacted == [_STORY_B]
+    assert watch.unplaced == 1  # one planned reaction did not go out
+
+
+def test_a_wholly_refused_view_records_nothing(tmp_path: Path) -> None:
+    """When Telegram opens none of them, the peer keeps every story unseen."""
+    import asyncio
+
+    account = _FakeAccount(refuse={_STORY_A, _STORY_B})
+    watch, brain, _ = _watcher(tmp_path, account)
+
+    watch, brain, names = _watcher(tmp_path, account)
+
+    asyncio.run(watch._view_later(_view()))
+
+    assert account.viewed == []
+    assert _seen(brain, 7) == set()
+    assert brain.state.total_views == 0
+    assert names.asked == 0  # no round trip for a view that recorded nothing

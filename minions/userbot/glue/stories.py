@@ -54,6 +54,10 @@ class StoryWatch:
     # /status, so they live here rather than on the host.
     pending: list[stories.StoryView] = field(default_factory=list)
     next_poll: float = 0.0
+    # Reactions this profile planned and could not place, so "0 reacted"
+    # can be told from "every one was refused". In memory: a diagnostic
+    # about the run, worthless after a restart.
+    unplaced: int = 0
     _views: set[asyncio.Task[None]] = field(default_factory=set)
 
     def cancel(self) -> None:
@@ -177,32 +181,46 @@ class StoryWatch:
     async def _view_later(self, view: stories.StoryView) -> None:
         """Sleep until the view is due, then open the stories and mark them.
 
-        Failures are logged (not swallowed) and the peer is NOT marked seen, so
-        a failed read is retried on the next poll rather than silently skipped.
-        Every successful view is recorded to the persisted view log with a
-        readable @name resolved here (the plan only carries the peer id).
+        Only what Telegram actually opened is marked seen. A story can expire
+        between the plan and the send, and marking that one seen would record
+        a view that never happened -- inflating the peer's exposure and
+        burning the id for good. It stays unseen instead: if it really is
+        gone, the live feed no longer offers it and it simply disappears; if
+        the failure was transient, the next poll picks it up again.
+
+        This is what the module always claimed to do, via ``except`` around
+        the watch. That path is close to dead: the adapter's contract is to
+        return False rather than raise, so a wholly refused view completed
+        "successfully" and everything got marked anyway.
         """
         delay = view.when - time.time()
         if delay > 0:
             await asyncio.sleep(delay)
         self._dequeue(view)  # it is firing now: drop it from the queue
         try:
-            await self._watch(view)
+            opened = await self._watch(view)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception('stories: view failed for %s', view.peer_id)
             return
+        if not opened:
+            log.warning(
+                'stories: %s opened none of %d; leaving them unseen',
+                view.label or view.peer_id,
+                len(view.story_ids),
+            )
+            return
         label = await self.deps.label(view.peer_id)
-        self.deps.brain.mark_viewed(view.peer_id, view.story_ids, label=label)
-        log.info('stories: viewed %d of %s', len(view.story_ids), label)
+        self.deps.brain.mark_viewed(view.peer_id, opened, label=label)
+        log.info('stories: viewed %d of %s', len(opened), label)
 
     def _dequeue(self, view: stories.StoryView) -> None:
         """Drop a fired view from the /status queue (no-op if already gone)."""
         with contextlib.suppress(ValueError):
             self.pending.remove(view)
 
-    async def _watch(self, view: stories.StoryView) -> None:
+    async def _watch(self, view: stories.StoryView) -> tuple[int, ...]:
         """Open each chosen story (human dwell), react to some, mark read.
 
         Opens the stories one at a time with a short random dwell between them
@@ -210,10 +228,15 @@ class StoryWatch:
         each story's view counter and leaving an occasional heart/thumb on the
         ids the brain chose (``react_ids``), then marks the peer read up to
         ``max_id``. Reactions are recorded (against the daily cap) as they go.
+
+        Returns the ids Telegram actually opened. One it refuses is skipped
+        whole -- no reaction is placed on a story we never saw -- and the
+        caller leaves it unseen.
         """
         peer = await self.deps.account.input_peer(view.peer_id)
         params = self.deps.brain.params
         react_set = set(view.react_ids)
+        opened: list[int] = []
         sent = 0
         for sid in view.story_ids:
             await asyncio.sleep(
@@ -221,7 +244,9 @@ class StoryWatch:
                     params.dwell_min_sec, params.dwell_max_sec
                 )
             )
-            await self.deps.account.view_story(peer, sid)
+            if not await self.deps.account.view_story(peer, sid):
+                continue
+            opened.append(sid)
             if sid in react_set:
                 sent += await self.deps.account.react_to_story(
                     peer, sid, view.react_emoji
@@ -229,6 +254,28 @@ class StoryWatch:
         await self.deps.account.read_stories(peer, view.max_id)
         if sent:
             self.deps.brain.mark_reacted(view.peer_id, sent, time.time())
+        self._note_unplaced(view, len(react_set), sent)
+        return tuple(opened)
+
+    def _note_unplaced(
+        self, view: stories.StoryView, planned: int, sent: int
+    ) -> None:
+        """Count reactions that were planned and did not go out.
+
+        The engine records only what LANDED, so a batch Telegram refused and
+        a batch that was never planned leave the same trace: none. Counted
+        here and shown in /status, the two stop looking alike.
+        """
+        lost = planned - sent
+        if lost <= 0:
+            return
+        self.unplaced += lost
+        log.warning(
+            'stories: %d of %d planned reaction(s) to %s did not go out',
+            lost,
+            planned,
+            view.label or view.peer_id,
+        )
 
     async def report(self) -> None:
         """Post the story-viewer log to the source chat (/stories command)."""
