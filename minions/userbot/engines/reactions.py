@@ -109,9 +109,9 @@ class Reaction:
     the
     comment is scheduled (not at send time), so the queue is deterministic and
     inspectable: /status and /requeue can show which reaction lands where. Each
-    item
-    is an ``(emoji_id, fallback)`` pair; usually one, occasionally two (the
-    rare double).
+    item is an ``(emoji_id, fallback)`` pair. Today the pickers return exactly
+    one; the tuple stays because it is the persisted shape, and collapsing it
+    would be a state migration for no gain.
     """
 
     chat: int
@@ -173,10 +173,11 @@ class ReactionParams:
     """Every tunable, loaded from the constants JSON 'reactions' section."""
 
     enabled: bool = False
-    # Like ABSOLUTELY every comment: bypass the human-like gates (skip_prob,
-    # silent days, the asleep/stale drop) so each comment always gets a like
-    # reaction. Dedup and the manual-reply check still apply -- a comment is
-    # liked once, not repeatedly. Off = the human-like behaviour.
+    # Bypass the human-like gates (skip_prob, silent days, the asleep/stale
+    # drop) so every comment reaches the send step. It does NOT get the last
+    # word: with attach_enabled on, the exposure control still declines some
+    # of them, so "absolutely every comment" holds only with attach off. Dedup
+    # and the manual-reply check apply either way.
     like_all: bool = False
     # When the target is a CHANNEL, its comments live in the linked discussion
     # group. True: resolve each post's discussion thread and react only there
@@ -248,9 +249,10 @@ class ReactionParams:
     # When on, we do NOT like every comment. Instead the fraction of a
     # person's comments we engage (like or sticker) is steered toward the
     # Wundt peak (~0.67): liking everything reads as desperate, so a heavy
-    # commenter is throttled while a newcomer is still acknowledged. Off
-    # reproduces the old behaviour (like_all likes every comment). The like
-    # reaction is the EXPOSURE act; the thread sticker is the RECIPROCITY act.
+    # commenter is throttled while a newcomer is still acknowledged. This
+    # decides LAST, so it wins over like_all; turning it off is what makes
+    # like_all mean what it says. The like reaction is the EXPOSURE act; the
+    # thread sticker is the RECIPROCITY act.
     attach_enabled: bool = True
     # The Wundt exposure curve params (engines/attachment.py): their argmax IS
     # the like-fraction target -- there is no separate 0.67 constant.
@@ -946,6 +948,13 @@ def load_reaction_params(data: dict[str, object]) -> ReactionParams:
     default (``core/codec.py``); only what a plain key cannot express is
     spelled out here -- the two emoji pools, the Gaussian day curves, and
     the uptime window whose JSON keys carry an ``_hour`` suffix.
+
+    ``quiet_hours`` is NOT among them any more. It used to be read here with
+    an ``or`` that turned a written ``[]`` back into the 2-6 default, so the
+    one thing an operator could write to mean "never silent" meant its
+    opposite. ``frozenset[int]`` is a reader ``codec`` already has, and the
+    key is now gone from the constants file, so an absent key still gives the
+    declared default and a written one finally means what it says.
     """
     cfg = codec.engine(data, 'reactions')
     return codec.decode(
@@ -958,19 +967,6 @@ def load_reaction_params(data: dict[str, object]) -> ReactionParams:
             or ReactionParams.hours_weekday,
             'hours_weekend': _peaks(cfg.get('hours_weekend'))
             or ReactionParams.hours_weekend,
-            # A BLANK list falls back to the default rather than meaning
-            # "no quiet hours at all". The live constants set this key to an
-            # empty list, and the engine has always run on the 2-6 default
-            # because the old loader read a blank as unset -- taking it
-            # literally now would start scheduling reactions overnight. Kept
-            # deliberately; drop the ``or`` to honour a blank list.
-            'quiet_hours': frozenset(
-                codec.whole(h)
-                for h in (
-                    codec.rows(cfg.get('quiet_hours'))
-                    or ReactionParams.quiet_hours
-                )
-            ),
             'active_start': codec.num(
                 cfg.get('active_start_hour'), ReactionParams.active_start
             ),

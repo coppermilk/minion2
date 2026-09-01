@@ -159,7 +159,9 @@ class CommentWatch:
         # When liking everything OR steering exposure per person, key per
         # COMMENT (chat:root:person:msg) so each comment is decided once;
         # otherwise once per (post, person). The key keeps the 'chat:root:'
-        # prefix so note_post's pruning holds.
+        # prefix so note_post's pruning holds. Both flags widen the key the
+        # same way; where they disagree, attach decides -- see decide_engage
+        # below, which runs after the schedule and can still say no.
         attach = self.deps.brain.params.attach_enabled
         per_comment = self.deps.brain.params.like_all or attach
         key = f'{comment.chat}:{comment.root}:{person}'

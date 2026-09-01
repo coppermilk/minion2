@@ -758,3 +758,25 @@ def test_warmth_lists_recent_commenters_first(tmp_path: Path) -> None:
     assert [w.label for w in warm] == ['b', 'a']  # newest first, not by score
     brain.decide_engage('a')  # 'a' comments again -> back to the front
     assert next(w.label for w in brain.warmth()) == 'a'
+
+
+# --- the constants file means what it says --------------------------------
+
+
+def test_a_written_quiet_hours_list_is_honoured() -> None:
+    """A blank quiet_hours means blank, and a written one is taken as written.
+
+    It used to mean neither: the loader folded an empty list back into the
+    2-6 default, so the one value an operator could write to say "never
+    silent" said the opposite. An ABSENT key still gives the default -- that
+    is codec's job, and it is what the live constants rely on.
+    """
+    load = reactions.load_reaction_params
+    absent = load({'engines': {'reactions': {}}})
+    assert absent.quiet_hours == reactions.ReactionParams.quiet_hours
+
+    blank = load({'engines': {'reactions': {'quiet_hours': []}}})
+    assert blank.quiet_hours == frozenset()
+
+    written = load({'engines': {'reactions': {'quiet_hours': [1, 2]}}})
+    assert written.quiet_hours == frozenset({1, 2})
