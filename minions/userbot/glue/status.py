@@ -462,8 +462,11 @@ class StatusReport:
             return [head + 'nobody has stories up']
         return [
             head + self._glance_count(glance),
+            # What is happening, then what was decided, then what needs
+            # nothing -- most actionable first.
             *self._opening_lines(glance, labels),
             *self._held_lines(glance, labels),
+            *self._seen_lines(glance, labels),
         ]
 
     def _attach(self) -> str:
@@ -515,19 +518,37 @@ class StatusReport:
             ),
         ]
 
-    def _glance_count(self, glance: stories.Glance) -> str:
-        """Return how many people have stories up, and how many are old news.
+    def _seen_lines(
+        self, glance: stories.Glance, labels: dict[int, str]
+    ) -> list[str]:
+        """Return the people whose every story we have already opened.
 
-        Someone whose every story we have already opened is named nowhere:
-        there is no decision to show and nothing pending, so a list of them
-        was a list of non-events. The COUNT still earns its place -- without
-        it, a glance that lists no groups cannot be told from a stalled one.
+        Nothing is decided about them this pass, which once seemed reason
+        enough to reduce them to a count. On a real account it is not: a
+        story lives a day and we open it once, so for the rest of that day
+        EVERYONE with stories up sits here, and the section about people
+        stopped naming any. They carry no "new" number -- what is worth
+        showing is who they are, how much they have up, and where we stand
+        with them.
         """
-        seen = sum(1 for row in glance.peers if not row.unseen)
-        count = f'{len(glance.peers)} with stories'
-        if not seen:
-            return count
-        return f'{count} {self.bullet()} {seen} already seen'
+        rows = [row for row in glance.peers if not row.unseen]
+        if not rows:
+            return []
+        b = self.bullet()
+        return [
+            f'{b} already seen ({len(rows)}):',
+            *_capped(
+                [
+                    f'    {self._who(row, labels)} {b} '
+                    f'{row.active} up {b} {self._record(row)}'
+                    for row in sorted(rows, key=lambda r: -r.active)
+                ]
+            ),
+        ]
+
+    def _glance_count(self, glance: stories.Glance) -> str:
+        """Return how many people have stories up right now."""
+        return f'{len(glance.peers)} with stories'
 
     def _who(self, row: stories.Seen, labels: dict[int, str]) -> str:
         """Return a peer's @name, falling back to the bare id, plus a flag."""

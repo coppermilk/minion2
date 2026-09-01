@@ -317,12 +317,14 @@ GOLDEN = """\
 [U] Users DB . (-) off
 [S] Stories . (+) on . 0 today . 0/50 reacted . 1 queued . next view -> in \
 3m 10s
-. glance 4m 10s ago . 4 with stories . 1 already seen
+. glance 4m 10s ago . 4 with stories
 . viewing (1):
     @alice . 3 of 5 new . [w] 80% [l] 25% . in ~3m 10s
 . passed this glance (2):
     @bob . 4 new . [w] 33% [l] 0%
     @carol (archived) . 2 new . first time
+. already seen (1):
+    @dave . 3 up . first time
 
 [H] Schedule
 . tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
@@ -517,15 +519,15 @@ def test_a_viewing_row_counts_the_new_stories_not_all_of_them(
     assert '9' not in got.split('viewing (1):')[1].splitlines()[1]
 
 
-def test_a_glance_with_nothing_to_do_is_counted_not_listed(
+def test_people_with_nothing_new_are_still_named(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """People whose every story we have opened are counted, never named.
+    """Everyone with stories up is named, even when nothing is pending.
 
-    Listing them was a list of non-events: no decision to show, nothing
-    pending, and the number was already the total minus the two groups. The
-    COUNT stays, because a glance that shows no groups at all otherwise
-    reads the same whether everything is answered or the engine is stuck.
+    A story lives a day and we open it once, so for the rest of that day
+    every peer with stories up falls in this group -- reducing it to a count
+    left the section about people naming nobody at all, which is what a real
+    report looked like.
     """
     monkeypatch.setattr(time, 'time', lambda: NOW)
     bot = _bot(tmp_path)
@@ -539,6 +541,7 @@ def test_a_glance_with_nothing_to_do_is_counted_not_listed(
 
     got = _section(bot.report.text({PEER_A: '@alice', PEER_B: '@bob'}), '[S]')
 
-    assert '2 with stories . 2 already seen' in got
-    assert '@alice' not in got
+    assert '. already seen (2):' in got
+    assert '    @alice . 3 up . first time' in got
+    assert '    @bob . 1 up . first time' in got
     assert 'viewing' not in got
