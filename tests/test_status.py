@@ -32,7 +32,8 @@ from minions.userbot.core.models import Emoji
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
 from minions.userbot.core.render import Glyphs
-from minions.userbot.core.state import StateStore
+from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Database
 from minions.userbot.engines import greeter
 from minions.userbot.engines import reactions
 from minions.userbot.engines import stories
@@ -132,12 +133,14 @@ def _bot(tmp_path: Path) -> main.Userbot:
         'greeter': 'live',
     }
     bot.modes = SimpleNamespace(mode_of=service_modes.__getitem__)
+    # One database, one view per service -- exactly as main builds it.
+    db = Database(tmp_path / DB_NAME)
     bot.aggregator = aggregator_glue.LinkAggregator(
         aggregator_glue.AggregatorDeps(
             account=None,
             config=bot.config,
             consts=bot.consts,
-            state_path=tmp_path / 'agg.json',
+            store=db.store('aggregator'),
             targets=lambda: (TARGET,),
             on_posted=_unused_posted,
             field_keys=(),
@@ -164,7 +167,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
         pool=(Emoji('11', 'a', base=1.0, tags=()),),
         like_pool=(Emoji('22', 'b', base=1.0, tags=()),),
     )
-    store = StateStore(tmp_path / 'reactions.db')
+    store = db.store('reactions')
     brain = reactions.ReactionBrain(params, store)
     brain.clock = lambda: NOW
     brain.state.mood = 0.25
@@ -199,7 +202,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
 
     bot.stories = stories.StoryBrain(
         stories.StoryParams(enabled=True, poll_sec=1800.0),
-        StateStore(tmp_path / 'stories.db'),  # its own file, as in production
+        db.store('stories'),  # its own view, as in production
     )
     # One glance covering every verdict a peer can get: being opened,
     # passed over this time, and nothing we have not already seen -- plus
@@ -250,7 +253,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
         wake_end_hour=17.0,
     )
     grt = greeter.Greeter(
-        SimpleNamespace(), gparams, greeter.GreeterIO(tmp_path / 'g.json')
+        SimpleNamespace(), gparams, greeter.GreeterIO(db.store('greeter'))
     )
     grt.state.dm_today = 2
     grt.state.last_event_id = 41

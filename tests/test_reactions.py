@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.models import Emoji
+from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Database
 from minions.userbot.core.state import StateStore
 from minions.userbot.engines import reactions
 
@@ -87,7 +89,7 @@ def _params(**over: object) -> object:
 def _store(tmp_path: Path) -> StateStore:
     """Return a state store over a temp dir (reopening reads it back)."""
     tmp_path.mkdir(parents=True, exist_ok=True)
-    return StateStore(tmp_path / 'reactions.db')
+    return Database(tmp_path / DB_NAME).store('reactions')
 
 
 def _brain(tmp_path: Path, seed: int = 0, **over: object) -> object:
@@ -570,10 +572,10 @@ def test_state_round_trips_through_the_store(tmp_path: Path) -> None:
 def test_corrupt_cursors_start_fresh(tmp_path: Path) -> None:
     """An unreadable cursor block degrades to defaults, never to a crash."""
     store = _store(tmp_path)
-    store._conn.execute(
-        "INSERT INTO cursor (id, blob) VALUES (1, '{ not json')"
+    store.conn.execute(
+        "INSERT INTO state (service, blob) VALUES ('reactions', '{ not json')"
     )
-    store._conn.commit()
+    store.conn.commit()
     brain = reactions.ReactionBrain(_params(), store, random.Random(0))
     assert brain.state.mood == 0.0
     assert brain.answered() == 0

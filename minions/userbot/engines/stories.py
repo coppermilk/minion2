@@ -709,8 +709,8 @@ class StoryBrain:
         )
 
     def _load(self) -> StoryState:
-        """Reload the cursors, or start fresh when the store has none."""
-        raw = self.store.cursor()
+        """Reload the state block, or start fresh when there is none."""
+        raw = self.store.read()
         self.ledger.restore(raw)
         if not raw:
             return StoryState()
@@ -728,8 +728,8 @@ class StoryBrain:
         )
 
     def _save(self) -> None:
-        """Publish the cursor block to this engine's database."""
-        self.store.put_cursor(
+        """Publish this engine's state block."""
+        self.store.write(
             {
                 'last_view': self.state.last_view,
                 'session': {

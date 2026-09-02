@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
 from minions.userbot.core import relationship
-from minions.userbot.core.state import StateStore
+from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Database
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,7 +32,7 @@ _CONTROL = relationship.Control(wundt=attachment.WundtParams())
 
 def _ledger(tmp_path: Path) -> relationship.Ledger:
     """Return a ledger over a fresh store (the counters live in SQLite)."""
-    store = StateStore(tmp_path / 'reactions.db')
+    store = Database(tmp_path / DB_NAME).store('reactions')
     return relationship.Ledger(store)
 
 

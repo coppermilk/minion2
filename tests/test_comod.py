@@ -13,6 +13,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import state
 from minions.userbot.engines import comod
 from minions.userbot.glue import comod as comod_glue
 
@@ -29,7 +30,9 @@ _DASHA = '\u0414\u0430\u0448\u0430'  # Cyrillic 'Dasha'
 
 
 def _roster(tmp_path: Path) -> comod.CabinetRoster:
-    return comod.CabinetRoster(tmp_path / 'comod.json')
+    return comod.CabinetRoster(
+        state.Database(tmp_path / state.DB_NAME).store('comod')
+    )
 
 
 def test_add_then_active_returns_nick_and_amount(tmp_path: Path) -> None:

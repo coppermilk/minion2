@@ -16,6 +16,8 @@ from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Database
 from minions.userbot.core.state import StateStore
 from minions.userbot.engines import stories
 
@@ -69,7 +71,7 @@ def _params(**over: object) -> stories.StoryParams:
 
 def _store(tmp_path: Path) -> StateStore:
     """Return a state store over a temp dir (reopening reads it back)."""
-    return StateStore(tmp_path / 'stories.db')
+    return Database(tmp_path / DB_NAME).store('stories')
 
 
 def _brain(tmp_path: Path, **over: object) -> stories.StoryBrain:
@@ -84,7 +86,7 @@ def _seen(brain: stories.StoryBrain, peer: int) -> set[int]:
     """Return the story ids recorded seen for one peer."""
     return {
         int(row['key'].split(':')[1])
-        for row in brain.store._conn.execute(
+        for row in brain.store.conn.execute(
             'SELECT key FROM marks WHERE key LIKE ?', (f'{peer}:%',)
         )
     }

@@ -46,10 +46,7 @@ from typing import TYPE_CHECKING
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
 from minions.userbot.core import state
-from minions.userbot.core import statefile
 from minions.userbot.core.config import CONSTANTS_FILE
-from minions.userbot.core.config import LEGACY_STATE_FILE
-from minions.userbot.core.config import STATE_FILE
 from minions.userbot.core.config import apply_persona
 from minions.userbot.core.config import load_config
 from minions.userbot.core.config import load_constants
@@ -57,7 +54,7 @@ from minions.userbot.core.config import load_env
 from minions.userbot.core.config import load_runtime
 from minions.userbot.core.config import read_json
 from minions.userbot.core.config import resolve_session_path
-from minions.userbot.core.config import resolve_state_path
+from minions.userbot.core.config import resolve_state_dir
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Config
@@ -65,6 +62,7 @@ from minions.userbot.core.render import Glyphs
 from minions.userbot.core.runtime import configure_logging
 from minions.userbot.core.runtime import touch_health
 from minions.userbot.core.runtime import watchdog
+from minions.userbot.core.state import Database
 from minions.userbot.core.state import StateStore
 from minions.userbot.engines import comod
 from minions.userbot.engines import greeter
@@ -129,11 +127,10 @@ class Userbot:
         # never touches live state and any future stateful feature is isolated
         # for free. The active mode is a marker in the base state dir; live
         # uses that dir (unchanged), test a 'test/' subdir under it.
-        base_state = resolve_state_path(here.with_name(STATE_FILE))
-        self.modes = ServiceModes(self, base_state.parent)
+        self.modes = ServiceModes(self, resolve_state_dir(here.parent))
         self.report = StatusReport(self)
         self.router = CommandRouter(self)
-        self._stores: dict[Path, StateStore] = {}
+        self._dbs: dict[Path, Database] = {}
         self.greeter_task: asyncio.Task[None] | None = None
         self.rescan_task: asyncio.Task[None] | None = None
         self.stories_task: asyncio.Task[None] | None = None
@@ -155,36 +152,29 @@ class Userbot:
         self.next_tick = 0.0
         self.build_profile()
 
-    def _service_db(
-        self, service: str, legacy: str, where: Path | None = None
-    ) -> Path:
-        """Return one service's database path, adopting its old JSON once.
+    def _db(self, where: Path) -> Database:
+        """Return one profile directory's state database, opening it once.
 
-        The state directory holds one file per service, named for it. Three
-        services used to write hand-rolled JSON under three different
-        conventions, so each names the file it used to have and it is
-        imported on the first start that finds it.
+        Keyed by DIRECTORY, because a service's directory follows its own
+        mode: flipping stories to test must open the test file, while the
+        live one stays open for whoever is still live. Older state files are
+        folded in the first time a directory is opened.
+        """
+        db = self._dbs.get(where)
+        if db is None:
+            state.adopt(where)  # fold any older shape in, once
+            db = Database(where / state.DB_NAME)
+            self._dbs[where] = db
+        return db
+
+    def _store(self, service: str, where: Path | None = None) -> StateStore:
+        """Return one service's view of its profile's state database.
+
+        The view knows its own name, so nothing downstream passes it -- an
+        engine reads and writes as though it owned the file.
         """
         pdir = self.modes.service_dir(service) if where is None else where
-        path = pdir / f'{service}.db'
-        statefile.adopt(path, pdir / legacy)
-        return path
-
-    def _store(self, service: str) -> StateStore:
-        """Return one service's state store: one database, named for it.
-
-        Keyed by PATH, not by name, because a service's directory follows
-        its mode: flipping stories to test must open the test file, and the
-        live one has to stay open for whoever is still live.
-        """
-        pdir = self.modes.service_dir(service)
-        path = pdir / f'{service}.db'
-        store = self._stores.get(path)
-        if store is None:
-            state.adopt(pdir)  # split an old shared peers.db, once
-            store = StateStore(path)
-            self._stores[path] = store
-        return store
+        return self._db(pdir).store(service)
 
     def build_profile(self) -> None:
         """(Re)bind every service to ITS OWN mode -- dir, enabled, channel.
@@ -246,7 +236,7 @@ class Userbot:
                 account=self.account,
                 source=self.config.source,
                 store=users.UserStore(
-                    self.modes.service_dir('users') / 'users.db'
+                    self._db(self.modes.service_dir('users')).conn
                 ),
                 watched=lambda: {c for c, _ in self.reactions.posts},
                 enabled=self.modes.enabled('users'),
@@ -265,7 +255,7 @@ class Userbot:
             self.account,
             greeter_params,
             greeter.GreeterIO(
-                self._service_db('greeter', 'greeter_state.json'),
+                self._store('greeter'),
                 self.audience.note_membership,
             ),
         )
@@ -274,9 +264,7 @@ class Userbot:
                 account=self.account,
                 config=self.config,
                 consts=self.consts,
-                state_path=self._service_db(
-                    'aggregator', LEGACY_STATE_FILE, pdir
-                ),
+                store=self._store('aggregator', pdir),
                 targets=self.live_targets,
                 on_posted=self.comment_watch.on_posted,
                 field_keys=self._field_keys,
@@ -289,9 +277,7 @@ class Userbot:
             CabinetDeps(
                 account=self.account,
                 chat=self.config.source,
-                roster=comod.CabinetRoster(
-                    self._service_db('comod', 'comod.json', pdir)
-                ),
+                roster=comod.CabinetRoster(self._store('comod', pdir)),
                 params=comod.load_comod_params(self.settings),
                 work_dir=pdir,
             )

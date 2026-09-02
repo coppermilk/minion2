@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
+from minions.userbot.core import state
 from minions.userbot.core.matching import action_ok
 from minions.userbot.core.matching import duration_seconds
 from minions.userbot.core.matching import extract_fields
@@ -30,20 +31,17 @@ from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.core.models import Posted
 from minions.userbot.core.models import iso
+from minions.userbot.core.poststate import pending_dict
+from minions.userbot.core.poststate import pending_from_dict
+from minions.userbot.core.poststate import posted_dict
+from minions.userbot.core.poststate import posted_from_dict
 from minions.userbot.core.render import compose
 from minions.userbot.core.render import youtube_thumb
 from minions.userbot.core.runtime import cancel
-from minions.userbot.core.statefile import pending_dict
-from minions.userbot.core.statefile import pending_from_dict
-from minions.userbot.core.statefile import posted_dict
-from minions.userbot.core.statefile import posted_from_dict
-from minions.userbot.core.statefile import read_state_strict
-from minions.userbot.core.statefile import write_state
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
-    from pathlib import Path
 
     from minions.userbot.core.humanize import Variety
     from minions.userbot.core.models import Config
@@ -70,7 +68,7 @@ class AggregatorDeps:
     account: userchat.Account
     config: Config
     consts: Consts
-    state_path: Path
+    store: state.StateStore
     targets: Callable[[], tuple[int, ...]]  # the profile's post destinations
     on_posted: Callable[[int, int], Awaitable[None]]  # hand a post onward
     field_keys: tuple[str, ...]  # incoming JSON field names to read
@@ -374,19 +372,17 @@ class LinkAggregator:
             # order is what makes "newest" mean anything after a restart.
             'rejected': list(self.rejected),
         }
-        write_state(self.deps.state_path, data)
+        self.deps.store.write(data)
 
     def restore(self) -> None:
         """Reload saved state and re-arm timers (call once at startup).
 
-        Reads strictly, NOT via ``read_state``: a store that comes back
-        empty because it could not be opened would read as "nothing was
-        ever posted", disarm the re-post guard and re-post the backlog. A
-        read error propagates instead.
+        Reads strictly, NOT via ``read``: a block that came back empty
+        because it could not be parsed would read as "nothing was ever
+        posted", disarm the re-post guard and re-post the backlog. A read
+        error propagates instead.
         """
-        if not self.deps.state_path.exists():
-            return
-        data = read_state_strict(self.deps.state_path)
+        data = self.deps.store.read_strict()
         # A file written before the cap holds a sorted list; it loads as-is
         # and only loses the true recency order once.
         self.rejected = [str(t) for t in codec.rows(data.get('rejected'))]

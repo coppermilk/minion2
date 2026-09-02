@@ -45,11 +45,10 @@ from typing import TYPE_CHECKING
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
 from minions.userbot.core import humanize
-from minions.userbot.core import statefile
+from minions.userbot.core import state
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 log = logging.getLogger('userbot')
 
@@ -132,20 +131,20 @@ def load_greeter_params(
 
 @dataclass(frozen=True)
 class GreeterIO:
-    """The greeter's wiring: its state file and an optional event sink.
+    """The greeter's wiring: its state store and an optional event sink.
 
     ``on_event`` receives EVERY fetched admin-log event (admin_log_id,
     user_id, joined, left) -- the users DB taps it; ``None`` disables the tap.
     """
 
-    path: Path
+    store: state.StateStore
     on_event: Callable[[userchat.MemberEvent], None] | None = None
 
 
 class Greeter:
     """Watch a channel's members and DM joiners/leavers (safely, opt-in).
 
-    ``account`` is the one door to Telegram; ``io`` carries the state file
+    ``account`` is the one door to Telegram; ``io`` carries the state store
     and the optional users-DB event sink.
     """
 
@@ -155,7 +154,7 @@ class Greeter:
         """Bind the account, the tuning params, and the I/O wiring."""
         self.account = account
         self.params = params
-        self.path = io.path
+        self.store = io.store
         self.state = self._load()
         self._last_dm = 0.0
         self._channel_at = ''  # '@username' cache for {channel}
@@ -415,7 +414,7 @@ class Greeter:
         re-read the whole admin log and mass-DM. The welcome_back memory
         (``left``) is carried over in that migration.
         """
-        raw = statefile.read_state(self.path)
+        raw = self.store.read()
         if not raw:  # before the 'last_event_id' probe: nothing is not legacy
             return GreeterState()
         stored = codec.whole(raw.get('channel'))
@@ -450,4 +449,4 @@ class Greeter:
             'dm_day': self.state.dm_day,
             'dm_today': self.state.dm_today,
         }
-        statefile.write_state(self.path, data)
+        self.store.write(data)

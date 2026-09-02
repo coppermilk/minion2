@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import state
 from minions.userbot.engines.users import Identity
 from minions.userbot.engines.users import MembershipEvent
 from minions.userbot.engines.users import SeenMessage
@@ -31,7 +32,8 @@ if TYPE_CHECKING:
 
 
 def _store(tmp_path: Path) -> UserStore:
-    store = UserStore(tmp_path / 'users.db')
+    """Return an audience store over the profile's one state database."""
+    store = UserStore(state.Database(tmp_path / state.DB_NAME).conn)
     store.clock = lambda: 1000.0  # pinned unless a ts is passed explicitly
     return store
 
@@ -202,15 +204,20 @@ def test_summary_of_an_empty_store(tmp_path: Path) -> None:
 
 
 def test_state_survives_reopening_the_file(tmp_path: Path) -> None:
-    """Check state survives reopening the file."""
-    path = tmp_path / 'users.db'
-    store = UserStore(path)
+    """The audience is in the file, not in this object.
+
+    Reopened through a SECOND connection to the same database, which is what
+    a restart is -- and, since the audience now shares that file with every
+    service, also what a mode switch leaves behind.
+    """
+    db = state.Database(tmp_path / state.DB_NAME)
+    store = UserStore(db.conn)
     store.record_membership(
         MembershipEvent(7, joined=True, left=False, admin_log_id=1)
     )
     store.record_message(SeenMessage(7, -100, 5001, text='hi'))
-    store.close()
-    reopened = UserStore(path)
+    db.close()
+    reopened = UserStore(state.Database(tmp_path / state.DB_NAME).conn)
     assert reopened.summary() == {
         'total': 1,
         'subscribed': 1,

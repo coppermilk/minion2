@@ -5,8 +5,14 @@
 Records the channel audience over time: the subscribe/unsubscribe timeline per
 person, their identity (username, id, name, phone), and every message the
 account can see, with text. This is strictly a DATA layer -- Telethon-free, so
-it unit-tests against a temp / ``:memory:`` database; ``main.py`` feeds it from
-the greeter's admin-log stream (membership) and the message handler (messages).
+it unit-tests against a temp database; ``main.py`` feeds it from the greeter's
+admin-log stream (membership) and the message handler (messages).
+
+The audience is NOT a service: it has no ledger, no cursor and no name to
+key rows by -- one channel's members belong to the profile. So its three
+tables sit in the profile's one state database beside every service's, and
+this module holds the queries against them while ``core/state.py`` holds
+their DDL along with the rest of that file's schema.
 
 Two facts shape the schema:
 
@@ -22,50 +28,13 @@ double-count. All UI text lives in the constants JSON, so this source is ASCII.
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from minions.userbot.core import state
-
 if TYPE_CHECKING:
+    import sqlite3
     from collections.abc import Callable
-    from pathlib import Path
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    user_id    INTEGER PRIMARY KEY,
-    username   TEXT,
-    first_name TEXT,
-    last_name  TEXT,
-    phone      TEXT,
-    first_seen REAL,
-    last_seen  REAL,
-    msg_count  INTEGER NOT NULL DEFAULT 0,
-    subscribed INTEGER NOT NULL DEFAULT 0,
-    updated_at REAL
-);
-CREATE TABLE IF NOT EXISTS membership_events (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id      INTEGER NOT NULL,
-    event        TEXT    NOT NULL,
-    ts           REAL    NOT NULL,
-    admin_log_id INTEGER UNIQUE
-);
-CREATE TABLE IF NOT EXISTS messages (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    chat_id INTEGER NOT NULL,
-    msg_id  INTEGER NOT NULL,
-    root    INTEGER,
-    text    TEXT,
-    ts      REAL    NOT NULL,
-    UNIQUE (chat_id, msg_id)
-);
-CREATE INDEX IF NOT EXISTS ix_membership_user ON membership_events (user_id);
-CREATE INDEX IF NOT EXISTS ix_messages_user ON messages (user_id);
-"""
 
 
 @dataclass(frozen=True)
@@ -112,21 +81,16 @@ class UserStore:
 
     clock: Callable[[], float]
 
-    def __init__(self, path: Path | str) -> None:
-        """Open the users DB and apply the schema and pragmas."""
-        self._conn = sqlite3.connect(str(path))
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
-        # DELETE, not the WAL default, for the reason state.JOURNAL spells
-        # out: this process is killed by the watchdog without closing, so a
-        # WAL is never checkpointed and users.db alone reads as empty.
-        self._conn.execute(f'PRAGMA journal_mode={state.JOURNAL}')
-        self._conn.commit()
-        self.clock = time.time
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """Bind the profile's state database; the tables are already there.
 
-    def close(self) -> None:
-        """Close the connection (called when a profile is torn down)."""
-        self._conn.close()
+        The connection is the bot's, not this object's: the audience lives
+        in the same file as every service's state, so there is nothing here
+        to open and nothing to close. Its tables are declared with the rest
+        of that file's schema in ``core/state.py``.
+        """
+        self._conn = conn
+        self.clock = time.time
 
     def _ensure_user(self, user_id: int, now: float) -> None:
         """Create a bare user row if this is the first time we see the id."""

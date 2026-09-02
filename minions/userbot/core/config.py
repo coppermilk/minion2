@@ -36,13 +36,10 @@ DEFAULT_TARGET_CHAT_ID = -1002431466060
 DEFAULT_PLATFORMS = 'tiktok,youtube,pinterest,instagram'
 # Only Shorts: a video whose known duration reaches this is dropped.
 MAX_SHORT_SEC = 180
-# Data files at the package root: the editable constants and the saved state.
+# The editable constants at the package root. State is one database per
+# profile directory (``core/state.DB_NAME``), not a file named here.
 CONSTANTS_FILE = 'aggregator_constants.json'
 CONSTANTS_PATH = PACKAGE_DIR / CONSTANTS_FILE
-STATE_FILE = 'aggregator.db'
-# What this service's state was called before the directory grew one file
-# per service. Adopted once on first start (``statefile.adopt``).
-LEGACY_STATE_FILE = 'aggregator_state.json'
 # Which profile is active (live/test). Lives in the base state dir, OUTSIDE the
 # per-profile state, so we know which profile to load at startup.
 MODE_FILE = 'aggregator_mode.json'
@@ -359,18 +356,23 @@ def state_base() -> Path | None:
     return _drive_dir()
 
 
-def resolve_state_path(default: Path) -> Path:
-    """Where the state file lives (``state_base``, else beside the package).
+def resolve_state_dir(default: Path) -> Path:
+    """Where state lives (``state_base``, else beside the package).
 
     A directory that cannot be created raises rather than silently falling
     back: state landing somewhere other than where the operator pointed is
     the kind of quiet success that loses a week of posts.
+
+    It used to return a FILE and every caller took its ``.parent``, because
+    the state directory was named after the one file that happened to sit in
+    it. There is one file now and it is not this one, so the directory says
+    so itself.
     """
     directory = state_base()
     if directory is None:
         return default
     directory.mkdir(parents=True, exist_ok=True)
-    return directory / STATE_FILE
+    return directory
 
 
 def _source() -> int:

@@ -191,7 +191,7 @@ def _bare_aggregator(fake: _FakeFlush) -> aggregator.LinkAggregator:
                 repost_guard_count=5,
             ),
             consts=None,  # only compose reads it, and we patch compose
-            state_path=None,  # _save is faked
+            store=None,  # _save is faked
             targets=tuple,
             on_posted=fake.on_posted,
             field_keys=(),

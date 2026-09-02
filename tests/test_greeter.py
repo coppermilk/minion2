@@ -21,7 +21,7 @@ from typing import Never
 from minion_core.adapters import userchat
 from minion_core.pace import Gate
 from minion_core.pace import Pace
-from minions.userbot.core import statefile
+from minions.userbot.core import state
 from minions.userbot.engines import greeter
 
 _CAP_PER_CYCLE = 2
@@ -35,6 +35,11 @@ _UID_5 = 5
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _store(tmp_path: Path) -> state.StateStore:
+    """Return the greeter's view of a state database under ``tmp_path``."""
+    return state.Database(tmp_path / state.DB_NAME).store('greeter')
 
 
 def _params(**over: object) -> object:
@@ -123,7 +128,7 @@ def _greeter(tmp_path: Path, client: object, **over: object) -> object:
     return greeter.Greeter(
         _account(client),
         _params(**over),
-        greeter.GreeterIO(tmp_path / 'g.json'),
+        greeter.GreeterIO(_store(tmp_path)),
     )
 
 
@@ -139,7 +144,7 @@ def test_on_event_sink_fires_for_every_event_incl_baseline(
     g = greeter.Greeter(
         _account(client),
         _params(),
-        greeter.GreeterIO(tmp_path / 'g.json', seen.append),
+        greeter.GreeterIO(_store(tmp_path), seen.append),
     )
     asyncio.run(g.sync())  # baseline: no DMs, but the sink still fires
     assert client.dms == []
@@ -315,14 +320,15 @@ def test_sync_now_reports_baseline_then_dms(tmp_path: Path) -> None:
 
 def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
     """Check state persists cursor and counter."""
-    path = tmp_path / 'g.json'
     client = _FakeClient([_join(1, 1)])
-    g = greeter.Greeter(_account(client), _params(), greeter.GreeterIO(path))
+    g = greeter.Greeter(
+        _account(client), _params(), greeter.GreeterIO(_store(tmp_path))
+    )
     asyncio.run(g.sync())
     g.state.dm_today = 3
     g._save()
     fresh = greeter.Greeter(
-        _account(client), _params(), greeter.GreeterIO(path)
+        _account(client), _params(), greeter.GreeterIO(_store(tmp_path))
     )
     assert fresh.state.started
     assert fresh.state.last_event_id == 1
@@ -331,15 +337,18 @@ def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
 
 def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
     """Check channel switch resets the baseline."""
-    path = tmp_path / 'g.json'
     client = _FakeClient([_join(9, 1)])
     g = greeter.Greeter(
-        _account(client), _params(channel=-100), greeter.GreeterIO(path)
+        _account(client),
+        _params(channel=-100),
+        greeter.GreeterIO(_store(tmp_path)),
     )
     asyncio.run(g.sync())  # baseline on channel -100 (cursor 9)
     assert g.state.started
     g2 = greeter.Greeter(
-        _account(client), _params(channel=-200), greeter.GreeterIO(path)
+        _account(client),
+        _params(channel=-200),
+        greeter.GreeterIO(_store(tmp_path)),
     )
     assert g2.state.started is False  # different channel -> re-baseline
     assert g2.state.last_event_id == 0
@@ -347,10 +356,8 @@ def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
 
 def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
     """Check old member state migrates and rebaselines."""
-    path = tmp_path / 'greeter.db'
     # An old member-diff state (has 'members', no 'last_event_id').
-    statefile.write_state(
-        path,
+    _store(tmp_path).write(
         {
             'channel': -100,
             'members': [1, 2, 3],
@@ -359,7 +366,9 @@ def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
         },
     )
     g = greeter.Greeter(
-        _FakeClient(), _params(channel=-100), greeter.GreeterIO(path)
+        _FakeClient(),
+        _params(channel=-100),
+        greeter.GreeterIO(_store(tmp_path)),
     )
     assert g.state.started is False  # re-baseline (no mass DM)
     assert g.state.last_event_id == 0
@@ -399,7 +408,7 @@ def test_sleep_defers_events_until_wake(tmp_path: Path) -> None:
     g = greeter.Greeter(
         _account(client),
         _params(wake_start_hour=7.0, wake_end_hour=17.0),
-        greeter.GreeterIO(tmp_path / 'g.json'),
+        greeter.GreeterIO(_store(tmp_path)),
     )
     asyncio.run(g.sync())  # baseline
     client.log.append(_join(2, 200))
@@ -419,7 +428,7 @@ def test_sync_now_reports_asleep_with_deferred_count(tmp_path: Path) -> None:
     g = greeter.Greeter(
         _account(client),
         _params(wake_start_hour=7.0, wake_end_hour=17.0),
-        greeter.GreeterIO(tmp_path / 'g.json'),
+        greeter.GreeterIO(_store(tmp_path)),
     )
     asyncio.run(g.sync())  # baseline
     client.log.append(_join(2, 200))
@@ -444,7 +453,7 @@ def test_departures_stop_growing_forever(tmp_path: Path) -> None:
     g = greeter.Greeter(
         _FakeClient(),
         _params(channel=-100),
-        greeter.GreeterIO(tmp_path / 'greeter_state.json'),
+        greeter.GreeterIO(_store(tmp_path)),
     )
     for uid in range(_OVER_LEFT_CAP):
         g._note_departure(uid)
@@ -458,7 +467,7 @@ def test_a_returning_subscriber_is_forgotten_once(tmp_path: Path) -> None:
     g = greeter.Greeter(
         _FakeClient(),
         _params(channel=-100),
-        greeter.GreeterIO(tmp_path / 'greeter_state.json'),
+        greeter.GreeterIO(_store(tmp_path)),
     )
     g._note_departure(7)
     g._note_departure(7)  # the same person leaving twice is one memory

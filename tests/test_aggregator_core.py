@@ -11,7 +11,6 @@ attributes the method under test touches -- no live client.
 from __future__ import annotations
 
 import json
-import sqlite3
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -19,8 +18,8 @@ import pytest
 
 from minions.userbot.core import config
 from minions.userbot.core import matching
+from minions.userbot.core import poststate
 from minions.userbot.core import render
-from minions.userbot.core import statefile
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
@@ -170,13 +169,13 @@ def test_youtube_thumb_only_from_youtube() -> None:
     assert render.youtube_thumb(Group('t', {})) == ''
 
 
-# --------------------------------------------------------------- statefile
+# ------------------------------------------------------ the poster shapes
 
 
 def test_posted_round_trip() -> None:
     """A Posted record survives dict serialization unchanged."""
     post = Posted('T', '2026-08-20T15:05:21Z', {'yt': 'u'}, [1, 2])
-    back = statefile.posted_from_dict(statefile.posted_dict(post))
+    back = poststate.posted_from_dict(poststate.posted_dict(post))
     assert back == post
 
 
@@ -184,79 +183,13 @@ def test_pending_round_trip_keeps_items_and_time() -> None:
     """A pending Group survives dict serialization (items, ids, created_at)."""
     item = Item('tiktok', 'tiktok', 'T', 'u', '', '30', 9)
     group = Group('T', {'tiktok': item}, {9}, created_at=1_700_000_000.0)
-    back = statefile.pending_from_dict(
-        statefile.pending_dict(group, ('tiktok', 'youtube'))
+    back = poststate.pending_from_dict(
+        poststate.pending_dict(group, ('tiktok', 'youtube'))
     )
     assert back.title == 'T'
     assert back.msg_ids == {9}
     assert back.items['tiktok'].url == 'u'
     assert back.created_at == group.created_at
-
-
-def test_read_state_degrades_to_empty(tmp_path: Path) -> None:
-    """Missing, unreadable and not-an-object all read as "no state"."""
-    assert statefile.read_state(tmp_path / 'absent.json') == {}
-    bad = tmp_path / 'bad.json'
-    bad.write_text('{oops', encoding='utf-8')
-    assert statefile.read_state(bad) == {}
-    listed = tmp_path / 'list.json'
-    listed.write_text('[1, 2]', encoding='utf-8')
-    assert statefile.read_state(listed) == {}
-
-
-def test_write_state_round_trips_and_leaves_no_temp(tmp_path: Path) -> None:
-    """The write lands whole, keeps non-ASCII, and cleans up after itself."""
-    path = tmp_path / 'state.json'
-    statefile.write_state(path, {'name': '\u0448\u043a\u0430\u0444'})
-    assert statefile.read_state(path) == {'name': '\u0448\u043a\u0430\u0444'}
-    assert not (tmp_path / 'state.tmp').exists()
-
-
-def test_a_write_cut_short_keeps_the_old_state_whole(
-    tmp_path: Path,
-) -> None:
-    """A kill part-way through a write leaves the previous state (CT-A).
-
-    The watchdog turns a hang into a hard ``os._exit(1)``, so an interrupted
-    write is a case that happens. It used to be survived by writing a
-    sibling temp file and renaming it; the store survives it by being one
-    transaction, and an uncommitted transaction IS what a killed process
-    leaves. Written here without a commit, exactly as that kill would.
-    """
-    path = tmp_path / 'state.db'
-    statefile.write_state(path, {'n': 1})
-
-    dying = sqlite3.connect(str(path))
-    dying.execute(
-        'INSERT INTO state (id, blob) VALUES (1, ?) '
-        'ON CONFLICT (id) DO UPDATE SET blob = excluded.blob',
-        (json.dumps({'n': 2}),),
-    )
-    dying.close()  # no commit: the process died holding the transaction
-
-    assert statefile.read_state(path) == {'n': 1}
-
-
-def test_a_pre_database_state_file_is_adopted_once(tmp_path: Path) -> None:
-    """The JSON a service used to write is imported, then set aside.
-
-    Three services wrote hand-rolled JSON under three naming conventions,
-    so each names its own former file and it is read exactly once. A second
-    call must not undo newer state by re-importing the stale copy.
-    """
-    legacy = tmp_path / 'greeter_state.json'
-    legacy.write_text(json.dumps({'last_event_id': 41}), encoding='utf-8')
-    path = tmp_path / 'greeter.db'
-
-    statefile.adopt(path, legacy)
-
-    assert statefile.read_state(path) == {'last_event_id': 41}
-    assert not legacy.exists()  # set aside as .bak, not left to confuse
-    assert (tmp_path / 'greeter_state.json.bak').exists()
-
-    statefile.write_state(path, {'last_event_id': 99})
-    statefile.adopt(path, legacy)
-    assert statefile.read_state(path) == {'last_event_id': 99}
 
 
 # ------------------------------------------------------- Userbot core flow
@@ -274,7 +207,7 @@ def _bare_core() -> aggregator.LinkAggregator:
             account=None,
             config=_config(),
             consts=CONSTS,
-            state_path=None,
+            store=None,
             targets=tuple,
             on_posted=None,
             field_keys=tuple(CONSTS.fields.values()),

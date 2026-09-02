@@ -120,9 +120,13 @@ class AudienceLog:
         return len(self._waiting)
 
     def close(self) -> None:
-        """Drop in-flight lookups and release the SQLite handle."""
+        """Drop in-flight lookups; the database is not ours to close.
+
+        The audience shares the profile's one connection with every service,
+        so closing it here would take the ledgers down with it on a mode
+        switch -- and a mode switch is exactly when this runs.
+        """
         tasks.cancel_all(self._lookups)
-        self.deps.store.close()
 
     def _maybe_enrich(self, user_id: int) -> None:
         """Queue a one-off identity lookup for a user we do not know yet.
