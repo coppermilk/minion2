@@ -11,27 +11,26 @@ attributes the method under test touches -- no live client.
 from __future__ import annotations
 
 import json
+import sqlite3
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 
-from tests.conftest import install_telethon_stub
+from minions.userbot.core import config
+from minions.userbot.core import matching
+from minions.userbot.core import render
+from minions.userbot.core import statefile
+from minions.userbot.core.models import Config
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Item
+from minions.userbot.core.models import Posted
+from minions.userbot.glue import aggregator
+from minions.userbot.glue.commands import CommandRouter
+from minions.userbot.glue.profiles import ServiceModes
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-install_telethon_stub()
-
-from minions.userbot import main  # noqa: E402
-from minions.userbot.core import config  # noqa: E402
-from minions.userbot.core import matching  # noqa: E402
-from minions.userbot.core import render  # noqa: E402
-from minions.userbot.core import statefile  # noqa: E402
-from minions.userbot.core.models import Config  # noqa: E402
-from minions.userbot.core.models import Group  # noqa: E402
-from minions.userbot.core.models import Item  # noqa: E402
-from minions.userbot.core.models import Posted  # noqa: E402
 
 CONSTS = config.load_constants(config.CONSTANTS_PATH)
 
@@ -49,7 +48,6 @@ def _config(**over: object) -> Config:
         'max_duration': 180,
         'repost_guard': 604800.0,
         'repost_guard_count': 5,
-        'discussion_gap': 0.0,
     }
     base.update(over)
     return Config(**base)  # type: ignore[arg-type]
@@ -195,19 +193,94 @@ def test_pending_round_trip_keeps_items_and_time() -> None:
     assert back.created_at == group.created_at
 
 
+def test_read_state_degrades_to_empty(tmp_path: Path) -> None:
+    """Missing, unreadable and not-an-object all read as "no state"."""
+    assert statefile.read_state(tmp_path / 'absent.json') == {}
+    bad = tmp_path / 'bad.json'
+    bad.write_text('{oops', encoding='utf-8')
+    assert statefile.read_state(bad) == {}
+    listed = tmp_path / 'list.json'
+    listed.write_text('[1, 2]', encoding='utf-8')
+    assert statefile.read_state(listed) == {}
+
+
+def test_write_state_round_trips_and_leaves_no_temp(tmp_path: Path) -> None:
+    """The write lands whole, keeps non-ASCII, and cleans up after itself."""
+    path = tmp_path / 'state.json'
+    statefile.write_state(path, {'name': '\u0448\u043a\u0430\u0444'})
+    assert statefile.read_state(path) == {'name': '\u0448\u043a\u0430\u0444'}
+    assert not (tmp_path / 'state.tmp').exists()
+
+
+def test_a_write_cut_short_keeps_the_old_state_whole(
+    tmp_path: Path,
+) -> None:
+    """A kill part-way through a write leaves the previous state (CT-A).
+
+    The watchdog turns a hang into a hard ``os._exit(1)``, so an interrupted
+    write is a case that happens. It used to be survived by writing a
+    sibling temp file and renaming it; the store survives it by being one
+    transaction, and an uncommitted transaction IS what a killed process
+    leaves. Written here without a commit, exactly as that kill would.
+    """
+    path = tmp_path / 'state.db'
+    statefile.write_state(path, {'n': 1})
+
+    dying = sqlite3.connect(str(path))
+    dying.execute(
+        'INSERT INTO state (id, blob) VALUES (1, ?) '
+        'ON CONFLICT (id) DO UPDATE SET blob = excluded.blob',
+        (json.dumps({'n': 2}),),
+    )
+    dying.close()  # no commit: the process died holding the transaction
+
+    assert statefile.read_state(path) == {'n': 1}
+
+
+def test_a_pre_database_state_file_is_adopted_once(tmp_path: Path) -> None:
+    """The JSON a service used to write is imported, then set aside.
+
+    Three services wrote hand-rolled JSON under three naming conventions,
+    so each names its own former file and it is read exactly once. A second
+    call must not undo newer state by re-importing the stale copy.
+    """
+    legacy = tmp_path / 'greeter_state.json'
+    legacy.write_text(json.dumps({'last_event_id': 41}), encoding='utf-8')
+    path = tmp_path / 'greeter.db'
+
+    statefile.adopt(path, legacy)
+
+    assert statefile.read_state(path) == {'last_event_id': 41}
+    assert not legacy.exists()  # set aside as .bak, not left to confuse
+    assert (tmp_path / 'greeter_state.json.bak').exists()
+
+    statefile.write_state(path, {'last_event_id': 99})
+    statefile.adopt(path, legacy)
+    assert statefile.read_state(path) == {'last_event_id': 99}
+
+
 # ------------------------------------------------------- Userbot core flow
 
 
-def _bare_core() -> main.Userbot:
-    """Return an Userbot with just the core-flow collaborators wired."""
-    agg = object.__new__(main.Userbot)
-    agg.config = _config()
-    agg.consts = CONSTS
-    agg.groups = []
-    agg.posted = []
-    agg.rejected = set()
-    agg.processed_ids = set()
-    agg._keys = tuple(CONSTS.fields.values())
+def _bare_core() -> aggregator.LinkAggregator:
+    """Return a poster with just the core-flow collaborators wired.
+
+    A plain constructor call: the poster no longer needs a Telethon client
+    to exist. Only the two side effects the flow would run -- persisting and
+    arming a timeout -- are stubbed out.
+    """
+    agg = aggregator.LinkAggregator(
+        aggregator.AggregatorDeps(
+            account=None,
+            config=_config(),
+            consts=CONSTS,
+            state_path=None,
+            targets=tuple,
+            on_posted=None,
+            field_keys=tuple(CONSTS.fields.values()),
+            variety=None,
+        )
+    )
     agg._save = lambda: None
     agg._arm = lambda _group: None
     return agg
@@ -249,40 +322,33 @@ def test_short_or_reject_drops_long_video() -> None:
 # ------------------------------------------------------ per-service modes
 
 
-def test_default_mode_follows_json_enabled() -> None:
-    """Userbot defaults live; a feature is live only if its JSON is on."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {'reactions': {'enabled': True}, 'stories': {'enabled': False}}
-    assert agg._default_mode('aggregator') == 'live'
-    assert agg._default_mode('reactions') == 'live'
-    assert agg._default_mode('stories') == 'off'
+def _modes(tmp_path: Path, settings: dict[str, object]) -> ServiceModes:
+    """Build a ServiceModes over a stub bot carrying only its settings."""
+    bot = SimpleNamespace(settings=settings)
+    return ServiceModes(bot, tmp_path)
 
 
-def test_migrate_service_modes_from_legacy_global(tmp_path: Path) -> None:
-    """A pre-per-service install seeds from the old global mode + overrides."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {
-        'reactions': {'enabled': True},
-        'stories': {'enabled': True},
-        'users': {'enabled': False},
-        'greeter': {'enabled': False},
-    }
-    agg._overrides_path = tmp_path / 'absent.json'  # no legacy overrides
-    modes = agg._migrate_service_modes({'mode': 'test'})
-    assert modes['aggregator'] == 'test'  # poster always followed the mode
-    assert modes['reactions'] == 'test'  # on -> the legacy mode
-    assert modes['users'] == 'off'  # disabled -> off
+def test_default_mode_follows_json_enabled(tmp_path: Path) -> None:
+    """The poster defaults live; a feature only if its JSON says enabled."""
+    modes = _modes(
+        tmp_path,
+        {
+            'engines': {
+                'reactions': {'enabled': True},
+                'stories': {'enabled': False},
+            }
+        },
+    )
+    assert modes.mode_of('aggregator') == 'live'
+    assert modes.mode_of('reactions') == 'live'
+    assert modes.mode_of('stories') == 'off'
 
 
-def test_load_service_modes_reads_and_cleans_the_block(
+def test_stored_modes_are_read_and_junk_falls_to_the_default(
     tmp_path: Path,
 ) -> None:
     """The stored services block is read; a junk value falls to the default."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {'reactions': {'enabled': True}}
-    agg._mode_path = tmp_path / 'mode.json'
-    agg._overrides_path = tmp_path / 'ov.json'
-    agg._mode_path.write_text(
+    (tmp_path / 'aggregator_mode.json').write_text(
         json.dumps(
             {
                 'services': {
@@ -295,73 +361,63 @@ def test_load_service_modes_reads_and_cleans_the_block(
             }
         )
     )
-    modes = agg._load_service_modes()
-    assert modes['aggregator'] == 'test'
-    assert modes['reactions'] == 'off'
-    assert modes['users'] == 'off'  # 'bogus' -> users default (JSON off)
+    modes = _modes(tmp_path, {'engines': {'reactions': {'enabled': True}}})
+    assert modes.mode_of('aggregator') == 'test'
+    assert modes.mode_of('reactions') == 'off'
+    assert modes.mode_of('users') == 'off'  # 'bogus' -> the users default
 
 
-def test_load_service_modes_migrates_the_legacy_cats_key(
-    tmp_path: Path,
-) -> None:
-    """A pre-rename 'cats' service key is carried over to 'reactions'."""
-    agg = object.__new__(main.Userbot)
-    agg._raw = {'reactions': {'enabled': True}}
-    agg._mode_path = tmp_path / 'mode.json'
-    agg._overrides_path = tmp_path / 'ov.json'
-    agg._mode_path.write_text(
-        json.dumps({'services': {'aggregator': 'live', 'cats': 'test'}})
+def test_modes_fall_back_when_the_file_is_absent(tmp_path: Path) -> None:
+    """No modes file (a fresh install) -> every service on its own default."""
+    modes = _modes(
+        tmp_path,
+        {
+            'engines': {
+                'reactions': {'enabled': True},
+                'users': {'enabled': False},
+            }
+        },
     )
-    modes = agg._load_service_modes()
-    assert modes['reactions'] == 'test'  # the old 'cats' mode is preserved
+    assert modes.mode_of('aggregator') == 'live'  # the poster is always live
+    assert modes.mode_of('reactions') == 'live'  # JSON-enabled -> live
+    assert modes.mode_of('users') == 'off'  # JSON-disabled -> off
 
 
-def test_migrate_reaction_state_renames_the_legacy_file(
-    tmp_path: Path,
-) -> None:
-    """cats_state.json moves to reactions_state.json once, never clobbered."""
-    (tmp_path / 'cats_state.json').write_text('{"mood": 1}')
-    main.Userbot._migrate_reaction_state(tmp_path)
-    assert not (tmp_path / 'cats_state.json').exists()
-    assert (tmp_path / 'reactions_state.json').read_text() == '{"mood": 1}'
-    # when the new file already exists, a stale old one is left untouched
-    (tmp_path / 'cats_state.json').write_text('{"mood": 9}')
-    main.Userbot._migrate_reaction_state(tmp_path)
-    assert (tmp_path / 'reactions_state.json').read_text() == '{"mood": 1}'
-
-
-def _agg_with_label(label: str) -> object:
-    """Build a bare Userbot whose reaction engine carries a persona label."""
-    agg = object.__new__(main.Userbot)
-    agg.reactions = SimpleNamespace(params=SimpleNamespace(label=label))
-    return agg
-
-
-def test_reaction_alias_maps_persona_label_to_canonical() -> None:
-    """A label answers /<label>now and /<label>_<action>; none = neutral."""
-    agg = _agg_with_label('cat')
-    assert main.Userbot._reaction_alias(agg, '/catnow') == '/reactnow'
-    assert main.Userbot._reaction_alias(agg, '/cat_on') == '/reactions_on'
-    assert main.Userbot._reaction_alias(agg, '/cat_test') == '/reactions_test'
-    assert main.Userbot._reaction_alias(agg, '/status') == '/status'
-    # no label configured -> friendly names are not recognised, text is as-is
-    plain = _agg_with_label('')
-    assert main.Userbot._reaction_alias(plain, '/catnow') == '/catnow'
-
-
-def test_feature_enabled_is_mode_not_off() -> None:
+def test_enabled_is_mode_not_off(tmp_path: Path) -> None:
     """A service counts as enabled unless its mode is 'off'."""
-    agg = object.__new__(main.Userbot)
-    agg._modes = {'reactions': 'test', 'stories': 'off', 'greeter': 'live'}
-    assert agg._feature_enabled('reactions') is True
-    assert agg._feature_enabled('greeter') is True
-    assert agg._feature_enabled('stories') is False
+    modes = _modes(tmp_path, {})
+    modes.by_service = {
+        'reactions': 'test',
+        'stories': 'off',
+        'greeter': 'live',
+    }
+    assert modes.enabled('reactions') is True
+    assert modes.enabled('greeter') is True
+    assert modes.enabled('stories') is False
 
 
 def test_service_dir_follows_each_services_mode(tmp_path: Path) -> None:
     """A test service lands in base/test; a live one in base."""
-    agg = object.__new__(main.Userbot)
-    agg._state_base = tmp_path
-    agg._modes = {'aggregator': 'live', 'reactions': 'test'}
-    assert agg._service_dir('aggregator') == tmp_path
-    assert agg._service_dir('reactions') == tmp_path / 'test'
+    modes = _modes(tmp_path, {})
+    modes.by_service = {'aggregator': 'live', 'reactions': 'test'}
+    assert modes.service_dir('aggregator') == tmp_path
+    assert modes.service_dir('reactions') == tmp_path / 'test'
+
+
+def _router_with_label(label: str) -> CommandRouter:
+    """Return a router whose reaction engine carries a persona label."""
+    bot = SimpleNamespace(
+        reactions=SimpleNamespace(params=SimpleNamespace(label=label))
+    )
+    return CommandRouter(bot)
+
+
+def test_reaction_alias_maps_persona_label_to_canonical() -> None:
+    """A label answers /<label>now and /<label>_<action>; none = neutral."""
+    router = _router_with_label('cat')
+    assert router._reaction_alias('/catnow') == '/reactnow'
+    assert router._reaction_alias('/cat_on') == '/reactions_on'
+    assert router._reaction_alias('/cat_test') == '/reactions_test'
+    assert router._reaction_alias('/status') == '/status'
+    # no label configured -> friendly names are not recognised, text is as-is
+    assert _router_with_label('')._reaction_alias('/catnow') == '/catnow'

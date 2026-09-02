@@ -14,11 +14,13 @@ import os
 import sys
 import time
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 from typing import TYPE_CHECKING
+
+from minions.userbot.core import config
 
 if TYPE_CHECKING:
     import asyncio
+    from pathlib import Path
 
 log = logging.getLogger('userbot')
 
@@ -29,22 +31,22 @@ _WATCHDOG_POLL_SEC = 30.0
 
 
 def _state_base() -> Path | None:
-    """Return the base state dir (AGGREGATOR_STATE_DIR or <DRIVE>).
+    """Return the base state dir, created; None when there is none to use.
 
     Process-level (not per-profile): the log and the watchdog heartbeat live
-    here. Returns None (and the caller degrades) when neither is configured.
+    here. WHERE it is, is ``config.state_base`` -- one rule, one place. What
+    is local to this module is the tolerance: a log we cannot write is worth
+    degrading over, so a directory that will not create reads as "no file
+    here" and the console handler carries on alone.
     """
-    base = os.environ.get('AGGREGATOR_STATE_DIR')
-    if not base:
-        drive = os.environ.get('DRIVE')
-        base = str(Path(drive) / 'bots' / 'aggregator') if drive else ''
-    if not base:
+    base = config.state_base()
+    if base is None:
         return None
     try:
-        Path(base).mkdir(parents=True, exist_ok=True)
+        base.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    return Path(base)
+    return base
 
 
 def _log_file() -> Path | None:

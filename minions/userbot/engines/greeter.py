@@ -26,7 +26,7 @@ Safety built in here:
     * Privacy failures are skipped; a flood error backs off the cycle.
     * Disabled by default.
 
-Telethon-free (the client is passed in and duck-typed), so the event-handling
+Telethon-free (every request goes through the adapter), so the event-handling
 logic is unit-testable. All texts live in the constants JSON, keeping this
 source ASCII.
 """
@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import asyncio
 import html
-import json
 import logging
 import random
 import time
@@ -43,7 +42,10 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from minion_core.adapters import userchat
+from minions.userbot.core import codec
 from minions.userbot.core import humanize
+from minions.userbot.core import statefile
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,51 +58,50 @@ log = logging.getLogger('userbot')
 class GreeterParams:
     """Every greeter tunable, from the constants JSON 'greeter' section."""
 
-    enabled: bool
-    channel: int  # the channel to watch (resolved: JSON value or the target)
-    welcome: str
-    welcome_back: str  # for someone who LEFT and later re-subscribed
-    farewell: str
-    fallback_name: str  # fills {name} when the real name is unresolvable
-    poll_sec: float
-    dm_min_gap_sec: float
-    dm_jitter_sec: float
-    max_dm_per_run: int
-    max_dm_per_day: int  # hard daily ceiling -- the real anti-ban knob
+    enabled: bool = False
+    channel: int = 0  # the channel to watch (JSON value, else the target)
+    welcome: str = 'Welcome!'
+    # For someone who LEFT and later re-subscribed. Empty (as shipped) makes
+    # both branches of _welcome_text send the same text -- that is the
+    # operator's choice, not a bug, and setting it is all it takes.
+    welcome_back: str = ''
+    farewell: str = ''
+    fallback_name: str = 'friend'  # fills {name} when the name will not
+    poll_sec: float = 600.0
+    dm_min_gap_sec: float = 30.0
+    dm_jitter_sec: float = 30.0
+    max_dm_per_run: int = 10
+    max_dm_per_day: int = 5  # hard daily ceiling -- the real anti-ban knob
     # Persona clock: welcome/farewell DMs only go out during waking hours (no
     # one messages at 4am). Outside the window the cycle defers -- see Greeter.
-    tz_offset_hours: float
-    wake_start_hour: float
-    wake_end_hour: float
+    tz_offset_hours: float = 3.0
+    wake_start_hour: float = 0.0
+    wake_end_hour: float = 24.0
 
 
 @dataclass
 class GreeterState:
     """Persisted: welcome-back memory, baseline flag, cursor, DM counter."""
 
-    left: set[int] = field(default_factory=set)  # unsubscribed -> welcome_back
+    # Unsubscribed, oldest first, capped at LEFT_CAP: they get welcome_back
+    # if they return while still remembered, else the plain welcome.
+    left: list[int] = field(default_factory=list)
     started: bool = False  # the silent baseline has been established
     last_event_id: int = 0  # highest admin-log event id already handled
     dm_day: str = ''  # UTC date of dm_today
     dm_today: int = 0  # DMs already sent today (against max_dm_per_day)
 
 
+# Departed subscribers remembered for a welcome_back, newest last. Unbounded
+# it was the one part of greeter state that grew for as long as the channel
+# had turnover; 500 matches the story engine's tracked-peer ceiling. Someone
+# who rolled off and later returns is greeted as new, which is the mild end
+# of getting it wrong.
+LEFT_CAP = 500
+
+
 class _FloodStopError(Exception):
     """Raised to abort a DM cycle when Telegram flags us for flooding."""
-
-
-def _norm_event(event: object) -> tuple[int, int, bool, bool]:
-    """(event_id, user_id, joined, left) from a Telethon AdminLogEvent."""
-    joined = bool(
-        getattr(event, 'joined', False)
-        or getattr(event, 'joined_invite', False)
-    )
-    return (
-        int(getattr(event, 'id', 0) or 0),
-        int(getattr(event, 'user_id', 0) or 0),
-        joined,
-        bool(getattr(event, 'left', False)),
-    )
 
 
 def load_greeter_params(
@@ -108,30 +109,24 @@ def load_greeter_params(
 ) -> GreeterParams:
     """Load the greeter params; channel falls back to the aggregator target.
 
-    The admin-log poll cadence is per profile (like the reactions rescan): test
-    tight, live relaxed to at most hourly. Live events (ChatAction) still catch
-    a join/leave in real time, so the poll is only the diff-based safety net --
-    hourly in live is plenty. Both fall back to ``poll_sec``.
+    Every knob reads its own key and falls back to its own declared default
+    (``core/codec.py``). Two cannot: the channel, where a blank means "use
+    the poster's target" (the live constants rely on that), and the
+    admin-log cadence, which is per profile like the reactions rescan --
+    test tight, live relaxed to at most hourly, both falling back to
+    ``poll_sec``. Live ChatAction events still catch a join/leave in real
+    time, so the poll is only the diff-based safety net.
     """
-    cfg = data.get('greeter') if isinstance(data.get('greeter'), dict) else {}
-    cfg = cfg or {}
-    default_poll = float(cfg.get('poll_sec') or 600.0)
+    cfg = codec.engine(data, 'greeter')
+    default_poll = codec.num(cfg.get('poll_sec')) or GreeterParams.poll_sec
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
-    return GreeterParams(
-        enabled=bool(cfg.get('enabled', False)),
-        channel=int(cfg.get('channel') or default_channel),
-        welcome=str(cfg.get('welcome') or 'Welcome!'),
-        welcome_back=str(cfg.get('welcome_back') or ''),
-        farewell=str(cfg.get('farewell') or ''),
-        fallback_name=str(cfg.get('fallback_name') or 'friend'),
-        poll_sec=float(cfg.get(poll_key) or default_poll),
-        dm_min_gap_sec=float(cfg.get('dm_min_gap_sec') or 30.0),
-        dm_jitter_sec=float(cfg.get('dm_jitter_sec') or 30.0),
-        max_dm_per_run=int(cfg.get('max_dm_per_run') or 10),
-        max_dm_per_day=int(cfg.get('max_dm_per_day') or 5),
-        tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
-        wake_start_hour=float(cfg.get('wake_start_hour', 0.0)),
-        wake_end_hour=float(cfg.get('wake_end_hour', 24.0)),
+    return codec.decode(
+        GreeterParams,
+        cfg,
+        {
+            'channel': codec.whole(cfg.get('channel')) or default_channel,
+            'poll_sec': codec.num(cfg.get(poll_key)) or default_poll,
+        },
     )
 
 
@@ -144,21 +139,21 @@ class GreeterIO:
     """
 
     path: Path
-    on_event: Callable[[tuple[int, int, bool, bool]], None] | None = None
+    on_event: Callable[[userchat.MemberEvent], None] | None = None
 
 
 class Greeter:
     """Watch a channel's members and DM joiners/leavers (safely, opt-in).
 
-    ``client`` is a Telethon client (duck-typed); ``io`` carries the state
-    file and the optional users-DB event sink.
+    ``account`` is the one door to Telegram; ``io`` carries the state file
+    and the optional users-DB event sink.
     """
 
     def __init__(
-        self, client: object, params: GreeterParams, io: GreeterIO
+        self, account: userchat.Account, params: GreeterParams, io: GreeterIO
     ) -> None:
-        """Bind the client, the tuning params, and the I/O wiring."""
-        self.client = client
+        """Bind the account, the tuning params, and the I/O wiring."""
+        self.account = account
         self.params = params
         self.path = io.path
         self.state = self._load()
@@ -197,7 +192,8 @@ class Greeter:
         self._emit(events)  # feed the users DB before any baseline/DM logic
         if not self.state.started:
             newest = max(
-                (eid for eid, *_ in events), default=self.state.last_event_id
+                (event.id for event in events),
+                default=self.state.last_event_id,
             )
             self.state.last_event_id = newest
             self.state.started = True
@@ -242,7 +238,7 @@ class Greeter:
             self.next_sync = time.time() + self.params.poll_sec
             await asyncio.sleep(self.params.poll_sec)
 
-    def _emit(self, events: list[tuple[int, int, bool, bool]]) -> None:
+    def _emit(self, events: list[userchat.MemberEvent]) -> None:
         """Hand every fetched event to the sink (the users DB), if wired.
 
         Fired for ALL events -- baseline and re-reads included -- so the DB
@@ -256,30 +252,17 @@ class Greeter:
                 self._on_event(event)
             except Exception:
                 log.exception(
-                    'greeter: users sink failed for event %d', event[0]
+                    'greeter: users sink failed for event %d', event.id
                 )
 
-    async def _fetch_events(self) -> list[tuple[int, int, bool, bool]] | None:
+    async def _fetch_events(self) -> list[userchat.MemberEvent] | None:
         """Return new admin-log join/leave events (id > cursor), or None."""
-        try:
-            return [
-                _norm_event(event)
-                async for event in self.client.iter_admin_log(
-                    self.params.channel,
-                    min_id=self.state.last_event_id,
-                    join=True,
-                    leave=True,
-                )
-            ]
-        except Exception:  # noqa: BLE001 -- not admin / unreachable: skip cycle
-            log.warning(
-                'greeter: cannot read admin log of %s (admin?)',
-                self.params.channel,
-            )
-            return None
+        return await self.account.admin_log(
+            self.params.channel, self.state.last_event_id
+        )
 
     async def _process_events(
-        self, events: list[tuple[int, int, bool, bool]]
+        self, events: list[userchat.MemberEvent]
     ) -> None:
         """Greet each new event oldest-first; defer the rest when the cap hits.
 
@@ -298,16 +281,18 @@ class Greeter:
                 len(events),
             )
             return
-        ordered = sorted(events)
+        ordered = sorted(events, key=lambda event: event.id)
         sent = 0
         handled = 0
-        for eid, uid, joined, left in ordered:
+        for event in ordered:
             try:
-                did = await self._handle(uid, joined=joined, left=left)
+                did = await self._handle(
+                    event.user_id, joined=event.joined, left=event.left
+                )
             except _FloodStopError:
                 log.warning('greeter: cap hit; the rest wait for a later poll')
                 break
-            self.state.last_event_id = max(self.state.last_event_id, eid)
+            self.state.last_event_id = max(self.state.last_event_id, event.id)
             handled += 1
             sent += int(did)
             if sent >= self.params.max_dm_per_run:
@@ -321,12 +306,23 @@ class Greeter:
             return False
         if joined:
             sent = await self._dm(uid, self._welcome_text(uid))
-            self.state.left.discard(uid)  # they came back
+            self._forget_departure(uid)  # they came back
             return sent
-        self.state.left.add(uid)  # remember for a welcome_back later
+        self._note_departure(uid)  # remember for a welcome_back later
         if not self.params.farewell:
             return False
         return await self._dm(uid, self.params.farewell)
+
+    def _note_departure(self, uid: int) -> None:
+        """Remember one departure for a later welcome_back, within the cap."""
+        self._forget_departure(uid)  # keep it once, and keep it newest
+        self.state.left.append(uid)
+        del self.state.left[:-LEFT_CAP]
+
+    def _forget_departure(self, uid: int) -> None:
+        """Drop one departure from the memory (they came back)."""
+        if uid in self.state.left:
+            self.state.left.remove(uid)
 
     def _welcome_text(self, uid: int) -> str:
         """Return welcome_back for a returning subscriber, else welcome."""
@@ -345,17 +341,14 @@ class Greeter:
             raise _FloodStopError
         await self._rate_limit()
         body = await self._personalize(uid, text)
-        try:
-            # parse_mode='html' renders <tg-emoji> emoji and <a> links;
-            # link_preview=False stops the return link expanding a preview.
-            await self.client.send_message(
-                uid, body, parse_mode='html', link_preview=False
-            )
-        except Exception as exc:
-            name = type(exc).__name__
-            log.warning('greeter: DM to %s failed (%s)', uid, name)
-            if 'Flood' in name:
-                raise _FloodStopError from exc
+        # html=True renders <tg-emoji> emoji and <a> links; no preview,
+        # so the return link does not expand into a card.
+        if not await self.account.dm(uid, userchat.Text(body, html=True)):
+            log.warning('greeter: DM to %s did not go out', uid)
+            if self.account.strained(userchat.DM):
+                # Telegram just told us to slow down. Carrying on DMing
+                # now is what turns a flood wait into a spam ban.
+                raise _FloodStopError
             return False
         self.state.dm_today += 1
         self._save()
@@ -381,12 +374,8 @@ class Greeter:
         """(@username, t.me/username) for the channel, resolved once."""
         if self._channel_at or self._channel_url:
             return self._channel_at, self._channel_url
-        username = ''
-        try:
-            entity = await self.client.get_entity(self.params.channel)
-            username = str(getattr(entity, 'username', '') or '')
-        except Exception:  # noqa: BLE001 -- unresolvable: leave placeholders empty
-            log.warning('greeter: cannot resolve channel username')
+        peer = await self.account.peer(self.params.channel)
+        username = peer.username if peer is not None else ''
         if username:
             self._channel_at = '@' + username
             self._channel_url = 'https://t.me/' + username
@@ -394,11 +383,8 @@ class Greeter:
 
     async def _first_name(self, uid: int) -> str:
         """Return the user's first name (HTML-escaped), or the fallback."""
-        try:
-            entity = await self.client.get_entity(uid)
-        except Exception:  # noqa: BLE001 -- unresolvable name: use the fallback
-            return html.escape(self.params.fallback_name)
-        raw = str(getattr(entity, 'first_name', '') or '').strip()
+        peer = await self.account.peer(uid)
+        raw = peer.first_name.strip() if peer is not None else ''
         return html.escape(raw or self.params.fallback_name)
 
     def _daily_budget_left(self) -> bool:
@@ -429,13 +415,10 @@ class Greeter:
         re-read the whole admin log and mass-DM. The welcome_back memory
         (``left``) is carried over in that migration.
         """
-        if not self.path.exists():
+        raw = statefile.read_state(self.path)
+        if not raw:  # before the 'last_event_id' probe: nothing is not legacy
             return GreeterState()
-        try:
-            raw = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
-            return GreeterState()
-        stored = int(raw.get('channel', 0) or 0)
+        stored = codec.whole(raw.get('channel'))
         if stored and stored != self.params.channel:
             log.warning(
                 'greeter: state was for channel %s, now %s -- re-baselining',
@@ -443,30 +426,28 @@ class Greeter:
                 self.params.channel,
             )
             return GreeterState()
-        carried = {int(m) for m in (raw.get('left') or [])}
+        carried = [codec.whole(m) for m in codec.rows(raw.get('left'))]
+        del carried[:-LEFT_CAP]
         if 'last_event_id' not in raw:
             log.info('greeter: migrating to admin-log, re-baselining')
             return GreeterState(left=carried)
         return GreeterState(
             left=carried,
             started=bool(raw.get('started', False)),
-            last_event_id=int(raw.get('last_event_id', 0) or 0),
-            dm_day=str(raw.get('dm_day', '')),
-            dm_today=int(raw.get('dm_today', 0)),
+            last_event_id=codec.whole(raw.get('last_event_id')),
+            dm_day=codec.text(raw.get('dm_day')),
+            dm_today=codec.whole(raw.get('dm_today')),
         )
 
     def _save(self) -> None:
         """Persist the state atomically as readable JSON."""
         data = {
-            'channel': self.params.channel,  # which channel this state is for
-            'left': sorted(self.state.left),
+            'channel': self.params.channel,  # the channel this is for
+            # Insertion order, NOT sorted: the cap keeps the newest.
+            'left': list(self.state.left),
             'started': self.state.started,
             'last_event_id': self.state.last_event_id,
             'dm_day': self.state.dm_day,
             'dm_today': self.state.dm_today,
         }
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.path)
+        statefile.write_state(self.path, data)

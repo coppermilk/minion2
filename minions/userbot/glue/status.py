@@ -1,12 +1,10 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Render the /status report -- a read-only view over the aggregator.
+"""Render the /status report -- a read-only view over the whole bot.
 
-Extracted from ``main``: the section builders and small display helpers that
-turn the live aggregator state into the /status text. ``_StatusMixin`` is
-mixed into ``Userbot`` (its method bodies are unchanged), so they keep
-reading ``self`` state; it inherits ``UserbotProtocol`` (base.py) so the
-type checker knows what that state is.
+One section builder per service, each reading that service off the bot and
+writing nothing back. The report is the operator's only window into six
+engines at once, so its exact text is pinned by tests/test_status.py.
 """
 
 from __future__ import annotations
@@ -17,95 +15,108 @@ from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
 
-from minions.userbot.core.base import UserbotProtocol
+from minions.userbot.core import humanize
 from minions.userbot.core.render import emoji_markup
+from minions.userbot.core.render import trim
 from minions.userbot.core.runtime import fmt_eta
 from minions.userbot.glue.commands import SERVICE_ACTIONS
 from minions.userbot.glue.commands import SERVICE_NAMES
 
-# How many pending reactions to list individually in /status (the rest are
-# summed).
-STATUS_PENDING_CATS = 12
+# How many queued rows (reactions, story views) to list before summing the
+# rest as "... (+N more)".
+PENDING_ROWS = 12
 # How many of the warmest story peers to list in the attachment readout.
 STATUS_WARM_PEERS = 3
 
 if TYPE_CHECKING:
-    from minions.userbot.engines import reactions
+    from minions.userbot.core import relationship
+    from minions.userbot.core.models import Emoji
+    from minions.userbot.engines import stories
+    from minions.userbot.main import Userbot
 
 
-def _trim(title: str, width: int = 40) -> str:
-    """Return a one-line, length-capped title for the /status report."""
-    flat = ' '.join(title.split())
-    return flat if len(flat) <= width else flat[: width - 1] + '~'
+def _capped(rows: list[str], cap: int = PENDING_ROWS) -> list[str]:
+    """Return at most ``cap`` rows, summing the remainder as a tail line."""
+    if len(rows) <= cap:
+        return rows
+    return [*rows[:cap], f'    ... (+{len(rows) - cap} more)']
 
 
-_EMOJI_ROW_LEN = 2
-"""A persisted emoji row is an [id, fallback] pair."""
+def _clock_eta(at: float, tz_offset: float) -> str:
+    """Return "HH:MM (in 8m 12s)" for ``at``, read in the persona's zone."""
+    zone = timezone(timedelta(hours=tz_offset))
+    clock = datetime.fromtimestamp(at, tz=zone).strftime('%H:%M')
+    eta = at - time.time()
+    return f'{clock} (in {"now" if eta <= 0 else fmt_eta(eta)})'
 
 
-def _pending_markup(entry: dict[str, object]) -> str:
-    """Render a pending entry's chosen reaction(s) as premium markup, or '?'.
+def _waiting(row: stories.Seen) -> bool:
+    """Whether a peer has something new that we are not opening."""
+    return bool(row.unseen) and not row.viewing
 
-    Reactions scheduled before the emoji were stored show '?' -- a /requeue
-    does not re-pick them (the choice is made at schedule time), it only
-    re-times what is already there.
+
+def _glance_order(row: stories.Seen) -> tuple[int, int]:
+    """Sort a glance: who we are opening first, then who is waiting."""
+    rank = 1 if _waiting(row) else (0 if row.viewing else 2)
+    return (rank, -row.unseen)
+
+
+def _bare(label: str, peer_id: object) -> str:
+    """Return a resolved label without the raw id the resolver appends.
+
+    ``_chat_label`` renders '@name (-100123)' because the Routing section is
+    read to CONFIGURE chats, where the id is the useful half. A list of
+    people is read to recognise them, where it is noise. Stripped by exact
+    suffix rather than by pattern, so a title that happens to end in
+    parentheses survives, and an unresolved peer still shows its bare id
+    because that is all we know about them.
     """
-    raw = entry.get('emojis')
-    rows = raw if isinstance(raw, list) else []
-    markup = ''.join(
-        emoji_markup(str(row[0]), str(row[1]))
-        for row in rows
-        if len(row) == _EMOJI_ROW_LEN
-    )
-    return markup or '?'
+    return label.removesuffix(f' ({peer_id})')
 
 
-def _pool_markup(pool: tuple[reactions.ReactionEmoji, ...]) -> str:
+def _pool_markup(pool: tuple[Emoji, ...]) -> str:
     """Render a whole emoji pool as premium markup (a preview strip)."""
-    return ''.join(emoji_markup(c.emoji_id, c.fallback) for c in pool) or '-'
+    return ''.join(emoji_markup(c.id, c.fallback) for c in pool) or '-'
 
 
-def _user_label(row: dict[str, object]) -> str:
-    """Return a readable handle for a users-DB row: @username/name/id."""
-    username = row.get('username')
-    if username:
-        return f'@{username}'
-    name = row.get('first_name')
-    if name:
-        return str(name)
-    return f'id {row.get("user_id", "?")}'
+class StatusReport:
+    """Render the /status report from a live Userbot -- read-only.
 
+    Holds the bot rather than sharing its ``self``: every line below can be
+    traced to ``self.bot.<service>``, and nothing here can write to it.
+    """
 
-class _StatusMixin(UserbotProtocol):
-    """The /status renderer, mixed into Userbot (reads its state)."""
+    def __init__(self, bot: Userbot) -> None:
+        """Bind the bot whose state this report renders."""
+        self.bot = bot
 
-    def _ic(self, key: str, fallback: str = '') -> str:
+    def _glyph(self, key: str, fallback: str = '') -> str:
         """Return a /status glyph from the JSON, or the fallback."""
-        return self.consts.status.get(key) or fallback
+        return self.bot.consts.status.get(key) or fallback
 
     def _dot(self, *, on: bool) -> str:
         """Return the green/red status dot."""
-        return self._ic('on', '[on]') if on else self._ic('off', '[off]')
+        return self._glyph('on', '[on]') if on else self._glyph('off', '[off]')
 
-    def _bul(self) -> str:
+    def bullet(self) -> str:
         """Return the bullet glyph leading sub-lines and joining headers."""
-        return self._ic('bullet', '-')
+        return self._glyph('bullet', '-')
 
-    def _arr(self) -> str:
+    def arrow(self) -> str:
         """Return the arrow glyph ('next ...' / 'posting ...')."""
-        return self._ic('arrow', '->')
+        return self._glyph('arrow', '->')
 
-    def _head(self, key: str, label: str, *tail: str) -> str:
+    def _header(self, key: str, label: str, *tail: str) -> str:
         """'icon label [ . tail . tail ]', skipping any blank piece."""
-        title = ' '.join(p for p in (self._ic(key), label) if p)
-        sep = f' {self._bul()} '
+        title = ' '.join(p for p in (self._glyph(key), label) if p)
+        sep = f' {self.bullet()} '
         return sep.join([title, *(t for t in tail if t)])
 
-    def _status_text(self, labels: dict[int, str]) -> str:
+    def text(self, labels: dict[int, str]) -> str:
         """Return the /status text: header, routing, videos, engines."""
-        flag = 'TEST' if self.mode == 'test' else 'LIVE'
+        flag = 'TEST' if self.bot.mode == 'test' else 'LIVE'
         parts = [
-            self._head('title', 'Userbot', f'{self._dot(on=True)} {flag}'),
+            self._header('title', 'Userbot', f'{self._dot(on=True)} {flag}'),
             '',
             *self._routing_lines(labels),
             '',
@@ -118,21 +129,25 @@ class _StatusMixin(UserbotProtocol):
             self._users_line(),
             *self._stories_lines(labels),
             '',
+            *self._schedule_lines(),
+            '',
             *self._services_lines(),
         ]
-        if self.consts.status_help:
+        if self.bot.consts.status_help:
             legend = ' '.join(
-                p for p in (self._ic('legend'), self.consts.status_help) if p
+                p
+                for p in (self._glyph('legend'), self.bot.consts.status_help)
+                if p
             )
             parts += ['', legend]
         return '\n'.join(parts)
 
     def _greeter_lines(self) -> list[str]:
         """Greeter section: on/off, DMs today, admin-log cursor, next check."""
-        gp = self.greeter.params
-        gs = self.greeter.state
+        gp = self.bot.greeter.params
+        gs = self.bot.greeter.state
         state = 'on' if gp.enabled else 'off'
-        head = self._head(
+        head = self._header(
             'greeter',
             'Greeter',
             f'{self._dot(on=gp.enabled)} {state}',
@@ -141,59 +156,62 @@ class _StatusMixin(UserbotProtocol):
         )
         if not gp.enabled:
             return [head]
-        return [head, self._greeter_schedule_line()]
+        return [head, *self._greeter_sleep_lines()]
 
-    def _greeter_schedule_line(self) -> str:
-        """Return the greeter's awake/asleep state and its next action time.
+    def _greeter_sleep_lines(self) -> list[str]:
+        """Say so when the greeter is asleep, and what is waiting on it.
 
-        When asleep (outside the persona wake window) DMs are held, so this
-        says so, when it wakes, and how many events are queued -- answering
-        "is anything queued?" instead of a silent, idle-looking greeter.
+        Outside the persona's wake window DMs are held, so this names the
+        window, when it opens, and how many events are queued -- without
+        it a held greeter and a broken one look the same. The awake case
+        needs no line here: its countdown lives in Schedule.
         """
-        gp = self.greeter.params
-        b = self._bul()
+        gp = self.bot.greeter.params
         now = time.time()
-        if not self.greeter.awake(now):
-            window = f'{gp.wake_start_hour:g}-{gp.wake_end_hour:g}h'
-            return (
-                f'{b} asleep (wake {window}) {self._arr()} '
+        if self.bot.greeter.awake(now):
+            return []
+        window = f'{gp.wake_start_hour:g}-{gp.wake_end_hour:g}h'
+        b = self.bullet()
+        return [
+            (
+                f'{b} asleep (wake {window}) {self.arrow()} '
                 f'wakes {self._greeter_wake_eta(now)} '
-                f'{b} {self.greeter.deferred} queued'
+                f'{b} {self.bot.greeter.deferred} queued'
             )
-        period = int(gp.poll_sec)
-        nxt = self.greeter.next_sync
-        if nxt <= 0:
-            return f'{b} check {period}s {b} next: first run'
-        tz = timezone(timedelta(hours=gp.tz_offset_hours))
-        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
-        eta = nxt - now
-        when = 'now' if eta <= 0 else fmt_eta(eta)
-        return f'{b} check {period}s {self._arr()} next {clock} (in {when})'
+        ]
 
     def _greeter_wake_eta(self, now: float) -> str:
-        """Return 'HH:MM (in Xd Yh)' for the greeter's next wake-up."""
-        gp = self.greeter.params
-        tz = timezone(timedelta(hours=gp.tz_offset_hours))
-        local = datetime.fromtimestamp(now, tz=tz)
+        """Return 'HH:MM (in 14h 30m)' for the greeter's next wake-up.
+
+        Hours are the coarsest unit ``fmt_eta`` prints, and the next wake is
+        under a day away by construction, so there is never a days field.
+        """
+        gp = self.bot.greeter.params
+        local = humanize.local(now, gp.tz_offset_hours)
         wake = local.replace(
             hour=int(gp.wake_start_hour), minute=0, second=0, microsecond=0
         )
         if wake <= local:
             wake += timedelta(days=1)
-        eta = fmt_eta(wake.timestamp() - now)
-        return f'{wake.strftime("%H:%M")} (in {eta})'
+        return _clock_eta(wake.timestamp(), gp.tz_offset_hours)
 
     def _routing_lines(self, labels: dict[int, str]) -> list[str]:
         """Source, the live targets, and where posts go NOW (test vs live)."""
-        source = labels.get(self.config.source, str(self.config.source))
-        targets = ', '.join(labels.get(t, str(t)) for t in self.config.targets)
-        dest = ', '.join(labels.get(t, str(t)) for t in self.live_targets())
-        b = self._bul()
+        source = labels.get(
+            self.bot.config.source, str(self.bot.config.source)
+        )
+        targets = ', '.join(
+            labels.get(t, str(t)) for t in self.bot.config.targets
+        )
+        dest = ', '.join(
+            labels.get(t, str(t)) for t in self.bot.live_targets()
+        )
+        b = self.bullet()
         return [
-            self._head('routing', 'Routing'),
+            self._header('routing', 'Routing'),
             f'{b} source: {source}',
             f'{b} target: {targets}',
-            f'{b} posting {self._arr()} {dest}',
+            f'{b} posting {self.arrow()} {dest}',
         ]
 
     def _guard_desc(self) -> str:
@@ -203,8 +221,8 @@ class _StatusMixin(UserbotProtocol):
         time window (e.g. '7d') and the count window (e.g. 'last 5'). Each
         reads 'off' when its knob is 0; 'off' overall when both are.
         """
-        secs = self.config.repost_guard
-        count = self.config.repost_guard_count
+        secs = self.bot.config.repost_guard
+        count = self.bot.config.repost_guard_count
         time_part = fmt_eta(secs) if secs > 0 else 'off'
         count_part = f'last {count}' if count > 0 else 'off'
         if secs <= 0 and count <= 0:
@@ -213,42 +231,45 @@ class _StatusMixin(UserbotProtocol):
 
     def _videos_lines(self) -> list[str]:
         """Videos: counts on the header, then pending + recent posts."""
-        b = self._bul()
-        window = fmt_eta(self.config.timeout)
+        b = self.bullet()
+        window = fmt_eta(self.bot.config.timeout)
+        poster = self.bot.aggregator
         lines = [
-            self._head(
+            self._header(
                 'videos',
                 'Videos',
-                f'pending {len(self.groups)} (timeout {window})',
-                f'posted {len(self.posted)}',
-                f'rejected {len(self.rejected)}',
+                f'pending {len(poster.groups)} (timeout {window})',
+                f'posted {len(poster.posted)}',
+                f'rejected {len(poster.rejected)}',
                 f'guard {self._guard_desc()}',
             )
         ]
-        for group in self.groups:
+        for group in poster.groups:
             have = ', '.join(sorted(group.items)) or '-'
             missing = (
                 ', '.join(
-                    p for p in self.config.platforms if p not in group.items
+                    p
+                    for p in self.bot.config.platforms
+                    if p not in group.items
                 )
                 or 'complete'
             )
-            left = self.config.timeout - (time.time() - group.created_at)
+            left = self.bot.config.timeout - (time.time() - group.created_at)
             lines.append(
-                f'{b} "{_trim(group.title)}" have [{have}] wait [{missing}]'
-                f' {self._arr()} ~{fmt_eta(left)}'
+                f'{b} "{trim(group.title)}" have [{have}] wait [{missing}]'
+                f' {self.arrow()} ~{fmt_eta(left)}'
             )
         lines.extend(
-            f'{b} "{_trim(post.title)}" {b} {post.at[:10]}'
+            f'{b} "{trim(post.title)}" {b} {post.at[:10]}'
             f' {b} {len(post.links)} links'
-            for post in self.posted[-5:]
+            for post in poster.posted[-5:]
         )
         return lines
 
     def _react_status_lines(self, labels: dict[int, str]) -> list[str]:
         """Return the reaction engine's live state (empty when off)."""
-        brain = self.reactions
-        b = self._bul()
+        brain = self.bot.reactions
+        b = self.bullet()
         enabled = brain.params.enabled
         state = 'on' if enabled else 'off'
         window = f'{brain.params.active_start:g}-{brain.params.active_end:g}h'
@@ -258,120 +279,117 @@ class _StatusMixin(UserbotProtocol):
         likes = _pool_markup(brain.params.like_pool)
         pool = _pool_markup(brain.params.pool)
         return [
-            self._head(
+            self._header(
                 'reactions',
                 'Reactions',
                 f'{self._dot(on=enabled)} {state}',
                 f'{len(brain.params.pool)} reactions / '
                 f'{len(brain.params.like_pool)} likes',
             ),
-            f'{b} likes {self._arr()} {likes}',
-            f'{b} reactions {self._arr()} {pool}',
+            f'{b} likes {self.arrow()} {likes}',
+            f'{b} reactions {self.arrow()} {pool}',
             (
                 f'{b} mood {brain.state.mood:.2f} {b} answered '
-                f'{len(brain.state.reacted)} {b} pending '
+                f'{brain.answered()} {b} pending '
                 f'{len(brain.state.pending)}'
             ),
             f'{b} window {window} (prior) {b} learned {learned}',
-            self._react_rescan_line(),
+            *([line] if (line := self._react_rescan_line()) else []),
             *self._react_attach_lines(),
             *self._last_posts_lines(labels),
             *self._pending_react_lines(),
             f'{b} /reactnow {b} /requeue',
         ]
 
-    def _react_attach_lines(self) -> list[str]:
-        """Return the per-commenter like-attachment readout (Berlyne control).
+    def _attach_line(
+        self, warm: list[relationship.Warmth], noun: str
+    ) -> str:
+        """Return the whole ledger in one line: how many, and how we act.
 
-        exposure p = engaged/commented (steered to the Wundt peak ~0.67),
-        reciprocity r = stickered/engaged (steered to 0.20). A~ is the partial
-        index exposure(p)*recip(r). Shows today's like/sticker counts vs caps,
-        the aggregate, and the most RECENT commenters (latest first). Labels
-        come from the ledger's cached @names (same as stories). Empty when the
-        control is off.
+        The same two fractions the rows carry, so the reader learns them once:
+        of what these people offered us we took this share, and of what we
+        took we answered this share with the stronger act. ``warmth`` is the
+        Berlyne index over all four factors, and the only place the two we
+        measure rather than steer -- how irregular our timing is, how much of
+        it arrives in bursts -- are visible at all.
+
+        Blank when the ledger is empty -- a fresh profile has met nobody, and
+        the callers drop a blank line rather than print a row of zeroes.
         """
-        brain = self.reactions
+        if not warm:
+            return ''
+        b = self.bullet()
+        seen = sum(w.p for w in warm) / len(warm)
+        answered = sum(w.r for w in warm) / len(warm)
+        warmth = sum(w.index for w in warm) / len(warm)
+        return (
+            f'{b} all time {b} {len(warm)} {noun} '
+            f'{b} {self._glyph("watched", "w")} {seen:.0%} '
+            f'{self._glyph("liked", "l")} {answered:.0%} '
+            f'{b} warmth {warmth:.2f}'
+        )
+
+    def _warmth_lines(
+        self, warm: list[relationship.Warmth], noun: str
+    ) -> list[str]:
+        """Return one Berlyne ledger's readout: aggregate, then recent peers.
+
+        Exposure p = taken/offered (steered to the Wundt peak ~0.67),
+        reciprocity r = recip/taken (steered to 0.20); A~ is the FULL Berlyne
+        index over all four factors, so it also carries the two we measure but
+        do not steer -- how irregular our timing is and how much of it arrives
+        in bursts. That puts A~ in [0, 1.6), not [0, 1]: irregularity is a
+        bonus of up to 1.6x. The comment likes and the story views keep the
+        same ledger shape, so they read out through one function -- ``noun``
+        is all that differs. Labels are the ledger's cached @names.
+        """
+        if not warm:
+            return []
+        b = self.bullet()
+        eye, thumb = self._glyph('watched', 'w'), self._glyph('liked', 'l')
+        return [
+            self._attach_line(warm, noun),
+            *(
+                f'    {_bare(w.label, w.peer_id)} {b} '
+                f'{eye} {w.p:.0%} {thumb} {w.r:.0%}'
+                for w in warm[:STATUS_WARM_PEERS]
+            ),
+        ]
+
+    def _react_attach_lines(self) -> list[str]:
+        """Return today's like/sticker budget, then the commenter readout."""
+        brain = self.bot.reactions
         if not brain.params.attach_enabled:
             return []
         now = time.time()
-        b = self._bul()
+        b = self.bullet()
         today = (
             f'{b} today likes {brain.likes_today(now)}/'
             f'{brain.params.like_max_per_day} {b} stickers '
             f'{brain.stickers_today(now)}/{brain.params.sticker_max_per_day}'
         )
-        warm = brain.warmth()
-        if not warm:
-            return [today]
-        n = len(warm)
-        mean_p = sum(w.p for w in warm) / n
-        mean_r = sum(w.r for w in warm) / n
-        head = (
-            f'{b} attach {n} commenters {self._arr()} '
-            f'p~{mean_p:.2f} r~{mean_r:.2f}'
-        )
-        rows = [
-            f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'
-            for w in warm[:STATUS_WARM_PEERS]
-        ]
-        return [today, head, *rows]
+        return [today, *self._warmth_lines(brain.warmth(), 'commenters')]
 
     def _react_rescan_line(self) -> str:
-        """Return the auto-rescan period and the countdown to the next one."""
-        b = self._bul()
-        period = int(self._rescan_sec)
-        if period <= 0:
-            return f'{b} rescan: off (use /requeue)'
-        nxt = self._react_next_rescan
-        if nxt <= 0:
-            return f'{b} rescan {period}s {b} next: first run'
-        tz = timezone(timedelta(hours=self.reactions.params.tz_offset_hours))
-        clock = datetime.fromtimestamp(nxt, tz=tz).strftime('%H:%M')
-        eta = nxt - time.time()
-        when = 'now' if eta <= 0 else fmt_eta(eta)
-        return f'{b} rescan {period}s {self._arr()} next {clock} (in {when})'
+        """Say when the auto-rescan is OFF; its countdown lives in Schedule."""
+        if self.bot.comment_watch.deps.rescan_sec > 0:
+            return ''
+        return f'{self.bullet()} rescan: off (use /requeue)'
 
     def _pending_react_lines(self) -> list[str]:
         """Return queued reactions: which lands on which comment, when."""
-        pending = self.reactions.state.pending
-        if not pending:
-            return []
-        now = time.time()
-        lines = [f'{self._bul()} queued:']
-        lines.extend(
-            self._pending_react_line(entry, now)
-            for entry in pending[:STATUS_PENDING_CATS]
-        )
-        extra = len(pending) - STATUS_PENDING_CATS
-        if extra > 0:
-            lines.append(f'    ... (+{extra} more)')
-        return lines
-
-    def _pending_react_line(self, entry: dict[str, object], now: float) -> str:
-        """One queued line: reaction, verb, comment, post, eta."""
-        b = self._bul()
-        msg = int(entry.get('reply_to', 0))
-        root = int(entry.get('root', msg))
-        body = str(entry.get('text', ''))
-        what = f'"{body}"' if body else f'comment {msg}'
-        glyphs = _pending_markup(entry)
-        verb = 'sticker' if entry.get('kind') == 'reply' else 'like'
-        eta = float(entry.get('when', now)) - now
-        when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
-        return (
-            f'    {glyphs} {verb} {self._arr()} {what}'
-            f' {b} post {root} {b} {when}'
-        )
+        rows = self.bot.comment_watch.queued_rows()
+        return [f'{self.bullet()} queued:', *rows] if rows else []
 
     def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
         """Return the watched comment threads, grouped one line per chat."""
-        posts = self.reactions.posts
+        posts = self.bot.reactions.posts
         if not posts:
             return []
         by_chat: dict[int, list[int]] = {}
         for chat, mid in posts:
             by_chat.setdefault(chat, []).append(mid)
-        lines = [f'{self._bul()} watching {len(posts)} posts:']
+        lines = [f'{self.bullet()} watching {len(posts)} posts:']
         lines.extend(
             f'    {labels.get(chat, str(chat))}: '
             f'{", ".join(str(m) for m in mids)}'
@@ -386,109 +404,286 @@ class _StatusMixin(UserbotProtocol):
         as a
         single tappable command; every service is off/test/live on its own.
         """
-        lines = [self._head('services', 'Services')]
+        lines = [self._header('services', 'Services')]
         for name in SERVICE_NAMES:
-            mode = self._modes.get(name, 'off')
+            mode = self.bot.modes.mode_of(name)
             dot = self._dot(on=mode != 'off')
             cmds = '  '.join(f'/{name}_{a}' for a in SERVICE_ACTIONS)
-            lines.append(f'{self._bul()} {dot} {name}: {mode.upper()}')
+            lines.append(f'{self.bullet()} {dot} {name}: {mode.upper()}')
             lines.append(f'   {cmds}')
         return lines
 
     def _stories_lines(self, labels: dict[int, str]) -> list[str]:
-        """Return the story-viewer section: header plus the view queue."""
-        if not self.stories.params.enabled:
-            return [
-                self._head('stories', 'Stories', f'{self._dot(on=False)} off')
-            ]
+        """Return the story-viewer section: header, the glance, attachment."""
+        if not self.bot.stories.params.enabled:
+            off = f'{self._dot(on=False)} off'
+            return [self._header('stories', 'Stories', off)]
+        # Summary first, then this pass: the aggregate is about EVERY person
+        # we have ever engaged, the glance about the few with stories up now.
+        # Sitting inside the glance block it read as a fourth group of it,
+        # which is how a count of 9 came to sit under a heading saying 4.
         return [
             self._stories_line(),
-            *self._stories_queue_lines(labels),
-            *self._attachment_lines(),
+            *([line] if (line := self._attach()) else []),
+            *self._glance_lines(labels),
         ]
-
-    def _attachment_lines(self) -> list[str]:
-        """Return the per-peer attachment readout (most RECENT peers first).
-
-        The Berlyne index we steer each viewer toward: exposure (viewed/
-        offered, aiming ~0.67) and reciprocity (reacted/viewed, aiming 0.20).
-        A~ is the partial index exposure(p)*recip(r) (variety/burst not tracked
-        per peer). Shows the aggregate plus the peers we most recently viewed.
-        """
-        warm = self.stories.warmth()
-        if not warm:
-            return []
-        b = self._bul()
-        n = len(warm)
-        mean_p = sum(w.p for w in warm) / n
-        mean_r = sum(w.r for w in warm) / n
-        head = (
-            f'{b} attach {n} peers {self._arr()} p~{mean_p:.2f} r~{mean_r:.2f}'
-        )
-        rows = [
-            f'    {w.label}  A {w.index:.2f} {b} p {w.p:.2f} r {w.r:.2f}'
-            for w in warm[:STATUS_WARM_PEERS]
-        ]
-        return [head, *rows]
 
     def _stories_line(self) -> str:
-        """Return the story-viewer header: on, count, next view, next poll."""
+        """Return the story-viewer header: on, counts, the next view."""
         now = time.time()
-        tz = self.stories.params.tz_offset_hours
-        today = self.stories.views_today(now, tz)
-        reacted = self.stories.reacts_today(now, tz)
-        cap = self.stories.params.react_max_per_day
+        tz = self.bot.stories.params.tz_offset_hours
+        cap = self.bot.stories.params.react_max_per_day
         parts = [
             f'{self._dot(on=True)} on',
-            f'{today} today',
-            f'{reacted}/{cap} reacted',
-            f'{len(self._pending_views)} queued',
+            f'{self.bot.stories.views_today(now, tz)} today',
+            f'{self.bot.stories.reacts_today(now, tz)}/{cap} reacted',
         ]
-        whens = [v.when for v in self._pending_views]
+        # Only when it happened: a standing "0 not placed" is noise, while
+        # any number here is the difference between a quiet engine and one
+        # whose every reaction Telegram is refusing.
+        if self.bot.story_watch.unplaced:
+            parts.append(f'{self.bot.story_watch.unplaced} not placed')
+        parts.append(f'{len(self.bot.story_watch.pending)} queued')
+        whens = [v.when for v in self.bot.story_watch.pending]
         if whens:
-            eta = min(whens) - now
-            when = 'now' if eta <= 0 else f'in {fmt_eta(eta)}'
-            parts.append(f'next view {self._arr()} {when}')
-        else:
-            # Empty queue: say WHY (asleep, cooldown, silent day) so it is not
-            # a mystery -- the same reason the poll logs.
-            reason = self.stories.blocked_reason(now)
-            if reason:
-                parts.append(f'idle ({reason})')
-        nxt = self._story_next_poll
-        poll_eta = nxt - now if nxt else 0.0
-        if poll_eta > 0:
-            parts.append(f'next poll {self._arr()} in {fmt_eta(poll_eta)}')
-        return self._head('stories', 'Stories', *parts)
+            due = self._in(min(whens) - now)
+            parts.append(f'next view {self.arrow()} {due}')
+        return self._header('stories', 'Stories', *parts)
 
-    def _stories_queue_lines(self, labels: dict[int, str]) -> list[str]:
-        """Return the queued story views: whose, how many, and the ETA."""
-        if not self._pending_views:
+    def _glance_lines(self, labels: dict[int, str]) -> list[str]:
+        """Return who has stories up now, grouped by what we do about them.
+
+        Grouped rather than listed flat, because the question is "who are
+        we opening and who are we not", and a header answers it before you
+        read a single row. Rendered from the last poll's snapshot with its
+        age beside it -- /status must not re-read the feed to look current.
+        """
+        glance = self.bot.stories.last_glance
+        b = self.bullet()
+        if not glance.at:
+            return [f'{b} glance: none yet']
+        head = f'{b} glance {fmt_eta(time.time() - glance.at)} ago {b} '
+        if not glance.peers:
+            return [head + 'nobody has stories up']
+        return [
+            head + self._glance_count(glance),
+            # What is happening, then what was decided, then what needs
+            # nothing -- most actionable first.
+            *self._opening_lines(glance, labels),
+            *self._held_lines(glance, labels),
+            *self._seen_lines(glance, labels),
+        ]
+
+    def _attach(self) -> str:
+        """Return the story ledger's aggregate line (blank when empty)."""
+        return self._attach_line(self.bot.stories.warmth(), 'people')
+
+    def _opening_lines(
+        self, glance: stories.Glance, labels: dict[int, str]
+    ) -> list[str]:
+        """Return the people whose stories we are opening this glance."""
+        rows = [row for row in glance.peers if row.viewing]
+        if not rows:
             return []
-        now = time.time()
-        b = self._bul()
-        views = sorted(self._pending_views, key=lambda v: v.when)
-        lines = [f'{b} queued:']
-        for view in views[:STATUS_PENDING_CATS]:
-            who = labels.get(view.peer_id, str(view.peer_id))
-            eta = view.when - now
-            when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
-            lines.append(
-                f'    {who} {b} {len(view.story_ids)} story(s) {b} {when}'
+        b = self.bullet()
+        return [
+            f'{b} viewing ({len(rows)}):',
+            *_capped(
+                [
+                    f'    {self._who(row, labels)} {b} '
+                    f'{row.viewing} of {row.unseen} new {b} '
+                    f'{self._record(row)}{self._view_eta(row.peer_id)}'
+                    for row in sorted(rows, key=lambda r: -r.viewing)
+                ]
+            ),
+        ]
+
+    def _held_lines(
+        self, glance: stories.Glance, labels: dict[int, str]
+    ) -> list[str]:
+        """Return the people who have something new we are not opening.
+
+        The header carries WHY: a blocked session names its reason once
+        (quiet hours, a cooldown, a silent day) instead of repeating it on
+        every row, which is the duplication this layout exists to remove.
+        """
+        rows = [row for row in glance.peers if _waiting(row)]
+        if not rows:
+            return []
+        b = self.bullet()
+        why = glance.blocked or 'passed this glance'
+        return [
+            f'{b} {why} ({len(rows)}):',
+            *_capped(
+                [
+                    f'    {self._who(row, labels)} {b} '
+                    f'{row.unseen} new {b} {self._record(row)}'
+                    for row in sorted(rows, key=lambda r: -r.unseen)
+                ]
+            ),
+        ]
+
+    def _seen_lines(
+        self, glance: stories.Glance, labels: dict[int, str]
+    ) -> list[str]:
+        """Return the people whose every story we have already opened.
+
+        Nothing is decided about them this pass, which once seemed reason
+        enough to reduce them to a count. On a real account it is not: a
+        story lives a day and we open it once, so for the rest of that day
+        EVERYONE with stories up sits here, and the section about people
+        stopped naming any. They carry no "new" number -- what is worth
+        showing is who they are, how much they have up, and where we stand
+        with them.
+        """
+        rows = [row for row in glance.peers if not row.unseen]
+        if not rows:
+            return []
+        b = self.bullet()
+        return [
+            f'{b} already seen ({len(rows)}):',
+            *_capped(
+                [
+                    f'    {self._who(row, labels)} {b} '
+                    f'{row.active} up {b} {self._record(row)}'
+                    for row in sorted(rows, key=lambda r: -r.active)
+                ]
+            ),
+        ]
+
+    def _glance_count(self, glance: stories.Glance) -> str:
+        """Return how many people have stories up right now."""
+        return f'{len(glance.peers)} with stories'
+
+    def _who(self, row: stories.Seen, labels: dict[int, str]) -> str:
+        """Return a peer's @name, falling back to the bare id, plus a flag."""
+        name = _bare(labels.get(row.peer_id, ''), row.peer_id) or str(
+            row.peer_id
+        )
+        return f'{name} (archived)' if row.hidden else name
+
+    def _record(self, row: stories.Seen) -> str:
+        """Return a peer's all-time record, or say we have no history.
+
+        "first time" rather than 0%: a person we have never engaged reads
+        completely differently from one we have been steadily skipping,
+        and a bare zero cannot tell them apart.
+        """
+        held = row.standing
+        if not held.offered:
+            return 'first time'
+        watched = 100 * held.viewed / held.offered
+        liked = 100 * held.reacted / held.viewed if held.viewed else 0.0
+        eye = self._glyph('watched', 'w')
+        thumb = self._glyph('liked', 'l')
+        return f'{eye} {watched:.0f}% {thumb} {liked:.0f}%'
+
+    def _view_eta(self, peer_id: int) -> str:
+        """Return ' . in ~3m 10s' for a queued peer, '' once it has fired."""
+        b = self.bullet()
+        for view in self.bot.story_watch.pending:
+            if view.peer_id == peer_id:
+                eta = view.when - time.time()
+                due = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
+                return f' {b} {due}'
+        return ''
+
+    def _schedule_lines(self) -> list[str]:
+        """Return the Schedule section: when each loop next runs, and the pace.
+
+        Every background loop in one place, because the question an
+        operator actually has is "is anything still running?", and six
+        countdowns scattered across six sections cannot answer it. A loop
+        that is off says so rather than showing a countdown that will
+        never reach zero.
+        """
+        b = self.bullet()
+        waiting = self.bot.audience.waiting()
+        host = f' {b} '.join(
+            (
+                f'tick {self.arrow()} {self._due(self.bot.next_tick)}',
+                f'probe {self.arrow()} {self._due(self.bot.next_probe())}',
+                f'lookups {waiting} queued',
             )
-        extra = len(views) - STATUS_PENDING_CATS
-        if extra > 0:
-            lines.append(f'    ... (+{extra} more)')
-        return lines
+        )
+        loops = f' {b} '.join(
+            f'{name} {self.arrow()} {self._due(at) if running else "off"}'
+            for name, at, running in self._loops()
+        )
+        return [
+            self._header('schedule', 'Schedule'),
+            f'{b} {host}',
+            f'{b} {loops}',
+            *self._pace_lines(),
+        ]
+
+    def _loops(self) -> list[tuple[str, float, bool]]:
+        """Return (label, next run, running) for each engine's own loop."""
+        bot = self.bot
+        return [
+            (
+                'reactions rescan',
+                bot.comment_watch.next_rescan,
+                bot.reactions.params.enabled
+                and bot.comment_watch.deps.rescan_sec > 0,
+            ),
+            (
+                'stories poll',
+                bot.story_watch.next_poll,
+                bot.stories.params.enabled and bot.stories.params.poll_sec > 0,
+            ),
+            (
+                'greeter check',
+                bot.greeter.next_sync,
+                bot.greeter.params.enabled,
+            ),
+        ]
+
+    def _due(self, at: float) -> str:
+        """Return a countdown to a scheduled moment; 'first run' before one."""
+        return self._in(at - time.time()) if at > 0 else 'first run'
+
+    def _in(self, seconds: float) -> str:
+        """Return a countdown, or 'now' for anything under a second.
+
+        Sub-second waits are why the threshold is not zero: fmt_eta floors
+        to whole seconds, so half a second rendered as "in 0s" -- which
+        reads like a broken counter rather than "free". The gate lands
+        there constantly, because resolving the report's own chat names
+        uses it moments before the report prints it.
+        """
+        return 'now' if seconds < 1 else f'in {fmt_eta(seconds)}'
+
+    def _pace_lines(self) -> list[str]:
+        """Return the gate's lanes: when each may fire, and any widening.
+
+        The only place a FloodWait is visible without reading the log. A
+        lane shows a DURATION, never a clock time: the gate runs on a
+        monotonic clock and this report on the wall clock, and mixing the
+        two would print a plausible, wrong time.
+        """
+        lanes = self.bot.account.pacing()
+        if not lanes:
+            return []
+        b = self.bullet()
+        ready = f' {b} '.join(
+            f'{lane.kind} {self._in(lane.free_in)}' for lane in lanes
+        )
+        rows = [f'{b} pace {b} {ready}']
+        hot = [lane for lane in lanes if lane.slack > 1.0]
+        if hot:
+            widened = f' {b} '.join(f'{x.kind} x{x.slack:.1f}' for x in hot)
+            rows.append(f'{b} widened by a flood {b} {widened}')
+        return rows
 
     def _users_line(self) -> str:
         """Return a one-line users summary for /status ('off' if disabled)."""
-        if not self._users_enabled:
-            return self._head(
+        if not self.bot.audience.deps.enabled:
+            return self._header(
                 'users', 'Users DB', f'{self._dot(on=False)} off'
             )
-        s = self.users.summary()
-        return self._head(
+        s = self.bot.audience.deps.store.summary()
+        return self._header(
             'users',
             'Users DB',
             f'{self._dot(on=True)} on',

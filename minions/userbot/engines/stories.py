@@ -38,7 +38,6 @@ this source stays ASCII.
 
 from __future__ import annotations
 
-import json
 import random
 import time
 from dataclasses import dataclass
@@ -46,62 +45,68 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
+from minions.userbot.core import codec
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
+from minions.userbot.core import state as state_store
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
+
+
+def _seen_key(peer_id: int, story_id: int) -> str:
+    """Return the dedup key for one story of one peer."""
+    return f'{peer_id}:{story_id}'
 
 
 @dataclass(frozen=True)
 class StoryParams:
     """Every tunable, loaded from the constants JSON 'stories' section."""
 
-    enabled: bool
+    enabled: bool = False
     # Catch-up mode: view EVERY unseen story each poll -- no per-session cap,
     # no skip, no long cooldown between sessions -- so all currently-active
     # stories are swept at once instead of a slow human trickle. Quiet hours
     # and the odd silent day still apply, and the per-story dwell / small gap
     # between peers stay (viewing dozens instantly would trip Telegram's flood
     # limits). Off is the human-like handful-then-rest behaviour.
-    view_all: bool
+    view_all: bool = False
     # Also view the stories of people whose CHATS were moved to the Archive
     # (Telegram's "hidden" stories feed). Off keeps to the main feed only --
     # archived contacts are left alone. ``main.py`` polls the hidden feed too
     # when this is on; the brain treats both feeds' peers the same.
-    include_archived: bool
+    include_archived: bool = False
     # The persona's UTC offset: quiet hours / the silent-day date are read in
     # THIS timezone, so the cadence matches the human, not the server clock.
-    tz_offset_hours: float
-    quiet_hours: frozenset[int]  # local hours with no viewing (asleep)
+    tz_offset_hours: float = 3.0
+    quiet_hours: frozenset[int] = frozenset({1, 2, 3, 4, 5, 6, 7})
     # How often ``main.py`` re-polls the stories feed (test tight, live
     # relaxed; both default via ``poll_sec``). Carried for main, not the brain.
-    poll_sec: float
+    poll_sec: float = 1800.0
     # One session views between min and max peers -- a glance, not the whole
     # feed. Picked per session so the count itself varies.
-    per_session_min: int
-    per_session_max: int
-    skip_peer_prob: float  # chance an eligible peer is skipped this pass
-    silent_day_prob: float  # chance a whole day views nothing
+    per_session_min: int = 2
+    per_session_max: int = 6
+    skip_peer_prob: float = 0.35  # chance an eligible peer is skipped
+    silent_day_prob: float = 0.06  # chance a whole day views nothing
     # First view lands a short, human "just opened the app" beat after the
     # plan; gap_* is the lognormal pause between one peer and the next in a
     # session; spacing_* is the long, heavy-tailed gap to the NEXT session.
-    latency_log_mu: float
-    latency_log_sigma: float
-    gap_log_mu: float
-    gap_log_sigma: float
-    spacing_log_mu: float
-    spacing_log_sigma: float
+    latency_log_mu: float = 2.5
+    latency_log_sigma: float = 0.8
+    gap_log_mu: float = 2.3
+    gap_log_sigma: float = 0.7
+    spacing_log_mu: float = 8.6
+    spacing_log_sigma: float = 1.0
     # How long to linger on each individual story (main.py dwells this long
     # between marking one story and the next, so a peer's set is not opened in
     # a single machine-fast blink). Carried for main; the brain does not sleep.
-    dwell_min_sec: float
-    dwell_max_sec: float
-    max_peers_tracked: int  # cap the persisted seen map (drop oldest peers)
-    seen_per_peer: int  # cap the per-peer seen id list (newest kept)
-    log_limit: int  # how many recent views to keep for /status and /stories
-    catch_up_max: int  # cap on peers viewed per poll in view_all (anti-binge)
+    dwell_min_sec: float = 2.0
+    dwell_max_sec: float = 9.0
+    max_peers_tracked: int = 500  # cap the persisted seen map (oldest go)
+    seen_per_peer: int = 40  # cap the per-peer seen id list (newest kept)
+    log_limit: int = 50  # recent views kept for /status and /stories
+    catch_up_max: int = 12  # peers per poll in view_all (anti-binge)
     # Berlyne exposure control: we view a FRACTION of each peer's stories,
     # toward the Wundt peak (~2/3), not all -- viewing everything sits
     # on the aversion side (reads as stalking). c1/c2/k shape the curve (see
@@ -121,6 +126,12 @@ class StoryParams:
     react_fraction_target: float = 0.20
     react_pool: tuple[str, ...] = ('\u270a', '\U0001f44d')
     react_max_per_day: int = 50
+    # Two views closer together than this are one sitting, not two visits.
+    # Feeds the clumping factor of the attachment model (relationship.py):
+    # attention that all arrives at once reaches tedium sooner than the same
+    # amount spread out. Well under spacing_log_mu, which is the gap BETWEEN
+    # sessions, so a real second visit is never mistaken for the same one.
+    burst_gap_sec: float = 900.0
 
 
 @dataclass(frozen=True)
@@ -138,6 +149,69 @@ class StoryCandidate:
     max_id: int
     last_ts: float = 0.0
     label: str = ''  # @name / title, for the log (never shown to the peer)
+    hidden: bool = False  # came from the archived feed, not the main one
+
+
+VIEWING = 'viewing'
+PASSED = 'passed this glance'
+NOTHING_NEW = 'nothing new'
+"""What a glance can conclude about one peer who has stories up."""
+
+
+def _verdict(unseen: int, viewing: int, blocked: str) -> str:
+    """Return why one peer is, or is not, being opened this glance."""
+    if viewing:
+        return VIEWING
+    if not unseen:
+        return NOTHING_NEW
+    return blocked or PASSED
+
+
+@dataclass(frozen=True)
+class Standing:
+    """One peer's all-time record with us, as of this glance.
+
+    ``offered`` at zero means we have never engaged them at all -- a
+    first sighting, which reads very differently from a peer we have
+    deliberately been skipping, and the two used to look identical.
+    """
+
+    offered: int = 0
+    viewed: int = 0
+    reacted: int = 0
+
+
+@dataclass(frozen=True)
+class Seen:
+    """One peer with active stories, and what the last glance decided.
+
+    The operator can see who has stories in Telegram; without this they
+    cannot see what the bot decided about them, which makes an idle
+    queue indistinguishable from an ignored person.
+    """
+
+    peer_id: int
+    active: int = 0  # stories they have up right now
+    unseen: int = 0  # of those, ones we have never opened
+    viewing: int = 0  # how many we will open this glance
+    verdict: str = NOTHING_NEW
+    hidden: bool = False  # from the archived feed, not the main one
+    standing: Standing = field(default_factory=Standing)
+
+
+@dataclass(frozen=True)
+class Glance:
+    """What the last poll saw and decided -- a readout, never state.
+
+    In memory only: it describes one pass and is worthless after a
+    restart, so it has no business in the state file. ``at`` is what
+    lets a report say how stale it is, which matters because /status
+    must not re-read the feed just to look current.
+    """
+
+    at: float = 0.0
+    peers: tuple[Seen, ...] = ()
+    blocked: str = ''  # why nothing was planned at all, if so
 
 
 @dataclass(frozen=True)
@@ -161,28 +235,32 @@ class StoryView:
     react_emoji: str = ''
 
 
+@dataclass(frozen=True)
+class ViewLog:
+    """One line of the rolling view log, shown by /status and /stories."""
+
+    peer_id: int
+    label: str
+    count: int
+    ts: float
+
+
 @dataclass
 class StoryState:
-    """The persisted memory: what we have already seen, and the session cursor.
+    """The engine's cursors: session marks and a bounded rolling log.
 
-    ``seen`` maps a peer id (as str, for JSON) to the story ids already viewed,
-    so principle 1 (never re-view) survives a restart. ``log`` is a rolling
-    record of recent views for /status and /stories.
+    What grew with the audience has moved to the state store -- the seen
+    story ids as marks (principle 1, never re-view), and the per-peer ledger
+    as rows. What is left is bounded: five scalars and the last ``log_limit``
+    views.
     """
 
-    seen: dict[str, list[int]] = field(default_factory=dict)
-    seen_order: list[str] = field(default_factory=list)  # LRU of peer ids
     last_view: float = 0.0
     next_session_at: float = 0.0
     session_start_at: float = 0.0
     session_last_at: float = 0.0
-    total_views: int = 0  # peers viewed all-time (a simple odometer)
-    log: list[dict[str, object]] = field(default_factory=list)
-    # Per-peer relationship memory (the shared Berlyne ledger): offered=stories
-    # offered, taken=viewed, recip=reacted, with the date-keyed reaction cap.
-    # Unbounded, so p = viewed/offered stays a true fraction even when seen is
-    # trimmed; a skipped story counts as offered but not viewed.
-    ledger: relationship.Ledger = field(default_factory=relationship.Ledger)
+    total_views: int = 0  # stories viewed all-time (a simple odometer)
+    log: list[ViewLog] = field(default_factory=list)
     last_react: float = 0.0  # ts of the last reaction, for the min-gap pacing
 
 
@@ -199,20 +277,25 @@ class StoryBrain:
     def __init__(
         self,
         params: StoryParams,
-        path: Path,
+        store: state_store.StateStore,
         rng: random.Random | None = None,
     ) -> None:
-        """Bind the params and state path; seed the RNG; load the memory."""
+        """Bind the params and the shared store; seed the RNG."""
         self.params = params
-        self.path = path
+        self.store = store
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto
         self.clock = time.time
+        self.ledger = relationship.Ledger(store)
         self.state = self._load()
+        self.last_glance = Glance()
 
     def unseen(self, cand: StoryCandidate) -> tuple[int, ...]:
         """Return the candidate's story ids we have not viewed yet."""
-        seen = set(self.state.seen.get(str(cand.peer_id), ()))
-        return tuple(sid for sid in cand.story_ids if sid not in seen)
+        return tuple(
+            sid
+            for sid in cand.story_ids
+            if not self.store.marked(_seen_key(cand.peer_id, sid))
+        )
 
     def plan(
         self, candidates: list[StoryCandidate], now: float | None = None
@@ -224,10 +307,25 @@ class StoryBrain:
         Otherwise picks a small, freshest-first, partly-skipped subset of the
         peers with unseen stories, staggered across a short viewing session.
         Marks nothing seen; ``mark_viewed`` does that once a read succeeds.
+
+        Whatever it decides is also recorded in ``last_glance``, so /status
+        can say who we are opening and who we are not -- the decision is
+        made here and was previously thrown away.
         """
         now = self.clock() if now is None else now
-        if not self._session_open(now):
-            return []
+        blocked = self.blocked_reason(now) or ''
+        views = [] if blocked else self._plan_views(candidates, now)
+        self.last_glance = Glance(
+            at=now,
+            peers=self._seen_rows(candidates, views, blocked),
+            blocked=blocked,
+        )
+        return views
+
+    def _plan_views(
+        self, candidates: list[StoryCandidate], now: float
+    ) -> list[StoryView]:
+        """Choose and lay out this session's views (the session is open)."""
         eligible = self._eligible(candidates)
         if not eligible:
             return []
@@ -241,13 +339,39 @@ class StoryBrain:
             if self.params.view_all
             else self._pick_peers(eligible)
         )
-        if not chosen:
-            return []
-        return self._lay_out(chosen, now)
+        return self._lay_out(chosen, now) if chosen else []
 
-    def _session_open(self, now: float) -> bool:
-        """Return whether a viewing session may run right now."""
-        return self.blocked_reason(now) is None
+    def _seen_rows(
+        self,
+        candidates: list[StoryCandidate],
+        views: list[StoryView],
+        blocked: str,
+    ) -> tuple[Seen, ...]:
+        """Describe every peer who has stories up, and our verdict on each.
+
+        Every candidate lands in exactly one bucket. The verdict is the
+        honest reason we are not opening someone: nothing we have not
+        already seen, passed this glance, or the whole session blocked
+        (quiet hours, cooldown, silent day).
+        """
+        opening = {view.peer_id: len(view.story_ids) for view in views}
+        return tuple(
+            Seen(
+                peer_id=cand.peer_id,
+                active=len(cand.story_ids),
+                unseen=(unseen := len(self.unseen(cand))),
+                viewing=(count := opening.get(cand.peer_id, 0)),
+                verdict=_verdict(unseen, count, blocked),
+                hidden=cand.hidden,
+                standing=self._standing(cand.peer_id),
+            )
+            for cand in candidates
+        )
+
+    def _standing(self, peer_id: int) -> Standing:
+        """Return one peer's all-time record, for the glance readout."""
+        row = self.ledger.row(str(peer_id))
+        return Standing(row.offered, row.taken, row.recip)
 
     def blocked_reason(self, now: float | None = None) -> str | None:
         """Return why no session may open now, or None when one may.
@@ -334,6 +458,7 @@ class StoryBrain:
             recip_target=p.react_fraction_target,
             take_cap=0,
             recip_cap=p.react_max_per_day,
+            burst_gap_sec=p.burst_gap_sec,
         )
 
     def _tz(self) -> float:
@@ -355,9 +480,8 @@ class StoryBrain:
         Runs on local counters (the ledger commits at ``mark_viewed`` /
         ``_record_skips``, so the plan/commit split survives I/O that fails).
         """
-        key = str(peer_id)
-        offered = self.state.ledger.offered.get(key, 0)
-        viewed = self.state.ledger.taken.get(key, 0)
+        row = self.ledger.row(str(peer_id))
+        offered, viewed = row.offered, row.taken
         gain = self.params.view_control_gain
         view_ids: list[int] = []
         skip_ids: list[int] = []
@@ -377,20 +501,19 @@ class StoryBrain:
         Decided once at plan time so a skipped story is not re-offered every
         poll (which would drive p back to 1); it counts as offered, not viewed.
         """
-        key = str(peer_id)
-        prior = self.state.seen.get(key, [])
-        fresh = [sid for sid in skip_ids if sid not in set(prior)]
+        fresh = [
+            sid for sid in skip_ids if self.store.mark(_seen_key(peer_id, sid))
+        ]
         if not fresh:
             return
-        self.state.seen[key] = (prior + fresh)[-self.params.seen_per_peer :]
-        self.state.ledger.add_offer(key, len(fresh))
-        self._touch_peer(key)
+        self.ledger.add_offer(str(peer_id), len(fresh), self.clock())
+        self._trim_peers()
 
     def _react_budget(self, now: float) -> int:
         """Return how many reactions are still allowed today (date roll)."""
         if not self.params.react_enabled:
             return 0
-        return self.state.ledger.recip_left(self._control(), now, self._tz())
+        return self.ledger.recip_left(self._control(), now, self._tz())
 
     def _plan_reacts(
         self, peer_id: int, view_ids: tuple[int, ...], budget: int
@@ -408,7 +531,7 @@ class StoryBrain:
         for sid in view_ids:
             if budget <= 0:
                 break
-            prob = self.state.ledger.recip_prob(key, ctrl, taken_now=False)
+            prob = self.ledger.recip_prob(key, ctrl, taken_now=False)
             if self.rng.random() < prob:
                 chosen.append(sid)
                 budget -= 1
@@ -489,27 +612,21 @@ class StoryBrain:
         newly-seen ids (so a re-mark does not inflate the count).
         """
         now = self.clock() if ts is None else ts
-        key = str(peer_id)
-        prior = self.state.seen.get(key, [])
-        known = set(prior)
-        fresh = [sid for sid in story_ids if sid not in known]
+        fresh = [
+            sid
+            for sid in story_ids
+            if self.store.mark(_seen_key(peer_id, sid))
+        ]
         if not fresh:
             return
-        merged = prior + fresh
-        self.state.seen[key] = merged[-self.params.seen_per_peer :]
-        self.state.ledger.add_take(key, len(fresh))
-        self.state.ledger.remember(key, label)  # @name for /status
-        self._touch_peer(key)
+        key = str(peer_id)
+        self.ledger.add_take(key, len(fresh), self._control(), now)
+        self.ledger.remember(key, label)  # @name for /status
+        self.store.trim_marks(f'{peer_id}:', self.params.seen_per_peer)
+        self._trim_peers()
         self.state.last_view = now
         self.state.total_views += len(fresh)
-        self.state.log.append(
-            {
-                'peer_id': peer_id,
-                'label': label,
-                'count': len(fresh),
-                'ts': now,
-            }
-        )
+        self.state.log.append(ViewLog(peer_id, label, len(fresh), now))
         del self.state.log[: -self.params.log_limit]
         self._save()
 
@@ -522,21 +639,21 @@ class StoryBrain:
         """
         if count <= 0:
             return
-        self.state.ledger.add_recip(str(peer_id), count, now, self._tz())
+        self.ledger.add_recip(str(peer_id), count, now, self._tz())
         self.state.last_react = now
         self._save()
 
-    def _touch_peer(self, key: str) -> None:
-        """Mark ``key`` most-recently-seen, dropping the oldest past cap."""
-        if key in self.state.seen_order:
-            self.state.seen_order.remove(key)
-        self.state.seen_order.append(key)
-        while len(self.state.seen_order) > self.params.max_peers_tracked:
-            oldest = self.state.seen_order.pop(0)
-            self.state.seen.pop(oldest, None)
-            self.state.ledger.evict(oldest)
+    def _trim_peers(self) -> None:
+        """Keep only the most recent ``max_peers_tracked`` peers.
 
-    def recent_log(self, limit: int) -> list[dict[str, object]]:
+        Recency is a column now, so the store does the ordering; we clear the
+        seen marks the dropped peers keyed, since the store does not know
+        their format.
+        """
+        for peer in self.store.trim_peers(self.params.max_peers_tracked):
+            self.store.drop_marks(f'{peer}:')
+
+    def recent_log(self, limit: int) -> list[ViewLog]:
         """Return recent views, newest first (for /status, /stories)."""
         return list(reversed(self.state.log))[:limit]
 
@@ -546,11 +663,11 @@ class StoryBrain:
 
     def reacts_today(self, now: float, tz: float) -> int:
         """Return reactions sent on the local date of ``now`` (0 past it)."""
-        return self.state.ledger.recips_today(now, tz)
+        return self.ledger.recips_today(now, tz)
 
     def warmth(self) -> list[relationship.Warmth]:
         """Per-peer attachment readout for /status, most recent first."""
-        return relationship.warmth(self.state.ledger, self._control())
+        return relationship.warmth(self.ledger, self._control())
 
     def remember(self, peer: str, label: str) -> None:
         """Cache a peer's @name for /status (persisted).
@@ -561,8 +678,21 @@ class StoryBrain:
         """
         if not label or label == peer:
             return
-        self.state.ledger.remember(peer, label)
+        self.ledger.remember(peer, label)
         self._save()
+
+    def known_labels(self) -> dict[int, str]:
+        """Return the @names we have cached, by peer id (no requests).
+
+        The glance lists people we have never viewed, so their names are
+        not in the view log; they are cached here the first time /status
+        resolves one, and read back from the store after that.
+        """
+        return {
+            int(row.peer_id): row.label
+            for row in self.store.peers()
+            if row.label and row.label != row.peer_id
+        }
 
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
@@ -572,79 +702,66 @@ class StoryBrain:
         of the all-time odometer.
         """
         today = humanize.local(now, tz).date()
-        total = 0
-        for entry in self.state.log:
-            ts = entry.get('ts')
-            if isinstance(ts, int | float) and (
-                humanize.local(ts, tz).date() == today
-            ):
-                total += int(entry.get('count', 0) or 0)
-        return total
+        return sum(
+            row.count
+            for row in self.state.log
+            if humanize.local(row.ts, tz).date() == today
+        )
 
     def _load(self) -> StoryState:
-        """Reload the persisted memory, or start fresh if none/corrupt."""
-        if not self.path.exists():
+        """Reload the cursors, or start fresh when the store has none."""
+        raw = self.store.cursor()
+        self.ledger.restore(raw)
+        if not raw:
             return StoryState()
-        try:
-            raw = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
-            return StoryState()
-        seen = {
-            str(k): [int(x) for x in v]
-            for k, v in (raw.get('seen') or {}).items()
-        }
-        order = [
-            str(k) for k in (raw.get('seen_order') or []) if str(k) in seen
-        ]
-        # Any peer missing from the persisted order (older state file) is
-        # appended, so the LRU cap still has every tracked peer to work with.
-        order += [k for k in seen if k not in order]
+        session = raw.get('session')
+        block = session if isinstance(session, dict) else {}
+        rows = raw.get('log')
         return StoryState(
-            seen=seen,
-            seen_order=order,
-            last_view=float(raw.get('last_view', 0.0)),
-            next_session_at=float(raw.get('next_session_at', 0.0)),
-            session_start_at=float(raw.get('session_start_at', 0.0)),
-            session_last_at=float(raw.get('session_last_at', 0.0)),
-            total_views=int(raw.get('total_views', 0)),
-            log=[dict(e) for e in (raw.get('log') or [])],
-            ledger=relationship.Ledger(
-                offered=relationship.int_map(raw.get('offered')),
-                taken=relationship.int_map(raw.get('viewed')),
-                recip=relationship.int_map(raw.get('reacted')),
-                recip_day=str(raw.get('react_day', '')),
-                recip_today=int(raw.get('react_today', 0)),
-                names={
-                    str(k): str(v) for k, v in (raw.get('names') or {}).items()
-                },
-            ),
-            last_react=float(raw.get('last_react', 0.0)),
+            last_view=float(raw.get('last_view', 0.0)),  # type: ignore[arg-type]
+            next_session_at=codec.num(block.get('next_at')),
+            session_start_at=codec.num(block.get('start_at')),
+            session_last_at=codec.num(block.get('last_at')),
+            total_views=codec.whole(raw.get('total_views')),
+            log=[_view(r) for r in codec.rows(rows)],
+            last_react=codec.num(raw.get('last_react')),
         )
 
     def _save(self) -> None:
-        """Persist the memory atomically as readable JSON."""
-        data = {
-            'seen': self.state.seen,
-            'seen_order': self.state.seen_order,
-            'last_view': self.state.last_view,
-            'next_session_at': self.state.next_session_at,
-            'session_start_at': self.state.session_start_at,
-            'session_last_at': self.state.session_last_at,
-            'total_views': self.state.total_views,
-            'log': self.state.log,
-            'offered': self.state.ledger.offered,
-            'viewed': self.state.ledger.taken,
-            'reacted': self.state.ledger.recip,
-            'react_day': self.state.ledger.recip_day,
-            'react_today': self.state.ledger.recip_today,
-            'names': self.state.ledger.names,
-            'last_react': self.state.last_react,
-        }
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
+        """Publish the cursor block to this engine's database."""
+        self.store.put_cursor(
+            {
+                'last_view': self.state.last_view,
+                'session': {
+                    'next_at': self.state.next_session_at,
+                    'start_at': self.state.session_start_at,
+                    'last_at': self.state.session_last_at,
+                },
+                'total_views': self.state.total_views,
+                'log': [
+                    {
+                        'peer_id': row.peer_id,
+                        'label': row.label,
+                        'count': row.count,
+                        'ts': row.ts,
+                    }
+                    for row in self.state.log
+                ],
+                'last_react': self.state.last_react,
+                **self.ledger.counters(),
+            },
         )
-        tmp.replace(self.path)
+
+
+def _view(raw: object) -> ViewLog:
+    """Rebuild one view-log line from its cursor row."""
+    row = raw if isinstance(raw, dict) else {}
+    return ViewLog(
+        peer_id=int(row.get('peer_id', 0)),
+        label=str(row.get('label', '')),
+        count=int(row.get('count', 0)),
+        ts=float(row.get('ts', 0.0)),
+    )
 
 
 def load_story_params(
@@ -652,46 +769,16 @@ def load_story_params(
 ) -> StoryParams:
     """Load the stories engine's parameters from the JSON 'stories' key.
 
-    ``mode`` selects the re-poll cadence (test tight, live relaxed), mirroring
-    the reactions rescan interval; both fall back to ``poll_sec``.
+    Every knob reads its own key and falls back to its own declared default
+    (``core/codec.py``). Only the re-poll cadence is spelled out: it is per
+    profile (test tight, live relaxed), mirroring the reactions rescan
+    interval, and both fall back to ``poll_sec``.
     """
-    cfg = data.get('stories') if isinstance(data.get('stories'), dict) else {}
-    cfg = cfg or {}
-    default_poll = float(cfg.get('poll_sec', 1800.0))
+    cfg = codec.engine(data, 'stories')
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
-    return StoryParams(
-        enabled=bool(cfg.get('enabled', False)),
-        view_all=bool(cfg.get('view_all', False)),
-        include_archived=bool(cfg.get('include_archived', False)),
-        tz_offset_hours=float(cfg.get('tz_offset_hours', 3.0)),
-        catch_up_max=int(cfg.get('catch_up_max') or 12),
-        quiet_hours=frozenset(
-            int(h) for h in (cfg.get('quiet_hours') or [1, 2, 3, 4, 5, 6, 7])
-        ),
-        poll_sec=float(cfg.get(poll_key, default_poll)),
-        per_session_min=int(cfg.get('per_session_min', 2)),
-        per_session_max=int(cfg.get('per_session_max', 6)),
-        skip_peer_prob=float(cfg.get('skip_peer_prob', 0.35)),
-        silent_day_prob=float(cfg.get('silent_day_prob', 0.06)),
-        latency_log_mu=float(cfg.get('latency_log_mu', 2.5)),
-        latency_log_sigma=float(cfg.get('latency_log_sigma', 0.8)),
-        gap_log_mu=float(cfg.get('gap_log_mu', 2.3)),
-        gap_log_sigma=float(cfg.get('gap_log_sigma', 0.7)),
-        spacing_log_mu=float(cfg.get('spacing_log_mu', 8.6)),
-        spacing_log_sigma=float(cfg.get('spacing_log_sigma', 1.0)),
-        dwell_min_sec=float(cfg.get('dwell_min_sec', 2.0)),
-        dwell_max_sec=float(cfg.get('dwell_max_sec', 9.0)),
-        max_peers_tracked=int(cfg.get('max_peers_tracked', 500)),
-        seen_per_peer=int(cfg.get('seen_per_peer', 40)),
-        log_limit=int(cfg.get('log_limit', 50)),
-        exposure_c1=float(cfg.get('exposure_c1', 0.45)),
-        exposure_c2=float(cfg.get('exposure_c2', 0.90)),
-        exposure_k=float(cfg.get('exposure_k', 8.0)),
-        view_control_gain=float(cfg.get('view_control_gain', 1.0)),
-        react_enabled=bool(cfg.get('react_enabled', True)),
-        react_fraction_target=float(cfg.get('react_fraction_target', 0.20)),
-        react_pool=tuple(
-            str(e) for e in (cfg.get('react_pool') or ['\u270a', '\U0001f44d'])
-        ),
-        react_max_per_day=int(cfg.get('react_max_per_day', 50)),
+    default_poll = codec.num(cfg.get('poll_sec'), StoryParams.poll_sec)
+    return codec.decode(
+        StoryParams,
+        cfg,
+        {'poll_sec': codec.num(cfg.get(poll_key), default_poll)},
     )

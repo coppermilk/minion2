@@ -19,10 +19,8 @@ import asyncio
 import logging
 import os
 
-from telethon import TelegramClient
-from telethon import events
-from telethon.tl.types import MessageEntityCustomEmoji
-
+from minion_core.adapters import userchat
+from minion_core.richtext import EMOJI
 from minions.userbot.core.config import load_env
 from minions.userbot.core.config import resolve_session_path
 
@@ -33,23 +31,16 @@ logging.basicConfig(
 log = logging.getLogger('dump-emoji-ids')
 
 
-def _glyph(text: str, offset: int, length: int) -> str:
-    """Return the fallback glyph a custom-emoji entity covers (UTF-16)."""
-    raw = text.encode('utf-16-le')
-    return raw[offset * 2 : (offset + length) * 2].decode('utf-16-le')
-
-
-async def _report(event: events.NewMessage.Event) -> None:
-    """Log the document_id of each custom emoji in the message."""
+async def _report(msg: userchat.Msg) -> None:
+    """Log the emoji id of each custom emoji in the message."""
     found = False
-    for entity in event.message.entities or []:
-        if isinstance(entity, MessageEntityCustomEmoji):
+    for span in msg.spans:
+        if span.kind == EMOJI:
             found = True
-            glyph = _glyph(event.message.message, entity.offset, entity.length)
             log.info(
                 'premium emoji: emoji-id="%s" (fallback glyph %r)',
-                entity.document_id,
-                glyph,
+                span.ref,
+                msg.text[span.at : span.at + span.length],
             )
     if not found:
         log.info('No premium emoji in that message.')
@@ -67,8 +58,13 @@ async def main() -> None:
 
     session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
-    client = TelegramClient(str(session_path), int(api_id), api_hash)
-    client.add_event_handler(_report, events.NewMessage(outgoing=True))
+    # Through connect(), not a bare TelegramClient: this opens the SAME
+    # session file the bot uses, and opening it without the WAL journal is
+    # how that file gets corrupted.
+    client = userchat.connect(
+        userchat.Login(session_path, int(api_id), api_hash)
+    )
+    userchat.Account(client, userchat.paces({})).on_message(_report)
 
     await client.start()
     log.info(

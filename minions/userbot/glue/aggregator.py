@@ -1,17 +1,24 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Link aggregation + posting, mixed into Userbot."""
+"""Group a Short's per-platform links and post the collected message.
+
+A collaborator, not a mixin. It owns the in-flight groups, the posted log
+and the reject set -- the state /status reads off it -- and reaches
+everything else through ``AggregatorDeps``. It has exactly one edge to the
+reaction side: ``on_posted``, called once per delivered post.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
+from dataclasses import dataclass
+from dataclasses import field
 from typing import TYPE_CHECKING
 
-from telethon.tl.functions.messages import GetDiscussionMessageRequest
-
+from minion_core.adapters import userchat
+from minions.userbot.core import codec
 from minions.userbot.core.matching import action_ok
 from minions.userbot.core.matching import duration_seconds
 from minions.userbot.core.matching import extract_fields
@@ -25,34 +32,78 @@ from minions.userbot.core.models import Posted
 from minions.userbot.core.models import iso
 from minions.userbot.core.render import compose
 from minions.userbot.core.render import youtube_thumb
+from minions.userbot.core.runtime import cancel
 from minions.userbot.core.statefile import pending_dict
 from minions.userbot.core.statefile import pending_from_dict
 from minions.userbot.core.statefile import posted_dict
 from minions.userbot.core.statefile import posted_from_dict
+from minions.userbot.core.statefile import read_state_strict
+from minions.userbot.core.statefile import write_state
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+    from collections.abc import Callable
+    from pathlib import Path
 
+    from minions.userbot.core.humanize import Variety
+    from minions.userbot.core.models import Config
+    from minions.userbot.core.models import Consts
     from minions.userbot.engines.premium_emoji import PremiumMessage
-
-from minions.userbot.core.base import UserbotProtocol
 
 log = logging.getLogger('userbot')
 
 # Posted videos kept in the readable log; doubles as the restart-dedup window.
 POSTED_CAP = 300
+# Rejected titles kept, newest last. The memory only has to outlive a group's
+# collection window (timeout_sec, three hours), because all it does is silence
+# the OTHER platforms' messages about a video already judged too long -- some
+# of which arrive without a duration of their own. Unbounded, it was the one
+# part of this state that grew for as long as the bot ran; 300 is the same
+# ceiling the posted log uses and is orders of magnitude more than the job.
+REJECTED_CAP = 300
 
-class _AggregatorMixin(UserbotProtocol):
-    """Link aggregation + posting, mixed into Userbot."""
 
-    async def on_message(self, message: object) -> None:
+@dataclass(frozen=True)
+class AggregatorDeps:
+    """Everything the poster may reach; nothing else is in scope."""
+
+    account: userchat.Account
+    config: Config
+    consts: Consts
+    state_path: Path
+    targets: Callable[[], tuple[int, ...]]  # the profile's post destinations
+    on_posted: Callable[[int, int], Awaitable[None]]  # hand a post onward
+    field_keys: tuple[str, ...]  # incoming JSON field names to read
+    variety: Variety  # non-repeating picker for the post decoration
+    mode: str = 'live'  # for the restore log only
+
+
+@dataclass
+class LinkAggregator:
+    """Collect a video's platform links, then post them as one message."""
+
+    deps: AggregatorDeps
+    groups: list[Group] = field(default_factory=list)
+    posted: list[Posted] = field(default_factory=list)
+    # Normalized titles of videos dropped as too long, oldest first, capped.
+    rejected: list[str] = field(default_factory=list)
+    # source ids already posted (the backfill dedup)
+    processed_ids: set[int] = field(default_factory=set)
+
+    def cancel(self) -> None:
+        """Cancel every in-flight group timeout (before a mode switch)."""
+        for group in self.groups:
+            cancel(group.task)
+
+    async def on_message(self, msg: userchat.Msg) -> None:
         """Route one incoming message into its video group."""
-        msg_id = int(getattr(message, 'id', 0) or 0)
-        preview = (getattr(message, 'message', '') or '').replace('\n', ' ')
-        log.info('received msg %s: %.120s', msg_id, preview)
-        if msg_id in self.processed_ids:
-            log.info('msg %s: already posted, skipping', msg_id)
+        log.info(
+            'received msg %s: %.120s', msg.id, msg.text.replace('\n', ' ')
+        )
+        if msg.id in self.processed_ids:
+            log.info('msg %s: already posted, skipping', msg.id)
             return
-        item = self._accept(message)
+        item = self._accept(msg)
         if item is None:
             return
         group = self._group_for(item)
@@ -60,36 +111,38 @@ class _AggregatorMixin(UserbotProtocol):
             return
         group.items[item.key] = item
         group.msg_ids.add(item.msg_id)
-        missing = [p for p in self.config.platforms if p not in group.items]
+        missing = [
+            p for p in self.deps.config.platforms if p not in group.items
+        ]
         log.info(
             'caught msg %s (%s) for %r -- have %d/%d, waiting for: %s',
             item.msg_id,
             item.platform,
             group.title,
             len(group.items),
-            len(self.config.platforms),
+            len(self.deps.config.platforms),
             ', '.join(missing) or 'nothing, complete',
         )
         self._save()
         if not missing:
             await self._flush(group)
 
-    def _accept(self, message: object) -> Item | None:
+    def _accept(self, msg: userchat.Msg) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
-        msg_id = int(getattr(message, 'id', 0) or 0)
-        text = getattr(message, 'message', '') or ''
-        data = extract_fields(text, self._keys)
+        msg_id = msg.id
+        text = msg.text
+        data = extract_fields(text, self.deps.field_keys)
         if not data:
             log.info('msg %s: no recognizable fields, ignoring', msg_id)
             return None
-        if not action_ok(data, self.consts):
+        if not action_ok(data, self.deps.consts):
             log.info(
                 'msg %s: action is not %r, skipping',
                 msg_id,
-                self.consts.action_value,
+                self.deps.consts.action_value,
             )
             return None
-        item = parse_item(data, msg_id, self.consts.fields)
+        item = parse_item(data, msg_id, self.deps.consts.fields)
         if item is None or norm(item.title) in self.rejected:
             log.info('msg %s: no platform/caption or already rejected', msg_id)
             return None
@@ -101,13 +154,13 @@ class _AggregatorMixin(UserbotProtocol):
         An empty/absent duration means unknown -- treated as a Short (kept).
         """
         seconds = duration_seconds(item.duration)
-        if seconds >= self.config.max_duration:
+        if seconds >= self.deps.config.max_duration:
             log.info(
                 'msg %s: %s is %ss (>= %ss) -- not a Short, dropping %r',
                 msg_id,
                 item.platform,
                 seconds,
-                self.config.max_duration,
+                self.deps.config.max_duration,
                 item.title,
             )
             self._reject(item.title)
@@ -115,8 +168,15 @@ class _AggregatorMixin(UserbotProtocol):
         return item
 
     def _reject(self, title: str) -> None:
-        """Remember a non-Short video and drop any group open for it."""
-        self.rejected.add(norm(title))
+        """Remember a non-Short video and drop any group open for it.
+
+        Newest last, capped: a title that rolled off is simply judged again
+        from the message's own duration if it ever comes back.
+        """
+        key = norm(title)
+        if key not in self.rejected:
+            self.rejected.append(key)
+            del self.rejected[:-REJECTED_CAP]
         group = self._match(title)
         if group is not None and group in self.groups:
             self.groups.remove(group)
@@ -128,7 +188,10 @@ class _AggregatorMixin(UserbotProtocol):
         """Return a group whose title is >= threshold similar, or None."""
         norm_title = norm(title)
         for group in self.groups:
-            if similar(norm_title, norm(group.title)) >= self.config.threshold:
+            if (
+                similar(norm_title, norm(group.title))
+                >= self.deps.config.threshold
+            ):
                 return group
         return None
 
@@ -166,9 +229,9 @@ class _AggregatorMixin(UserbotProtocol):
             self.posted,
             title,
             time.time(),
-            threshold=self.config.threshold,
-            window=self.config.repost_guard,
-            count=self.config.repost_guard_count,
+            threshold=self.deps.config.threshold,
+            window=self.deps.config.repost_guard,
+            count=self.deps.config.repost_guard_count,
         )
 
     def _start(self, item: Item) -> Group:
@@ -184,7 +247,7 @@ class _AggregatorMixin(UserbotProtocol):
 
     async def _expire(self, group: Group) -> None:
         """Flush a group once its timeout (from creation) elapses."""
-        remaining = self.config.timeout - (time.time() - group.created_at)
+        remaining = self.deps.config.timeout - (time.time() - group.created_at)
         if remaining > 0:
             await asyncio.sleep(remaining)
         log.info('timeout for %r -- posting what arrived', group.title)
@@ -215,7 +278,10 @@ class _AggregatorMixin(UserbotProtocol):
             ', '.join(sorted(group.items)),
         )
         message = compose(
-            group, self.config.platforms, self.consts, self._variety
+            group,
+            self.deps.config.platforms,
+            self.deps.consts,
+            self.deps.variety,
         )
         posts = await self._deliver_post(message, youtube_thumb(group))
         if not posts:
@@ -229,8 +295,7 @@ class _AggregatorMixin(UserbotProtocol):
         log.info('posted %r', group.title)
         self._save()
         for target, post_id in posts:
-            await self._react_to_post(target, post_id)
-            await self._watch_post(target, post_id)
+            await self.deps.on_posted(target, post_id)
 
     def _record_posted(self, group: Group) -> None:
         """Append a readable posted record; rebuild the dedup id set."""
@@ -250,35 +315,20 @@ class _AggregatorMixin(UserbotProtocol):
 
     async def backfill(self) -> None:
         """Scan recent source history for messages not yet processed."""
-        limit = self.config.backfill
+        limit = self.deps.config.backfill
         if limit <= 0:
             return
         log.info(
             'backfill: scanning last %d messages of %s ...',
             limit,
-            self.config.source,
+            self.deps.config.source,
         )
-        try:
-            history = await self.client.get_messages(
-                self.config.source, limit=limit
-            )
-        except Exception:  # noqa: BLE001 -- source may be unreachable at start
-            log.warning('backfill: could not read source history')
-            return
+        history = await self.deps.account.history(
+            self.deps.config.source, userchat.Slice(limit=limit)
+        )
         for message in reversed(history):  # oldest first
             await self.on_message(message)
         log.info('backfill: done (%d messages scanned)', len(history))
-
-    def live_targets(self) -> tuple[int, ...]:
-        """Post destination for the active profile.
-
-        Test: TEST_CHAT_ID, or the source control chat if it is unset. Live:
-        the configured targets. Every channel-touching part reads this, so the
-        whole bot follows the profile.
-        """
-        if self.mode == 'test':
-            return (self.config.test_target or self.config.source,)
-        return self.config.targets
 
     async def _deliver_post(
         self, message: PremiumMessage, thumb: str
@@ -292,147 +342,55 @@ class _AggregatorMixin(UserbotProtocol):
         means nothing was delivered and the caller should re-queue.
         """
         posts: list[tuple[int, int]] = []
-        for target in self.live_targets():
-            try:
-                sent = await self._send_post(target, message, thumb)
-            except Exception:
-                log.exception('send to %s failed', target)
-                continue
-            posts.append((target, int(getattr(sent, 'id', 0) or 0)))
+        for target in self.deps.targets():
+            post_id = await self._send_post(target, message, thumb)
+            if post_id:
+                posts.append((target, post_id))
+            else:
+                log.warning('send to %s did not go out', target)
         return posts
-
-    async def _react_to_post(self, target: int, post_id: int) -> None:
-        """Immediately place a reaction ON a freshly-posted message.
-
-        Optional (``react_to_posts``, default off): reacting to our own posts
-        is an extra, separate from the engine's real job of reacting to
-        commenters. When on, there is no human-like wait -- the post is ours,
-        so the reaction goes on straight away. A failure never blocks the post
-        -- it
-        is logged and swallowed, unlike the comment path which owns its own
-        retry/skip machinery.
-        """
-        if not self.reactions.params.enabled or not post_id:
-            return
-        if not self.reactions.params.react_to_posts:
-            return
-        specs = self.reactions.pick_like(f'{target}:{post_id}')
-        emojis = tuple((s.emoji_id, s.fallback) for s in specs)
-        try:
-            placed = await self._react(target, post_id, emojis)
-        except Exception:  # noqa: BLE001 -- reacting must never break posting
-            log.warning(
-                'reaction: could not react to new post %s in %s',
-                post_id,
-                target,
-            )
-            return
-        if placed:
-            glyphs = ''.join(fb for _, fb in emojis)
-            log.info(
-                'reaction: reacted %s to new post %s in %s',
-                glyphs,
-                post_id,
-                target,
-            )
-
-    async def _watch_post(self, target: int, post_id: int) -> None:
-        """Register where this post's comments appear (the react target).
-
-        For a channel with a linked discussion (comments_in_discussion), the
-        comments live in the discussion group: resolve the post's thread root
-        and watch THAT, so reactions land only in the channel post's comments.
-        For a
-        plain group target, the post message id itself is the comment target.
-        """
-        if self.reactions.params.comments_in_discussion:
-            # Channel: only watch a post whose discussion thread resolves; a
-            # post with comments off (or deleted) adds nothing rather than a
-            # useless channel-id entry that could evict a real one.
-            thread = await self._discussion_thread(target, post_id)
-            if thread is not None:
-                self.reactions.note_post(*thread)
-            return
-        self.reactions.note_post(target, post_id)
-
-    async def _throttle_discussion(self) -> None:
-        """Space out GetDiscussionMessageRequest calls (Telegram flood guard).
-
-        These resolve a post's comment thread and are fired in bursts -- the
-        last ``watch_posts`` posts per target on every startup and rescan --
-        which trips Telegram's flood wait. Keep at least ``discussion_gap``
-        seconds between consecutive calls, process-wide. 0 disables it.
-        """
-        gap = self.config.discussion_gap
-        if gap <= 0:
-            return
-        wait = gap - (time.time() - self._last_discussion_ts)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._last_discussion_ts = time.time()
-
-    async def _discussion_thread(
-        self, channel: int, post_id: int
-    ) -> tuple[int, int] | None:
-        """(discussion_chat_id, thread_root_id) for a channel post, or None."""
-        await self._throttle_discussion()
-        try:
-            disc = await self.client(
-                GetDiscussionMessageRequest(peer=channel, msg_id=post_id)
-            )
-        except Exception:  # noqa: BLE001 -- not a channel / no linked group
-            log.warning('reactions: no discussion thread for post %s', post_id)
-            return None
-        messages = getattr(disc, 'messages', None) or []
-        if not messages:
-            return None
-        root = messages[0]
-        chat_id = int(getattr(root, 'chat_id', 0) or 0)
-        root_id = int(getattr(root, 'id', 0) or 0)
-        return (chat_id, root_id) if chat_id and root_id else None
 
     async def _send_post(
         self, target: int, message: PremiumMessage, thumb: str
-    ) -> object:
-        """Send one post as a photo (thumb) or text; return the message."""
+    ) -> int:
+        """Send one post as a photo (thumb) or text; 0 if neither landed."""
+        text = userchat.Text(message.text, message.spans)
         if thumb:
-            try:
-                return await self.client.send_file(
-                    target,
-                    thumb,
-                    caption=message.text,
-                    formatting_entities=message.entities,
-                )
-            except Exception:  # noqa: BLE001 -- bad thumb falls back to text
-                log.warning('thumbnail send failed; posting as text')
-        return await self.client.send_message(
-            target,
-            message.text,
-            formatting_entities=message.entities,
-            link_preview=False,
-        )
+            post_id = await self.deps.account.send_photo(target, thumb, text)
+            if post_id:
+                return post_id
+            log.warning('thumbnail send failed; posting as text')
+        return await self.deps.account.send(target, text)
 
     def _save(self) -> None:
         """Persist state to disk as readable, indented JSON (atomic)."""
         data = {
             'posted': [posted_dict(p) for p in self.posted],
             'pending': [
-                pending_dict(g, self.config.platforms) for g in self.groups
+                pending_dict(g, self.deps.config.platforms)
+                for g in self.groups
             ],
-            'rejected': sorted(self.rejected),
+            # Insertion order, NOT sorted: the cap keeps the newest, so the
+            # order is what makes "newest" mean anything after a restart.
+            'rejected': list(self.rejected),
         }
-        tmp = self.state_path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.state_path)
+        write_state(self.deps.state_path, data)
 
     def restore(self) -> None:
-        """Reload saved state and re-arm timers (call once at startup)."""
-        if not self.state_path.exists():
+        """Reload saved state and re-arm timers (call once at startup).
+
+        Reads strictly, NOT via ``read_state``: a store that comes back
+        empty because it could not be opened would read as "nothing was
+        ever posted", disarm the re-post guard and re-post the backlog. A
+        read error propagates instead.
+        """
+        if not self.deps.state_path.exists():
             return
-        data = json.loads(self.state_path.read_text(encoding='utf-8'))
-        self.rejected = set(data.get('rejected') or [])
+        data = read_state_strict(self.deps.state_path)
+        # A file written before the cap holds a sorted list; it loads as-is
+        # and only loses the true recency order once.
+        self.rejected = [str(t) for t in codec.rows(data.get('rejected'))]
+        del self.rejected[:-REJECTED_CAP]
         self._restore_posted(data)
         self._restore_pending(data)
         log.info(
@@ -440,21 +398,28 @@ class _AggregatorMixin(UserbotProtocol):
             len(self.groups),
             len(self.posted),
             len(self.processed_ids),
-            self.mode,
+            self.deps.mode,
         )
 
     def _restore_posted(self, data: dict[str, object]) -> None:
         """Load the posted log; migrate an old processed_ids-only file."""
-        self.posted = [posted_from_dict(p) for p in data.get('posted') or []]
+        self.posted = [
+            posted_from_dict(codec.table(p))
+            for p in codec.rows(data.get('posted'))
+        ]
         self.processed_ids = {i for p in self.posted for i in p.msg_ids}
         # Back-compat: an old file has no posted log, only raw processed_ids --
         # seed the dedup set from it so a restart still never re-posts.
-        self.processed_ids |= set(data.get('processed_ids') or [])
+        self.processed_ids |= {
+            codec.whole(i) for i in codec.rows(data.get('processed_ids'))
+        }
 
     def _restore_pending(self, data: dict[str, object]) -> None:
         """Load pending groups (new 'pending' key or old 'groups') + re-arm."""
-        raw_groups = data.get('pending') or data.get('groups') or []
+        raw_groups = codec.rows(data.get('pending')) or codec.rows(
+            data.get('groups')
+        )
         for raw in raw_groups:
-            group = pending_from_dict(raw)
+            group = pending_from_dict(codec.table(raw))
             self.groups.append(group)
             self._arm(group)

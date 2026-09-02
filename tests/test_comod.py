@@ -1,14 +1,23 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Cabinet roster tests: the 7-day shelf TTL, labels, and announcements."""
+"""Cabinet tests: the shelf TTL, labels, announcements, and posting.
+
+The last section drives the /comod and /propiska commands end to end
+against a fake account, because the roster logic being right is not the
+same as the commands working -- they once did not.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import TYPE_CHECKING
 
 from minions.userbot.engines import comod
+from minions.userbot.glue import comod as comod_glue
 
 _MAX_SHELVES = 10
+CHAT = 42
 _THREE_SHELVES = 3
 
 if TYPE_CHECKING:
@@ -106,15 +115,17 @@ def test_load_tolerates_missing_and_corrupt(tmp_path: Path) -> None:
     assert roster.active(1.0) == []
 
 
-def test_labels_for_stacks_amount_under_nick() -> None:
+def test_a_label_stacks_the_amount_under_the_nick() -> None:
     """The amount sits on its own line under the nick; else nick only."""
-    labels = comod.labels_for([('Nick_01', '50'), ('Bob', '')])
+    slots = ((0, 0, 40, 40), (0, 40, 40, 80))
+    labels = comod.assign_labels([('Nick_01', '50'), ('Bob', '')], slots)
     assert labels == ['Nick_01\n$50', 'Bob']
 
 
-def test_labels_for_dedups_a_typed_dollar() -> None:
+def test_a_label_does_not_double_a_typed_dollar() -> None:
     """A '$' the operator already typed is not doubled."""
-    assert comod.labels_for([('Bob', '$40')]) == ['Bob\n$40']
+    slots = ((0, 0, 40, 40),)
+    assert comod.assign_labels([('Bob', '$40')], slots) == ['Bob\n$40']
 
 
 def test_load_comod_params_defaults() -> None:
@@ -129,14 +140,16 @@ def test_load_comod_params_reads_section() -> None:
     """Configured knobs override the defaults."""
     params = comod.load_comod_params(
         {
-            'comod': {
-                'donate_link': 'http://d',
-                'render': {
-                    'template': 't.jpg',
-                    'max_shelves': 3,
-                    'slots': [[1, 2, 3, 4]],
-                    'text_color': [1, 2, 3],
-                },
+            'engines': {
+                'comod': {
+                    'donate_link': 'http://d',
+                    'render': {
+                        'template': 't.jpg',
+                        'max_shelves': 3,
+                        'slots': [[1, 2, 3, 4]],
+                        'text_color': [1, 2, 3],
+                    },
+                }
             }
         }
     )
@@ -196,3 +209,71 @@ def test_move_in_text_picks_from_a_variant_list() -> None:
     """A list of variants is supported (a single entry is deterministic)."""
     templates = {'move_in': ['only {nick}']}
     assert comod.move_in_text(templates, 'Bob', {}) == 'only Bob'
+
+
+# --- the commands themselves
+
+
+class _Posting:
+    """An account that records what the cabinet asked it to send."""
+
+    def __init__(self) -> None:
+        """Start with nothing sent."""
+        self.sent: list[tuple[int, str]] = []
+
+    async def send(self, chat: int, text: object) -> int:
+        """Record a text send and report it landed."""
+        self.sent.append((chat, str(getattr(text, 'body', ''))))
+        return 1
+
+    async def send_photo(self, chat: int, photo: object, text: object) -> int:
+        """Refuse the photo, so the caller falls back to text."""
+        return 0
+
+
+def _cabinet(tmp_path: Path, account: _Posting) -> comod_glue.Cabinet:
+    """Return a cabinet posting to chat 42, with no render template."""
+    return comod_glue.Cabinet(
+        comod_glue.CabinetDeps(
+            account=account,
+            chat=CHAT,
+            roster=_roster(tmp_path),
+            params=comod.load_comod_params({}),
+            work_dir=tmp_path,
+        )
+    )
+
+
+def test_comod_seats_a_nick_and_posts_the_cabinet(tmp_path: Path) -> None:
+    """The whole /comod path runs and posts to the configured chat.
+
+    Every step of it used to raise AttributeError: the command reached
+    for deps.params_chat(), deps.params_asset() and deps.params_font(),
+    none of which exist -- the chat is a plain field and the other two
+    are methods on the cabinet itself. Nothing caught it, because the
+    roster tests never invoke the command.
+    """
+    account = _Posting()
+    cabinet = _cabinet(tmp_path, account)
+    asyncio.run(cabinet.command('/comod Nick_01 50'))
+    assert cabinet.deps.roster.active(time.time()) == [('Nick_01', '50')]
+    assert [chat for chat, _ in account.sent] == [CHAT]
+
+
+def test_propiska_posts_the_month_roster(tmp_path: Path) -> None:
+    """/propiska renders the dated registry to the same chat."""
+    account = _Posting()
+    cabinet = _cabinet(tmp_path, account)
+    cabinet.deps.roster.add('Nick_01', '50', time.time())
+    asyncio.run(cabinet.propiska())
+    assert [chat for chat, _ in account.sent] == [CHAT]
+    assert 'Nick_01' in account.sent[0][1]
+
+
+def test_kick_without_a_nick_answers_with_the_hint(tmp_path: Path) -> None:
+    """A bare /comod kick posts the hint instead of evicting nobody."""
+    account = _Posting()
+    cabinet = _cabinet(tmp_path, account)
+    asyncio.run(cabinet.command('/comod kick'))
+    assert len(account.sent) == 1
+    assert cabinet.deps.roster.active(time.time()) == []

@@ -37,9 +37,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from telethon import TelegramClient
-from telethon import events
-
+from minion_core.adapters import userchat
+from minions.userbot.core import codec
+from minions.userbot.core.models import Emoji
 from minions.userbot.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ PROJECT_ENV = Path(__file__).resolve().parents[2] / '.env'
 class Consts:
     """Editable texts and the leading premium emoji, loaded from JSON."""
 
-    emoji: object
+    emoji: Emoji
     header: str
     currency: str
     quote: str
@@ -109,20 +109,31 @@ def _read_json(path: Path) -> dict[str, object]:
     return {}
 
 
+def _emoji(entry: dict[str, object]) -> Emoji:
+    """Read the leading premium emoji from its {id, fallback} block."""
+    return Emoji(
+        id=codec.text(entry.get('id')),
+        fallback=codec.text(entry.get('fallback')),
+    )
+
+
 def _load_constants(path: Path) -> Consts:
     """Load the shout-out constants from JSON, ignoring unknown keys."""
     data = _read_json(path)
-    reactions = [str(r) for r in (data.get('donate_reactions') or [''])]
+    reactions = [str(r) for r in codec.rows(data.get('donate_reactions'))]
     return Consts(
-        emoji=data.get('donate_emoji') or '',
-        header=str(data.get('donate_header') or '{name}: {amount}'),
-        currency=str(data.get('donate_currency', '')),
-        quote=str(data.get('donate_quote') or '{message}'),
+        emoji=_emoji(codec.table(data.get('donate_emoji'))),
+        header=codec.text(data.get('donate_header')) or '{name}: {amount}',
+        currency=codec.text(data.get('donate_currency')),
+        quote=codec.text(data.get('donate_quote')) or '{message}',
         reactions=reactions or [''],
-        separator=str(data.get('donate_separator', '')),
-        arrow=str(data.get('donate_arrow') or ' -> '),
-        link_text=str(data.get('donate_link_text') or 'link'),
-        links=[dict(row) for row in (data.get('donate_links') or [])],
+        separator=codec.text(data.get('donate_separator')),
+        arrow=codec.text(data.get('donate_arrow')) or ' -> ',
+        link_text=codec.text(data.get('donate_link_text')) or 'link',
+        links=[
+            {k: str(v) for k, v in codec.table(row).items()}
+            for row in codec.rows(data.get('donate_links'))
+        ],
         usage=str(
             data.get('donate_usage')
             or 'Usage: /donate <name> <amount> <message>'
@@ -186,29 +197,26 @@ def _compose(donation: Donation, consts: Consts) -> PremiumMessage:
 class DonateBot:
     """Listen for /donate and render the shout-out to the configured chat."""
 
-    def __init__(self, client: TelegramClient, chat: int | None) -> None:
-        """Keep the client and target chat; load the texts."""
-        self.client = client
+    def __init__(self, account: userchat.Account, chat: int | None) -> None:
+        """Keep the account and target chat; load the texts."""
+        self.account = account
         self.chat = chat  # fixed target, or None to reply where invoked
         self.consts = _load_constants(Path(__file__).with_name(CONSTANTS_FILE))
 
-    async def handle(self, event: events.NewMessage.Event) -> None:
+    async def handle(self, msg: userchat.Msg) -> None:
         """Render a shout-out for a /donate message; ignore everything else."""
-        text = (event.raw_text or '').strip()
+        text = msg.text.strip()
         if not _is_command(text.lower()):
             return
-        target = self.chat if self.chat is not None else event.chat_id
+        target = self.chat if self.chat is not None else msg.chat_id
         donation = _parse(text)
         if donation is None:
-            await self.client.send_message(target, self.consts.usage)
+            await self.account.send(target, userchat.Text(self.consts.usage))
             log.info('donate: malformed command, sent usage')
             return
         message = _compose(donation, self.consts)
-        await self.client.send_message(
-            target,
-            message.text,
-            formatting_entities=message.entities,
-            link_preview=False,
+        await self.account.send(
+            target, userchat.Text(message.text, message.spans)
         )
         log.info('donate: rendered shout-out for %r', donation.name)
 
@@ -266,9 +274,12 @@ async def main() -> None:
 
     session_path = _resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
-    client = TelegramClient(str(session_path), int(api_id), api_hash)
-    bot = DonateBot(client, _chat())
-    client.add_event_handler(bot.handle, events.NewMessage())
+    client = userchat.connect(
+        userchat.Login(session_path, int(api_id), api_hash)
+    )
+    account = userchat.Account(client, userchat.paces({}))
+    bot = DonateBot(account, _chat())
+    account.on_message(bot.handle)
 
     # DONATE_PASSWORD supplies the 2FA/cloud password non-interactively;
     # unset, Telethon prompts for it (getpass) only if the account has 2FA.

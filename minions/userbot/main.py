@@ -43,13 +43,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from telethon import TelegramClient
-from telethon import events
-
-from minions.userbot.core.client import build_client
+from minion_core.adapters import userchat
+from minions.userbot.core import codec
+from minions.userbot.core import state
+from minions.userbot.core import statefile
 from minions.userbot.core.config import CONSTANTS_FILE
-from minions.userbot.core.config import FEATURE_OVERRIDES_FILE
-from minions.userbot.core.config import MODE_FILE
+from minions.userbot.core.config import LEGACY_STATE_FILE
 from minions.userbot.core.config import STATE_FILE
 from minions.userbot.core.config import apply_persona
 from minions.userbot.core.config import load_config
@@ -62,26 +61,32 @@ from minions.userbot.core.config import resolve_state_path
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Config
-from minions.userbot.core.models import Group
-from minions.userbot.core.models import Posted
+from minions.userbot.core.render import Glyphs
 from minions.userbot.core.runtime import configure_logging
 from minions.userbot.core.runtime import touch_health
 from minions.userbot.core.runtime import watchdog
+from minions.userbot.core.state import StateStore
 from minions.userbot.engines import comod
 from minions.userbot.engines import greeter
 from minions.userbot.engines import reactions
 from minions.userbot.engines import stories
 from minions.userbot.engines import users
+from minions.userbot.engines.premium_emoji import PremiumMessage
 from minions.userbot.engines.premium_emoji import build_premium_message
-from minions.userbot.glue.aggregator import _AggregatorMixin
-from minions.userbot.glue.commands import _CommandsMixin
-from minions.userbot.glue.comod import _ComodMixin
-from minions.userbot.glue.profiles import _ProfilesMixin
-from minions.userbot.glue.reactions import _ReactionsMixin
+from minions.userbot.glue.aggregator import AggregatorDeps
+from minions.userbot.glue.aggregator import LinkAggregator
+from minions.userbot.glue.commands import CommandRouter
+from minions.userbot.glue.comod import Cabinet
+from minions.userbot.glue.comod import CabinetDeps
+from minions.userbot.glue.profiles import ServiceModes
+from minions.userbot.glue.reactions import CommentDeps
+from minions.userbot.glue.reactions import CommentWatch
 from minions.userbot.glue.status import STATUS_WARM_PEERS
-from minions.userbot.glue.status import _StatusMixin
-from minions.userbot.glue.stories import _StoriesMixin
-from minions.userbot.glue.users import _UsersMixin
+from minions.userbot.glue.status import StatusReport
+from minions.userbot.glue.stories import StoryDeps
+from minions.userbot.glue.stories import StoryWatch
+from minions.userbot.glue.users import AudienceDeps
+from minions.userbot.glue.users import AudienceLog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,35 +100,26 @@ log = logging.getLogger('userbot')
 STATUS_INTERVAL = 60
 
 
-class Userbot(
-    _AggregatorMixin,
-    _ProfilesMixin,
-    _StatusMixin,
-    _ComodMixin,
-    _StoriesMixin,
-    _ReactionsMixin,
-    _UsersMixin,
-    _CommandsMixin,
-):
-    """The Telethon userbot host: wires the engines and runs the loops.
+class Userbot:
+    """The Telethon userbot host: wires the services and runs the loops.
 
-    A thin assembly -- the aggregation/posting logic lives in
-    ``_AggregatorMixin`` (glue/aggregator.py), the live/test profile and
-    per-service modes in ``_ProfilesMixin`` (glue/profiles.py), and each other
-    engine in its own glue mixin. This class only builds the profile,
-    dispatches incoming events, and runs the status/heartbeat loop.
+    A thin assembly. Every behaviour lives in an object this class holds --
+    ``aggregator`` posts, ``comment_watch`` reacts, ``story_watch`` views,
+    ``greeter`` DMs, ``audience`` records, ``cabinet`` runs /comod, ``modes``
+    owns the live/test lifecycle and ``report`` renders /status. The host
+    itself only builds them, routes each incoming event, and runs the
+    status/heartbeat loop.
     """
 
-    def __init__(self, client: TelegramClient, config: Config) -> None:
-        """Load the constants and wire the aggregator's state."""
+    def __init__(self, account: userchat.Account, config: Config) -> None:
+        """Load the constants and assemble every service."""
         here = Path(__file__)
-        self.client = client
         self.config = config
         self.consts = load_constants(here.with_name(CONSTANTS_FILE))
-        self._raw = read_json(here.with_name(CONSTANTS_FILE))
-        apply_persona(self._raw)  # one persona clock shared by all engines
+        self.settings = read_json(here.with_name(CONSTANTS_FILE))
+        apply_persona(self.settings)  # one persona clock, shared by all
         keys = [*self.consts.fields.values(), *THUMB_ALIASES]
-        self._keys = tuple(dict.fromkeys(keys))
+        self._field_keys = tuple(dict.fromkeys(keys))
         # Post-decoration picker: keeps the announce line and love/lead/arrow
         # emoji from repeating on consecutive posts (in-memory; cosmetic).
         self._variety = Variety()
@@ -134,189 +130,252 @@ class Userbot(
         # for free. The active mode is a marker in the base state dir; live
         # uses that dir (unchanged), test a 'test/' subdir under it.
         base_state = resolve_state_path(here.with_name(STATE_FILE))
-        self._state_base = base_state.parent
-        self._mode_path = self._state_base / MODE_FILE
-        self._overrides_path = self._state_base / FEATURE_OVERRIDES_FILE
-        self._modes = self._load_service_modes()
-        self._react_tasks: set[asyncio.Task[None]] = set()
-        self._greeter_task: asyncio.Task[None] | None = None
-        self._react_rescan_task: asyncio.Task[None] | None = None
-        self._react_next_rescan: float = 0.0  # ts of the next auto-rescan
-        self._rescan_sec: float = 300.0  # per-profile, set in _build_profile
-        self._enrich_tasks: set[asyncio.Task[None]] = set()
-        self._story_tasks: set[asyncio.Task[None]] = set()
-        self._stories_task: asyncio.Task[None] | None = None
-        self._story_next_poll: float = 0.0  # ts of the next stories re-poll
-        # Planned-but-not-yet-fired story views, for the /status queue readout.
-        self._pending_views: list[stories.StoryView] = []
-        # pre-fire thread refresh debounce, keyed by thread root
-        self._thread_rescan_at: dict[int, float] = {}
-        # ts of the last GetDiscussionMessageRequest, for the flood throttle
-        self._last_discussion_ts: float = 0.0
-        rt = self._raw.get('runtime')
-        rt = rt if isinstance(rt, dict) else {}
-        self._probe_timeout = float(rt.get('probe_timeout_sec', 30.0))
+        self.modes = ServiceModes(self, base_state.parent)
+        self.report = StatusReport(self)
+        self.router = CommandRouter(self)
+        self._stores: dict[Path, StateStore] = {}
+        self.greeter_task: asyncio.Task[None] | None = None
+        self.rescan_task: asyncio.Task[None] | None = None
+        self.stories_task: asyncio.Task[None] | None = None
+        rt = codec.section(self.settings, 'runtime')
+        # One door to Telegram, one gate in front of it: every service this
+        # host builds is handed the same account, so there is no second way
+        # out and nothing that skips the pacing.
+        self.account = account
+        self._probe_timeout = codec.num(rt.get('probe_timeout_sec'), 30.0)
         # The liveness probe (get_me) is the only ALWAYS-ON Telegram request;
         # firing it every 60s status tick hammered the server for no reason.
         # Space it to its own gentler cadence -- still well inside the watchdog
         # window -- while the 60s tick keeps doing its LOCAL bookkeeping
         # (uptime learning, pending log) at full resolution.
-        self._probe_interval = float(rt.get('probe_interval_sec', 300.0))
+        self._probe_interval = codec.num(rt.get('probe_interval_sec'), 300.0)
         self._last_probe = 0.0
-        self._build_profile()
+        # The one loop that did not publish its next run; /status shows it
+        # beside the others so a stalled tick is visible, not inferred.
+        self.next_tick = 0.0
+        self.build_profile()
 
+    def _service_db(
+        self, service: str, legacy: str, where: Path | None = None
+    ) -> Path:
+        """Return one service's database path, adopting its old JSON once.
 
+        The state directory holds one file per service, named for it. Three
+        services used to write hand-rolled JSON under three different
+        conventions, so each names the file it used to have and it is
+        imported on the first start that finds it.
+        """
+        pdir = self.modes.service_dir(service) if where is None else where
+        path = pdir / f'{service}.db'
+        statefile.adopt(path, pdir / legacy)
+        return path
 
-    def _build_profile(self) -> None:
+    def _store(self, service: str) -> StateStore:
+        """Return one service's state store: one database, named for it.
+
+        Keyed by PATH, not by name, because a service's directory follows
+        its mode: flipping stories to test must open the test file, and the
+        live one has to stay open for whoever is still live.
+        """
+        pdir = self.modes.service_dir(service)
+        path = pdir / f'{service}.db'
+        store = self._stores.get(path)
+        if store is None:
+            state.adopt(pdir)  # split an old shared peers.db, once
+            store = StateStore(path)
+            self._stores[path] = store
+        return store
+
+    def build_profile(self) -> None:
         """(Re)bind every service to ITS OWN mode -- dir, enabled, channel.
 
-        Each service is off/test/live independently (``self._modes``): test
+        Each service is off/test/live independently (``self.modes``): test
         state lives in ``base/test``, live in ``base``, off builds it inert
         (``enabled=False``, the loop still runs but no-ops). The poster's
         containers and ``live_targets`` follow the aggregator's mode; the
         greeter's channel follows the greeter's. ``start_profile`` then
         hydrates each from its own files.
         """
-        self.mode = self._modes['aggregator']
-        pdir = self._service_dir('aggregator')
-        self.state_path = pdir / STATE_FILE
-        self.groups: list[Group] = []
-        self.rejected: set[str] = set()
-        self.posted: list[Posted] = []
-        self.processed_ids: set[int] = set()
-        self._react_tasks = set()
-        self._react_next_rescan = 0.0
-        self._rescan_sec = self._rescan_interval(self._modes['reactions'])
-        # A service is enabled when its mode != 'off' (``_feature_enabled``).
+        self.mode = self.modes.mode_of('aggregator')
+        pdir = self.modes.service_dir('aggregator')
+        # A service is enabled when its mode is not 'off'.
         # The params are frozen, so the flag is swapped via replace.
         reaction_params = replace(
-            reactions.load_reaction_params(self._raw),
-            enabled=self._feature_enabled('reactions'),
+            reactions.load_reaction_params(self.settings),
+            enabled=self.modes.enabled('reactions'),
         )
-        react_dir = self._service_dir('reactions')
-        self._migrate_reaction_state(react_dir)
         self.reactions = reactions.ReactionBrain(
-            reaction_params,
-            react_dir / 'reactions_state.json',
+            reaction_params, self._store('reactions')
+        )
+        self.comment_watch = CommentWatch(
+            CommentDeps(
+                account=self.account,
+                brain=self.reactions,
+                targets=self.live_targets,
+                announce=self._send_status,
+                glyphs=Glyphs(self.report.bullet(), self.report.arrow()),
+                human_words=self.consts.human_words,
+                rescan_sec=self.modes.rescan_interval(
+                    self.modes.mode_of('reactions')
+                ),
+            )
         )
         # Story viewer: watches friends'/contacts' stories the way a person
         # does -- a glance now and then, no reactions -- with its own
         # per-service seen set and view log. Poll cadence follows its mode.
         story_params = replace(
-            stories.load_story_params(self._raw, self._modes['stories']),
-            enabled=self._feature_enabled('stories'),
+            stories.load_story_params(
+                self.settings, self.modes.mode_of('stories')
+            ),
+            enabled=self.modes.enabled('stories'),
         )
-        self.stories = stories.StoryBrain(
-            story_params, self._service_dir('stories') / 'stories_state.json'
+        self.stories = stories.StoryBrain(story_params, self._store('stories'))
+        self.story_watch = StoryWatch(
+            StoryDeps(
+                account=self.account,
+                brain=self.stories,
+                source=self.config.source,
+                label=self._chat_label,
+            )
         )
-        self._story_next_poll = 0.0
-        self._pending_views = []
-        # Users DB: its own SQLite file per mode, so live and test audiences
-        # never mix. Config lives in the 'users' JSON section.
-        ucfg = self._raw.get('users')
-        ucfg = ucfg if isinstance(ucfg, dict) else {}
-        self._users_enabled = self._feature_enabled('users')
-        self._users_store_text = bool(ucfg.get('store_message_text', True))
-        self._users_enrich = bool(ucfg.get('enrich', True))
-        self.users = users.UserStore(self._service_dir('users') / 'users.db')
-        gchannel = self._profile_channel(self._modes['greeter'])
+        # Audience log: its own SQLite file per mode, so live and test
+        # audiences never mix. Config lives in the 'users' JSON section.
+        ucfg = codec.engine(self.settings, 'users')
+        self.audience = AudienceLog(
+            AudienceDeps(
+                account=self.account,
+                source=self.config.source,
+                store=users.UserStore(
+                    self.modes.service_dir('users') / 'users.db'
+                ),
+                watched=lambda: {c for c, _ in self.reactions.posts},
+                enabled=self.modes.enabled('users'),
+                store_text=bool(ucfg.get('store_message_text', True)),
+                enrich=bool(ucfg.get('enrich', True)),
+            )
+        )
+        gchannel = self.modes.channel_for(self.modes.mode_of('greeter'))
         greeter_params = replace(
             greeter.load_greeter_params(
-                self._raw, gchannel, self._modes['greeter']
+                self.settings, gchannel, self.modes.mode_of('greeter')
             ),
-            enabled=self._feature_enabled('greeter'),
+            enabled=self.modes.enabled('greeter'),
         )
         self.greeter = greeter.Greeter(
-            self.client,
+            self.account,
             greeter_params,
             greeter.GreeterIO(
-                self._service_dir('greeter') / 'greeter_state.json',
-                self._on_membership_event,
+                self._service_db('greeter', 'greeter_state.json'),
+                self.audience.note_membership,
             ),
         )
+        self.aggregator = LinkAggregator(
+            AggregatorDeps(
+                account=self.account,
+                config=self.config,
+                consts=self.consts,
+                state_path=self._service_db(
+                    'aggregator', LEGACY_STATE_FILE, pdir
+                ),
+                targets=self.live_targets,
+                on_posted=self.comment_watch.on_posted,
+                field_keys=self._field_keys,
+                variety=self._variety,
+                mode=self.mode,
+            )
+        )
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
-        self.comod = comod.CabinetRoster(pdir / 'comod.json')
-        self._comod = comod.load_comod_params(self._raw)
+        self.cabinet = Cabinet(
+            CabinetDeps(
+                account=self.account,
+                chat=self.config.source,
+                roster=comod.CabinetRoster(
+                    self._service_db('comod', 'comod.json', pdir)
+                ),
+                params=comod.load_comod_params(self.settings),
+                work_dir=pdir,
+            )
+        )
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    async def handle(self, event: events.NewMessage.Event) -> None:
-        """Dispatch one event: a /command, a comment reaction, or aggregation.
+    async def handle(self, msg: userchat.Msg) -> None:
+        """Dispatch one message: a /command, a comment, or aggregation.
 
         Commands (/emojis, /preview, /status) work from ANY chat and for
         ANYONE and always render into the source chat; the reaction engine
         watches
         replies to our own posts (any chat); aggregation stays source-scoped.
         """
-        text = (event.raw_text or '').strip().lower()
-        if await self._command(text):
+        text = msg.text.strip().lower()
+        if await self.router.handle(text):
             return
-        if await self._unknown_command(event, text):
+        if await self.router.nudge_unknown(msg, text):
             return
-        self._record_user_message(event)
+        self.audience.record_message(msg)
         if self.reactions.params.enabled:
-            self._maybe_react(event)
-        if event.chat_id == self.config.source:
-            await self.on_message(event.message)
+            self.comment_watch.on_message(msg)
+        if msg.chat_id == self.config.source:
+            await self.aggregator.on_message(msg)
 
     async def status_report(self) -> None:
         """Post the pending/posted/reaction diagnostics to the source chat."""
-        labels = await self._chat_labels()
-        await self._send_status(self._status_text(labels))
+        labels = await self.chat_labels()
+        await self._send_status(self.report.text(labels))
         log.info('sent status report to %s', self.config.source)
 
     async def _send_status(self, text: str) -> None:
         """Send an operator report, rendering its premium-emoji markup.
 
-        /status, /requeue and /reactnow embed `<tg-emoji>` tags for the chosen
-        reactions/likes and the pool previews; build_premium_message turns them
-        into
-        custom-emoji entities, so the REAL premium emoji show (a non-premium
-        viewer still sees the fallback glyph). Text without tags sends plain.
+        /status, /requeue and /reactnow embed `<tg-emoji>` tags for the
+        chosen reactions/likes and the pool previews; build_premium_message
+        turns them into custom-emoji spans, so the REAL premium emoji show
+        (a non-premium viewer still sees the fallback glyph). Text without
+        tags sends plain.
         """
-        message = build_premium_message(text)
-        await self.client.send_message(
+        await self.show(build_premium_message(text))
+
+    async def show(self, message: PremiumMessage) -> None:
+        """Send an already-composed premium message to the operator."""
+        await self.account.send(
             self.config.source,
-            message.text,
-            formatting_entities=message.entities,
-            link_preview=False,
+            userchat.Text(message.text, message.spans),
         )
 
-    async def _chat_labels(self) -> dict[int, str]:
+    async def say(self, text: str) -> None:
+        """Send a plain operator line to the source chat."""
+        await self.account.send(self.config.source, userchat.Text(text))
+
+    async def chat_labels(self) -> dict[int, str]:
         """Resolve every chat shown in /status to a readable @name or title."""
         await self._resolve_attach_labels()
         ids = {self.config.source, *self.config.targets}
         if self.config.test_target:
             ids.add(self.config.test_target)
         ids |= {chat for chat, _ in self.reactions.posts}
-        ids |= {v.peer_id for v in self._pending_views}  # story-view queue
-        return {cid: await self._chat_label(cid) for cid in ids}
+        ids |= {v.peer_id for v in self.story_watch.pending}
+        await self._name_glance_peers()
+        cached = self.stories.known_labels()
+        return {**cached, **{cid: await self._chat_label(cid) for cid in ids}}
+
+    async def _name_glance_peers(self) -> None:
+        """Put @names on a few of the people who have stories up.
+
+        The glance lists people we have never opened, so nothing has ever
+        cached their name. Resolving all of them on every /status would be
+        exactly the burst the request gate exists to prevent, so a bounded
+        handful is resolved per report and remembered; a few reports in,
+        the whole list is named and it costs nothing again.
+        """
+        if not self.stories.params.enabled:
+            return
+        known = self.stories.known_labels()
+        unnamed = [
+            row.peer_id
+            for row in self.stories.last_glance.peers
+            if row.peer_id not in known
+        ]
+        for peer_id in unnamed[:STATUS_WARM_PEERS]:
+            label = await self._chat_label(peer_id)
+            self.stories.remember(str(peer_id), label)
 
     async def _resolve_attach_labels(self) -> None:
         """Cache the shown peers' @names via the shared chat-label helper.
@@ -348,27 +407,30 @@ class Userbot(
 
     async def _chat_label(self, chat_id: int) -> str:
         """Return a chat's @username (or "title") for /status, else id."""
-        try:
-            entity = await self.client.get_entity(chat_id)
-        except Exception:  # noqa: BLE001 -- not cached/reachable: show the id
+        peer = await self.account.peer(chat_id)
+        if peer is None:
             return str(chat_id)
-        username = getattr(entity, 'username', None)
-        if username:
-            return f'@{username} ({chat_id})'
-        title = getattr(entity, 'title', None) or getattr(
-            entity, 'first_name', None
-        )
+        if peer.username:
+            return f'@{peer.username} ({chat_id})'
+        title = peer.title or peer.first_name
         return f'"{title}" ({chat_id})' if title else str(chat_id)
 
     async def status_loop(self) -> None:
         """Periodically log pending videos, learn uptime, beat the watchdog."""
         while True:
+            self.next_tick = time.time() + STATUS_INTERVAL
             await asyncio.sleep(STATUS_INTERVAL)
             now = time.time()
             await self._maybe_probe(now)
             if self.reactions.params.enabled:
                 self.reactions.mark_alive(now)  # learn actual on-hours
             self._log_pending()
+
+    def next_probe(self) -> float:
+        """Return when the liveness probe fires next (0 before the first)."""
+        if not self._last_probe:
+            return 0.0
+        return self._last_probe + self._probe_interval
 
     async def _maybe_probe(self, now: float) -> None:
         """Probe Telegram only every _probe_interval, not every 60s tick.
@@ -382,9 +444,20 @@ class Userbot(
             self._last_probe = now
             await self._heartbeat()
 
+    def live_targets(self) -> tuple[int, ...]:
+        """Post destination for the active profile.
+
+        Test: TEST_CHAT_ID, or the source control chat if it is unset. Live:
+        the configured targets. Every channel-touching part reads this, so
+        the whole bot follows the profile.
+        """
+        if self.mode == 'test':
+            return (self.config.test_target or self.config.source,)
+        return self.config.targets
+
     def _log_pending(self) -> None:
         """Log each still-collecting group and which platforms it awaits."""
-        for group in self.groups:
+        for group in self.aggregator.groups:
             missing = [
                 p for p in self.config.platforms if p not in group.items
             ]
@@ -405,25 +478,24 @@ class Userbot(
         all already proves the event loop is not stalled.
         """
         try:
-            await asyncio.wait_for(
-                self.client.get_me(), timeout=self._probe_timeout
+            alive = await asyncio.wait_for(
+                self.account.me(), timeout=self._probe_timeout
             )
-        except Exception:  # noqa: BLE001 -- wedged/unreachable: let it go stale
+        except TimeoutError:
+            alive = None
+        if alive is None:
             log.warning('watchdog: liveness probe failed; heartbeat stale')
             return
         touch_health()
 
 
-
-
-
-
-
-
-
-
-
-
+def _login(session: Path, api_id: str, api_hash: str) -> userchat.Login:
+    """Build the session credentials, flood knob included."""
+    rt = load_runtime()
+    threshold = codec.num(
+        rt.get('flood_sleep_threshold_sec'), userchat.DEFAULT_FLOOD_SLEEP
+    )
+    return userchat.Login(session, int(api_id), api_hash, threshold)
 
 
 async def main() -> None:
@@ -440,13 +512,14 @@ async def main() -> None:
 
     session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
-    client = build_client(session_path, int(api_id), api_hash)
-    agg = Userbot(client, config)
+    client = userchat.connect(_login(session_path, api_id, api_hash))
+    account = userchat.Account(client, userchat.paces(load_runtime()))
+    bot = Userbot(account, config)
 
     # Listen everywhere the account can see: the /emojis preview command works
     # from ANY chat and for ANYONE (it renders back into the source chat);
-    # aggregation itself stays scoped to the source chat inside agg.handle.
-    client.add_event_handler(agg.handle, events.NewMessage())
+    # aggregation itself stays scoped to the source chat inside bot.handle.
+    bot.account.on_message(bot.handle)
 
     # TELEGRAM_PASSWORD supplies the 2FA/cloud password non-interactively;
     # unset, Telethon prompts for it (getpass) only if the account has 2FA.
@@ -459,27 +532,27 @@ async def main() -> None:
     # Hydrate the active profile (live or test) and start its loops. The
     # reaction
     # startup inside can fail without stopping the bot from listening.
-    await agg.start_profile()
+    await bot.modes.start_profile()
     log.info(
         'Listening on %s; mode=%s posting to %s; platforms=%s',
         config.source,
-        agg.mode,
-        ','.join(str(t) for t in agg.live_targets()),
+        bot.mode,
+        ','.join(str(t) for t in bot.live_targets()),
         ','.join(config.platforms),
     )
-    status_task = asyncio.create_task(agg.status_loop())
+    status_task = asyncio.create_task(bot.status_loop())
     # Self-healing watchdog: seed the heartbeat now (so a cold start is not
     # instantly "stale"), then a daemon thread exits the process if the
     # heartbeat later goes stale -- a hang no restart: policy could catch --
     # so Docker's restart: always recreates the container.
     touch_health()
-    watchdog_sec = float(load_runtime().get('watchdog_sec', 600.0))
+    watchdog_sec = codec.num(load_runtime().get('watchdog_sec'), 600.0)
     threading.Thread(
         target=watchdog, args=(watchdog_sec,), daemon=True
     ).start()
     await client.run_until_disconnected()
     status_task.cancel()
-    await agg.stop_profile()
+    await bot.modes.stop_profile()
 
 
 if __name__ == '__main__':

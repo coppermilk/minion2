@@ -33,37 +33,41 @@ reaction in
    the morning, a festive one in December.
 6. Jitter defeats the ":00 scheduler fingerprint": the fire time gets a random
    sub-minutes offset.
-7. Built-in imperfection: a comment is sometimes ignored, a day is sometimes
-   silent, and once in a while a second reaction follows the first.
+7. Built-in imperfection: a comment is sometimes ignored and a whole day is
+   sometimes silent.
 8. Feedback reactivity: a commenter who is themselves replying to us gets a
    faster reaction.
-9. State is persisted (mood, last-send cursor, per-reaction recency, who was
-already
-   reacted), because principles 2-4 need memory across restarts.
+9. State is persisted (mood, the session cursors, per-reaction recency, who
+   was already reacted), because principles 2-4 need memory across restarts.
 
 All texts/ids live in the constants JSON, so this source stays ASCII.
 """
 
 from __future__ import annotations
 
-import json
 import math
 import random
 import time
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
+from minions.userbot.core import codec
+from minions.userbot.core import config
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
+from minions.userbot.core import state as state_store
 from minions.userbot.core.humanize import recency_penalty
 from minions.userbot.core.humanize import weighted_choice
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from collections.abc import Mapping
     from datetime import datetime
-    from pathlib import Path
+
+    from minions.userbot.core.models import Emoji
 
 # When a session start lands in a dead hour we sample a real send moment on
 # this grid across the reachable awake time (see _place); 5 min is fine-grained
@@ -78,24 +82,12 @@ _ALIVE_STEP = 1.0
 _SESSION_REACH_SEC = 7200.0
 # A persisted emoji row is an [id, fallback] pair.
 _EMOJI_ROW_LEN = 2
-# A reacted dedup key is 'chat:root:person[:msg]', so the person is field 3.
-_CATTED_PERSON_FIELDS = 3
 # datetime.weekday(): Monday is 0, so Saturday (5) and up is the weekend.
 _SATURDAY = 5
 # Local hours: midnight..noon reads sleepy, noon..midnight bodry.
 _NOON = 12
 # Calendar month numbers used as context switches.
 _DECEMBER = 12
-
-
-@dataclass(frozen=True)
-class ReactionEmoji:
-    """One premium reaction emoji in the pool, with its selection knobs."""
-
-    emoji_id: str
-    fallback: str
-    base: float  # a priori preference (favourites > 1)
-    tags: tuple[str, ...]  # e.g. ('sleepy',), ('bodry', 'newyear')
 
 
 @dataclass(frozen=True)
@@ -114,9 +106,9 @@ class Reaction:
     the
     comment is scheduled (not at send time), so the queue is deterministic and
     inspectable: /status and /requeue can show which reaction lands where. Each
-    item
-    is an ``(emoji_id, fallback)`` pair; usually one, occasionally two (the
-    rare double).
+    item is an ``(emoji_id, fallback)`` pair. Today the pickers return exactly
+    one; the tuple stays because it is the persisted shape, and collapsing it
+    would be a state migration for no gain.
     """
 
     chat: int
@@ -130,7 +122,7 @@ class Reaction:
     kind: str = 'react'  # 'react' = a like reaction; 'reply' = thread sticker
 
 
-def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
+def _emojis_from_row(raw: object) -> tuple[tuple[str, str], ...]:
     """Parse a persisted ``emojis`` list of [id, fallback] pairs."""
     rows = raw if isinstance(raw, list) else []
     return tuple(
@@ -140,105 +132,124 @@ def _emojis_from_entry(raw: object) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _reaction_from_entry(entry: dict[str, object], when: float) -> Reaction:
-    """Rebuild a Reaction from a persisted dict (root defaults to reply_to)."""
-    reply_to = int(entry['reply_to'])
+def _reaction(raw: object) -> Reaction | None:
+    """Rebuild one queued Reaction from its cursor row, or None if broken."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        reply_to = codec.whole(raw['reply_to'])
+        chat = codec.whole(raw['chat'])
+    except (KeyError, TypeError, ValueError):
+        return None
     return Reaction(
-        chat=int(entry['chat']),
+        chat=chat,
         reply_to=reply_to,
-        root=int(entry.get('root', reply_to)),
-        when=when,
-        text=str(entry.get('text', '')),
-        emojis=_emojis_from_entry(entry.get('emojis')),
-        kind=str(entry.get('kind', 'react')),
+        root=codec.whole(raw.get('root'), reply_to),
+        when=codec.num(raw.get('when')),
+        text=str(raw.get('text', '')),
+        emojis=_emojis_from_row(raw.get('emojis')),
+        kind=str(raw.get('kind', 'react')),
     )
+
+
+def _queue_row(reaction: Reaction) -> dict[str, object]:
+    """Return one queued Reaction as its readable cursor row."""
+    return {
+        'chat': reaction.chat,
+        'reply_to': reaction.reply_to,
+        'root': reaction.root,
+        'when': reaction.when,
+        'text': reaction.text,
+        'emojis': [[eid, fb] for eid, fb in reaction.emojis],
+        'kind': reaction.kind,
+    }
 
 
 @dataclass(frozen=True)
 class ReactionParams:
     """Every tunable, loaded from the constants JSON 'reactions' section."""
 
-    enabled: bool
-    # Like ABSOLUTELY every comment: bypass the human-like gates (skip_prob,
-    # silent days, the asleep/stale drop) so each comment always gets a like
-    # reaction. Dedup and the manual-reply check still apply -- a comment is
-    # liked once, not repeatedly. Off = the human-like behaviour.
-    like_all: bool
+    enabled: bool = False
+    # Bypass the human-like gates (skip_prob, silent days, the asleep/stale
+    # drop) so every comment reaches the send step. It does NOT get the last
+    # word: with attach_enabled on, the exposure control still declines some
+    # of them, so "absolutely every comment" holds only with attach off. Dedup
+    # and the manual-reply check apply either way.
+    like_all: bool = False
     # When the target is a CHANNEL, its comments live in the linked discussion
     # group. True: resolve each post's discussion thread and react only there
     # (so reactions land in the channel post's comments). False: match replies
-    # to
-    # the post id directly (the target is a plain group).
-    comments_in_discussion: bool
-    # Whether to also drop a reaction on our OWN fresh posts
-    # (immediately,
-    # no human-like wait). Optional and off by default: the engine's job is
+    # to the post id directly (the target is a plain group).
+    comments_in_discussion: bool = False
+    # Whether to also drop a reaction on our OWN fresh posts (immediately, no
+    # human-like wait). Optional and off by default: the engine's job is
     # reacting to COMMENTERS; liking our own posts is a separate extra.
-    react_to_posts: bool
-    watch_posts: int
-    hours_weekday: tuple[tuple[float, float, float], ...]
-    hours_weekend: tuple[tuple[float, float, float], ...]
-    quiet_hours: frozenset[int]
+    react_to_posts: bool = False
+    watch_posts: int = 4
+    hours_weekday: tuple[tuple[float, float, float], ...] = (
+        (9.0, 2.0, 1.0),
+        (21.0, 2.5, 1.3),
+    )
+    hours_weekend: tuple[tuple[float, float, float], ...] = (
+        (11.0, 3.0, 1.0),
+        (22.0, 3.0, 1.2),
+    )
+    quiet_hours: frozenset[int] = frozenset({2, 3, 4, 5, 6})
     # The DECLARED uptime window in local hours [start, end) -- a prior only.
     # The engine also LEARNS the real on-hours (mark_alive), and blends the two
     # by confidence, so it adapts to whatever hours the NAS is actually up, not
     # just this rule of thumb. start >= end (or 0/24) means "up all day".
-    active_start: float
-    active_end: float
+    # (JSON keys: active_start_hour / active_end_hour.)
+    active_start: float = 0.0
+    active_end: float = 24.0
     # How the learned uptime is weighed: uptime_half_life_sec fades old
     # observations (so a changed schedule is followed), uptime_learn_obs is how
     # many heartbeats of history earn full trust in the learned curve over the
     # declared window. skip_if_manually_replied drops the reaction when the
-    # operator
-    # has already replied to that comment by hand.
-    uptime_half_life_sec: float
-    uptime_learn_obs: float
-    skip_if_manually_replied: bool
+    # operator has already replied to that comment by hand.
+    uptime_half_life_sec: float = 864000.0
+    uptime_learn_obs: float = 2000.0
+    skip_if_manually_replied: bool = True
     # The persona's UTC offset: hours/dates are read in THIS timezone, so the
     # cadence matches the legend, not the server's clock (principle 9).
-    tz_offset_hours: float
-    latency_log_mu: float
-    latency_log_sigma: float
-    spacing_log_mu: float
-    spacing_log_sigma: float
-    jitter_sec: float
-    skip_prob: float
-    double_prob: float
-    double_gap_sec: float
-    silent_day_prob: float
-    recency_half_life_sec: float
-    mood_phi: float
-    mood_sigma: float
-    feedback_speedup: float
+    tz_offset_hours: float = 3.0
+    latency_log_mu: float = 7.0
+    latency_log_sigma: float = 1.2
+    spacing_log_mu: float = 9.5
+    spacing_log_sigma: float = 1.3
+    jitter_sec: float = 90.0
+    skip_prob: float = 0.12
+    silent_day_prob: float = 0.08
+    recency_half_life_sec: float = 172800.0
+    mood_phi: float = 0.8
+    mood_sigma: float = 0.35
+    feedback_speedup: float = 0.4
     # Session model (see ReactionBrain._plan): spacing_* is the long gap
-    # BETWEEN
-    # comment-answering sessions; the fields below shape ONE session.
-    session_gap_log_mu: float  # log-mean of the short intra-session gap
-    session_gap_log_sigma: float
-    session_idle_sec: float  # a silence longer than this ends the session
-    session_max_sec: float  # hard cap on one session's span
-    max_reply_delay_sec: (
-        float  # a reaction older than this is too stale -> skip
-    )
-    pool: tuple[ReactionEmoji, ...]
+    # BETWEEN comment-answering sessions; the fields below shape ONE session.
+    session_gap_log_mu: float = 3.8  # log-mean of the intra-session gap
+    session_gap_log_sigma: float = 0.6
+    session_idle_sec: float = 900.0  # a longer silence ends the session
+    session_max_sec: float = 1200.0  # hard cap on one session's span
+    max_reply_delay_sec: float = 21600.0  # older than this -> too stale
+    pool: tuple[Emoji, ...] = ()
     # The LIKE pool: the emoji placed as the default reaction. Chosen
     # pseudo-randomly but DETERMINISTICALLY -- seeded by the target id, so the
     # same comment/post always yields the same like: varied across targets, yet
     # recomputable after a restart (no persisted cursor). Separate from the
-    # reaction
-    # ``pool``.
-    like_pool: tuple[ReactionEmoji, ...]
+    # reaction ``pool``.
+    like_pool: tuple[Emoji, ...] = ()
     # How often (seconds) the bot re-scans the targets on its own -- picking up
     # posts created (and commented on) while it runs, without waiting for a
     # restart or a manual /requeue. 0 turns the auto-rescan off.
-    rescan_sec: float
+    rescan_sec: float = 300.0
     # --- Berlyne attachment control (per commenter) -----------------------
     # When on, we do NOT like every comment. Instead the fraction of a
     # person's comments we engage (like or sticker) is steered toward the
     # Wundt peak (~0.67): liking everything reads as desperate, so a heavy
-    # commenter is throttled while a newcomer is still acknowledged. Off
-    # reproduces the old behaviour (like_all likes every comment). The like
-    # reaction is the EXPOSURE act; the thread sticker is the RECIPROCITY act.
+    # commenter is throttled while a newcomer is still acknowledged. This
+    # decides LAST, so it wins over like_all; turning it off is what makes
+    # like_all mean what it says. The like reaction is the EXPOSURE act; the
+    # thread sticker is the RECIPROCITY act.
     attach_enabled: bool = True
     # The Wundt exposure curve params (engines/attachment.py): their argmax IS
     # the like-fraction target -- there is no separate 0.67 constant.
@@ -266,17 +277,18 @@ class ReactionParams:
 
 @dataclass
 class ReactionState:
-    """The persisted memory that principles 2-4 and once-per-person need.
+    """The engine's cursors: everything bounded, nothing per-audience.
 
-    ``posts`` (the watched comment targets) and ``pending`` (reactions
-    scheduled but
-    not yet sent) are persisted too, so a nightly NAS shutdown does not lose
-    which posts to watch or the reactions due after it comes back.
+    What used to sit here and grow with the audience now lives in the state
+    store: the per-commenter ledger as rows, and the once-per-(post, person)
+    dedup as marks. What is left is a handful of scalars plus three bounded
+    lists -- the watched posts (four), the due queue (tens), and the
+    per-emoji recency of a 39-entry catalog. That is the whole reason this
+    is still a readable JSON block.
     """
 
     mood: float = 0.0
     mood_day: str = ''  # ISO date of the last mood step (drift once a day)
-    last_send: float = 0.0  # unix ts of the most recent reaction sent
     next_session_at: float = (
         0.0  # earliest the NEXT session may open (spacing)
     )
@@ -285,20 +297,12 @@ class ReactionState:
     reaction_last: dict[str, float] = field(
         default_factory=dict
     )  # id -> last ts
-    reacted: set[str] = field(default_factory=set)  # (post, person) keys done
     posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
-    pending: list[dict[str, object]] = field(
-        default_factory=list
-    )  # due reactions
+    pending: list[Reaction] = field(default_factory=list)  # due reactions
     alive: dict[str, float] = field(
         default_factory=dict
     )  # hour -> decayed obs
     alive_ts: float = 0.0  # last heartbeat, for decay
-    # Per-commenter relationship memory (the shared Berlyne ledger), spanning
-    # posts so a person is remembered across our posts (the point of adapting
-    # to each individual): offered=commented, taken=engaged (liked),
-    # recip=stickered, with the date-keyed like/sticker daily caps.
-    ledger: relationship.Ledger = field(default_factory=relationship.Ledger)
 
 
 def _local(ts: float, params: ReactionParams) -> datetime:
@@ -372,7 +376,7 @@ def _context_tags(ts: float, params: ReactionParams) -> frozenset[str]:
     return frozenset(tags)
 
 
-def _mood_bias(reaction: ReactionEmoji, mood: float) -> float:
+def _mood_bias(reaction: Emoji, mood: float) -> float:
     """Tilt to lively reactions when mood is high, sleepy when low."""
     if 'bodry' in reaction.tags:
         return math.exp(mood)
@@ -394,14 +398,15 @@ class ReactionBrain:
     def __init__(
         self,
         params: ReactionParams,
-        path: Path,
+        store: state_store.StateStore,
         rng: random.Random | None = None,
     ) -> None:
-        """Bind the params and state path; seed the RNG."""
+        """Bind the params and the shared store; seed the RNG."""
         self.params = params
-        self.path = path
+        self.store = store
         self.rng = rng or random.Random()  # noqa: S311 -- mimicry, not crypto
         self.clock = time.time
+        self.ledger = relationship.Ledger(store)
         self.state = self._load()
 
     @property
@@ -423,11 +428,12 @@ class ReactionBrain:
             self.state.posts.remove(pair)
         self.state.posts.append(pair)
         del self.state.posts[: -self.params.watch_posts]  # keep the last N
-        live = tuple(f'{c}:{m}:' for c, m in self.state.posts)
-        self.state.reacted = {
-            k for k in self.state.reacted if k.startswith(live)
-        }
+        self.store.keep_marks(tuple(f'{c}:{m}:' for c, m in self.state.posts))
         self._save()
+
+    def answered(self) -> int:
+        """How many (post, commenter) pairs have already been reacted to."""
+        return self.store.count_marks()
 
     def is_comment(self, chat: int, reply_to: int | None) -> bool:
         """Whether a reply in ``chat`` targets one of the tracked posts."""
@@ -441,17 +447,7 @@ class ReactionBrain:
         comment
         was scheduled -- not a fresh random one at send time.
         """
-        self.state.pending.append(
-            {
-                'chat': reaction.chat,
-                'reply_to': reaction.reply_to,
-                'root': reaction.root,
-                'when': reaction.when,
-                'text': reaction.text,
-                'emojis': [[eid, fb] for eid, fb in reaction.emojis],
-                'kind': reaction.kind,
-            }
-        )
+        self.state.pending.append(reaction)
         self._save()
 
     def done_pending(self, chat: int, reply_to: int) -> None:
@@ -459,7 +455,7 @@ class ReactionBrain:
         self.state.pending = [
             p
             for p in self.state.pending
-            if not (p['chat'] == chat and p['reply_to'] == reply_to)
+            if not (p.chat == chat and p.reply_to == reply_to)
         ]
         self._save()
 
@@ -483,26 +479,23 @@ class ReactionBrain:
             self.state.next_session_at = now
             self.state.session_start_at = 0.0
             self.state.session_last_at = 0.0
-        out: list[Reaction] = []
-        for entry in self.state.pending:
-            when = float(entry['when'])
-            if renew_all or when <= now:
-                when = self._fire_time(now, engaged=False)
-                entry['when'] = when
-            out.append(_reaction_from_entry(entry, when))
+        fresh: list[Reaction] = []
+        for queued in self.state.pending:
+            due = renew_all or queued.when <= now
+            when = self._fire_time(now, engaged=False) if due else queued.when
+            fresh.append(replace(queued, when=when))
+        self.state.pending = fresh
         self._save()
-        return out
+        return list(fresh)
 
     def due_now(self) -> list[Reaction]:
         """Set every pending reaction to fire now and return them."""
         now = self.clock()
-        out = [
-            _reaction_from_entry(entry, now) for entry in self.state.pending
+        self.state.pending = [
+            replace(queued, when=now) for queued in self.state.pending
         ]
-        for entry in self.state.pending:
-            entry['when'] = now
         self._save()
-        return out
+        return list(self.state.pending)
 
     def schedule(self, key: str, *, engaged: bool) -> float | None:
         """Decide if/when to react to ``key``; None means skip it.
@@ -512,7 +505,7 @@ class ReactionBrain:
         reacted on success. Returns the unix ts at which ``emit`` should run.
         """
         now = self.clock()
-        if not self.params.enabled or key in self.state.reacted:
+        if not self.params.enabled or self.store.marked(key):
             return None
         # like_all likes every comment: place it at the next awake moment
         # (always lands). Otherwise the human-like gates may drop it.
@@ -523,7 +516,7 @@ class ReactionBrain:
         )
         if when is None:
             return None
-        self.state.reacted.add(key)
+        self.store.mark(key)
         self._save()
         return when
 
@@ -691,7 +684,7 @@ class ReactionBrain:
             return None
         return weighted_choice(self.rng, slots, weights)
 
-    def pick_like(self, key: str) -> list[ReactionEmoji]:
+    def pick_like(self, key: str) -> list[Emoji]:
         """One like for a target, WEIGHTED and DETERMINISTIC in ``key``.
 
         Drawn from the like pool through the same human machinery as the
@@ -706,7 +699,7 @@ class ReactionBrain:
         """
         return self._choose(self.params.like_pool, key)
 
-    def pick_reaction(self, key: str) -> list[ReactionEmoji]:
+    def pick_reaction(self, key: str) -> list[Emoji]:
         """Pick the thread sticker, WEIGHTED and DETERMINISTIC in ``key``.
 
         Same as ``pick_like`` but drawn from the reaction ``pool``, so a
@@ -719,19 +712,15 @@ class ReactionBrain:
         """
         return self._choose(self.params.pool, key)
 
-    def _choose(
-        self, pool: tuple[ReactionEmoji, ...], key: str
-    ) -> list[ReactionEmoji]:
+    def _choose(self, pool: tuple[Emoji, ...], key: str) -> list[Emoji]:
         """Weighted, reproducible-in-key draw of one emoji; records recency.
 
         Shared by ``pick_like`` and ``pick_reaction``. Weights come from
-        ``_weight``
-        (base * recency * mood * context), so the emoji people actually SEE
-        inherits the same human machinery that the (otherwise unused) ``emit``
-        path had. Seeded by ``key`` for per-target reproducibility, then the
-        pick is written to ``reaction_last`` so the next draw suppresses it --
-        no
-        back-to-back repeats across a burst of reactions.
+        ``_weight`` (base * recency * mood * context), so every emoji people
+        actually see carries the full human machinery. Seeded by ``key`` for
+        per-target reproducibility, then the pick is written to
+        ``reaction_last`` so the next draw suppresses it -- no back-to-back
+        repeats across a burst of reactions.
         """
         if not pool:
             return []
@@ -740,7 +729,7 @@ class ReactionBrain:
         weights = [self._weight(reaction, now) for reaction in pool]
         roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible-in-key
         chosen = weighted_choice(roll, pool, weights)
-        self.state.reaction_last[chosen.emoji_id] = now  # principle 3: recency
+        self.state.reaction_last[chosen.id] = now  # principle 3: recency
         self._save()
         return [chosen]
 
@@ -756,14 +745,18 @@ class ReactionBrain:
             recip_gain=p.recip_control_gain,
             take_cap=p.like_max_per_day,
             recip_cap=p.sticker_max_per_day,
+            # One answering session IS the burst this engine clumps into, so
+            # the clumping factor reuses that gate rather than adding a knob.
+            burst_gap_sec=p.session_idle_sec,
         )
 
     def _grant_engage(self, person: str) -> bool:
         """Commit one engagement (like) to the ledger if the cap allows."""
-        led = self.state.ledger
-        if not led.spend_take(self._control(), self.clock(), self._tz()):
+        led = self.ledger
+        control, now = self._control(), self.clock()
+        if not led.spend_take(control, now, self._tz()):
             return False
-        led.bump_take(person)
+        led.bump_take(person, control, now)
         return True
 
     def decide_engage(self, person: str) -> bool:
@@ -776,11 +769,12 @@ class ReactionBrain:
         control starts from the second. Records the comment as offered either
         way, so a rescan never re-rolls a decided comment.
         """
-        led = self.state.ledger
-        first = led.offered.get(person, 0) == 0
+        led = self.ledger
+        first = led.row(person).offered == 0
         prob = led.take_prob(person, self._control())
         take = first or self.rng.random() < prob
-        led.add_offer(person)  # count this comment (recorded before granting)
+        # count this comment (recorded before granting)
+        led.add_offer(person, now=self.clock())
         ok = self._grant_engage(person) if take else False
         self._save()
         return ok
@@ -799,69 +793,44 @@ class ReactionBrain:
         """
         if not content_ok:
             return False
-        led = self.state.ledger
+        led = self.ledger
         ctrl = self._control()
         prob = led.recip_prob(person, ctrl, taken_now=True)
         if self.rng.random() >= prob:
             return False
-        if not led.spend_recip(ctrl, self.clock(), self._tz()):
+        now = self.clock()
+        if not led.spend_recip(ctrl, now, self._tz()):
             return False
-        led.recip[person] = led.recip.get(person, 0) + 1
+        led.bump_recip(person, now)
         self._save()
         return True
 
     def warmth(self) -> list[relationship.Warmth]:
         """Per-commenter attachment readout for /status, most recent first."""
-        return relationship.warmth(self.state.ledger, self._control())
+        return relationship.warmth(self.ledger, self._control())
 
     def remember(self, person: str, label: str) -> None:
         """Cache a commenter's @name for /status (persisted)."""
         if not label or label == person:
             return
-        self.state.ledger.remember(person, label)
+        self.ledger.remember(person, label)
         self._save()
 
     def likes_today(self, now: float) -> int:
         """Engagements (likes) placed on the local date of ``now`` (else 0)."""
-        return self.state.ledger.takes_today(now, self._tz())
+        return self.ledger.takes_today(now, self._tz())
 
     def stickers_today(self, now: float) -> int:
         """Stickers placed on the local date of ``now`` (else 0)."""
-        return self.state.ledger.recips_today(now, self._tz())
+        return self.ledger.recips_today(now, self._tz())
 
     def _tz(self) -> float:
         """Return the persona timezone offset (for the daily counters)."""
         return self.params.tz_offset_hours
 
-    def emit(self) -> list[ReactionEmoji]:
-        """Pick the reaction(s) to send now and record the send.
-
-        Returns one reaction, or two when the rare "second reaction" fires. An
-        empty pool
-        yields an empty list (the caller then sends nothing).
-        """
-        now = self.clock()
-        self._step_mood(now)
-        if not self.params.pool:
-            return []
-        reactions = [self._pick(now)]
-        if self.rng.random() < self.params.double_prob:  # principle 7
-            reactions.append(self._pick(now))
-        for reaction in reactions:
-            self.state.reaction_last[reaction.emoji_id] = now
-        self.state.last_send = now
-        self._save()
-        return reactions
-
-    def _pick(self, now: float) -> ReactionEmoji:
-        """One weighted reaction draw at ``now``."""
-        pool = self.params.pool
-        weights = [self._weight(c, now) for c in pool]
-        return weighted_choice(self.rng, pool, weights)
-
-    def _weight(self, reaction: ReactionEmoji, now: float) -> float:
+    def _weight(self, reaction: Emoji, now: float) -> float:
         """Return the selection weight: base*recency*mood*context (3,4,5)."""
-        dt = now - self.state.reaction_last.get(reaction.emoji_id, 0.0)
+        dt = now - self.state.reaction_last.get(reaction.id, 0.0)
         weight = reaction.base * recency_penalty(
             dt, self.params.recency_half_life_sec
         )
@@ -879,202 +848,124 @@ class ReactionBrain:
         self.state.mood = self.params.mood_phi * self.state.mood + noise
         self.state.mood_day = day
 
-    def _backfill_ledger(self, state: ReactionState) -> None:
-        """Seed the relationship ledger from historically-liked comments.
-
-        A state file written before the attachment control has an empty ledger
-        but a full ``reacted`` set (every comment we already liked). Seed
-        offered=taken per commenter from it, so the /status coefficients show
-        the history at once instead of only new comments; the control then
-        steers each person from there. Runs only while the ledger is empty, so
-        a real engagement (which persists the ledger) supersedes it.
-        """
-        if state.ledger.offered or not state.reacted:
-            return
-        for key in state.reacted:
-            parts = key.split(':')
-            person = parts[2] if len(parts) >= _CATTED_PERSON_FIELDS else ''
-            if person:
-                state.ledger.add_take(person, 1)
-
     def _load(self) -> ReactionState:
-        """Reload the persisted memory, or start fresh if none/corrupt."""
-        if not self.path.exists():
+        """Reload the cursors, or start fresh when the store has none."""
+        raw = self.store.cursor()
+        self.ledger.restore(raw)
+        if not raw:
             return ReactionState()
-        try:
-            raw = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
-            return ReactionState()
-        state = ReactionState(
-            mood=float(raw.get('mood', 0.0)),
+        queued = [_reaction(row) for row in codec.rows(raw.get('queue'))]
+        return ReactionState(
+            mood=float(raw.get('mood', 0.0)),  # type: ignore[arg-type]
             mood_day=str(raw.get('mood_day', '')),
-            last_send=float(raw.get('last_send', 0.0)),
-            next_session_at=float(
-                raw.get('next_session_at', raw.get('next_earliest', 0.0))
-            ),
-            session_start_at=float(raw.get('session_start_at', 0.0)),
-            session_last_at=float(raw.get('session_last_at', 0.0)),
-            reaction_last={
-                str(k): float(v)
-                for k, v in (raw.get('reaction_last') or {}).items()
-            },
-            reacted={str(p) for p in (raw.get('reacted') or [])},
-            posts=[(int(c), int(m)) for c, m in (raw.get('posts') or [])],
-            pending=[dict(p) for p in (raw.get('pending') or [])],
-            alive={
-                str(k): float(v) for k, v in (raw.get('alive') or {}).items()
-            },
-            alive_ts=float(raw.get('alive_ts', 0.0)),
-            ledger=relationship.Ledger(
-                offered=relationship.int_map(raw.get('commented')),
-                taken=relationship.int_map(raw.get('engaged')),
-                recip=relationship.int_map(raw.get('stickered')),
-                take_day=str(raw.get('engage_day', '')),
-                take_today=int(raw.get('engage_today', 0)),
-                recip_day=str(raw.get('sticker_day', '')),
-                recip_today=int(raw.get('sticker_today', 0)),
-                names={
-                    str(k): str(v) for k, v in (raw.get('names') or {}).items()
-                },
-            ),
+            next_session_at=_at(raw, 'next_at'),
+            session_start_at=_at(raw, 'start_at'),
+            session_last_at=_at(raw, 'last_at'),
+            reaction_last=_floats(raw.get('emoji_last')),
+            posts=[
+                (codec.whole(c), codec.whole(m))
+                for c, m in _pairs(raw.get('posts'))
+            ],
+            pending=[q for q in queued if q is not None],
+            alive=_floats(raw.get('alive')),
+            alive_ts=codec.num(raw.get('alive_at')),
         )
-        self._backfill_ledger(state)
-        return state
 
     def _save(self) -> None:
-        """Persist the memory atomically as readable JSON."""
-        data = {
-            'mood': self.state.mood,
-            'mood_day': self.state.mood_day,
-            'last_send': self.state.last_send,
-            'next_session_at': self.state.next_session_at,
-            'session_start_at': self.state.session_start_at,
-            'session_last_at': self.state.session_last_at,
-            'reaction_last': self.state.reaction_last,
-            'reacted': sorted(self.state.reacted),
-            'posts': [[c, m] for c, m in self.state.posts],
-            'pending': self.state.pending,
-            'alive': self.state.alive,
-            'alive_ts': self.state.alive_ts,
-            'commented': self.state.ledger.offered,
-            'engaged': self.state.ledger.taken,
-            'stickered': self.state.ledger.recip,
-            'engage_day': self.state.ledger.take_day,
-            'engage_today': self.state.ledger.take_today,
-            'sticker_day': self.state.ledger.recip_day,
-            'sticker_today': self.state.ledger.recip_today,
-            'names': self.state.ledger.names,
-        }
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
+        """Publish the cursor block to this engine's database."""
+        self.store.put_cursor(
+            {
+                'mood': self.state.mood,
+                'mood_day': self.state.mood_day,
+                'session': {
+                    'next_at': self.state.next_session_at,
+                    'start_at': self.state.session_start_at,
+                    'last_at': self.state.session_last_at,
+                },
+                'emoji_last': self.state.reaction_last,
+                'posts': [[c, m] for c, m in self.state.posts],
+                'queue': [_queue_row(q) for q in self.state.pending],
+                'alive': self.state.alive,
+                'alive_at': self.state.alive_ts,
+                **self.ledger.counters(),
+            },
         )
-        tmp.replace(self.path)
 
 
-def _emoji(raw: dict[str, object]) -> ReactionEmoji:
-    """One ReactionEmoji from its JSON dict (unknown keys ignored)."""
-    tags = raw.get('tags') or []
-    return ReactionEmoji(
-        emoji_id=str(raw.get('id', '')),
-        fallback=str(raw.get('fallback') or ' '),
-        base=float(raw.get('base') or 1.0),
-        tags=tuple(str(t) for t in tags),
-    )
+_PAIR = 2
+"""A persisted (chat, post) row is exactly two numbers."""
+
+
+def _pairs(raw: object) -> list[tuple[object, object]]:
+    """Return a persisted list of two-item rows, skipping anything else."""
+    return [
+        (row[0], row[1])
+        for row in codec.rows(raw)
+        if isinstance(row, (list, tuple)) and len(row) == _PAIR
+    ]
+
+
+def _floats(raw: object) -> dict[str, float]:
+    """Coerce a persisted ``{key: number}`` block to ``dict[str, float]``."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): float(v) for k, v in raw.items()}
+
+
+def _at(cursor: Mapping[str, object], key: str) -> float:
+    """Read one timestamp out of the nested ``session`` block."""
+    session = cursor.get('session')
+    block = session if isinstance(session, dict) else {}
+    return float(block.get(key, 0.0))
 
 
 def _peaks(
     value: object,
 ) -> tuple[tuple[float, float, float], ...]:
     """Parse a JSON list of [mean, sigma, weight] peaks."""
-    rows = value if isinstance(value, list) else []
     out = []
-    for row in rows:
-        mean, sigma, weight = row
-        out.append((float(mean), float(sigma), float(weight)))
+    for row in codec.rows(value):
+        mean, sigma, weight = codec.rows(row)
+        out.append((codec.num(mean), codec.num(sigma), codec.num(weight)))
     return tuple(out)
 
 
-def _entries_of_type(data: dict[str, object], etype: str) -> list[dict]:
-    """Return the emoji dicts of one ``type`` from the top-level array."""
-    top = data.get('emoji')
-    if not isinstance(top, list):
-        return []
-    return [e for e in top if isinstance(e, dict) and e.get('type') == etype]
+def _pool(data: dict[str, object], kind: str) -> tuple[Emoji, ...]:
+    """Build one emoji pool from the unified top-level ``emoji`` array."""
+    return tuple(config.emoji_of(config.emoji_catalog(data), kind))
 
 
 def load_reaction_params(data: dict[str, object]) -> ReactionParams:
-    """Load the reaction engine's params from the 'reactions' JSON key."""
-    reactions = (
-        data.get('reactions')
-        if isinstance(data.get('reactions'), dict)
-        else {}
-    )
-    reactions = reactions or {}
-    pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'reaction'))
-    like_pool = tuple(_emoji(dict(e)) for e in _entries_of_type(data, 'like'))
-    return ReactionParams(
-        enabled=bool(reactions.get('enabled', False)),
-        like_all=bool(reactions.get('like_all', False)),
-        comments_in_discussion=bool(
-            reactions.get('comments_in_discussion', False)
-        ),
-        react_to_posts=bool(reactions.get('react_to_posts', False)),
-        watch_posts=int(reactions.get('watch_posts') or 4),
-        hours_weekday=_peaks(reactions.get('hours_weekday'))
-        or ((9.0, 2.0, 1.0), (21.0, 2.5, 1.3)),
-        hours_weekend=_peaks(reactions.get('hours_weekend'))
-        or ((11.0, 3.0, 1.0), (22.0, 3.0, 1.2)),
-        quiet_hours=frozenset(
-            int(h) for h in (reactions.get('quiet_hours') or [2, 3, 4, 5, 6])
-        ),
-        active_start=float(reactions.get('active_start_hour', 0.0)),
-        active_end=float(reactions.get('active_end_hour', 24.0)),
-        uptime_half_life_sec=float(
-            reactions.get('uptime_half_life_sec', 864000.0)
-        ),
-        uptime_learn_obs=float(reactions.get('uptime_learn_obs', 2000.0)),
-        skip_if_manually_replied=bool(
-            reactions.get('skip_if_manually_replied', True)
-        ),
-        tz_offset_hours=float(reactions.get('tz_offset_hours', 3.0)),
-        latency_log_mu=float(reactions.get('latency_log_mu', 7.0)),
-        latency_log_sigma=float(reactions.get('latency_log_sigma', 1.2)),
-        spacing_log_mu=float(reactions.get('spacing_log_mu', 9.5)),
-        spacing_log_sigma=float(reactions.get('spacing_log_sigma', 1.3)),
-        jitter_sec=float(reactions.get('jitter_sec', 90.0)),
-        skip_prob=float(reactions.get('skip_prob', 0.12)),
-        double_prob=float(reactions.get('double_prob', 0.06)),
-        double_gap_sec=float(reactions.get('double_gap_sec', 40.0)),
-        silent_day_prob=float(reactions.get('silent_day_prob', 0.08)),
-        recency_half_life_sec=float(
-            reactions.get('recency_half_life_sec', 172800.0)
-        ),
-        mood_phi=float(reactions.get('mood_phi', 0.8)),
-        mood_sigma=float(reactions.get('mood_sigma', 0.35)),
-        feedback_speedup=float(reactions.get('feedback_speedup', 0.4)),
-        session_gap_log_mu=float(reactions.get('session_gap_log_mu', 3.8)),
-        session_gap_log_sigma=float(
-            reactions.get('session_gap_log_sigma', 0.6)
-        ),
-        session_idle_sec=float(reactions.get('session_idle_sec', 900.0)),
-        session_max_sec=float(reactions.get('session_max_sec', 1200.0)),
-        max_reply_delay_sec=float(
-            reactions.get('max_reply_delay_sec', 21600.0)
-        ),
-        pool=pool,
-        like_pool=like_pool,
-        rescan_sec=float(reactions.get('rescan_sec', 300.0)),
-        attach_enabled=bool(reactions.get('attach_enabled', True)),
-        exposure_c1=float(reactions.get('exposure_c1', 0.45)),
-        exposure_c2=float(reactions.get('exposure_c2', 0.90)),
-        exposure_k=float(reactions.get('exposure_k', 8.0)),
-        like_control_gain=float(reactions.get('like_control_gain', 1.0)),
-        recip_fraction_target=float(
-            reactions.get('recip_fraction_target', 0.20)
-        ),
-        recip_control_gain=float(reactions.get('recip_control_gain', 1.0)),
-        like_max_per_day=int(reactions.get('like_max_per_day', 400)),
-        sticker_max_per_day=int(reactions.get('sticker_max_per_day', 40)),
-        label=str(reactions.get('label', '')),
+    """Load the reaction engine's params from the 'reactions' JSON key.
+
+    Every scalar knob reads its own key and falls back to its own declared
+    default (``core/codec.py``); only what a plain key cannot express is
+    spelled out here -- the two emoji pools, the Gaussian day curves, and
+    the uptime window whose JSON keys carry an ``_hour`` suffix.
+
+    ``quiet_hours`` is NOT among them any more. It used to be read here with
+    an ``or`` that turned a written ``[]`` back into the 2-6 default, so the
+    one thing an operator could write to mean "never silent" meant its
+    opposite. ``frozenset[int]`` is a reader ``codec`` already has, and the
+    key is now gone from the constants file, so an absent key still gives the
+    declared default and a written one finally means what it says.
+    """
+    cfg = codec.engine(data, 'reactions')
+    return codec.decode(
+        ReactionParams,
+        cfg,
+        {
+            'pool': _pool(data, 'reaction'),
+            'like_pool': _pool(data, 'like'),
+            'hours_weekday': _peaks(cfg.get('hours_weekday'))
+            or ReactionParams.hours_weekday,
+            'hours_weekend': _peaks(cfg.get('hours_weekend'))
+            or ReactionParams.hours_weekend,
+            'active_start': codec.num(
+                cfg.get('active_start_hour'), ReactionParams.active_start
+            ),
+            'active_end': codec.num(
+                cfg.get('active_end_hour'), ReactionParams.active_end
+            ),
+        },
     )

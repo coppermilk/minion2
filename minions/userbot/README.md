@@ -33,21 +33,31 @@ minions/userbot/
   login.py                # one-time interactive login -> the session file
   aggregator_constants.json, assets/   # editable texts + premium-emoji ids (UTF-8), cabinet template/fonts
   core/                   # pure building blocks, no Telethon
-    models, matching, statefile, render, config, runtime, client,
-    humanize, profiles, attachment, relationship, base (the shared-state contract)
+    models, matching, state (the store), statefile, render, config, codec,
+    runtime, client, humanize, tasks, attachment, relationship
   engines/                # domain brains (Telethon-free, unit-tested)
     reactions, stories, greeter, comod, users, premium_emoji
-  glue/                   # the Userbot mixins that DO touch Telethon
-    aggregator (grouping + posting), reactions, stories, comod, users,
-    commands, status, profiles (live/test modes)
+  glue/                   # the collaborators that DO touch Telethon
+    aggregator (LinkAggregator), reactions (CommentWatch),
+    stories (StoryWatch), comod (Cabinet), users (AudienceLog),
+    status (StatusReport), commands (CommandRouter), profiles (ServiceModes)
   dev/                    # developer tools, not the running bot
-    reactions_proof, dump_emoji_ids
+    dump_emoji_ids
 ```
 
 The principle: `core/` is pure logic/maths/IO, `engines/` are the domain brains,
 `glue/` is everything that calls Telethon, `dev/` is helpers. The aggregation
 brain (grouping, fuzzy title match, the re-post guard) lives in `core/matching.py`
 + `core/models.py`; its Telethon side is `glue/aggregator.py`.
+
+**How the host is assembled.** `Userbot` is a plain object that HOLDS one
+collaborator per service -- it does not inherit from them. Each service takes a
+frozen `*Deps` naming everything it may reach, so what a service can touch is
+its constructor signature, not "whatever is on `self`". The three host-level
+helpers (`StatusReport`, `CommandRouter`, `ServiceModes`) hold the bot
+explicitly instead. Two consequences worth knowing: a service cannot reach
+another service's state by accident, and every collaborator can be constructed
+in a test without a Telethon client.
 
 ## Configuration
 
@@ -70,12 +80,40 @@ the chats); **`aggregator_constants.json`** carries all behaviour and content.
 > `AGGREGATOR_STATE_DIR` env) so the live bot finds its session and state exactly
 > where it always did -- only the **code** is now `minions.userbot`.
 
-**`aggregator_constants.json`** -- key sections: `platforms`, `title_match`,
-`timeout_sec`, `backfill`, `max_duration_sec`, `repost_guard_sec` /
-`repost_guard_count` / `discussion_gap_sec` (the aggregator's dedup/flood knobs),
-the incoming `fields` names, the post's texts + the unified `emoji` array, and one
-section per engine (`reactions`, `stories`, `greeter`, `comod`, `users`,
-`persona`, `runtime`).
+**`aggregator_constants.json`** -- six sections, one rule: **a setting lives
+in the section of the engine that reads it.**
+
+| Section | What is in it |
+|---------|---------------|
+| `persona` | one human: timezone, waking window, silent-day chance. Fanned into every engine at load, so you tune the person in one place |
+| `runtime` | the process: watchdog, liveness probe, flood-sleep threshold |
+| `engines` | one block per engine -- `aggregator` (platforms, timeouts, the dedup/flood guards, the incoming `fields` names), `reactions`, `stories`, `greeter`, `comod`, `users` |
+| `post` | what a post looks like: author, announce lines, rows, labels, samples |
+| `emoji` | the unified premium-emoji catalog, each entry tagged with its `type` |
+| `texts` | what the operator sees: `/help`, the `/status` legend and glyphs, the words that suppress a sticker |
+
+## State on disk
+
+Two shapes, because two things behave differently. Per-peer data grows with
+the audience and is written one row at a time; cursors are a bounded handful
+of scalars and are the only part worth reading by eye.
+
+```
+<DRIVE>/bots/aggregator/       (live; test/ mirrors it under the same dir)
+  telethon.session             the MTProto session (SQLite, WAL)
+  peers.db                     per-peer ledger + dedup marks, both engines
+  cursors.json                 mood, session marks, daily counters, queues
+  aggregator_state.json        the posted log + groups still collecting
+  greeter_state.json           the admin-log cursor and DM budget
+  comod.json                   who is on which shelf
+  users.db                     the opt-in audience DB (PII, off by default)
+```
+
+`peers.db` is the source of truth; `cursors.json` is rebuilt from what the
+store holds rather than written per event -- at a thousand peers the old
+single-file design reached 652 KB and 47 000 lines and was rewritten on
+every comment. `users.db` stays separate on purpose: it is opt-in and holds
+PII, which the always-on ledger does not.
 
 ## Run (without Docker)
 
@@ -128,9 +166,6 @@ human. The engine is Telethon-free (`engines/reactions.py`, unit-tested in
 The reaction glyphs are simply the `type: "reaction"` entries of the unified
 `emoji` array -- put cats there, or daisies; the code is content-neutral.
 
-A runnable, network-free proof of the whole path is
-`python -m minions.userbot.dev.reactions_proof`.
-
 **Persona label (optional).** The commands are neutral: `/reactnow` fires the
 queue now, `/reactions_on` / `/reactions_off` toggle the engine. Set
 `reactions.label` (e.g. `"cat"`) and the engine ALSO answers under a friendly
@@ -155,12 +190,52 @@ A per-profile **SQLite** DB (`users.db`) recording the channel audience over tim
 (membership timeline, identity, seen messages). It collects PII, so it is off by
 default and lives only on your own state disk. Read it with `/users`.
 
+## Reading `/status`
+
+Two sections answer the questions that used to need the log.
+
+**Stories** lists everyone who has stories up right now -- the same people you
+see in Telegram, archived feed included -- grouped by what the bot decided:
+
+    . glance 4m 10s ago . 4 with stories (1 archived)
+    . viewing (1):
+        @alice . 3 of 5 up . 80% . 25% . in ~3m 10s
+    . passed this glance (2):
+        @bob . 4 new . 45% . 0%
+        @carol (archived) . 2 new . first time
+    . nothing new (1): @dave
+
+One row per person, one place. The two percentages are that peer's ALL-TIME
+record: how much of what they offered we opened, and how much of what we opened
+we reacted to -- the two fractions the Berlyne control steers. `first time` says
+we have no history at all with them, which reads very differently from a steady
+0% and used to be indistinguishable from it.
+
+A held session names its reason ONCE, in the group header (`cooldown 4949s (3):`)
+rather than against every person: the cooldown is a property of the session, not
+of the people. `nothing new` collapses to a single line of names, because there
+is no decision to show.
+
+It is a snapshot from the last poll with its age beside it, on purpose: the
+report never re-reads the feed, because two story requests behind every `/status`
+is exactly the traffic the request gate exists to prevent.
+
+An archived peer is watched on the same maths as anyone else; the `(archived)`
+marker says where we saw them, not that they are treated differently.
+
+**Schedule** collects every background loop's next run -- host tick, liveness
+probe, reactions rescan, stories poll, greeter check -- plus the request gate:
+when each lane may fire next, and how far a lane has been widened after a
+FloodWait. That widening is the only place Telegram's "slow down" is visible
+without reading the log.
+
 ## Commands
 
 From **any** chat, rendered back into the source chat: `/help` (or `/start`),
 `/status`, `/preview`, `/emojis`, `/reactnow`, `/requeue`, `/greetnow`,
 `/stories`, `/users`, `/comod ...`, `/propiska_shkaf_month`, `/test` / `/live`
-(switch the whole bot's profile), `/features`, and per-service toggles
-`/<name>_on|off|test|live` (`name` in `aggregator, reactions, stories, users,
-greeter`). A toggle **persists** to `feature_overrides.json` and takes effect at
-once.
+(switch the whole bot's profile), `/features` and `/services` (both render the
+whole `/status`, which is where the service table lives), and per-service
+toggles `/<name>_on|off|test|live` (`name` in `aggregator, reactions, stories,
+users, greeter`). A toggle **persists** to `aggregator_mode.json` and takes
+effect at once.

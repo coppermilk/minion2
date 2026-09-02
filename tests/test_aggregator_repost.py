@@ -11,24 +11,23 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from tests.conftest import install_telethon_stub
-
 if TYPE_CHECKING:
     import pytest
 
-install_telethon_stub()
 
-from minions.userbot import main  # noqa: E402
-from minions.userbot.core.matching import is_recent_repost  # noqa: E402
-from minions.userbot.core.models import Config  # noqa: E402
-from minions.userbot.core.models import Group  # noqa: E402
-from minions.userbot.core.models import Item  # noqa: E402
-from minions.userbot.core.models import Posted  # noqa: E402
-from minions.userbot.glue import aggregator  # noqa: E402
+from minions.userbot.core import matching
+from minions.userbot.core.matching import is_recent_repost
+from minions.userbot.core.models import Config
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Item
+from minions.userbot.core.models import Posted
+from minions.userbot.engines import premium_emoji
+from minions.userbot.glue import aggregator
 
 
 def _post(title: str, age_days: float) -> Posted:
@@ -46,8 +45,12 @@ def test_time_window_blocks_recent_repost() -> None:
     """A title posted inside the time window is a re-post (count off)."""
     posted = [_post('Salsa dance', 1)]
     assert is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=0,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=0,
     )
 
 
@@ -64,12 +67,20 @@ def test_count_window_catches_what_time_misses() -> None:
         _post('Gym fail', 1),
     ]
     assert not is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=0,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=0,
     )
     assert is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=3,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=3,
     )
 
 
@@ -77,11 +88,17 @@ def test_eligible_again_beyond_both_windows() -> None:
     """Once past the time AND the count window, the title may post again."""
     posted = [
         _post('Salsa dance', 10),
-        _post('a', 9), _post('b', 8), _post('c', 7),  # push it beyond count 3
+        _post('a', 9),
+        _post('b', 8),
+        _post('c', 7),  # push it beyond count 3
     ]
     assert not is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=WEEK, count=3,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=3,
     )
 
 
@@ -89,11 +106,18 @@ def test_time_still_blocks_beyond_count() -> None:
     """A recent title beyond the count window is still caught by time."""
     posted = [
         _post('X recent', 0.04),  # ~1h old: inside the week
-        _post('a', 0), _post('b', 0), _post('c', 0), _post('d', 0),
+        _post('a', 0),
+        _post('b', 0),
+        _post('c', 0),
+        _post('d', 0),
     ]
     assert is_recent_repost(
-        posted, 'X recent', time.time(),
-        threshold=0.9, window=WEEK, count=3,
+        posted,
+        'X recent',
+        time.time(),
+        threshold=0.9,
+        window=WEEK,
+        count=3,
     )
 
 
@@ -101,8 +125,12 @@ def test_both_windows_off_disables_guard() -> None:
     """With both knobs at 0 the guard never fires."""
     posted = [_post('Salsa dance', 0)]
     assert not is_recent_repost(
-        posted, 'Salsa dance', time.time(),
-        threshold=0.9, window=0, count=0,
+        posted,
+        'Salsa dance',
+        time.time(),
+        threshold=0.9,
+        window=0,
+        count=0,
     )
 
 
@@ -111,11 +139,13 @@ def test_fuzzy_match_ignores_hashtag_and_emoji_tail() -> None:
     posted = [_post('Three days editing this number and finally done', 0)]
     variant = 'Three days editing this number and finally done #banger #fun'
     assert is_recent_repost(
-        posted, variant, time.time(),
-        threshold=0.9, window=0, count=3,
+        posted,
+        variant,
+        time.time(),
+        threshold=0.9,
+        window=0,
+        count=3,
     )
-
-
 
 
 class _FakeFlush:
@@ -129,10 +159,7 @@ class _FakeFlush:
         self.order.append('deliver')
         return list(self._delivered)
 
-    async def react(self, *_: object) -> None:
-        self.order.append('react')
-
-    async def watch(self, *_: object) -> None:
+    async def on_posted(self, *_: object) -> None:
         self.order.append('watch')
 
     def save(self) -> None:
@@ -142,33 +169,42 @@ class _FakeFlush:
         self.order.append('arm')
 
 
-def _bare_aggregator(fake: _FakeFlush) -> main.Userbot:
-    """Build an Userbot with only what the flush path touches (no __init__).
+def _bare_aggregator(fake: _FakeFlush) -> aggregator.LinkAggregator:
+    """Build a poster with only what the flush path touches.
 
-    ``__init__`` opens a Telethon client and loads real state, so we make the
-    instance directly and wire in the fake collaborators.
+    No object.__new__ and no Telethon: the poster is an object now, so the
+    test constructs one and swaps in the fakes it wants to observe.
     """
-    agg = object.__new__(main.Userbot)
-    agg.groups = []
-    agg.posted = []
-    agg.processed_ids = set()
-    agg.consts = None  # only compose reads it, and we patch compose
-    agg._variety = None  # passed to the patched compose, which ignores it
-    agg.config = Config(
-        source=0, targets=(), test_target=0,
-        platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
-        threshold=0.9, timeout=10800.0, backfill=100, max_duration=180,
-        repost_guard=604800.0, repost_guard_count=5, discussion_gap=0.0,
+    agg = aggregator.LinkAggregator(
+        aggregator.AggregatorDeps(
+            account=None,
+            config=Config(
+                source=0,
+                targets=(),
+                test_target=0,
+                platforms=('tiktok', 'youtube', 'pinterest', 'instagram'),
+                threshold=0.9,
+                timeout=10800.0,
+                backfill=100,
+                max_duration=180,
+                repost_guard=604800.0,
+                repost_guard_count=5,
+            ),
+            consts=None,  # only compose reads it, and we patch compose
+            state_path=None,  # _save is faked
+            targets=tuple,
+            on_posted=fake.on_posted,
+            field_keys=(),
+            variety=None,  # the patched compose ignores it
+        )
     )
     agg._deliver_post = fake.deliver
-    agg._react_to_post = fake.react
-    agg._watch_post = fake.watch
     agg._save = fake.save
     agg._arm = fake.arm
 
     def _record_posted(group: Group) -> None:
         fake.order.append('record')
-        main.Userbot._record_posted(agg, group)
+        aggregator.LinkAggregator._record_posted(agg, group)
 
     agg._record_posted = _record_posted
     return agg
@@ -178,12 +214,22 @@ def _sample_group() -> Group:
     """Return a two-platform group like the one that looped in the wild."""
     items = {
         'pinterest': Item(
-            key='pinterest', platform='pinterest', title='V',
-            url='https://pin/1', thumbnail='', duration='', msg_id=539,
+            key='pinterest',
+            platform='pinterest',
+            title='V',
+            url='https://pin/1',
+            thumbnail='',
+            duration='',
+            msg_id=539,
         ),
         'youtube': Item(
-            key='youtube', platform='youtube', title='V',
-            url='https://yt/1', thumbnail='', duration='', msg_id=546,
+            key='youtube',
+            platform='youtube',
+            title='V',
+            url='https://yt/1',
+            thumbnail='',
+            duration='',
+            msg_id=546,
         ),
     }
     return Group(title='V', items=items, msg_ids={539, 546})
@@ -210,10 +256,9 @@ def test_flush_records_and_saves_before_react_watch(
     group = _sample_group()
     agg.groups.append(group)
 
-    asyncio.run(main.Userbot._flush(agg, group))
+    asyncio.run(agg._flush(group))
 
-    assert fake.order.index('record') < fake.order.index('react')
-    assert fake.order.index('save') < fake.order.index('react')
+    assert fake.order.index('record') < fake.order.index('watch')
     assert fake.order.index('save') < fake.order.index('watch')
     assert group not in agg.groups
     assert len(agg.posted) == 1
@@ -232,7 +277,7 @@ def test_flush_requeues_when_nothing_delivered(
     group = _sample_group()
     agg.groups.append(group)
 
-    asyncio.run(main.Userbot._flush(agg, group))
+    asyncio.run(agg._flush(group))
 
     assert group in agg.groups  # kept for a later retry
     assert agg.posted == []  # not recorded
@@ -241,50 +286,105 @@ def test_flush_requeues_when_nothing_delivered(
     assert 'save' in fake.order  # the re-queue is persisted
 
 
-def _agg_with_gap(gap: float) -> main.Userbot:
-    """Build a bare Userbot whose config sets only the discussion gap."""
-    agg = object.__new__(main.Userbot)
-    agg.config = Config(
-        source=0, targets=(), test_target=0, platforms=('tiktok',),
-        threshold=0.9, timeout=1.0, backfill=0, max_duration=180,
-        repost_guard=0.0, repost_guard_count=0, discussion_gap=gap,
-    )
-    agg._last_discussion_ts = 0.0
+class _FakeAccount:
+    """An Account that reports what went out, and what it was asked to send."""
+
+    def __init__(self, *, photo_id: int = 0, text_id: int = 0) -> None:
+        """Answer send_photo with ``photo_id`` and send with ``text_id``."""
+        self.photo_id = photo_id
+        self.text_id = text_id
+        self.calls: list[str] = []
+
+    async def send_photo(self, chat: int, photo: str, text: object) -> int:
+        """Record the photo attempt and answer with the canned id."""
+        self.calls.append(f'photo:{chat}:{photo}')
+        return self.photo_id
+
+    async def send(self, chat: int, text: object) -> int:
+        """Record the text attempt and answer with the canned id."""
+        self.calls.append(f'text:{chat}')
+        return self.text_id
+
+
+def _delivering(account: _FakeAccount) -> aggregator.LinkAggregator:
+    """Return a poster wired to ``account``, with two targets."""
+    agg = _bare_aggregator(_FakeFlush([]))
+    # _bare_aggregator stubs delivery out; here delivery IS the subject.
+    del agg._deliver_post
+    agg.deps = replace(agg.deps, account=account, targets=lambda: (11, 22))
     return agg
 
 
-def test_discussion_throttle_spaces_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A call soon after the previous one waits out the remaining gap."""
-    slept: list[float] = []
-
-    async def _fake_sleep(sec: float) -> None:
-        slept.append(sec)
-
-    monkeypatch.setattr(main.asyncio, 'sleep', _fake_sleep)
-    gap = 2.0
-    agg = _agg_with_gap(gap)
-    agg._last_discussion_ts = time.time()  # a call just happened
-
-    asyncio.run(main.Userbot._throttle_discussion(agg))
-
-    assert slept
-    assert 0 < slept[0] <= gap
+def _deliver(agg: aggregator.LinkAggregator, thumb: str) -> object:
+    """Run one delivery of a trivial message with ``thumb``."""
+    message = premium_emoji.PremiumMessage('body')
+    return asyncio.run(agg._deliver_post(message, thumb))
 
 
-def test_discussion_throttle_disabled_when_zero(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A zero gap disables the throttle -- no sleep at all."""
-    slept: list[float] = []
+def test_a_thumbnail_post_never_also_sends_the_text() -> None:
+    """A photo that lands is the whole post -- no second, text copy."""
+    account = _FakeAccount(photo_id=500)
+    assert _deliver(_delivering(account), 'https://img/1.jpg') == [
+        (11, 500),
+        (22, 500),
+    ]
+    assert account.calls == [
+        'photo:11:https://img/1.jpg',
+        'photo:22:https://img/1.jpg',
+    ]
 
-    async def _fake_sleep(sec: float) -> None:
-        slept.append(sec)
 
-    monkeypatch.setattr(main.asyncio, 'sleep', _fake_sleep)
-    agg = _agg_with_gap(0.0)
+def test_a_refused_thumbnail_falls_back_to_text() -> None:
+    """The adapter answers 0 rather than raising, so 0 IS the fallback."""
+    account = _FakeAccount(photo_id=0, text_id=700)
+    assert _deliver(_delivering(account), 'https://img/bad.jpg') == [
+        (11, 700),
+        (22, 700),
+    ]
+    assert account.calls[:2] == [
+        'photo:11:https://img/bad.jpg',
+        'text:11',
+    ]
 
-    asyncio.run(main.Userbot._throttle_discussion(agg))
 
-    assert slept == []
+def test_nothing_delivered_means_nothing_recorded() -> None:
+    """An empty result is what tells the caller to re-queue the group.
+
+    The old code reached this by catching an exception per target; the
+    adapter degrades instead, so the check is now "did it come back with
+    an id" -- and a post recorded under id 0 would be a post the reaction
+    engine then watches at message 0.
+    """
+    account = _FakeAccount(photo_id=0, text_id=0)
+    assert _deliver(_delivering(account), '') == []
+    assert account.calls == ['text:11', 'text:22']
+
+
+# --- the rejected memory is bounded ---------------------------------------
+
+_OVER_CAP = aggregator.REJECTED_CAP + 100
+
+
+def test_rejected_titles_stop_growing_forever() -> None:
+    """The non-Short memory is capped, newest kept.
+
+    It is the one piece of poster state that used to grow for as long as the
+    bot ran -- a title per rejected video, persisted, never trimmed, while
+    the posted log beside it was capped at 300 all along.
+    """
+    agg = _bare_aggregator(_FakeFlush([]))
+    for i in range(_OVER_CAP):
+        agg._reject(f'a long video number {i}')
+    assert len(agg.rejected) == aggregator.REJECTED_CAP
+    assert agg.rejected[-1] == matching.norm(
+        f'a long video number {_OVER_CAP - 1}'
+    )  # the newest survived
+    assert matching.norm('a long video number 0') not in agg.rejected
+
+
+def test_a_rejected_title_is_remembered_once() -> None:
+    """Re-rejecting the same video does not spend a slot twice."""
+    agg = _bare_aggregator(_FakeFlush([]))
+    for _ in range(5):
+        agg._reject('the same long video')
+    assert agg.rejected == [matching.norm('the same long video')]

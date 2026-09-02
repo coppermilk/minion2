@@ -19,6 +19,7 @@ from minions.userbot.core.models import parse_iso
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from collections.abc import Mapping
 
     from minions.userbot.core.models import Consts
     from minions.userbot.core.models import Group
@@ -107,7 +108,7 @@ def duration_seconds(text: str) -> int:
     return seconds
 
 
-def action_ok(data: dict[str, object], consts: Consts) -> bool:
+def action_ok(data: Mapping[str, object], consts: Consts) -> bool:
     """Whether the message's action is the one we act on (or no filter set)."""
     if not consts.action_value:
         return True
@@ -134,7 +135,7 @@ def extract_fields(text: str, keys: Iterable[str]) -> dict[str, str]:
 
 
 def parse_item(
-    data: dict[str, object], msg_id: int, fields: dict[str, str]
+    data: Mapping[str, object], msg_id: int, fields: Mapping[str, str]
 ) -> Item | None:
     """Build an Item from a parsed JSON object, or None if incomplete.
 
@@ -156,7 +157,7 @@ def parse_item(
     )
 
 
-def _pick(data: dict[str, object], *keys: str) -> str:
+def _pick(data: Mapping[str, object], *keys: str) -> str:
     """First non-empty value among ``keys`` (handles optional/renamed keys)."""
     for key in keys:
         value = str(data.get(key) or '').strip()
@@ -198,18 +199,3 @@ def needs_human(text: str, words: tuple[str, ...]) -> bool:
     if any(u in low for u in _LINK_MARKERS):
         return True
     return any(w in low for w in words)
-
-
-def thread_top(reply: object) -> int | None:
-    """Return the thread-root id a reply belongs to (comment target), or None.
-
-    A comment on a channel post is a reply in the discussion group: its
-    ``reply_to_top_id`` is the post's thread root; a first-level comment has
-    only ``reply_to_msg_id`` (the same root). Either way this yields the id the
-    engine watches, so nested and top-level comments both map to their post.
-    """
-    top = getattr(reply, 'reply_to_top_id', None)
-    if top is not None:
-        return int(top)
-    msg = getattr(reply, 'reply_to_msg_id', None)
-    return int(msg) if msg is not None else None

@@ -137,12 +137,11 @@ convention = 'pep257'
 'tests/*' = ['S101', 'S311', 'SLF001', 'ARG', 'PLC0415', 'S106']
 'services/tests/*' = ['S101', 'ARG', 'PLC0415']
 # Operator CLIs whose stdout IS the product: login.py prints where it wrote
-# the session file; dump_emoji_ids.py prints each premium emoji id;
-# cats_proof.py's printed narration is the deliverable. T201 (no print)
-# targets stray debug prints in library code, not a tool's own output.
+# the session file; dump_emoji_ids.py prints each premium emoji id. T201
+# (no print) targets stray debug prints in library code, not a tool's own
+# output.
 'minions/userbot/login.py' = ['T201']
 'minions/userbot/dev/dump_emoji_ids.py' = ['T201']
-'minions/userbot/dev/reactions_proof.py' = ['T201']
 'minions/donate/login.py' = ['T201']
 
 # ---------------------------------------------------------------- mypy
@@ -165,6 +164,10 @@ module = [
     'transformers.*',
     'facenet_pytorch.*',
     'google.*',
+    # Telethon ships no stubs. It is imported at exactly one site
+    # (minion_core/adapters/userchat.py, enforced by test_architecture),
+    # so the unchecked surface is that file's vendor calls -- everything
+    # above it deals in this project's own value types.
     'telethon.*',
 ]
 ignore_missing_imports = true
@@ -179,15 +182,6 @@ ignore_missing_imports = true
 module = ['services.*']
 follow_imports = 'skip'
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# The aggregator userbot rides the kernel package tree (minions/userbot) but
-# is a standalone Telethon app, not part of the strict kernel gate -- exactly
-# like services.* above. Telethon is untyped and its event/message objects are
-# duck-typed here, so keep it out of strict checking; ruff (ALL) still lints it.
-# The donate userbot is a sibling Telethon app on its own account, same story.
-module = ['minions.userbot.*', 'minions.donate.*']
-ignore_errors = true
 
 # -------------------------------------------------------------- pytest
 [tool.pytest.ini_options]

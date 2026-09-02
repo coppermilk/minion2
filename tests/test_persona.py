@@ -26,7 +26,8 @@ _SILENT = 0.08
 
 def _block(data: dict[str, object], name: str) -> dict[str, object]:
     """Return one engine sub-config (typed for the assertions)."""
-    return cast('dict[str, object]', data[name])
+    engines = cast('dict[str, object]', data['engines'])
+    return cast('dict[str, object]', engines[name])
 
 
 def _persona() -> dict[str, object]:
@@ -75,7 +76,7 @@ def test_an_explicit_engine_key_overrides_persona() -> None:
     """A key set in an engine's own section wins; the rest still fills in."""
     data: dict[str, object] = {
         'persona': _persona(),
-        'reactions': {'active_start_hour': _OVERRIDE_START},
+        'engines': {'reactions': {'active_start_hour': _OVERRIDE_START}},
     }
     config.apply_persona(data)
     reactions = _block(data, 'reactions')
@@ -87,5 +88,5 @@ def test_an_explicit_engine_key_overrides_persona() -> None:
 
 def test_no_persona_block_is_a_noop() -> None:
     """Without a persona block the config is returned untouched."""
-    data: dict[str, object] = {'reactions': {}}
-    assert config.apply_persona(data) == {'reactions': {}}
+    data: dict[str, object] = {'engines': {'reactions': {}}}
+    assert config.apply_persona(data) == {'engines': {'reactions': {}}}

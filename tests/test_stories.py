@@ -11,10 +11,12 @@ opening/marking against Telegram; none of that is exercised here.
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from minions.userbot.core.state import StateStore
 from minions.userbot.engines import stories
 
 _MANY = 50
@@ -65,14 +67,27 @@ def _params(**over: object) -> stories.StoryParams:
     return stories.StoryParams(**base)
 
 
+def _store(tmp_path: Path) -> StateStore:
+    """Return a state store over a temp dir (reopening reads it back)."""
+    return StateStore(tmp_path / 'stories.db')
+
+
 def _brain(tmp_path: Path, **over: object) -> stories.StoryBrain:
     brain = stories.StoryBrain(
-        _params(**over),
-        tmp_path / 'stories.json',
-        rng=random.Random(0),
+        _params(**over), _store(tmp_path), rng=random.Random(0)
     )
     brain.clock = lambda: _NOON
     return brain
+
+
+def _seen(brain: stories.StoryBrain, peer: int) -> set[int]:
+    """Return the story ids recorded seen for one peer."""
+    return {
+        int(row['key'].split(':')[1])
+        for row in brain.store._conn.execute(
+            'SELECT key FROM marks WHERE key LIKE ?', (f'{peer}:%',)
+        )
+    }
 
 
 def _cand(
@@ -232,7 +247,7 @@ def test_mark_viewed_dedups_and_counts_fresh(tmp_path: Path) -> None:
     brain.mark_viewed(7, (1, 2), ts=_NOON)
     brain.mark_viewed(7, (2, 3), ts=_NOON)  # 2 already seen -> only 3 is fresh
     assert brain.seen_count() == _THREE
-    assert set(brain.state.seen['7']) == {1, 2, 3}
+    assert _seen(brain, 7) == {1, 2, 3}
 
 
 # --- Berlyne exposure control (view a fraction toward the Wundt peak)
@@ -257,7 +272,7 @@ def test_view_split_converges_to_the_wundt_peak(tmp_path: Path) -> None:
         brain._record_skips(peer, skip_ids)  # skips: offered, never viewed
         brain.mark_viewed(peer, view_ids, ts=_NOON)  # views: offered + viewed
     key = str(peer)
-    ratio = brain.state.ledger.taken[key] / brain.state.ledger.offered[key]
+    ratio = brain.ledger.row(key).taken / brain.ledger.row(key).offered
     assert abs(ratio - p_star) < _EXPO_TOL
 
 
@@ -267,7 +282,7 @@ def test_skipped_stories_are_recorded_seen(tmp_path: Path) -> None:
     _view, skip = brain._view_split(7, (1, 2, 3, 4, 5), brain._view_target())
     brain._record_skips(7, skip)
     for sid in skip:
-        assert sid in set(brain.state.seen['7'])  # would not be offered again
+        assert sid in _seen(brain, 7)  # would not be offered again
 
 
 def test_view_all_exposure_still_views_every_story(tmp_path: Path) -> None:
@@ -298,7 +313,7 @@ def test_react_fraction_converges_to_target(tmp_path: Path) -> None:
         brain.mark_viewed(peer, ids, ts=_NOON)
         brain.mark_reacted(peer, len(r_ids), _NOON)
     key = str(peer)
-    ratio = brain.state.ledger.recip[key] / brain.state.ledger.taken[key]
+    ratio = brain.ledger.row(key).recip / brain.ledger.row(key).taken
     assert abs(ratio - _R_TARGET) < _EXPO_TOL
 
 
@@ -325,10 +340,10 @@ def test_react_counter_rolls_over_daily(tmp_path: Path) -> None:
     """The daily counter resets at local midnight; the per-peer tally stays."""
     brain = _brain(tmp_path)
     brain.mark_reacted(7, _FIVE, _NOON)
-    assert brain.state.ledger.recip_today == _FIVE
+    assert brain.ledger.recip_today == _FIVE
     brain.mark_reacted(7, _TWO, _NOON + 86400.0)  # the next day
-    assert brain.state.ledger.recip_today == _TWO  # reset, then +2
-    assert brain.state.ledger.recip['7'] == _FIVE + _TWO  # cumulative per peer
+    assert brain.ledger.recip_today == _TWO  # reset, then +2
+    assert brain.ledger.row('7').recip == _FIVE + _TWO  # cumulative per peer
 
 
 def test_plan_attaches_reactions(tmp_path: Path) -> None:
@@ -343,13 +358,13 @@ def test_plan_attaches_reactions(tmp_path: Path) -> None:
 
 def test_remember_fills_a_peer_name_and_persists(tmp_path: Path) -> None:
     """A peer viewed before the name cache existed can be labelled later."""
-    path = tmp_path / 'stories_state.json'
-    brain = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    store = _store(tmp_path)
+    brain = stories.StoryBrain(_params(), store, rng=random.Random(0))
     brain.mark_viewed(552, (1, 2), ts=_NOON)  # no label -> raw id in warmth
     assert next(w.label for w in brain.warmth()) == '552'
     brain.remember('552', '@liriiu (552)')  # status path resolves it
     assert next(w.label for w in brain.warmth()) == '@liriiu (552)'
-    fresh = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    fresh = stories.StoryBrain(_params(), store, rng=random.Random(0))
     assert next(w.label for w in fresh.warmth()) == '@liriiu (552)'
 
 
@@ -360,8 +375,8 @@ def test_warmth_lists_recent_peers_first(tmp_path: Path) -> None:
     brain._record_skips(7, (100,))  # 1 offered, skipped
     brain.mark_viewed(7, (101, 102), label='@warm', ts=_NOON)
     brain.mark_reacted(7, 1, _NOON)
-    # peer 8 (more recent): viewed all, no reactions (r 0)
-    brain.mark_viewed(8, (200, 201), label='@cool', ts=_NOON)
+    # peer 8 (an hour later): viewed all, no reactions (r 0)
+    brain.mark_viewed(8, (200, 201), label='@cool', ts=_NOON + 3600)
     rows = brain.warmth()
     assert [w.label for w in rows] == ['@cool', '@warm']  # newest first
     cool, warm = rows
@@ -393,15 +408,18 @@ def test_seen_list_is_bounded_per_peer(tmp_path: Path) -> None:
     """Check seen list is bounded per peer."""
     brain = _brain(tmp_path, seen_per_peer=3)
     brain.mark_viewed(7, tuple(range(10)), ts=_NOON)
-    assert brain.state.seen['7'] == [7, 8, 9]  # newest kept
+    assert _seen(brain, 7) == {7, 8, 9}
 
 
 def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
     """Check tracked peers are lru bounded."""
     brain = _brain(tmp_path, max_peers_tracked=2)
-    for peer in (1, 2, 3):
-        brain.mark_viewed(peer, (1,), ts=_NOON)
-    assert set(brain.state.seen) == {'2', '3'}  # peer 1 evicted
+    for peer in (1, 2, 3):  # a minute apart, so "least recent" is a fact
+        brain.mark_viewed(peer, (1,), ts=_NOON + peer * 60)
+    assert {r.peer_id for r in brain.store.peers()} == {
+        '2',
+        '3',
+    }  # peer 1 evicted
 
 
 def test_every_view_is_logged(tmp_path: Path) -> None:
@@ -411,10 +429,10 @@ def test_every_view_is_logged(tmp_path: Path) -> None:
     brain.mark_viewed(2, (9,), label='@b', ts=_NOON)
     log = brain.recent_log(10)
     assert len(log) == _TWO  # one entry per view
-    by_peer = {e['peer_id']: e for e in log}
-    assert by_peer[1]['count'] == _TWO
-    assert by_peer[1]['label'] == '@a'
-    assert by_peer[2]['count'] == 1
+    by_peer = {e.peer_id: e for e in log}
+    assert by_peer[1].count == _TWO
+    assert by_peer[1].label == '@a'
+    assert by_peer[2].count == 1
 
 
 def test_recent_log_is_newest_first(tmp_path: Path) -> None:
@@ -423,7 +441,7 @@ def test_recent_log_is_newest_first(tmp_path: Path) -> None:
     brain.mark_viewed(1, (1,), label='@a', ts=_NOON)
     brain.mark_viewed(2, (1,), label='@b', ts=_NOON)
     recent = brain.recent_log(5)
-    assert [r['peer_id'] for r in recent] == [2, 1]
+    assert [r.peer_id for r in recent] == [2, 1]
 
 
 def test_log_is_bounded(tmp_path: Path) -> None:
@@ -434,12 +452,12 @@ def test_log_is_bounded(tmp_path: Path) -> None:
     assert len(brain.state.log) == _LOG_CAP
 
 
-def test_state_survives_reopening_the_file(tmp_path: Path) -> None:
-    """Check state survives reopening the file."""
-    path = tmp_path / 'stories.json'
-    first = stories.StoryBrain(_params(), path, rng=random.Random(0))
+def test_state_survives_reopening_the_store(tmp_path: Path) -> None:
+    """Seen marks and the odometer both survive a reopen."""
+    store = _store(tmp_path)
+    first = stories.StoryBrain(_params(), store, rng=random.Random(0))
     first.mark_viewed(7, (1, 2, 3), ts=_NOON)
-    reopened = stories.StoryBrain(_params(), path, rng=random.Random(0))
+    reopened = stories.StoryBrain(_params(), store, rng=random.Random(0))
     assert reopened.unseen(_cand(7, (1, 2, 3, 4))) == (4,)
     assert reopened.seen_count() == _THREE
 
@@ -447,10 +465,12 @@ def test_state_survives_reopening_the_file(tmp_path: Path) -> None:
 def test_load_story_params_mode_selects_poll(tmp_path: Path) -> None:
     """Check load story params mode selects poll."""
     data = {
-        'stories': {
-            'enabled': True,
-            'poll_sec_test': 300,
-            'poll_sec_live': 3600,
+        'engines': {
+            'stories': {
+                'enabled': True,
+                'poll_sec_test': 300,
+                'poll_sec_live': 3600,
+            }
         }
     }
     assert stories.load_story_params(data, 'test').poll_sec == _POLL_TEST
@@ -459,6 +479,221 @@ def test_load_story_params_mode_selects_poll(tmp_path: Path) -> None:
 
 def test_include_archived_defaults_off(tmp_path: Path) -> None:
     """Check include archived defaults off."""
-    assert not stories.load_story_params({'stories': {}}).include_archived
-    on = stories.load_story_params({'stories': {'include_archived': True}})
+    blank = {'engines': {'stories': {}}}
+    assert not stories.load_story_params(blank).include_archived
+    on = stories.load_story_params(
+        {'engines': {'stories': {'include_archived': True}}}
+    )
     assert on.include_archived
+
+
+# --- the glance: who we are opening, and who we are not
+
+
+def _verdicts(brain: stories.StoryBrain) -> dict[int, str]:
+    """Return the last glance's verdict per peer."""
+    return {row.peer_id: row.verdict for row in brain.last_glance.peers}
+
+
+def test_every_peer_with_stories_gets_exactly_one_verdict(
+    tmp_path: Path,
+) -> None:
+    """The glance accounts for everyone the feed showed, once each.
+
+    This is the whole point of the readout: an operator looking at
+    Telegram sees these people, and /status has to say something about
+    each of them rather than only about the ones we chose.
+    """
+    brain = _brain(tmp_path, per_session_max=1, skip_peer_prob=0.9)
+    brain.mark_viewed(3, (30, 31), ts=_NOON)  # 3 has nothing new
+    cands = [
+        _cand(1, (10, 11), last_ts=_NOON),
+        _cand(2, (20,), last_ts=_NOON - 1),
+        _cand(3, (30, 31), last_ts=_NOON - 2),
+    ]
+    views = brain.plan(cands, now=_NOON)
+
+    glance = brain.last_glance
+    assert glance.at == _NOON
+    assert [row.peer_id for row in glance.peers] == [1, 2, 3]
+    assert _verdicts(brain)[3] == stories.NOTHING_NEW
+    # Whoever is queued is 'viewing' and reports how many we will open;
+    # everyone else with unseen stories was passed.
+    opened = {v.peer_id: len(v.story_ids) for v in views}
+    for row in glance.peers:
+        if row.peer_id in opened:
+            assert row.verdict == stories.VIEWING
+            assert row.viewing == opened[row.peer_id]
+        else:
+            assert row.viewing == 0
+            assert row.verdict in {stories.PASSED, stories.NOTHING_NEW}
+
+
+def test_a_blocked_session_says_why_for_everyone(tmp_path: Path) -> None:
+    """Quiet hours name themselves on every peer, not just on the header."""
+    brain = _brain(tmp_path, quiet_hours=frozenset({12}))
+    assert brain.plan([_cand(1, (10,))], now=_NOON) == []
+    glance = brain.last_glance
+    assert glance.blocked
+    assert _verdicts(brain) == {1: glance.blocked}
+    assert all(row.viewing == 0 for row in glance.peers)
+
+
+def test_the_archived_feed_is_marked_as_such(tmp_path: Path) -> None:
+    """A peer from the hidden feed is flagged, so the list matches Telegram."""
+    brain = _brain(tmp_path)
+    archived = replace(_cand(2, (20,)), hidden=True)
+    brain.plan([_cand(1, (10,)), archived], now=_NOON)
+    flags = {row.peer_id: row.hidden for row in brain.last_glance.peers}
+    assert flags == {1: False, 2: True}
+
+
+def test_the_glance_counts_what_is_up_and_what_is_new(tmp_path: Path) -> None:
+    """Active is what they posted; unseen is what we have not opened."""
+    brain = _brain(tmp_path)
+    brain.mark_viewed(1, (10,), ts=_NOON)
+    brain.plan([_cand(1, (10, 11, 12))], now=_NOON)
+    row = brain.last_glance.peers[0]
+    assert (row.active, row.unseen) == (_THREE, _TWO)
+
+
+def test_an_empty_feed_leaves_an_empty_glance(tmp_path: Path) -> None:
+    """Nobody has stories: the readout says so rather than going stale."""
+    brain = _brain(tmp_path)
+    brain.plan([], now=_NOON)
+    assert brain.last_glance.peers == ()
+    assert brain.last_glance.at == _NOON
+
+
+# --- the Telethon side: what Telegram refuses is not recorded -------------
+# The brain above is pure; these drive the glue, because the bug they pin is
+# in the seam. A story can expire between the plan and the send, and the
+# adapter reports that by RETURNING False rather than raising -- so the
+# except-guard the module relied on never fired and everything got marked
+# seen regardless.
+
+_STORY_A = 101
+_STORY_B = 102
+
+
+class _FakeAccount:
+    """Stand in for the one door to Telegram, refusing what it is told to."""
+
+    def __init__(self, refuse: set[int] | None = None) -> None:
+        self.refuse = refuse or set()
+        self.viewed: list[int] = []
+        self.reacted: list[int] = []
+        self.read_up_to = 0
+
+    async def input_peer(self, peer_id: int) -> object:
+        return peer_id
+
+    async def view_story(self, _peer: object, story_id: int) -> bool:
+        if story_id in self.refuse:
+            return False  # expired between the plan and the send
+        self.viewed.append(story_id)
+        return True
+
+    async def react_to_story(
+        self, _peer: object, story_id: int, _emoji: str
+    ) -> bool:
+        self.reacted.append(story_id)
+        return True
+
+    async def read_stories(self, _peer: object, max_id: int) -> bool:
+        self.read_up_to = max_id
+        return True
+
+
+def _watcher(
+    tmp_path: Path, account: _FakeAccount
+) -> tuple[object, stories.StoryBrain, _Names]:
+    """Build a story watcher over a real brain and a fake door."""
+    from minions.userbot.glue import stories as glue
+
+    brain = _brain(tmp_path, dwell_min_sec=0.0, dwell_max_sec=0.0)
+    names = _Names()
+    watch = glue.StoryWatch(
+        glue.StoryDeps(
+            account=account,  # type: ignore[arg-type]
+            brain=brain,
+            source=0,
+            label=names,
+        )
+    )
+    return watch, brain, names
+
+
+class _Names:
+    """The host's chat-label resolver, counting what it was asked.
+
+    Resolving a name is a Telegram round trip, so a view that recorded
+    nothing must not spend one.
+    """
+
+    def __init__(self) -> None:
+        self.asked = 0
+
+    async def __call__(self, peer_id: int) -> str:
+        self.asked += 1
+        return f'@peer{peer_id}'
+
+
+def _view(**over: object) -> stories.StoryView:
+    base: dict[str, object] = {
+        'peer_id': 7,
+        'story_ids': (_STORY_A, _STORY_B),
+        'max_id': _STORY_B,
+        'when': _NOON,
+        'label': '@peer7',
+    }
+    base.update(over)
+    return stories.StoryView(**base)  # type: ignore[arg-type]
+
+
+def test_a_story_that_expired_is_left_unseen(tmp_path: Path) -> None:
+    """A refused story is not recorded viewed, so the next poll may retry.
+
+    Marking it seen would record a view that never happened: the peer's
+    exposure climbs on it and the id is burnt for good.
+    """
+    import asyncio
+
+    account = _FakeAccount(refuse={_STORY_A})
+    watch, brain, _ = _watcher(tmp_path, account)
+
+    asyncio.run(watch._view_later(_view()))
+
+    assert account.viewed == [_STORY_B]
+    assert _seen(brain, 7) == {_STORY_B}  # the refused one stays open
+    assert brain.state.total_views == 1
+
+
+def test_a_story_refused_gets_no_reaction(tmp_path: Path) -> None:
+    """No reaction is placed on a story we were not allowed to open."""
+    import asyncio
+
+    account = _FakeAccount(refuse={_STORY_A})
+    watch, _, _ = _watcher(tmp_path, account)
+
+    asyncio.run(watch._view_later(_view(react_ids=(_STORY_A, _STORY_B))))
+
+    assert account.reacted == [_STORY_B]
+    assert watch.unplaced == 1  # one planned reaction did not go out
+
+
+def test_a_wholly_refused_view_records_nothing(tmp_path: Path) -> None:
+    """When Telegram opens none of them, the peer keeps every story unseen."""
+    import asyncio
+
+    account = _FakeAccount(refuse={_STORY_A, _STORY_B})
+    watch, brain, _ = _watcher(tmp_path, account)
+
+    watch, brain, names = _watcher(tmp_path, account)
+
+    asyncio.run(watch._view_later(_view()))
+
+    assert account.viewed == []
+    assert _seen(brain, 7) == set()
+    assert brain.state.total_views == 0
+    assert names.asked == 0  # no round trip for a view that recorded nothing

@@ -25,8 +25,7 @@ from __future__ import annotations
 
 import os
 
-from telethon import TelegramClient
-
+from minion_core.adapters import userchat
 from minions.donate.main import _resolve_session_path
 from minions.donate.main import load_env
 
@@ -55,7 +54,8 @@ def main() -> None:
         start_kwargs['password'] = password
 
     # start() runs the login and writes the .session file on disk.
-    with TelegramClient(str(session_path), int(api_id), api_hash) as client:
+    login = userchat.Login(session_path, int(api_id), api_hash)
+    with userchat.connect(login) as client:
         client.start(**start_kwargs)
         me = client.get_me()
 

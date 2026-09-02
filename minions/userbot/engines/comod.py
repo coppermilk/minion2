@@ -19,10 +19,12 @@ constants JSON, so this source stays ASCII.
 
 from __future__ import annotations
 
-import json
 import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from minions.userbot.core import codec
+from minions.userbot.core import statefile
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -88,14 +90,8 @@ class CabinetRoster:
 
     def _load(self) -> dict[str, dict[str, object]]:
         """Reload the roster, tolerating a missing or corrupt file."""
-        try:
-            data = json.loads(self.path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            return {}
-        if not isinstance(data, dict):
-            return {}
         out: dict[str, dict[str, object]] = {}
-        for key, value in data.items():
+        for key, value in statefile.read_state(self.path).items():
             if isinstance(key, str) and isinstance(value, dict):
                 out[key] = {
                     'at': float(value.get('at', 0.0) or 0.0),
@@ -106,11 +102,7 @@ class CabinetRoster:
     def _write(self, roster: dict[str, dict[str, object]]) -> None:
         """Persist the roster atomically as readable JSON."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix('.tmp')
-        tmp.write_text(
-            json.dumps(roster, ensure_ascii=False, indent=2), encoding='utf-8'
-        )
-        tmp.replace(self.path)
+        statefile.write_state(self.path, roster)
 
     def add(self, nick: str, amount: str, now: float) -> None:
         """Move a nick into the cabinet, pruning anyone whose timer expired."""
@@ -122,7 +114,7 @@ class CabinetRoster:
         fresh = {
             n: e
             for n, e in roster.items()
-            if now - float(e['at']) < COMOD_TTL_SEC
+            if now - codec.num(e['at']) < COMOD_TTL_SEC
         }
         self._write(fresh)
 
@@ -148,9 +140,9 @@ class CabinetRoster:
         """
         roster = self._load()
         fresh = [
-            (float(e['at']), n, str(e['amount']))
+            (codec.num(e['at']), n, str(e['amount']))
             for n, e in roster.items()
-            if now - float(e['at']) < COMOD_TTL_SEC
+            if now - codec.num(e['at']) < COMOD_TTL_SEC
         ]
         fresh.sort(key=lambda row: row[0], reverse=True)
         return [(nick, amount, at) for at, nick, amount in fresh]
@@ -194,43 +186,37 @@ def _hearts(value: object) -> tuple[tuple[str, str], ...]:
 
 
 def _tz_offset(data: dict[str, object]) -> float:
-    """Return the persona's UTC offset, from the shared 'reactions' section."""
-    reactions = (
-        data.get('reactions')
-        if isinstance(data.get('reactions'), dict)
-        else {}
-    )
-    reactions = reactions or {}
+    """Return the persona's UTC offset, as the persona fan left it here."""
     try:
-        return float(reactions.get('tz_offset_hours', 3.0))
+        return float(
+            codec.engine(data, 'comod').get('tz_offset_hours', 3.0)  # type: ignore[arg-type]
+        )
     except (TypeError, ValueError):
         return 3.0
 
 
 def load_comod_params(data: dict[str, object]) -> ComodParams:
     """Load the cabinet's params from the constants JSON 'comod' section."""
-    cfg = data.get('comod') if isinstance(data.get('comod'), dict) else {}
-    cfg = cfg or {}
-    templates = cfg.get('templates')
-    templates = templates if isinstance(templates, dict) else {}
-    render = cfg.get('render') if isinstance(cfg.get('render'), dict) else {}
-    render = render or {}
+    cfg = codec.engine(data, 'comod')
+    render = codec.table(cfg.get('render'))
     slots = _slots(render.get('slots'))
     return ComodParams(
-        templates=templates,
-        donate_link=str(cfg.get('donate_link', '')),
-        amazon_link=str(cfg.get('amazon_link', '')),
-        template_path=str(render.get('template', '')),
-        font_path=str(render.get('font', '')),
-        font_cyrillic_path=str(render.get('font_cyrillic', '')),
-        base_size=int(render.get('base_size') or 40),
-        amount_scale=float(render.get('amount_scale') or 0.75),
+        templates={
+            k: str(v) for k, v in codec.table(cfg.get('templates')).items()
+        },
+        donate_link=codec.text(cfg.get('donate_link')),
+        amazon_link=codec.text(cfg.get('amazon_link')),
+        template_path=codec.text(render.get('template')),
+        font_path=codec.text(render.get('font')),
+        font_cyrillic_path=codec.text(render.get('font_cyrillic')),
+        base_size=codec.whole(render.get('base_size')) or 40,
+        amount_scale=codec.num(render.get('amount_scale')) or 0.75,
         ref_size=(
-            int(render.get('ref_width') or 1080),
-            int(render.get('ref_height') or 1350),
+            codec.whole(render.get('ref_width')) or 1080,
+            codec.whole(render.get('ref_height')) or 1350,
         ),
         slots=slots,
-        max_shelves=int(render.get('max_shelves') or len(slots)),
+        max_shelves=codec.whole(render.get('max_shelves')) or len(slots),
         text_color=_color(render.get('text_color'), (255, 255, 255)),
         shadow_color=_color(render.get('shadow_color'), (0, 0, 0)),
         hearts=_hearts(cfg.get('hearts')),
@@ -262,15 +248,6 @@ def _label(nick: str, amount: str) -> str:
 def by_amount(residents: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Residents sorted by donated amount, biggest first (stable on ties)."""
     return sorted(residents, key=lambda r: _amount_value(r[1]), reverse=True)
-
-
-def labels_for(residents: list[tuple[str, str]]) -> list[str]:
-    r"""Each resident as a shelf label, nick over amount.
-
-    The amount goes on its own line UNDER the nick (rendered centered), so a
-    label is ``"nick\n$amount"`` -- or just the nick when no amount was given.
-    """
-    return [_label(nick, amount) for nick, amount in residents]
 
 
 def assign_labels(

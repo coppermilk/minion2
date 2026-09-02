@@ -44,6 +44,7 @@ VENDORS = {
     'transformers': ('minion_core/adapters/vision.py',),
     'facenet_pytorch': ('minions/svc/censor_black/step.py',),
     'google': ('minion_core/adapters/llm.py',),
+    'telethon': ('minion_core/adapters/userchat.py',),
 }
 """Each vendor and its sanctioned import sites (adapters only)."""
 
