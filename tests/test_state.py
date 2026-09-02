@@ -11,6 +11,7 @@ The rest is the import, which has to survive every shape that ever shipped.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import subprocess
 import sys
@@ -24,6 +25,8 @@ from minions.userbot.core.state import adopt
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 TOP_N = 2
 """How many rows the limited readout asks for."""
@@ -758,3 +761,24 @@ def test_a_copy_of_the_database_beside_it_is_not_re_imported(
         str(r['service']) for r in db.conn.execute('SELECT service FROM state')
     }
     assert named == {'greeter'}
+
+
+def test_adopt_says_what_it_took(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The import is a one-shot on an unattended machine, so it reports.
+
+    Without this the only way to learn whether a start imported six files or
+    none is to open the database and count rows -- which is what the first
+    person to meet an unexpected file actually ends up doing.
+    """
+    with caplog.at_level(logging.INFO, logger='userbot'):
+        adopt(tmp_path)
+    assert 'nothing older found' in caplog.text
+
+    _per_service(tmp_path)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger='userbot'):
+        adopt(tmp_path)
+    assert 'stories.db' in caplog.text
+    assert '4 adopted file(s)' in caplog.text

@@ -558,6 +558,11 @@ def adopt(where: Path) -> None:
 
     What the one database already holds wins -- the import adds, it never
     overwrites -- and nothing is renamed unless its import got through.
+
+    Says out loud what it took. A migration that runs once, silently, on a
+    machine nobody is watching is one you can only audit by opening the
+    database and counting -- which is exactly what the first person to meet
+    an unexpected file ends up doing.
     """
     conn = connect(where / DB_NAME)
     try:
@@ -575,9 +580,16 @@ def adopt(where: Path) -> None:
         ]
     finally:
         conn.close()
-    for path, imported in taken:
-        if imported:
-            _retire(path)
+    done = [path for path, imported in taken if imported]
+    for path in done:
+        _retire(path)
+    log.info(
+        'state: %s holds %s',
+        DB_NAME,
+        f'{len(done)} adopted file(s): {", ".join(p.name for p in done)}'
+        if done
+        else 'its own state; nothing older found to adopt',
+    )
 
 
 def _absorb(conn: sqlite3.Connection, path: Path) -> bool:
