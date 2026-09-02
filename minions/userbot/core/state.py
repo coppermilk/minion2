@@ -163,6 +163,15 @@ events a day is not a cost worth measuring.
 
 Switching an existing WAL database is safe and automatic: SQLite checkpoints
 it on the mode change and removes the sibling files.
+
+The Telegram session next to us makes the OPPOSITE choice on purpose, and
+neither is wrong (see ``minion_core/adapters/userchat.connect``). It is not
+ours to write: Telethon commits to it on its own schedule, from inside
+library code, so a kill can land mid-commit -- and on the NAS mount that
+left the file malformed and forced a re-login every couple of weeks, which
+WAL fixed. Every write to THIS file is one statement we make and commit, so
+there is no mid-commit to land in, and being self-contained on disk is worth
+more than recovering from a crash that cannot happen here.
 """
 
 _BUMP_SQL = (  # noqa: S608 -- the column names are COUNTERS, never input

@@ -808,6 +808,13 @@ def connect(login: Login) -> TelegramClient:
       ("database disk image is malformed") and forced a re-login every
       couple of weeks. WAL recovers on the next open; synchronous=NORMAL
       (safe under WAL) also trims fsync churn on the NAS.
+
+    The cost is that the session is THREE files -- ``.session`` plus the
+    ``-wal`` and ``-shm`` SQLite keeps beside it -- and the ``.session``
+    alone is stale between checkpoints, so a backup that copies only it can
+    be unusable. That is the trade this incident paid for. The bot's own
+    state database refuses the same trade for the opposite reason; its
+    ``JOURNAL`` in ``minions/userbot/core/state.py`` says why.
     """
     from telethon import TelegramClient
 
