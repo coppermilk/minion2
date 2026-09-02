@@ -135,13 +135,12 @@ def _engine(data: dict[str, object], name: str) -> dict[str, object]:
     return got
 
 
-def _fan_window(  # noqa: PLR0913 -- the window's start/end/quiet read best flat
-    data: dict[str, object], start: object, end: object, quiet: object
-) -> None:
-    """Fan the waking window into reactions/greeter and stories' quiet hours.
+def _fan_window(data: dict[str, object], start: object, end: object) -> None:
+    """Fan the waking window into the two engines that declare one.
 
-    Does nothing unless both edges are given. Stories' quiet hours are the
-    explicit ``quiet`` when set, else everything OUTSIDE the waking window.
+    Does nothing unless both edges are given. The hours OUTSIDE it are the
+    persona's silence, and that is ``_quiet_hours`` below, not this function
+    -- an engine can be silent at an hour without having a window of its own.
     """
     if start is None or end is None:
         return
@@ -151,11 +150,30 @@ def _fan_window(  # noqa: PLR0913 -- the window's start/end/quiet read best flat
     greeter = _engine(data, 'greeter')
     greeter.setdefault('wake_start_hour', start)
     greeter.setdefault('wake_end_hour', end)
+
+
+def _quiet_hours(persona: dict[str, object]) -> object:
+    """Return the hours the persona is hard-silent for, or None if unknowable.
+
+    The explicit ``quiet_hours`` when it is set, else the complement of the
+    waking window -- ONE rule, for every engine that has quiet hours.
+
+    It used to be two: stories got the complement, reactions kept a hard-coded
+    2-6. Those agreed only while the window happened to be 7-17, where 2-6 sits
+    entirely outside it and the window gate covered for the difference. Widen
+    the window to 5-23 and it stops covering: reactions falls silent at 5 and 6
+    while stories is watching, and answers comments at 0 and 1 while stories
+    sleeps. That is the "several schedules for one person" this module exists
+    to prevent, and it was one edit away the whole time.
+    """
+    quiet = persona.get('quiet_hours')
+    if quiet is not None:
+        return quiet
+    start, end = persona.get('wake_start_hour'), persona.get('wake_end_hour')
+    if start is None or end is None:
+        return None
     low, high = codec.num(start), codec.num(end)
-    outside = [h for h in range(24) if not (low <= h < high)]
-    _engine(data, 'stories').setdefault(
-        'quiet_hours', outside if quiet is None else quiet
-    )
+    return [h for h in range(24) if not (low <= h < high)]
 
 
 def _fan_key(  # noqa: PLR0913 -- data + the (names, key, value) fan read flat
@@ -188,13 +206,12 @@ def apply_persona(data: dict[str, object]) -> dict[str, object]:
     Mutates and returns ``data``.
 
     persona keys: ``tz_offset_hours``, ``wake_start_hour``, ``wake_end_hour``,
-    ``silent_day_prob`` and optional ``quiet_hours`` (extra hard-silent hours;
-    when absent, stories' quiet hours are the complement of the waking window).
+    ``silent_day_prob`` and optional ``quiet_hours`` (the hard-silent hours;
+    when absent they are the complement of the waking window).
     """
     persona = data.get('persona')
     if not isinstance(persona, dict):
         return data
-    quiet = persona.get('quiet_hours')
     _fan_key(
         data,
         ('reactions', 'stories', 'greeter', 'comod'),
@@ -202,10 +219,7 @@ def apply_persona(data: dict[str, object]) -> dict[str, object]:
         persona.get('tz_offset_hours'),
     )
     _fan_window(
-        data,
-        persona.get('wake_start_hour'),
-        persona.get('wake_end_hour'),
-        quiet,
+        data, persona.get('wake_start_hour'), persona.get('wake_end_hour')
     )
     # One silent-day roll (is_silent_day seeds by date), one shared threshold,
     # so reactions and stories fall silent on the SAME days -- one person
@@ -216,7 +230,9 @@ def apply_persona(data: dict[str, object]) -> dict[str, object]:
         'silent_day_prob',
         persona.get('silent_day_prob'),
     )
-    _fan_key(data, ('reactions',), 'quiet_hours', quiet)
+    _fan_key(
+        data, ('reactions', 'stories'), 'quiet_hours', _quiet_hours(persona)
+    )
     return data
 
 

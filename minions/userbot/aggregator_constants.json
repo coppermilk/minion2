@@ -1,10 +1,10 @@
 {
   "_note": "ALL premium emoji live in the single top-level \"emoji\" array. Each entry is {type, id, fallback} plus per-type extras: type=platform adds \"name\" (tiktok/youtube/instagram/pinterest); type=reaction adds \"base\" (preference) and \"tags\" (sleepy/bodry/winter/spring/summer/autumn/newyear). Types: love + lead + arrow drive the post (random pick), platform is the link grid, reaction is the reply pool. Add/remove entries freely; the whole array is rendered by /emojis. Render from a user account with Telegram Premium; replace an entry's id with a plain glyph in fallback to use a non-premium emoji.",
   "persona": {
-    "_note": "ЕДИНЫЕ ЧАСЫ ПЕРСОНАЖА — один источник правды для cats/stories/greeter/comod (см. core/config.py apply_persona). tz_offset_hours — UTC-сдвиг. wake_start_hour/wake_end_hour — окно бодрствования [start,end): коты активны в нём, greeter шлёт ЛС только в нём, тихие часы сторис = всё ВНЕ окна. silent_day_prob — шанс, что человек весь день не заходил (коты и сторис молчат в ОДНИ и те же дни). Правишь ЗДЕСЬ — двигаются все движки разом. Пер-движковый ключ в его секции перекрывает persona (намеренное исключение).",
+    "_note": "ЕДИНЫЕ ЧАСЫ ПЕРСОНАЖА — один источник правды для cats/stories/greeter/comod (см. core/config.py apply_persona). tz_offset_hours — UTC-сдвиг. wake_start_hour/wake_end_hour — окно бодрствования [start,end): коты активны в нём, greeter шлёт ЛС только в нём, тихие часы (и у сторис, и у котов) = всё ВНЕ окна, одним правилом. silent_day_prob — шанс, что человек весь день не заходил (коты и сторис молчат в ОДНИ и те же дни). Правишь ЗДЕСЬ — двигаются все движки разом. Пер-движковый ключ в его секции перекрывает persona (намеренное исключение).",
     "tz_offset_hours": 3,
-    "wake_start_hour": 7,
-    "wake_end_hour": 17,
+    "wake_start_hour": 5,
+    "wake_end_hour": 23,
     "silent_day_prob": 0.08
   },
   "runtime": {

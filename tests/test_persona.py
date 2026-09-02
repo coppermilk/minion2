@@ -5,9 +5,9 @@
 One account is one person, so a single top-level ``persona`` block is the one
 source of truth for the waking window, quiet hours and timezone; it is fanned
 into each engine's sub-config via ``setdefault`` (an engine that sets its own
-key still wins). These tests pin that fan-out, the derived stories quiet-hours
-(the complement of the waking window), the per-engine override, and the
-no-persona no-op.
+key still wins). These tests pin that fan-out, the derived quiet hours (the
+complement of the waking window, for every engine that has them), the
+per-engine override, and the no-persona no-op.
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ _WAKE_END = 17
 _OVERRIDE_START = 9
 _HOURS = 24
 _SILENT = 0.08
+_WIDE_START = 5
+_WIDE_END = 23
 
 
 def _block(data: dict[str, object], name: str) -> dict[str, object]:
@@ -63,13 +65,63 @@ def test_silent_day_prob_reaches_reactions_and_stories() -> None:
     assert _block(data, 'stories')['silent_day_prob'] == _SILENT
 
 
-def test_stories_quiet_hours_are_the_complement_of_the_window() -> None:
-    """With no explicit quiet-hours, stories sleep outside the wake window."""
+def test_quiet_hours_are_the_complement_of_the_window() -> None:
+    """With no explicit quiet-hours, both engines sleep outside the window."""
     data: dict[str, object] = {'persona': _persona()}
     config.apply_persona(data)
-    quiet = _block(data, 'stories')['quiet_hours']
     expected = set(range(_WAKE_START)) | set(range(_WAKE_END, _HOURS))
-    assert set(cast('list[int]', quiet)) == expected
+    for name in ('stories', 'reactions'):
+        quiet = _block(data, name)['quiet_hours']
+        assert set(cast('list[int]', quiet)) == expected
+
+
+def test_the_two_engines_are_silent_at_the_same_hours() -> None:
+    """One person, one silence -- at ANY window, not just the one shipped.
+
+    Reactions used to keep a hard-coded 2-6 while stories took the
+    complement. Those agree only while the window is 7-17, where 2-6 sits
+    entirely outside it and the window gate hides the difference. Widened to
+    5-23 they diverge at 0, 1, 5, 6 and 23: reactions answers comments at
+    01:00 while stories sleeps, and goes quiet at 05:00 while stories
+    watches. This asserts the divergence at exactly that window.
+    """
+    data: dict[str, object] = {
+        'persona': {
+            **_persona(),
+            'wake_start_hour': _WIDE_START,
+            'wake_end_hour': _WIDE_END,
+        }
+    }
+    config.apply_persona(data)
+    quiet = {
+        name: set(cast('list[int]', _block(data, name)['quiet_hours']))
+        for name in ('stories', 'reactions')
+    }
+    assert quiet['reactions'] == quiet['stories']
+    assert quiet['stories'] == {0, 1, 2, 3, 4, _WIDE_END}
+
+
+def test_an_explicit_persona_quiet_list_wins_over_the_window() -> None:
+    """A written quiet_hours is the answer for both engines, derived or not."""
+    data: dict[str, object] = {
+        'persona': {**_persona(), 'quiet_hours': [1, 2]}
+    }
+    config.apply_persona(data)
+    for name in ('stories', 'reactions'):
+        assert _block(data, name)['quiet_hours'] == [1, 2]
+
+
+def test_no_window_leaves_quiet_hours_alone() -> None:
+    """A persona with no window says nothing about silence -- not "none".
+
+    The difference is the whole night: an absent key leaves each engine on
+    its own declared default, while an empty list written into the config
+    means "never silent" and would have the bot answering comments at 3am.
+    """
+    data: dict[str, object] = {'persona': {'tz_offset_hours': _TZ}}
+    config.apply_persona(data)
+    for name in ('stories', 'reactions'):
+        assert 'quiet_hours' not in _block(data, name)
 
 
 def test_an_explicit_engine_key_overrides_persona() -> None:
