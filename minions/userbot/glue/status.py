@@ -16,6 +16,7 @@ from datetime import timezone
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import humanize
+from minions.userbot.core import render
 from minions.userbot.core.render import emoji_markup
 from minions.userbot.core.render import trim
 from minions.userbot.core.runtime import fmt_eta
@@ -31,6 +32,7 @@ STATUS_WARM_PEERS = 3
 if TYPE_CHECKING:
     from minions.userbot.core import relationship
     from minions.userbot.core.models import Emoji
+    from minions.userbot.core.state import Actor
     from minions.userbot.engines import stories
     from minions.userbot.main import Userbot
 
@@ -61,17 +63,16 @@ def _glance_order(row: stories.Seen) -> tuple[int, int]:
     return (rank, -row.unseen)
 
 
-def _bare(label: str, peer_id: object) -> str:
-    """Return a resolved label without the raw id the resolver appends.
+def _name(known: dict[int, Actor], peer_id: int) -> str:
+    """Name a peer for a list of PEOPLE, where the raw id is noise."""
+    found = known.get(peer_id)
+    return (render.name(found) if found is not None else '') or str(peer_id)
 
-    ``_chat_label`` renders '@name (-100123)' because the Routing section is
-    read to CONFIGURE chats, where the id is the useful half. A list of
-    people is read to recognise them, where it is noise. Stripped by exact
-    suffix rather than by pattern, so a title that happens to end in
-    parentheses survives, and an unresolved peer still shows its bare id
-    because that is all we know about them.
-    """
-    return label.removesuffix(f' ({peer_id})')
+
+def _tag(known: dict[int, Actor], peer_id: int) -> str:
+    """Name a chat for the ROUTING lines, where the raw id is the point."""
+    found = known.get(peer_id)
+    return render.tagged(found) if found is not None else str(peer_id)
 
 
 def _pool_markup(pool: tuple[Emoji, ...]) -> str:
@@ -112,22 +113,22 @@ class StatusReport:
         sep = f' {self.bullet()} '
         return sep.join([title, *(t for t in tail if t)])
 
-    def text(self, labels: dict[int, str]) -> str:
+    def text(self, known: dict[int, Actor]) -> str:
         """Return the /status text: header, routing, videos, engines."""
         flag = 'TEST' if self.bot.mode == 'test' else 'LIVE'
         parts = [
             self._header('title', 'Userbot', f'{self._dot(on=True)} {flag}'),
             '',
-            *self._routing_lines(labels),
+            *self._routing_lines(known),
             '',
             *self._videos_lines(),
             '',
-            *self._react_status_lines(labels),
+            *self._react_status_lines(known),
             '',
             *self._greeter_lines(),
             '',
             self._users_line(),
-            *self._stories_lines(labels),
+            *self._stories_lines(known),
             '',
             *self._schedule_lines(),
             '',
@@ -195,17 +196,11 @@ class StatusReport:
             wake += timedelta(days=1)
         return _clock_eta(wake.timestamp(), gp.tz_offset_hours)
 
-    def _routing_lines(self, labels: dict[int, str]) -> list[str]:
+    def _routing_lines(self, known: dict[int, Actor]) -> list[str]:
         """Source, the live targets, and where posts go NOW (test vs live)."""
-        source = labels.get(
-            self.bot.config.source, str(self.bot.config.source)
-        )
-        targets = ', '.join(
-            labels.get(t, str(t)) for t in self.bot.config.targets
-        )
-        dest = ', '.join(
-            labels.get(t, str(t)) for t in self.bot.live_targets()
-        )
+        source = _tag(known, self.bot.config.source)
+        targets = ', '.join(_tag(known, t) for t in self.bot.config.targets)
+        dest = ', '.join(_tag(known, t) for t in self.bot.live_targets())
         b = self.bullet()
         return [
             self._header('routing', 'Routing'),
@@ -266,7 +261,7 @@ class StatusReport:
         )
         return lines
 
-    def _react_status_lines(self, labels: dict[int, str]) -> list[str]:
+    def _react_status_lines(self, known: dict[int, Actor]) -> list[str]:
         """Return the reaction engine's live state (empty when off)."""
         brain = self.bot.reactions
         b = self.bullet()
@@ -295,15 +290,13 @@ class StatusReport:
             ),
             f'{b} window {window} (prior) {b} learned {learned}',
             *([line] if (line := self._react_rescan_line()) else []),
-            *self._react_attach_lines(),
-            *self._last_posts_lines(labels),
+            *self._react_attach_lines(known),
+            *self._last_posts_lines(known),
             *self._pending_react_lines(),
             f'{b} /reactnow {b} /requeue',
         ]
 
-    def _attach_line(
-        self, warm: list[relationship.Warmth], noun: str
-    ) -> str:
+    def _attach_line(self, warm: list[relationship.Warmth], noun: str) -> str:
         """Return the whole ledger in one line: how many, and how we act.
 
         The same two fractions the rows carry, so the reader learns them once:
@@ -330,7 +323,10 @@ class StatusReport:
         )
 
     def _warmth_lines(
-        self, warm: list[relationship.Warmth], noun: str
+        self,
+        warm: list[relationship.Warmth],
+        noun: str,
+        known: dict[int, Actor],
     ) -> list[str]:
         """Return one Berlyne ledger's readout: aggregate, then recent peers.
 
@@ -341,7 +337,8 @@ class StatusReport:
         in bursts. That puts A~ in [0, 1.6), not [0, 1]: irregularity is a
         bonus of up to 1.6x. The comment likes and the story views keep the
         same ledger shape, so they read out through one function -- ``noun``
-        is all that differs. Labels are the ledger's cached @names.
+        is all that differs. ``known`` names the peers; the ledger keeps
+        only their ids.
         """
         if not warm:
             return []
@@ -350,13 +347,13 @@ class StatusReport:
         return [
             self._attach_line(warm, noun),
             *(
-                f'    {_bare(w.label, w.peer_id)} {b} '
+                f'    {_name(known, w.peer_id)} {b} '
                 f'{eye} {w.p:.0%} {thumb} {w.r:.0%}'
                 for w in warm[:STATUS_WARM_PEERS]
             ),
         ]
 
-    def _react_attach_lines(self) -> list[str]:
+    def _react_attach_lines(self, known: dict[int, Actor]) -> list[str]:
         """Return today's like/sticker budget, then the commenter readout."""
         brain = self.bot.reactions
         if not brain.params.attach_enabled:
@@ -368,7 +365,10 @@ class StatusReport:
             f'{brain.params.like_max_per_day} {b} stickers '
             f'{brain.stickers_today(now)}/{brain.params.sticker_max_per_day}'
         )
-        return [today, *self._warmth_lines(brain.warmth(), 'commenters')]
+        return [
+            today,
+            *self._warmth_lines(brain.warmth(), 'commenters', known),
+        ]
 
     def _react_rescan_line(self) -> str:
         """Say when the auto-rescan is OFF; its countdown lives in Schedule."""
@@ -381,7 +381,7 @@ class StatusReport:
         rows = self.bot.comment_watch.queued_rows()
         return [f'{self.bullet()} queued:', *rows] if rows else []
 
-    def _last_posts_lines(self, labels: dict[int, str]) -> list[str]:
+    def _last_posts_lines(self, known: dict[int, Actor]) -> list[str]:
         """Return the watched comment threads, grouped one line per chat."""
         posts = self.bot.reactions.posts
         if not posts:
@@ -391,8 +391,7 @@ class StatusReport:
             by_chat.setdefault(chat, []).append(mid)
         lines = [f'{self.bullet()} watching {len(posts)} posts:']
         lines.extend(
-            f'    {labels.get(chat, str(chat))}: '
-            f'{", ".join(str(m) for m in mids)}'
+            f'    {_tag(known, chat)}: {", ".join(str(m) for m in mids)}'
             for chat, mids in by_chat.items()
         )
         return lines
@@ -413,7 +412,7 @@ class StatusReport:
             lines.append(f'   {cmds}')
         return lines
 
-    def _stories_lines(self, labels: dict[int, str]) -> list[str]:
+    def _stories_lines(self, known: dict[int, Actor]) -> list[str]:
         """Return the story-viewer section: header, the glance, attachment."""
         if not self.bot.stories.params.enabled:
             off = f'{self._dot(on=False)} off'
@@ -425,7 +424,7 @@ class StatusReport:
         return [
             self._stories_line(),
             *([line] if (line := self._attach()) else []),
-            *self._glance_lines(labels),
+            *self._glance_lines(known),
         ]
 
     def _stories_line(self) -> str:
@@ -450,7 +449,7 @@ class StatusReport:
             parts.append(f'next view {self.arrow()} {due}')
         return self._header('stories', 'Stories', *parts)
 
-    def _glance_lines(self, labels: dict[int, str]) -> list[str]:
+    def _glance_lines(self, known: dict[int, Actor]) -> list[str]:
         """Return who has stories up now, grouped by what we do about them.
 
         Grouped rather than listed flat, because the question is "who are
@@ -469,9 +468,9 @@ class StatusReport:
             head + self._glance_count(glance),
             # What is happening, then what was decided, then what needs
             # nothing -- most actionable first.
-            *self._opening_lines(glance, labels),
-            *self._held_lines(glance, labels),
-            *self._seen_lines(glance, labels),
+            *self._opening_lines(glance, known),
+            *self._held_lines(glance, known),
+            *self._seen_lines(glance, known),
         ]
 
     def _attach(self) -> str:
@@ -479,7 +478,7 @@ class StatusReport:
         return self._attach_line(self.bot.stories.warmth(), 'people')
 
     def _opening_lines(
-        self, glance: stories.Glance, labels: dict[int, str]
+        self, glance: stories.Glance, known: dict[int, Actor]
     ) -> list[str]:
         """Return the people whose stories we are opening this glance."""
         rows = [row for row in glance.peers if row.viewing]
@@ -490,7 +489,7 @@ class StatusReport:
             f'{b} viewing ({len(rows)}):',
             *_capped(
                 [
-                    f'    {self._who(row, labels)} {b} '
+                    f'    {self._who(row, known)} {b} '
                     f'{row.viewing} of {row.unseen} new {b} '
                     f'{self._record(row)}{self._view_eta(row.peer_id)}'
                     for row in sorted(rows, key=lambda r: -r.viewing)
@@ -499,7 +498,7 @@ class StatusReport:
         ]
 
     def _held_lines(
-        self, glance: stories.Glance, labels: dict[int, str]
+        self, glance: stories.Glance, known: dict[int, Actor]
     ) -> list[str]:
         """Return the people who have something new we are not opening.
 
@@ -516,7 +515,7 @@ class StatusReport:
             f'{b} {why} ({len(rows)}):',
             *_capped(
                 [
-                    f'    {self._who(row, labels)} {b} '
+                    f'    {self._who(row, known)} {b} '
                     f'{row.unseen} new {b} {self._record(row)}'
                     for row in sorted(rows, key=lambda r: -r.unseen)
                 ]
@@ -524,7 +523,7 @@ class StatusReport:
         ]
 
     def _seen_lines(
-        self, glance: stories.Glance, labels: dict[int, str]
+        self, glance: stories.Glance, known: dict[int, Actor]
     ) -> list[str]:
         """Return the people whose every story we have already opened.
 
@@ -544,7 +543,7 @@ class StatusReport:
             f'{b} already seen ({len(rows)}):',
             *_capped(
                 [
-                    f'    {self._who(row, labels)} {b} '
+                    f'    {self._who(row, known)} {b} '
                     f'{row.active} up {b} {self._record(row)}'
                     for row in sorted(rows, key=lambda r: -r.active)
                 ]
@@ -555,11 +554,9 @@ class StatusReport:
         """Return how many people have stories up right now."""
         return f'{len(glance.peers)} with stories'
 
-    def _who(self, row: stories.Seen, labels: dict[int, str]) -> str:
+    def _who(self, row: stories.Seen, known: dict[int, Actor]) -> str:
         """Return a peer's @name, falling back to the bare id, plus a flag."""
-        name = _bare(labels.get(row.peer_id, ''), row.peer_id) or str(
-            row.peer_id
-        )
+        name = _name(known, row.peer_id)
         return f'{name} (archived)' if row.hidden else name
 
     def _record(self, row: stories.Seen) -> str:

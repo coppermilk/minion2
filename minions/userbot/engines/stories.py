@@ -148,7 +148,6 @@ class StoryCandidate:
     story_ids: tuple[int, ...]
     max_id: int
     last_ts: float = 0.0
-    label: str = ''  # @name / title, for the log (never shown to the peer)
     hidden: bool = False  # came from the archived feed, not the main one
 
 
@@ -228,7 +227,6 @@ class StoryView:
     story_ids: tuple[int, ...]
     max_id: int
     when: float
-    label: str = ''
     # The subset of story_ids to react to, and the reaction glyph chosen for
     # this view (empty when none) -- decided at plan time, sent by the glue.
     react_ids: tuple[int, ...] = ()
@@ -237,10 +235,14 @@ class StoryView:
 
 @dataclass(frozen=True)
 class ViewLog:
-    """One line of the rolling view log, shown by /status and /stories."""
+    """One line of the rolling view log, shown by /status and /stories.
+
+    No name: who this peer is lives once, in ``actors``, and the render
+    looks it up. A log line used to carry its own copy, which meant a peer
+    who changed their @name read as two different people down the list.
+    """
 
     peer_id: int
-    label: str
     count: int
     ts: float
 
@@ -370,7 +372,7 @@ class StoryBrain:
 
     def _standing(self, peer_id: int) -> Standing:
         """Return one peer's all-time record, for the glance readout."""
-        row = self.ledger.row(str(peer_id))
+        row = self.ledger.row(peer_id)
         return Standing(row.offered, row.taken, row.recip)
 
     def blocked_reason(self, now: float | None = None) -> str | None:
@@ -480,7 +482,7 @@ class StoryBrain:
         Runs on local counters (the ledger commits at ``mark_viewed`` /
         ``_record_skips``, so the plan/commit split survives I/O that fails).
         """
-        row = self.ledger.row(str(peer_id))
+        row = self.ledger.row(peer_id)
         offered, viewed = row.offered, row.taken
         gain = self.params.view_control_gain
         view_ids: list[int] = []
@@ -506,7 +508,7 @@ class StoryBrain:
         ]
         if not fresh:
             return
-        self.ledger.add_offer(str(peer_id), len(fresh), self.clock())
+        self.ledger.add_offer(peer_id, len(fresh), self.clock())
         self._trim_peers()
 
     def _react_budget(self, now: float) -> int:
@@ -525,7 +527,7 @@ class StoryBrain:
         stopped by the remaining daily ``budget``. Returns the chosen ids and
         the budget left.
         """
-        key = str(peer_id)
+        key = peer_id
         ctrl = self._control()
         chosen: list[int] = []
         for sid in view_ids:
@@ -574,7 +576,6 @@ class StoryBrain:
                     story_ids=view_ids,
                     max_id=max(view_ids),
                     when=when,
-                    label=cand.label,
                     react_ids=react_ids,
                     react_emoji=emoji,
                 )
@@ -596,12 +597,10 @@ class StoryBrain:
         self._save()
         return views
 
-    def mark_viewed(  # noqa: PLR0913 -- id + ids + optional label/ts read best flat
+    def mark_viewed(
         self,
         peer_id: int,
         story_ids: tuple[int, ...],
-        *,
-        label: str = '',
         ts: float | None = None,
     ) -> None:
         """Record that ``story_ids`` of ``peer_id`` were viewed (persisted).
@@ -619,14 +618,12 @@ class StoryBrain:
         ]
         if not fresh:
             return
-        key = str(peer_id)
-        self.ledger.add_take(key, len(fresh), self._control(), now)
-        self.ledger.remember(key, label)  # @name for /status
+        self.ledger.add_take(peer_id, len(fresh), self._control(), now)
         self.store.trim_marks(f'{peer_id}:', self.params.seen_per_peer)
         self._trim_peers()
         self.state.last_view = now
         self.state.total_views += len(fresh)
-        self.state.log.append(ViewLog(peer_id, label, len(fresh), now))
+        self.state.log.append(ViewLog(peer_id, len(fresh), now))
         del self.state.log[: -self.params.log_limit]
         self._save()
 
@@ -639,7 +636,7 @@ class StoryBrain:
         """
         if count <= 0:
             return
-        self.ledger.add_recip(str(peer_id), count, now, self._tz())
+        self.ledger.add_recip(peer_id, count, now, self._tz())
         self.state.last_react = now
         self._save()
 
@@ -668,31 +665,6 @@ class StoryBrain:
     def warmth(self) -> list[relationship.Warmth]:
         """Per-peer attachment readout for /status, most recent first."""
         return relationship.warmth(self.ledger, self._control())
-
-    def remember(self, peer: str, label: str) -> None:
-        """Cache a peer's @name for /status (persisted).
-
-        Story views already remember the candidate's label at ``mark_viewed``;
-        this lets the status path fill in a peer viewed before that cache
-        existed (resolved through the shared chat-label helper).
-        """
-        if not label or label == peer:
-            return
-        self.ledger.remember(peer, label)
-        self._save()
-
-    def known_labels(self) -> dict[int, str]:
-        """Return the @names we have cached, by peer id (no requests).
-
-        The glance lists people we have never viewed, so their names are
-        not in the view log; they are cached here the first time /status
-        resolves one, and read back from the store after that.
-        """
-        return {
-            int(row.peer_id): row.label
-            for row in self.store.peers()
-            if row.label and row.label != row.peer_id
-        }
 
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
@@ -741,7 +713,6 @@ class StoryBrain:
                 'log': [
                     {
                         'peer_id': row.peer_id,
-                        'label': row.label,
                         'count': row.count,
                         'ts': row.ts,
                     }
@@ -758,7 +729,6 @@ def _view(raw: object) -> ViewLog:
     row = raw if isinstance(raw, dict) else {}
     return ViewLog(
         peer_id=int(row.get('peer_id', 0)),
-        label=str(row.get('label', '')),
         count=int(row.get('count', 0)),
         ts=float(row.get('ts', 0.0)),
     )

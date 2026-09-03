@@ -18,6 +18,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Actor
 from minions.userbot.core.state import Database
 from minions.userbot.core.state import PeerRow
 from minions.userbot.core.state import StateStore
@@ -51,15 +52,15 @@ def _store(tmp_path: Path, service: str = 'reactions') -> StateStore:
 
 def test_unknown_peer_reads_as_an_empty_row(tmp_path: Path) -> None:
     """A peer we have never seen answers with zeroes, not with None."""
-    assert _store(tmp_path).peer('77') == PeerRow('77')
+    assert _store(tmp_path).peer(77) == PeerRow(77)
 
 
 def test_bump_accumulates_per_column(tmp_path: Path) -> None:
     """Counters add up; a column left out of the call is left alone."""
     store = _store(tmp_path)
-    store.bump('77', {'offered': 1})
-    store.bump('77', {'offered': 1, 'taken': 1})
-    row = store.peer('77')
+    store.bump(77, {'offered': 1})
+    store.bump(77, {'offered': 1, 'taken': 1})
+    row = store.peer(77)
     assert (row.offered, row.taken, row.recip) == (2, 1, 0)
 
 
@@ -71,10 +72,10 @@ def test_a_take_stamps_take_at_and_an_offer_does_not(tmp_path: Path) -> None:
     otherwise make the following engagement's gap zero.
     """
     store = _store(tmp_path)
-    store.bump('77', {'taken': 1}, TAKE_AT)
-    store.bump('77', {'offered': 1}, TAKE_AT + 60)
+    store.bump(77, {'taken': 1}, TAKE_AT)
+    store.bump(77, {'offered': 1}, TAKE_AT + 60)
 
-    row = store.peer('77')
+    row = store.peer(77)
     assert row.take_at == TAKE_AT
     assert row.last_at == TAKE_AT + 60  # recency moved, the take did not
 
@@ -82,28 +83,34 @@ def test_a_take_stamps_take_at_and_an_offer_does_not(tmp_path: Path) -> None:
 def test_peers_come_back_most_recent_first(tmp_path: Path) -> None:
     """Recency ordering is a column now, not dict insertion order."""
     store = _store(tmp_path)
-    for peer in ('a', 'b', 'c'):
+    for peer in (1, 2, 3):
         store.bump(peer, {'offered': 1})
-    store.bump('a', {'offered': 1})  # 'a' is freshest again
-    assert next(p.peer_id for p in store.peers()) == 'a'
+    store.bump(1, {'offered': 1})  # peer 1 is freshest again
+    assert next(p.peer_id for p in store.peers()) == 1
     assert len(store.peers(limit=TOP_N)) == TOP_N
 
 
-def test_remember_ignores_a_blank_or_id_shaped_label(tmp_path: Path) -> None:
-    """A failed resolution must not overwrite a real name already learned."""
-    store = _store(tmp_path)
-    store.remember('77', '@real')
-    store.remember('77', '')
-    store.remember('77', '77')
-    assert store.peer('77').label == '@real'
+def test_a_thinner_answer_never_erases_a_fuller_one(tmp_path: Path) -> None:
+    """Telegram shares what it feels like; a later blank must not erase.
+
+    A resolution can come back with a username one time and only a first
+    name the next. Overwriting field by field would make the second answer
+    forget what the first taught us.
+    """
+    db = Database(tmp_path / DB_NAME)
+    db.note_actor(Actor(77, 'user', username='real', first_name='Real'))
+    db.note_actor(Actor(77, 'user', first_name='Realer'))
+
+    got = db.actor(77)
+    assert (got.username, got.first_name) == ('real', 'Realer')
 
 
 def test_forget_drops_the_row(tmp_path: Path) -> None:
     """A peer rolled off the tracked set leaves no counters behind."""
     store = _store(tmp_path)
-    store.bump('77', {'taken': 3})
-    store.forget('77')
-    assert store.peer('77') == PeerRow('77')
+    store.bump(77, {'taken': 3})
+    store.forget(77)
+    assert store.peer(77) == PeerRow(77)
 
 
 # --------------------------------------------------- one file, many services
@@ -120,15 +127,15 @@ def test_two_services_share_a_file_and_nothing_else(tmp_path: Path) -> None:
     db = Database(tmp_path / DB_NAME)
     likes, views = db.store('reactions'), db.store('stories')
 
-    likes.bump('77', {'taken': TOP_N})
+    likes.bump(77, {'taken': TOP_N})
     likes.mark('shared-key')
     likes.write({'mood': MOOD})
-    views.bump('77', {'taken': 1})
+    views.bump(77, {'taken': 1})
     views.mark('shared-key')
     views.write({'total_views': 1})
 
-    assert likes.peer('77').taken == TOP_N
-    assert views.peer('77').taken == 1
+    assert likes.peer(77).taken == TOP_N
+    assert views.peer(77).taken == 1
     assert likes.read() == {'mood': MOOD}
     assert views.read() == {'total_views': 1}
 
@@ -170,9 +177,9 @@ def test_the_audience_lives_in_the_same_file(tmp_path: Path) -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )
     }
-    assert {'users', 'membership_events', 'messages'} <= tables
+    assert {'actors', 'audience', 'membership_events', 'messages'} <= tables
     assert 'service' not in {
-        str(r['name']) for r in db.conn.execute('PRAGMA table_info(users)')
+        str(r['name']) for r in db.conn.execute('PRAGMA table_info(actors)')
     }
 
 
@@ -274,9 +281,8 @@ def test_a_thousand_peers_still_write_one_row_each(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.write({'mood': MOOD, 'alive': {'12': 5.0}})
     for i in range(CROWD):
-        peer = str(-1000000000 - i)
+        peer = -1000000000 - i
         store.bump(peer, {'offered': 3, 'taken': 2})
-        store.remember(peer, f'@user{i}')
         store.mark(f'-100:7:{peer}')
 
     assert len(store.peers()) == CROWD
@@ -291,9 +297,9 @@ def test_one_peer_write_touches_one_row(tmp_path: Path) -> None:
     """
     store = _store(tmp_path)
     for i in range(100):
-        store.bump(str(i), {'offered': 1})
+        store.bump(i, {'offered': 1})
     before = store.conn.total_changes
-    store.bump('50', {'taken': 1})
+    store.bump(50, {'taken': 1})
     assert store.conn.total_changes - before == 1
 
 
@@ -307,7 +313,7 @@ def test_the_database_file_stands_alone(tmp_path: Path) -> None:
     door. Asserted by copying ONLY the .db, exactly as a backup does.
     """
     store = _store(tmp_path, 'stories')
-    store.bump('77', {'offered': TOP_N, 'taken': 1})
+    store.bump(77, {'offered': TOP_N, 'taken': 1})
     store.mark('77:1')
     # deliberately NOT closed: the crash path is what the WAL trap needed
 
@@ -315,7 +321,7 @@ def test_the_database_file_stands_alone(tmp_path: Path) -> None:
     copy.write_bytes((tmp_path / DB_NAME).read_bytes())
     alone = sqlite3.connect(f'file:{copy}?mode=ro', uri=True)
 
-    assert alone.execute('SELECT count(*) FROM peers').fetchone()[0] == 1
+    assert alone.execute('SELECT count(*) FROM standing').fetchone()[0] == 1
     assert alone.execute('SELECT count(*) FROM marks').fetchone()[0] == 1
     assert sorted(p.name for p in tmp_path.glob(f'{DB_NAME}-*')) == []
 
@@ -390,6 +396,7 @@ LEGACY_TAKEN = 7
 LEGACY_RECIP = 2
 LEGACY_LAST_AT = 5.0
 LEGACY_USER = 4242
+OLD_PEER = 5105052156
 
 
 def _write(
@@ -414,7 +421,7 @@ def _shared(where: Path) -> None:
             'last_at) VALUES (?, ?, ?, ?, ?, ?)',
             (
                 'reactions',
-                'old',
+                str(OLD_PEER),
                 LEGACY_OFFERED,
                 LEGACY_TAKEN,
                 LEGACY_RECIP,
@@ -440,7 +447,7 @@ def _per_service(where: Path) -> None:
         (
             'INSERT INTO peers (peer_id, label, offered, taken) '
             'VALUES (?, ?, ?, ?)',
-            ('360724480', '@eliza', LEGACY_OFFERED, LEGACY_TAKEN),
+            ('360724480', '@eliza (360724480)', LEGACY_OFFERED, LEGACY_TAKEN),
         ),
         ('INSERT INTO marks (key, at) VALUES (?, ?)', ('360724480:397', 1.0)),
         (
@@ -498,7 +505,7 @@ def test_adopt_folds_every_older_shape_into_the_one_file(
 
     db = Database(tmp_path / DB_NAME)
     likes = db.store('reactions')
-    row = likes.peer('old')  # shape 1, by its engine column
+    row = likes.peer(OLD_PEER)  # shape 1, by its engine column
     assert (row.offered, row.taken, row.recip) == (
         LEGACY_OFFERED,
         LEGACY_TAKEN,
@@ -508,7 +515,7 @@ def test_adopt_folds_every_older_shape_into_the_one_file(
     assert likes.read() == {'mood': MOOD}  # shape 1, from cursors.json
 
     views = db.store('stories')  # shape 2a, by its filename
-    assert views.peer('360724480').label == '@eliza'
+    assert db.actor(360724480).username == 'eliza'
     assert views.marked('360724480:397') is True
     assert views.marked('77:1') is True  # and shape 1's mark, same service
     assert views.read() == {'total_views': 38}
@@ -519,7 +526,8 @@ def test_adopt_folds_every_older_shape_into_the_one_file(
     ]
 
     seen = db.conn.execute(  # shape 3, under no service at all
-        'SELECT username, msg_count FROM users WHERE user_id = ?',
+        'SELECT a.username, n.msg_count FROM actors a '
+        'JOIN audience n ON n.peer_id = a.peer_id WHERE a.peer_id = ?',
         (LEGACY_USER,),
     ).fetchone()
     assert (seen['username'], seen['msg_count']) == ('alice', 1)
@@ -533,7 +541,7 @@ def test_adopt_does_not_cross_the_services(tmp_path: Path) -> None:
     adopt(tmp_path)
 
     db = Database(tmp_path / DB_NAME)
-    assert db.store('stories').peer('old') == PeerRow('old')
+    assert db.store('stories').peer(OLD_PEER) == PeerRow(OLD_PEER)
     assert db.store('reactions').marked('77:1') is False
     assert db.store('reactions').read() == {'mood': MOOD}
 
@@ -563,13 +571,13 @@ def test_a_resumed_import_never_undoes_live_state(tmp_path: Path) -> None:
     (tmp_path / 'peers.db.bak').rename(tmp_path / 'peers.db')  # killed here
     (tmp_path / 'cursors.json.bak').rename(tmp_path / 'cursors.json')
     store = _store(tmp_path)
-    store.bump('old', {'taken': 1}, TAKE_AT)
+    store.bump(OLD_PEER, {'taken': 1}, TAKE_AT)
     store.write({'mood': 0.9})
 
     adopt(tmp_path)  # a second start
 
     reopened = _store(tmp_path)
-    assert reopened.peer('old').taken == LEGACY_TAKEN + 1
+    assert reopened.peer(OLD_PEER).taken == LEGACY_TAKEN + 1
     assert reopened.read() == {'mood': 0.9}
 
 
@@ -598,7 +606,7 @@ import os, sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
 conn.execute('PRAGMA journal_mode=WAL')
 conn.executescript(sys.argv[2])
-conn.execute("INSERT INTO peers (peer_id, taken) VALUES ('w', 1)")
+conn.execute("INSERT INTO peers (peer_id, taken) VALUES ('770', 1)")
 conn.commit()
 os._exit(0)
 """
@@ -640,7 +648,7 @@ def test_adopt_leaves_no_orphan_journal_siblings(tmp_path: Path) -> None:
     assert sorted(p.name for p in tmp_path.glob('stories.db*')) == [
         'stories.db.bak'
     ]
-    assert Database(tmp_path / DB_NAME).store('stories').peer('w').taken == 1
+    assert Database(tmp_path / DB_NAME).store('stories').peer(770).taken == 1
 
 
 def test_adopt_on_a_fresh_directory_creates_only_the_database(
@@ -782,3 +790,111 @@ def test_adopt_says_what_it_took(
         adopt(tmp_path)
     assert 'stories.db' in caplog.text
     assert '4 adopted file(s)' in caplog.text
+
+
+# --------------------------------------- folding THIS file's older shape
+
+_OLD_SELF = """
+CREATE TABLE peers (
+    service TEXT NOT NULL, peer_id TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '', offered INTEGER NOT NULL DEFAULT 0,
+    taken INTEGER NOT NULL DEFAULT 0, recip INTEGER NOT NULL DEFAULT 0,
+    last_at REAL NOT NULL DEFAULT 0, take_at REAL NOT NULL DEFAULT 0,
+    gap_n INTEGER NOT NULL DEFAULT 0, gap_sum REAL NOT NULL DEFAULT 0,
+    gap_sq REAL NOT NULL DEFAULT 0, burst INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (service, peer_id)
+);
+CREATE TABLE users (
+    user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
+    last_name TEXT, phone TEXT, first_seen REAL, last_seen REAL,
+    msg_count INTEGER NOT NULL DEFAULT 0,
+    subscribed INTEGER NOT NULL DEFAULT 0, updated_at REAL
+);
+CREATE TABLE membership_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+    event TEXT NOT NULL, ts REAL NOT NULL, admin_log_id INTEGER UNIQUE
+);
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL, msg_id INTEGER NOT NULL, root INTEGER,
+    text TEXT, ts REAL NOT NULL, UNIQUE (chat_id, msg_id)
+);
+"""
+"""userbot.db as the version before this one wrote it.
+
+Not an older FILE -- the same file, one schema back. This is what a deployed
+install actually has on the morning of the upgrade.
+"""
+
+CHANNEL = -1001787638608
+
+
+def _old_self(path: Path) -> None:
+    """Write userbot.db at the previous schema, with a person and a channel."""
+    _write(
+        path,
+        _OLD_SELF,
+        (
+            'INSERT INTO peers (service, peer_id, label, offered, taken) '
+            'VALUES (?, ?, ?, ?, ?)',
+            ('stories', '360724480', '@eliza (360724480)', 7, 5),
+        ),
+        (
+            'INSERT INTO peers (service, peer_id, label) VALUES (?, ?, ?)',
+            ('stories', str(CHANNEL), f'"Kanal" ({CHANNEL})'),
+        ),
+        (
+            'INSERT INTO users (user_id, username, subscribed) '
+            'VALUES (?, ?, ?)',
+            (LEGACY_USER, 'alice', 1),
+        ),
+        (
+            'INSERT INTO membership_events (user_id, event, ts) '
+            'VALUES (?, ?, ?)',
+            (LEGACY_USER, 'join', 1.0),
+        ),
+    )
+
+
+def test_a_channel_folds_in_as_a_chat_not_a_person(tmp_path: Path) -> None:
+    """The sign of a Telegram id says which it is, and the fold reads it.
+
+    The story engine watches channels as well as people, so both are actors;
+    folding a channel in as a 'user' would make ``kind`` a column that
+    silently lies about half its rows.
+    """
+    _old_self(tmp_path / DB_NAME)
+
+    db = Database(tmp_path / DB_NAME)
+
+    assert db.actor(CHANNEL).kind == 'chat'
+    assert db.actor(CHANNEL).title == 'Kanal'
+    assert db.actor(360724480).kind == 'user'
+    assert db.actor(360724480).username == 'eliza'
+
+
+def test_an_older_file_opens_before_it_is_indexed(tmp_path: Path) -> None:
+    """The fold runs BETWEEN the tables and the indexes, and must.
+
+    An index names columns, so ``ix_messages_peer`` cannot be built until
+    ``messages`` has a ``peer_id`` -- which the fold is what creates. Built
+    with the tables, the very first open of a deployed file dies on a column
+    the fold was about to make.
+    """
+    _old_self(tmp_path / DB_NAME)
+
+    db = Database(tmp_path / DB_NAME)  # would raise if the order were wrong
+
+    indexed = {
+        str(r['name'])
+        for r in db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index'"
+        )
+    }
+    assert {'ix_messages_peer', 'ix_membership_peer'} <= indexed
+    assert (
+        db.conn.execute('SELECT peer_id FROM membership_events').fetchone()[
+            'peer_id'
+        ]
+        == LEGACY_USER
+    )

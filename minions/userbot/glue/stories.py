@@ -42,7 +42,8 @@ class StoryDeps:
     account: userchat.Account
     brain: stories.StoryBrain
     source: int  # where /stories reports
-    label: Callable[[int], Awaitable[str]]  # peer id -> @name, for the log
+    learn: Callable[[int], Awaitable[str]]  # resolve a peer, store, name it
+    name: Callable[[int], str]  # what we already know a peer as
 
 
 @dataclass
@@ -175,7 +176,6 @@ class StoryWatch:
             last_ts=max(
                 (story.date for story in peer_stories.stories), default=0.0
             ),
-            label=str(peer_stories.peer_id),
         )
 
     async def _view_later(self, view: stories.StoryView) -> None:
@@ -207,13 +207,13 @@ class StoryWatch:
         if not opened:
             log.warning(
                 'stories: %s opened none of %d; leaving them unseen',
-                view.label or view.peer_id,
+                self._who(view.peer_id),
                 len(view.story_ids),
             )
             return
-        label = await self.deps.label(view.peer_id)
-        self.deps.brain.mark_viewed(view.peer_id, opened, label=label)
-        log.info('stories: viewed %d of %s', len(opened), label)
+        name = await self.deps.learn(view.peer_id)
+        self.deps.brain.mark_viewed(view.peer_id, opened)
+        log.info('stories: viewed %d of %s', len(opened), name)
 
     def _dequeue(self, view: stories.StoryView) -> None:
         """Drop a fired view from the /status queue (no-op if already gone)."""
@@ -274,8 +274,12 @@ class StoryWatch:
             'stories: %d of %d planned reaction(s) to %s did not go out',
             lost,
             planned,
-            view.label or view.peer_id,
+            self._who(view.peer_id),
         )
+
+    def _who(self, peer_id: int) -> str:
+        """Name a peer for a log line, falling back to their bare id."""
+        return self.deps.name(peer_id) or str(peer_id)
 
     async def report(self) -> None:
         """Post the story-viewer log to the source chat (/stories command)."""
@@ -295,7 +299,7 @@ class StoryWatch:
         if recent:
             lines.append('  recent views:')
             lines += [
-                f'    - {e.label or e.peer_id}: {e.count} story(s) {iso(e.ts)}'
+                f'    - {self._who(e.peer_id)}: {e.count} story(s) {iso(e.ts)}'
                 for e in recent
             ]
         else:

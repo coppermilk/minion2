@@ -40,10 +40,10 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass
-from dataclasses import fields
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from collections.abc import Mapping
     from pathlib import Path
 
@@ -53,10 +53,26 @@ DB_NAME = 'userbot.db'
 """The one state file, per profile directory (live and test each get one)."""
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS peers (
+CREATE TABLE IF NOT EXISTS actors (
+    peer_id    INTEGER PRIMARY KEY,
+    kind       TEXT NOT NULL DEFAULT '',
+    username   TEXT NOT NULL DEFAULT '',
+    title      TEXT NOT NULL DEFAULT '',
+    first_name TEXT NOT NULL DEFAULT '',
+    last_name  TEXT NOT NULL DEFAULT '',
+    phone      TEXT NOT NULL DEFAULT '',
+    first_seen REAL NOT NULL DEFAULT 0,
+    last_seen  REAL NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS audience (
+    peer_id    INTEGER PRIMARY KEY,
+    subscribed INTEGER NOT NULL DEFAULT 0,
+    msg_count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS standing (
     service TEXT    NOT NULL,
-    peer_id TEXT    NOT NULL,
-    label   TEXT    NOT NULL DEFAULT '',
+    peer_id INTEGER NOT NULL,
     offered INTEGER NOT NULL DEFAULT 0,
     taken   INTEGER NOT NULL DEFAULT 0,
     recip   INTEGER NOT NULL DEFAULT 0,
@@ -68,7 +84,6 @@ CREATE TABLE IF NOT EXISTS peers (
     burst   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (service, peer_id)
 );
-CREATE INDEX IF NOT EXISTS peers_recent ON peers (service, last_at DESC);
 CREATE TABLE IF NOT EXISTS marks (
     service TEXT NOT NULL,
     key     TEXT NOT NULL,
@@ -79,28 +94,16 @@ CREATE TABLE IF NOT EXISTS state (
     service TEXT PRIMARY KEY,
     blob    TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS users (
-    user_id    INTEGER PRIMARY KEY,
-    username   TEXT,
-    first_name TEXT,
-    last_name  TEXT,
-    phone      TEXT,
-    first_seen REAL,
-    last_seen  REAL,
-    msg_count  INTEGER NOT NULL DEFAULT 0,
-    subscribed INTEGER NOT NULL DEFAULT 0,
-    updated_at REAL
-);
 CREATE TABLE IF NOT EXISTS membership_events (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id      INTEGER NOT NULL,
+    peer_id      INTEGER NOT NULL,
     event        TEXT    NOT NULL,
     ts           REAL    NOT NULL,
     admin_log_id INTEGER UNIQUE
 );
 CREATE TABLE IF NOT EXISTS messages (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
+    peer_id INTEGER NOT NULL,
     chat_id INTEGER NOT NULL,
     msg_id  INTEGER NOT NULL,
     root    INTEGER,
@@ -108,23 +111,37 @@ CREATE TABLE IF NOT EXISTS messages (
     ts      REAL    NOT NULL,
     UNIQUE (chat_id, msg_id)
 );
-CREATE INDEX IF NOT EXISTS ix_membership_user ON membership_events (user_id);
-CREATE INDEX IF NOT EXISTS ix_messages_user ON messages (user_id);
 """
 """Every table in the file, declared once.
 
-The first three are per-service and carry the name in a column. ``state`` is
-deliberately ONE table for what used to be five: the story and like engines
-called their blob a "cursor block"; the poster, the greeter and the cabinet
-called theirs a "state file" and hand-rolled a JSON file each, under three
-different naming conventions. One thing wearing five costumes -- a service's
-scalar state, as JSON, one row.
+``actors`` is WHO -- one row per person or channel, keyed by the Telegram id
+as a NUMBER. It is the only place a name is stored. There used to be two: a
+``users`` table with structured fields for the audience, and a ``label``
+column on the ledger holding ``'@eliza (360724480)'`` for everyone else --
+the same person twice, under two ids of two different types (TEXT against
+INTEGER), which could not be joined even in principle. And the label was a
+rendered string, so the display layer had to un-render it
+(``status.py`` stripped the id back off by exact suffix) to show a name.
+Storage keeps fields; rendering makes strings; the two stop meeting.
 
-The last three are the AUDIENCE, and they have no service column because
-they have no service: one channel's members and messages belong to the
-profile, not to whoever happened to write the row. ``engines/users.py``
-holds every query against them and none of their DDL -- the schema of the
-one database is this string, so there is one place to read it.
+``audience`` and ``standing`` are both AGGREGATES over that one actor:
+membership of our channel, and our relationship with them per service.
+``state`` is a service's scalar state as JSON, one row -- deliberately ONE
+table for what used to be five hand-rolled files under three naming
+conventions.
+"""
+
+_INDEXES = """
+CREATE INDEX IF NOT EXISTS standing_recent ON standing (service, last_at DESC);
+CREATE INDEX IF NOT EXISTS ix_membership_peer ON membership_events (peer_id);
+CREATE INDEX IF NOT EXISTS ix_messages_peer ON messages (peer_id);
+"""
+"""The indexes, apart from the tables because they are built LATER.
+
+An index names columns, so it can only be built once every table is in this
+shape -- and a deployed file is not, until ``_migrate`` has folded it. Built
+with the tables instead, the first open of an older file would fail on a
+column the fold was about to create.
 """
 
 COUNTERS = (
@@ -175,7 +192,7 @@ more than recovering from a crash that cannot happen here.
 """
 
 _BUMP_SQL = (  # noqa: S608 -- the column names are COUNTERS, never input
-    'INSERT INTO peers (service, peer_id, {cols}, last_at, take_at) '
+    'INSERT INTO standing (service, peer_id, {cols}, last_at, take_at) '
     'VALUES (?, ?, {marks}, ?, ?) '
     'ON CONFLICT (service, peer_id) DO UPDATE SET {sets}, '
     'last_at = excluded.last_at, '
@@ -193,6 +210,62 @@ Three combine rules, and the difference between them is the point:
 of ours can pass 0 and leave it alone.
 """
 
+IDENTITY = ('kind', 'username', 'title', 'first_name', 'last_name', 'phone')
+"""The fields that say WHO a peer is.
+
+All of them combine the same way: a blank one keeps whatever we already
+knew. Telegram answers a resolution with whatever it feels like sharing --
+a username for one call, only a first name for the next -- so a later,
+thinner answer must never erase a fuller one.
+"""
+
+ACTOR_SQL = (  # noqa: S608 -- the column names are IDENTITY, never input
+    'INSERT INTO actors (peer_id, {cols}, first_seen, last_seen, updated_at) '
+    'VALUES (?, {marks}, ?, ?, ?) '
+    'ON CONFLICT (peer_id) DO UPDATE SET {sets}, '
+    'last_seen = excluded.last_seen, updated_at = excluded.updated_at'
+).format(
+    cols=', '.join(IDENTITY),
+    marks=', '.join('?' * len(IDENTITY)),
+    sets=', '.join(
+        f"{name} = coalesce(nullif(excluded.{name}, ''), {name})"
+        for name in IDENTITY
+    ),
+)
+"""One upsert over every identity field, built from the list above.
+
+Public because ``engines/users.py`` writes an actor too -- the audience
+enricher learns the same fields from a different door, and two upserts
+would be two chances to combine them differently.
+
+``first_seen`` is written only by the INSERT, so it keeps the first moment
+we ever met this peer; ``last_seen`` is overwritten every time.
+"""
+
+
+@dataclass(frozen=True)
+class Actor:
+    """One person or channel, in the fields Telegram gives us for them.
+
+    Fields, not a rendered name: ``'@eliza (360724480)'`` is a sentence
+    about an actor, and which half of it to show depends on who is reading
+    (the routing list wants the id, a list of people does not). Composing
+    that sentence is the render layer's job -- see ``core/render.py``. When
+    it was stored composed, the render layer had to take it apart again.
+
+    ``kind`` is 'user' or 'chat', which is all the bot ever needs to know
+    about the difference; both live here because Telegram gives them one
+    id namespace and the story engine watches both.
+    """
+
+    peer_id: int
+    kind: str = ''
+    username: str = ''
+    title: str = ''  # a channel's name
+    first_name: str = ''
+    last_name: str = ''
+    phone: str = ''  # only ever set for a mutual contact
+
 
 @dataclass(frozen=True)
 class PeerRow:
@@ -209,10 +282,11 @@ class PeerRow:
     the dispersion of ``gap_sum``/``gap_sq`` gives how irregular our attention
     is, and ``burst`` how much of it arrives all at once. Sums, not a history,
     so a peer costs the same four numbers forever.
+
+    No name here: who this peer IS lives once, in ``actors``.
     """
 
-    peer_id: str
-    label: str = ''
+    peer_id: int
     offered: int = 0
     taken: int = 0
     recip: int = 0
@@ -235,7 +309,146 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     conn.execute(f'PRAGMA journal_mode={JOURNAL}')
     conn.commit()
+    _migrate(conn)  # bring an older file to this shape...
+    conn.executescript(_INDEXES)  # ...before indexing it
+    conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Fold this file's OLDER shape into the current one, once.
+
+    ``CREATE TABLE IF NOT EXISTS`` does nothing to a database that already
+    exists, so a deployed file keeps whatever tables it was made with. This
+    is where a shape change lands -- ``adopt`` is for OTHER files, this is
+    for ours.
+
+    One transaction: either the whole fold happens or the old tables are
+    still there to try again next start.
+    """
+    old = {
+        str(row['name'])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name IN ('peers', 'users')"
+        )
+    }
+    if not old:
+        return
+    with conn:
+        if 'peers' in old:
+            _fold_peers(conn)
+        if 'users' in old:
+            _fold_users(conn)
+        for table in old:
+            conn.execute(f'DROP TABLE {table}')
+    log.info('state: folded %s into actors/standing', ', '.join(sorted(old)))
+
+
+def _fold_peers(conn: sqlite3.Connection) -> None:
+    """Split the old ``peers`` table into ``standing`` plus ``actors``.
+
+    Two things came out of one row. The counters go to ``standing`` with the
+    id finally stored as a number. The ``label`` was a string this bot
+    composed itself -- ``'@name (id)'`` or ``'"Title" (id)'`` -- so it is
+    taken apart by the same rule that built it and stored as fields. Losing
+    it instead would cost a Telegram resolution per peer to learn again
+    what we already knew.
+    """
+    have = _own_columns(conn, 'peers')
+    rows = conn.execute('SELECT * FROM peers').fetchall()
+    conn.executemany(
+        'INSERT OR IGNORE INTO standing '
+        '(service, peer_id, offered, taken, recip, last_at, take_at, '
+        'gap_n, gap_sum, gap_sq, burst) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            (
+                row['service'],
+                int(row['peer_id']),
+                *(row[name] if name in have else 0 for name in _FOLDED),
+            )
+            for row in rows
+            if str(row['peer_id']).lstrip('-').isdigit()
+        ],
+    )
+    for row in rows:
+        actor = _from_label(str(row['peer_id']), str(row['label'] or ''))
+        if actor is not None:
+            conn.execute(
+                'INSERT OR IGNORE INTO actors '
+                '(peer_id, kind, username, title) VALUES (?, ?, ?, ?)',
+                (actor.peer_id, actor.kind, actor.username, actor.title),
+            )
+
+
+def _fold_users(conn: sqlite3.Connection) -> None:
+    """Split the old ``users`` table into ``actors`` plus ``audience``.
+
+    Identity and membership were one row keyed by ``user_id``; they are one
+    actor and one aggregate over them now. ``kind`` is 'user' for every one
+    of these -- the audience table only ever held people.
+    """
+    conn.execute(
+        'INSERT OR IGNORE INTO actors (peer_id, kind, username, first_name, '
+        'last_name, phone, first_seen, last_seen, updated_at) '
+        "SELECT user_id, 'user', coalesce(username, ''), "
+        "coalesce(first_name, ''), coalesce(last_name, ''), "
+        "coalesce(phone, ''), coalesce(first_seen, 0), "
+        'coalesce(last_seen, 0), coalesce(updated_at, 0) FROM users'
+    )
+    conn.execute(
+        'INSERT OR IGNORE INTO audience (peer_id, subscribed, msg_count) '
+        'SELECT user_id, subscribed, msg_count FROM users'
+    )
+    for table in ('membership_events', 'messages'):
+        if 'user_id' in _own_columns(conn, table):
+            conn.execute(
+                f'ALTER TABLE {table} RENAME COLUMN user_id TO peer_id'
+            )
+
+
+_FOLDED = (
+    'offered',
+    'taken',
+    'recip',
+    'last_at',
+    'take_at',
+    'gap_n',
+    'gap_sum',
+    'gap_sq',
+    'burst',
+)
+"""What a ``peers`` row carried besides its key and its label.
+
+Read by name with a default, because the oldest files on record stop after
+``last_at`` -- the timing columns were added later, and a fold that assumed
+them would fail on exactly the installs that most need migrating.
+"""
+
+
+def _own_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Return the columns of a table in THIS database (not an attached one)."""
+    return {
+        str(row['name']) for row in conn.execute(f'PRAGMA table_info({table})')
+    }
+
+
+def _from_label(peer_id: str, label: str) -> Actor | None:
+    """Take a composed ``'@name (id)'`` label back apart into an Actor.
+
+    ``None`` when there is nothing to learn: a blank label, or one that is
+    just the bare id because the peer was never resolved.
+    """
+    if not peer_id.lstrip('-').isdigit():
+        return None
+    name = label.removesuffix(f' ({peer_id})').strip()
+    kind = 'chat' if peer_id.startswith('-') else 'user'
+    if not name or name == peer_id:
+        return Actor(int(peer_id), kind)
+    if name.startswith('@'):
+        return Actor(int(peer_id), kind, username=name[1:])
+    return Actor(int(peer_id), kind, title=name.strip('"'))
 
 
 @dataclass
@@ -261,6 +474,45 @@ class Database:
         """
         return StateStore(self.conn, service)
 
+    # --- who: one identity, shared by every service ----------------------
+
+    def actor(self, peer_id: int) -> Actor:
+        """Return what we know about a peer, or a bare Actor if nothing."""
+        got = self.conn.execute(
+            'SELECT * FROM actors WHERE peer_id = ?', (peer_id,)
+        ).fetchone()
+        return _actor(got) if got is not None else Actor(peer_id)
+
+    def actors(self, peer_ids: Iterable[int]) -> dict[int, Actor]:
+        """Return what we know about several peers, keyed by id.
+
+        Missing ones are simply absent, so a caller can tell "we have never
+        resolved this peer" from "this peer has no name", which is the
+        difference between asking Telegram again and not bothering.
+        """
+        wanted = list(dict.fromkeys(peer_ids))
+        if not wanted:
+            return {}
+        marks = ', '.join('?' * len(wanted))
+        rows = self.conn.execute(
+            f'SELECT * FROM actors WHERE peer_id IN ({marks})',  # noqa: S608 -- placeholders, not values
+            wanted,
+        )
+        return {int(r['peer_id']): _actor(r) for r in rows}
+
+    def note_actor(self, actor: Actor, at: float | None = None) -> None:
+        """Record who a peer is; a blank field keeps what we already knew.
+
+        Telegram answers a resolution with whatever it feels like sharing --
+        ``username`` for one call, only ``first_name`` for the next -- so a
+        later, thinner answer must not erase a fuller one. Hence the
+        blank-keeps-the-old rule rather than a plain overwrite.
+        """
+        now = time.time() if at is None else at
+        known = [getattr(actor, name) for name in IDENTITY]
+        self.conn.execute(ACTOR_SQL, (actor.peer_id, *known, now, now, now))
+        self.conn.commit()
+
     def close(self) -> None:
         """Release the database handle."""
         self.conn.close()
@@ -280,17 +532,17 @@ class StateStore:
 
     # --- per-peer rows ---------------------------------------------------
 
-    def peer(self, peer_id: str) -> PeerRow:
+    def peer(self, peer_id: int) -> PeerRow:
         """Return one peer's row, or an empty row if it has none yet."""
         got = self.conn.execute(
-            'SELECT * FROM peers WHERE service = ? AND peer_id = ?',
+            'SELECT * FROM standing WHERE service = ? AND peer_id = ?',
             (self.service, peer_id),
         ).fetchone()
         return _row(got) if got is not None else PeerRow(peer_id)
 
     def peers(self, limit: int = 0) -> list[PeerRow]:
         """Return this service's peers, most recently engaged first."""
-        sql = 'SELECT * FROM peers WHERE service = ? ORDER BY last_at DESC'
+        sql = 'SELECT * FROM standing WHERE service = ? ORDER BY last_at DESC'
         args: tuple[object, ...] = (self.service,)
         if limit > 0:
             sql, args = sql + ' LIMIT ?', (self.service, limit)
@@ -298,7 +550,7 @@ class StateStore:
 
     def bump(
         self,
-        peer_id: str,
+        peer_id: int,
         counts: Mapping[str, float],
         at: float | None = None,
     ) -> None:
@@ -331,27 +583,19 @@ class StateStore:
         )
         self.conn.commit()
 
-    def remember(self, peer_id: str, label: str) -> None:
-        """Cache a peer's display name; a blank or id-like label is ignored."""
-        if not label or label == peer_id:
-            return
-        self.conn.execute(
-            'INSERT INTO peers (service, peer_id, label) VALUES (?, ?, ?) '
-            'ON CONFLICT (service, peer_id) DO UPDATE SET '
-            'label = excluded.label',
-            (self.service, peer_id, label),
-        )
-        self.conn.commit()
+    def forget(self, peer_id: int) -> None:
+        """Drop a peer's standing WITH THIS SERVICE (it rolled off the set).
 
-    def forget(self, peer_id: str) -> None:
-        """Drop a peer entirely (it rolled off the tracked set)."""
+        Their row in ``actors`` stays: who they are is not this service's to
+        forget, and the other service may still be talking to them.
+        """
         self.conn.execute(
-            'DELETE FROM peers WHERE service = ? AND peer_id = ?',
+            'DELETE FROM standing WHERE service = ? AND peer_id = ?',
             (self.service, peer_id),
         )
         self.conn.commit()
 
-    def trim_peers(self, keep: int) -> list[str]:
+    def trim_peers(self, keep: int) -> list[int]:
         """Drop all but the ``keep`` most recent peers; return what went.
 
         The tracked set is bounded so a long-running account does not carry
@@ -361,11 +605,11 @@ class StateStore:
         if keep <= 0:
             return []
         rows = self.conn.execute(
-            'SELECT peer_id FROM peers WHERE service = ? '
+            'SELECT peer_id FROM standing WHERE service = ? '
             'ORDER BY last_at DESC LIMIT -1 OFFSET ?',
             (self.service, keep),
         ).fetchall()
-        dropped = [str(r['peer_id']) for r in rows]
+        dropped = [int(r['peer_id']) for r in rows]
         for peer_id in dropped:
             self.forget(peer_id)
         return dropped
@@ -500,11 +744,18 @@ class StateStore:
         self.conn.commit()
 
 
+def _actor(row: sqlite3.Row) -> Actor:
+    """Build an Actor from one database row."""
+    return Actor(
+        peer_id=int(row['peer_id']),
+        **{name: str(row[name]) for name in IDENTITY},
+    )
+
+
 def _row(row: sqlite3.Row) -> PeerRow:
     """Build a PeerRow from one database row."""
     return PeerRow(
-        peer_id=str(row['peer_id']),
-        label=str(row['label']),
+        peer_id=int(row['peer_id']),
         offered=int(row['offered']),
         taken=int(row['taken']),
         recip=int(row['recip']),
@@ -540,11 +791,55 @@ install that jumps straight from before that to here would find them
 untouched, and dropping the path would quietly start it from zero.
 """
 
-PEER_COLUMNS = tuple(f.name for f in fields(PeerRow))
 MARK_COLUMNS = ('key', 'at')
-AUDIENCE_TABLES = ('users', 'membership_events', 'messages')
-"""What a row is worth carrying over, named once so the import cannot drift
-from the schema above."""
+AUDIENCE_TABLES = ('membership_events', 'messages')
+LEGACY_PEER = ('peer_id', 'label', *_FOLDED)
+"""What a row is worth carrying over, named once so the import cannot drift.
+
+``LEGACY_PEER`` is the shape a ``peers`` row had, not the shape ``standing``
+has now, and that is the point: this import moves ROWS BETWEEN FILES without
+changing them, and ``_migrate`` changes SHAPE within one file. Two jobs, two
+places, one conversion path -- an import that also reshaped would be a second
+copy of the fold, free to disagree with the first.
+"""
+
+_STAGING = """
+CREATE TABLE IF NOT EXISTS peers (
+    service TEXT    NOT NULL,
+    peer_id TEXT    NOT NULL,
+    label   TEXT    NOT NULL DEFAULT '',
+    offered INTEGER NOT NULL DEFAULT 0,
+    taken   INTEGER NOT NULL DEFAULT 0,
+    recip   INTEGER NOT NULL DEFAULT 0,
+    last_at REAL    NOT NULL DEFAULT 0,
+    take_at REAL    NOT NULL DEFAULT 0,
+    gap_n   INTEGER NOT NULL DEFAULT 0,
+    gap_sum REAL    NOT NULL DEFAULT 0,
+    gap_sq  REAL    NOT NULL DEFAULT 0,
+    burst   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (service, peer_id)
+);
+CREATE TABLE IF NOT EXISTS users (
+    user_id    INTEGER PRIMARY KEY,
+    username   TEXT,
+    first_name TEXT,
+    last_name  TEXT,
+    phone      TEXT,
+    first_seen REAL,
+    last_seen  REAL,
+    msg_count  INTEGER NOT NULL DEFAULT 0,
+    subscribed INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL
+);
+"""
+"""The two tables an older file's rows land in before ``_migrate`` folds them.
+
+Created only when there is something to put in them, and dropped by the fold,
+so a fresh install never sees either. Every legacy ledger shape normalises
+into this one -- the shared file's ``engine`` column and the per-service
+file's filename both become ``service`` -- which is what leaves the fold with
+a single input to understand.
+"""
 
 
 def adopt(where: Path) -> None:
@@ -587,6 +882,7 @@ def adopt(where: Path) -> None:
             (where / name, _absorb_json(conn, where / name, service))
             for name, service in LEGACY_JSON.items()
         ]
+        _migrate(conn)  # fold what the import staged, in this same open
     finally:
         conn.close()
     done = [path for path, imported in taken if imported]
@@ -638,13 +934,18 @@ def _absorb_ledger(conn: sqlite3.Connection, service: str) -> bool:
     per-service files that replaced it): one query, two places the key can
     come from. Only the columns both schemas have are carried, so a file from
     before the timing columns existed leaves those at their defaults.
+
+    Peer rows land in the staging ``peers`` table, in the shape they had.
+    ``_migrate`` turns them into ``standing`` plus ``actors`` afterwards --
+    the same fold a directly upgraded install goes through.
     """
     took = False
-    for table, wanted in (('peers', PEER_COLUMNS), ('marks', MARK_COLUMNS)):
+    for table, wanted in (('peers', LEGACY_PEER), ('marks', MARK_COLUMNS)):
         have = _columns(conn, table)
         names = ', '.join(name for name in wanted if name in have)
         if not names:
             continue
+        conn.executescript(_STAGING)
         key = 'engine' if 'engine' in have else '?'
         conn.execute(
             f'INSERT OR IGNORE INTO {table} (service, {names}) '  # noqa: S608 -- schema names, not input
@@ -684,16 +985,27 @@ def _absorb_audience(conn: sqlite3.Connection) -> bool:
     No service name is involved: these rows are the channel's members and
     their messages, which belong to the profile. That is the whole reason
     ``users.db`` stops being a file of its own.
+
+    The events and messages come straight across, with the old ``user_id``
+    read into today's ``peer_id`` -- one person, one column name, everywhere.
+    The identity rows go to the staging ``users`` table for ``_migrate``,
+    which is what splits them into an actor and their membership.
     """
     took = False
     for table in AUDIENCE_TABLES:
-        names = ', '.join(sorted(_columns(conn, table)))
-        if not names:
+        have = _columns(conn, table)
+        if not have:
             continue
+        source = ', '.join(sorted(have))
+        target = source.replace('user_id', 'peer_id')
         conn.execute(
-            f'INSERT OR IGNORE INTO {table} ({names}) '  # noqa: S608 -- schema names, not input
-            f'SELECT {names} FROM old.{table}'
+            f'INSERT OR IGNORE INTO {table} ({target}) '  # noqa: S608 -- schema names, not input
+            f'SELECT {source} FROM old.{table}'
         )
+        took = True
+    if _columns(conn, 'users'):
+        conn.executescript(_STAGING)
+        conn.execute('INSERT OR IGNORE INTO users SELECT * FROM old.users')
         took = True
     return took
 

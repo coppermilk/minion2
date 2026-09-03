@@ -20,6 +20,7 @@ import time
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import codec
+from minions.userbot.core import render
 from minions.userbot.core.config import MODE_FILE
 from minions.userbot.core.runtime import cancel
 from minions.userbot.glue.commands import SERVICE_MODES
@@ -116,9 +117,11 @@ class ServiceModes:
         self.bot.build_profile()
         self.save()
         await self.start_profile(source_backfill=False)
-        labels = await self.bot.chat_labels()
+        known = await self.bot.peer_actors()
         targets = self.bot.live_targets()
-        dest = ', '.join(labels.get(t, str(t)) for t in targets)
+        dest = ', '.join(
+            render.tagged(known[t]) if t in known else str(t) for t in targets
+        )
         await self.bot.say(
             f'Mode: {self.bot.mode.upper()}. ALL posts now go to: {dest}'
         )

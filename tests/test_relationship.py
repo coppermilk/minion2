@@ -63,7 +63,7 @@ def test_take_prob_converges_offered_taken_to_the_wundt_peak(
     led = _ledger(tmp_path)
     ctrl = _steer_only()
     rng = random.Random(0)
-    peer = 'p'
+    peer = 1
     for _ in range(_STEPS):
         if rng.random() < led.take_prob(peer, ctrl):
             led.bump_take(peer, _CONTROL, _NOON)
@@ -79,7 +79,7 @@ def test_recip_prob_converges_recip_taken_to_the_target(
     led = _ledger(tmp_path)
     ctrl = _steer_only()
     rng = random.Random(1)
-    peer = 'p'
+    peer = 1
     for _ in range(_STEPS):
         led.bump_take(peer, _CONTROL, _NOON)  # a taken exposure
         if rng.random() < led.recip_prob(peer, ctrl, taken_now=True):
@@ -109,7 +109,7 @@ def test_recip_left_reads_without_consuming(tmp_path: Path) -> None:
     led = _ledger(tmp_path)
     ctrl = relationship.Control(wundt=attachment.WundtParams(), recip_cap=_CAP)
     assert led.recip_left(ctrl, _NOON, _TZ) == _CAP
-    led.add_recip('p', 1, _NOON, _TZ)
+    led.add_recip(1, 1, _NOON, _TZ)
     assert led.recip_left(ctrl, _NOON, _TZ) == _CAP - 1
     assert led.recip_left(ctrl, _NOON, _TZ) == _CAP - 1  # still, read-only
 
@@ -118,29 +118,35 @@ def test_warmth_orders_by_recency_and_evict_drops_a_peer(
     tmp_path: Path,
 ) -> None:
     """warmth() lists the most recent peer first; evict removes a peer."""
+    early, late = 111, 222
     led = _ledger(tmp_path)
-    led.add_take('early', 2, _CONTROL, _NOON)
-    led.add_recip('early', 1, _NOON, _TZ)
-    led.add_offer('late', 3)  # interacted with more recently
+    led.add_take(early, 2, _CONTROL, _NOON)
+    led.add_recip(early, 1, _NOON, _TZ)
+    led.add_offer(late, 3)  # interacted with more recently
     rows = relationship.warmth(led, _CONTROL)
-    assert [row.label for row in rows] == ['late', 'early']  # newest first
-    led.add_offer('early')  # touching 'early' again moves it to the front
-    assert next(r.label for r in relationship.warmth(led, _CONTROL)) == 'early'
-    led.evict('early')
-    assert led.row('early').offered == 0
+    assert [row.peer_id for row in rows] == [late, early]  # newest first
+    led.add_offer(early)  # touching them again moves them to the front
+    assert next(r.peer_id for r in relationship.warmth(led, _CONTROL)) == early
+    led.evict(early)
+    assert led.row(early).offered == 0
 
 
-def test_remember_labels_warmth_and_ignores_the_bare_id(
+def test_a_readout_row_names_a_peer_by_id_and_nothing_else(
     tmp_path: Path,
 ) -> None:
-    """A cached @name shows in warmth; a label equal to the id is ignored."""
+    """The ledger keeps numbers; who a peer IS lives once, in ``actors``.
+
+    A row used to carry a display label as well, so the same person's name
+    travelled beside every number about them -- and a peer who changed their
+    @name read as two different people down the readout.
+    """
     led = _ledger(tmp_path)
-    led.add_take('552', 1, _CONTROL, _NOON)
-    led.remember('552', '@liriiu (552)')
-    led.remember('552', '552')  # a failed resolve must not clobber the name
-    assert next(r.label for r in relationship.warmth(led, _CONTROL)) == (
-        '@liriiu (552)'
-    )
+    led.add_take(552, 1, _CONTROL, _NOON)
+
+    row = next(iter(relationship.warmth(led, _CONTROL)))
+
+    assert row.peer_id == 552  # noqa: PLR2004 -- the id written just above
+    assert not hasattr(row, 'label')
 
 
 # --------------------------------------- the two factors we MEASURE
@@ -167,7 +173,7 @@ def _moments(gaps: list[float]) -> list[float]:
     return out
 
 
-def _engage(led: relationship.Ledger, peer: str, gaps: list[float]) -> None:
+def _engage(led: relationship.Ledger, peer: int, gaps: list[float]) -> None:
     """Engage ``peer`` once per gap, the way decide_engage does it.
 
     An offer then a take, so the peer reaches ``warmth`` (which skips anyone
@@ -187,29 +193,29 @@ def _poisson(seed: int) -> list[float]:
 def test_metronome_timing_reads_as_perfectly_regular(tmp_path: Path) -> None:
     """Engaging on a fixed clock leaves irregularity at zero."""
     led = _ledger(tmp_path)
-    _engage(led, 'clock', [_DAY] * _TOUCHES)
-    assert relationship._irregularity(led.row('clock')) < _FLAT_TOL
+    _engage(led, 10, [_DAY] * _TOUCHES)
+    assert relationship._irregularity(led.row(10)) < _FLAT_TOL
 
 
 def test_memoryless_timing_reads_as_fully_irregular(tmp_path: Path) -> None:
     """A Poisson stream of gaps reaches the cap -- the Skinner reference."""
     led = _ledger(tmp_path)
-    _engage(led, 'random', _poisson(7))
-    assert relationship._irregularity(led.row('random')) > _POISSON_MIN
+    _engage(led, 11, _poisson(7))
+    assert relationship._irregularity(led.row(11)) > _POISSON_MIN
 
 
 def test_attention_all_at_once_reads_as_fully_clumped(tmp_path: Path) -> None:
     """Engagements inside one sitting are burst, whatever their count."""
     led = _ledger(tmp_path)
-    _engage(led, 'binge', [60.0] * _TOUCHES)
-    assert relationship._clumping(led.row('binge')) == 1.0
+    _engage(led, 12, [60.0] * _TOUCHES)
+    assert relationship._clumping(led.row(12)) == 1.0
 
 
 def test_attention_spread_out_reads_as_unclumped(tmp_path: Path) -> None:
     """Gaps longer than burst_gap_sec are separate visits, not one."""
     led = _ledger(tmp_path)
-    _engage(led, 'spread', [_BURST_GAP * 2] * _TOUCHES)
-    assert relationship._clumping(led.row('spread')) == 0.0
+    _engage(led, 13, [_BURST_GAP * 2] * _TOUCHES)
+    assert relationship._clumping(led.row(13)) == 0.0
 
 
 def test_a_batch_of_views_is_one_sitting_not_many_gaps(
@@ -221,9 +227,9 @@ def test_a_batch_of_views_is_one_sitting_not_many_gaps(
     irregularity when it is in fact a single visit.
     """
     led = _ledger(tmp_path)
-    led.add_take('peer', 1, _CONTROL, _NOON)  # first visit: no gap behind it
-    led.add_take('peer', _BATCH, _CONTROL, _NOON + _DAY)
-    row = led.row('peer')
+    led.add_take(14, 1, _CONTROL, _NOON)  # first visit: no gap behind it
+    led.add_take(14, _BATCH, _CONTROL, _NOON + _DAY)
+    row = led.row(14)
     assert row.gap_n == 1  # one interval, not _BATCH of them
     assert row.gap_sum == _DAY
     assert row.burst == _BATCH - 1  # the batch's own members, nothing else
@@ -237,11 +243,11 @@ def test_warmth_index_carries_the_measured_factors(tmp_path: Path) -> None:
     partial index could not tell the two apart.
     """
     led = _ledger(tmp_path)
-    _engage(led, 'binge', [60.0] * _TOUCHES)
-    _engage(led, 'natural', _poisson(3))
-    for peer in ('binge', 'natural'):
+    _engage(led, 12, [60.0] * _TOUCHES)
+    _engage(led, 15, _poisson(3))
+    for peer in (12, 15):
         led.add_recip(peer, _TOUCHES // 2, _NOON, _TZ)
-    scored = {row.label: row for row in relationship.warmth(led, _CONTROL)}
-    assert scored['binge'].p == scored['natural'].p  # same exposure
-    assert scored['binge'].r == scored['natural'].r  # same reciprocity
-    assert scored['natural'].index > scored['binge'].index
+    scored = {row.peer_id: row for row in relationship.warmth(led, _CONTROL)}
+    assert scored[12].p == scored[15].p  # same exposure
+    assert scored[12].r == scored[15].r  # same reciprocity
+    assert scored[15].index > scored[12].index

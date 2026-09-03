@@ -33,6 +33,7 @@ from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
 from minions.userbot.core.render import Glyphs
 from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Actor
 from minions.userbot.core.state import Database
 from minions.userbot.engines import greeter
 from minions.userbot.engines import reactions
@@ -62,7 +63,7 @@ async def _unused_announce(text: str) -> None:
 
 
 async def _unused_label(peer_id: int) -> str:
-    """Peer resolver the disabled story section never reaches."""
+    """Peer resolver the render never reaches (it never asks Telegram)."""
     return str(peer_id)
 
 
@@ -106,6 +107,14 @@ def _consts() -> Consts:
         },
         emoji_all=[],
     )
+
+
+def _known(names: dict[int, str]) -> dict[int, Actor]:
+    """Return what the report is handed: fields, not display strings."""
+    return {
+        peer_id: Actor(peer_id, 'user', username=handle)
+        for peer_id, handle in names.items()
+    }
 
 
 def _bot(tmp_path: Path) -> main.Userbot:
@@ -184,9 +193,8 @@ def _bot(tmp_path: Path) -> main.Userbot:
             emojis=(('11', 'a'),),
         ),
     ]
-    brain.ledger.add_take('alice', 3, brain._control(), NOW)
-    brain.ledger.add_offer('alice', 1)
-    brain.ledger.remember('alice', '@alice')
+    brain.ledger.add_take(PEER_A, 3, brain._control(), NOW)
+    brain.ledger.add_offer(PEER_A, 1)
     bot.reactions = brain
     bot.comment_watch = reactions_glue.CommentWatch(
         reactions_glue.CommentDeps(
@@ -235,7 +243,8 @@ def _bot(tmp_path: Path) -> main.Userbot:
             account=None,
             brain=bot.stories,
             source=SOURCE,
-            label=_unused_label,
+            learn=_unused_label,
+            name=lambda peer_id: '',
         )
     )
     bot.story_watch.next_poll = NOW + 900
@@ -358,15 +367,17 @@ def test_status_text_is_unchanged(
     """The whole /status render, pinned. A diff here is a deliberate change."""
     monkeypatch.setattr(time, 'time', lambda: NOW)
     bot = _bot(tmp_path)
-    labels = {
-        SOURCE: '@src (-1001)',
-        TARGET: '@dst (-1002)',
-        PEER_A: '@alice',
-        PEER_B: '@bob',
-        PEER_C: '@carol',
-        PEER_D: '@dave',
-    }
-    assert bot.report.text(labels) == GOLDEN
+    known = _known(
+        {
+            SOURCE: 'src',
+            TARGET: 'dst',
+            PEER_A: 'alice',
+            PEER_B: 'bob',
+            PEER_C: 'carol',
+            PEER_D: 'dave',
+        }
+    )
+    assert bot.report.text(known) == GOLDEN
 
 
 def test_rendering_the_report_makes_no_requests(
@@ -388,7 +399,7 @@ def test_rendering_the_report_makes_no_requests(
         stories_feed=lambda **_: asked.append('feed'),
     )
 
-    bot.report.text({SOURCE: '@src', TARGET: '@dst'})
+    bot.report.text(_known({SOURCE: 'src', TARGET: 'dst'}))
 
     assert asked == []
 
@@ -414,7 +425,7 @@ def test_a_blocked_session_names_its_reason_once(
     )
     bot.story_watch.pending = []
 
-    got = bot.report.text({PEER_A: '@alice', PEER_B: '@bob'})
+    got = bot.report.text(_known({PEER_A: 'alice', PEER_B: 'bob'}))
 
     assert '. cooldown 4949s (2):' in got
     assert got.count('cooldown 4949s') == 1
@@ -476,9 +487,10 @@ def test_the_story_list_names_each_person_once(
     control, ledger = bot.stories._control(), bot.stories.ledger
     for peer, taken in ((PEER_A, 4), (PEER_B, 2)):
         ledger.add_take(str(peer), taken, control, NOW - 86400)
-        ledger.remember(str(peer), f'@peer{peer}')
 
-    got = _section(bot.report.text({PEER_A: '@alice', PEER_B: '@bob'}), '[S]')
+    got = _section(
+        bot.report.text(_known({PEER_A: 'alice', PEER_B: 'bob'})), '[S]'
+    )
 
     assert got.count('@alice') == 1
     assert got.count('@bob') == 1
@@ -496,7 +508,7 @@ def test_a_person_in_the_list_is_named_not_numbered(
     monkeypatch.setattr(time, 'time', lambda: NOW)
     bot = _bot(tmp_path)
 
-    got = _section(bot.report.text({PEER_A: f'@alice ({PEER_A})'}), '[S]')
+    got = _section(bot.report.text(_known({PEER_A: 'alice'})), '[S]')
 
     assert '@alice' in got
     assert str(PEER_A) not in got
@@ -517,7 +529,7 @@ def test_a_viewing_row_counts_the_new_stories_not_all_of_them(
         peers=(stories.Seen(PEER_A, active=9, unseen=4, viewing=3),),
     )
 
-    got = _section(bot.report.text({PEER_A: '@alice'}), '[S]')
+    got = _section(bot.report.text(_known({PEER_A: 'alice'})), '[S]')
 
     assert '3 of 4 new' in got
     assert '9' not in got.split('viewing (1):')[1].splitlines()[1]
@@ -543,7 +555,9 @@ def test_people_with_nothing_new_are_still_named(
         ),
     )
 
-    got = _section(bot.report.text({PEER_A: '@alice', PEER_B: '@bob'}), '[S]')
+    got = _section(
+        bot.report.text(_known({PEER_A: 'alice', PEER_B: 'bob'})), '[S]'
+    )
 
     assert '. already seen (2):' in got
     assert '    @alice . 3 up . first time' in got

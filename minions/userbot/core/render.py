@@ -26,10 +26,38 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from minions.userbot.core.models import Consts
+    from minions.userbot.core.state import Actor
     from minions.userbot.engines.premium_emoji import PremiumMessage
 
 # The order emoji types are grouped in for the /emojis catalog message.
 _EMOJI_ORDER = ('love', 'lead', 'arrow', 'platform', 'reaction', 'like')
+
+
+def name(actor: Actor) -> str:
+    """Return how to CALL a peer: '@handle', '"Title"', or ''.
+
+    Empty when we have never resolved them, which the caller turns into
+    whatever it shows for a stranger -- usually the bare id.
+    """
+    if actor.username:
+        return f'@{actor.username}'
+    title = actor.title or f'{actor.first_name} {actor.last_name}'.strip()
+    return f'"{title}"' if title else ''
+
+
+def tagged(actor: Actor) -> str:
+    """Return a peer's name WITH the raw id: '@handle (-1001234)'.
+
+    Two forms exist because two readers want different halves. The routing
+    section is read to CONFIGURE chats, where the id is the useful part; a
+    list of people is read to recognise them, where it is noise. The name
+    used to be STORED in this form and the people-list stripped the id back
+    off by exact suffix -- one composer and one decomposer, disagreeing by
+    construction. Now storage keeps fields and each reader composes what it
+    needs.
+    """
+    got = name(actor)
+    return f'{got} ({actor.peer_id})' if got else str(actor.peer_id)
 
 
 @dataclass(frozen=True)

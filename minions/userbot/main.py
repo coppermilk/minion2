@@ -41,10 +41,10 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
 from minions.userbot.core import codec
+from minions.userbot.core import render
 from minions.userbot.core import state
 from minions.userbot.core.config import CONSTANTS_FILE
 from minions.userbot.core.config import apply_persona
@@ -85,12 +85,6 @@ from minions.userbot.glue.stories import StoryDeps
 from minions.userbot.glue.stories import StoryWatch
 from minions.userbot.glue.users import AudienceDeps
 from minions.userbot.glue.users import AudienceLog
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from minions.userbot.core import relationship
-
 
 log = logging.getLogger('userbot')
 
@@ -225,7 +219,8 @@ class Userbot:
                 account=self.account,
                 brain=self.stories,
                 source=self.config.source,
-                label=self._chat_label,
+                learn=self._learn,
+                name=self._name,
             )
         )
         # Audience log: its own SQLite file per mode, so live and test
@@ -304,8 +299,7 @@ class Userbot:
 
     async def status_report(self) -> None:
         """Post the pending/posted/reaction diagnostics to the source chat."""
-        labels = await self.chat_labels()
-        await self._send_status(self.report.text(labels))
+        await self._send_status(self.report.text(await self.peer_actors()))
         log.info('sent status report to %s', self.config.source)
 
     async def _send_status(self, text: str) -> None:
@@ -330,76 +324,88 @@ class Userbot:
         """Send a plain operator line to the source chat."""
         await self.account.send(self.config.source, userchat.Text(text))
 
-    async def chat_labels(self) -> dict[int, str]:
-        """Resolve every chat shown in /status to a readable @name or title."""
-        await self._resolve_attach_labels()
-        ids = {self.config.source, *self.config.targets}
+    async def peer_actors(self) -> dict[int, state.Actor]:
+        """Return who everyone /status names is, resolving what we lack.
+
+        The report is handed FIELDS, not display strings, and composes what
+        each of its sections wants (``core/render.name`` for a list of
+        people, ``tagged`` for the routing lines, which are read to
+        configure chats and want the id). A single string could not serve
+        both, which is why the id used to be baked in at resolve time and
+        stripped back off at render time.
+        """
+        chats = {self.config.source, *self.config.targets}
         if self.config.test_target:
-            ids.add(self.config.test_target)
-        ids |= {chat for chat, _ in self.reactions.posts}
-        ids |= {v.peer_id for v in self.story_watch.pending}
-        await self._name_glance_peers()
-        cached = self.stories.known_labels()
-        return {**cached, **{cid: await self._chat_label(cid) for cid in ids}}
+            chats.add(self.config.test_target)
+        chats |= {chat for chat, _ in self.reactions.posts}
+        chats |= {v.peer_id for v in self.story_watch.pending}
+        for chat_id in chats:
+            await self._learn(chat_id)
+        people = await self._warm_people()
+        return self._actors([*chats, *people])
 
-    async def _name_glance_peers(self) -> None:
-        """Put @names on a few of the people who have stories up.
+    async def _warm_people(self) -> list[int]:
+        """Resolve a FEW of the people /status is about to name; return all.
 
-        The glance lists people we have never opened, so nothing has ever
-        cached their name. Resolving all of them on every /status would be
-        exactly the burst the request gate exists to prevent, so a bounded
-        handful is resolved per report and remembered; a few reports in,
-        the whole list is named and it costs nothing again.
+        The glance and the two warmth readouts list people we may never
+        have opened, and resolving every one of them each minute is exactly
+        the burst the request gate exists to prevent. A bounded handful per
+        report, and a few reports in the whole list is known and costs
+        nothing again.
         """
-        if not self.stories.params.enabled:
-            return
-        known = self.stories.known_labels()
-        unnamed = [
-            row.peer_id
-            for row in self.stories.last_glance.peers
-            if row.peer_id not in known
-        ]
-        for peer_id in unnamed[:STATUS_WARM_PEERS]:
-            label = await self._chat_label(peer_id)
-            self.stories.remember(str(peer_id), label)
-
-    async def _resolve_attach_labels(self) -> None:
-        """Cache the shown peers' @names via the shared chat-label helper.
-
-        Both attachment readouts (comment likes and story views) only keep peer
-        ids; resolve the ones about to appear in /status (the most recent) to
-        @names through the shared resolver and cache them on each ledger, so it
-        is a one-time lookup per peer.
-        """
+        shown: list[int] = []
         if self.reactions.params.enabled:
-            await self._resolve_rows(
-                self.reactions.warmth(), self.reactions.remember
-            )
+            shown += [w.peer_id for w in self.reactions.warmth()]
         if self.stories.params.enabled:
-            await self._resolve_rows(
-                self.stories.warmth(), self.stories.remember
-            )
+            shown += [w.peer_id for w in self.stories.warmth()]
+            shown += [r.peer_id for r in self.stories.last_glance.peers]
+        shown = list(dict.fromkeys(shown))
+        known = self._actors(shown)
+        for peer_id in [p for p in shown if p not in known][
+            :STATUS_WARM_PEERS
+        ]:
+            await self._learn(peer_id)
+        return shown
 
-    async def _resolve_rows(
-        self,
-        rows: list[relationship.Warmth],
-        remember: Callable[[str, str], None],
-    ) -> None:
-        """Resolve the shown rows' raw-id labels to @names and cache them."""
-        for row in rows[:STATUS_WARM_PEERS]:
-            pid = row.label
-            if pid.lstrip('-').isdigit():  # still a raw id -> resolve it
-                remember(pid, await self._chat_label(int(pid)))
+    def _actors(self, peer_ids: list[int]) -> dict[int, state.Actor]:
+        """Return what every open profile database knows about these peers.
 
-    async def _chat_label(self, chat_id: int) -> str:
-        """Return a chat's @username (or "title") for /status, else id."""
+        Merged across the open databases because a service in test keeps its
+        own file: the same person may be known in one and not the other, and
+        who they are does not depend on which profile met them first.
+        """
+        found: dict[int, state.Actor] = {}
+        for db in self._dbs.values():
+            found.update(db.actors(peer_ids))
+        return found
+
+    async def _learn(self, chat_id: int) -> str:
+        """Resolve a chat through Telegram, record WHO it is, and name it.
+
+        Returns the readable name (empty when the peer cannot be reached).
+        Writes to every open profile database: identity is the same fact
+        wherever it is read, and each profile keeps its own copy of it.
+        """
         peer = await self.account.peer(chat_id)
         if peer is None:
-            return str(chat_id)
-        if peer.username:
-            return f'@{peer.username} ({chat_id})'
-        title = peer.title or peer.first_name
-        return f'"{title}" ({chat_id})' if title else str(chat_id)
+            return ''
+        actor = state.Actor(
+            peer_id=chat_id,
+            kind='chat' if chat_id < 0 else 'user',
+            username=peer.username,
+            title=peer.title,
+            first_name=peer.first_name,
+            last_name=peer.last_name,
+            phone=peer.phone,
+        )
+        for db in self._dbs.values():
+            db.note_actor(actor)
+        return render.name(actor)
+
+    def _name(self, peer_id: int) -> str:
+        """Return what we already know a peer as, without asking Telegram."""
+        found = self._actors([peer_id]).get(peer_id)
+        return render.name(found) if found is not None else ''
 
     async def status_loop(self) -> None:
         """Periodically log pending videos, learn uptime, beat the watchdog."""

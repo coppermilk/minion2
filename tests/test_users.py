@@ -151,7 +151,7 @@ def test_apply_identity_upserts_and_keeps_known_fields(tmp_path: Path) -> None:
     user = store.history(7)['user']
     assert user['username'] == 'alice'
     assert user['first_name'] == 'Alice B'
-    assert user['phone'] is None  # essentially never available
+    assert user['phone'] == ''  # essentially never available
 
 
 def test_has_identity_false_before_enrich(tmp_path: Path) -> None:

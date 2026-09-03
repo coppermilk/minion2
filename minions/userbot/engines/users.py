@@ -32,6 +32,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import state
+
 if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Callable
@@ -92,12 +94,20 @@ class UserStore:
         self._conn = conn
         self.clock = time.time
 
-    def _ensure_user(self, user_id: int, now: float) -> None:
-        """Create a bare user row if this is the first time we see the id."""
+    def _ensure_user(self, peer_id: int, now: float) -> None:
+        """Make sure this id has an actor row and a membership row.
+
+        Two rows because they answer two questions: ``actors`` is who they
+        are, which every service shares, and ``audience`` is their standing
+        with OUR channel, which only this module keeps.
+        """
         self._conn.execute(
-            'INSERT OR IGNORE INTO users (user_id, first_seen, updated_at) '
-            'VALUES (?, ?, ?)',
-            (user_id, now, now),
+            'INSERT OR IGNORE INTO actors (peer_id, kind, first_seen, '
+            "last_seen, updated_at) VALUES (?, 'user', ?, ?, ?)",
+            (peer_id, now, now, now),
+        )
+        self._conn.execute(
+            'INSERT OR IGNORE INTO audience (peer_id) VALUES (?)', (peer_id,)
         )
 
     def record_membership(self, event: MembershipEvent) -> bool:
@@ -113,17 +123,17 @@ class UserStore:
         kind = 'join' if event.joined else 'leave'
         cur = self._conn.execute(
             'INSERT OR IGNORE INTO membership_events '
-            '(user_id, event, ts, admin_log_id) VALUES (?, ?, ?, ?)',
+            '(peer_id, event, ts, admin_log_id) VALUES (?, ?, ?, ?)',
             (event.user_id, kind, now, event.admin_log_id),
         )
         if cur.rowcount == 0:
             return False  # already recorded under this admin_log_id
         self._ensure_user(event.user_id, now)
         self._conn.execute(
-            'UPDATE users SET subscribed=?, last_seen=?, updated_at=?, '
-            'first_seen=COALESCE(first_seen, ?) WHERE user_id=?',
-            (1 if event.joined else 0, now, now, now, event.user_id),
+            'UPDATE audience SET subscribed=? WHERE peer_id=?',
+            (1 if event.joined else 0, event.user_id),
         )
+        self._seen(event.user_id, now)
         self._conn.commit()
         return True
 
@@ -138,19 +148,27 @@ class UserStore:
         now = self.clock() if msg.ts is None else msg.ts
         cur = self._conn.execute(
             'INSERT OR IGNORE INTO messages '
-            '(user_id, chat_id, msg_id, root, text, ts) VALUES (?,?,?,?,?,?)',
+            '(peer_id, chat_id, msg_id, root, text, ts) VALUES (?,?,?,?,?,?)',
             (msg.user_id, msg.chat_id, msg.msg_id, msg.root, msg.text, now),
         )
         if cur.rowcount == 0:
             return False  # already stored this message
         self._ensure_user(msg.user_id, now)
         self._conn.execute(
-            'UPDATE users SET msg_count=msg_count+1, last_seen=?, '
-            'updated_at=?, first_seen=COALESCE(first_seen, ?) WHERE user_id=?',
-            (now, now, now, msg.user_id),
+            'UPDATE audience SET msg_count = msg_count + 1 WHERE peer_id = ?',
+            (msg.user_id,),
         )
+        self._seen(msg.user_id, now)
         self._conn.commit()
         return True
+
+    def _seen(self, peer_id: int, now: float) -> None:
+        """Stamp when we last saw this peer do anything."""
+        self._conn.execute(
+            'UPDATE actors SET last_seen = ?, updated_at = ? '
+            'WHERE peer_id = ?',
+            (now, now, peer_id),
+        )
 
     def apply_identity(self, identity: Identity) -> None:
         """Fill/refresh a user's identity; a ``None`` field keeps the old one.
@@ -163,19 +181,18 @@ class UserStore:
         now = self.clock()
         self._ensure_user(identity.user_id, now)
         self._conn.execute(
-            'UPDATE users SET '
-            'username=COALESCE(?, username), '
-            'first_name=COALESCE(?, first_name), '
-            'last_name=COALESCE(?, last_name), '
-            'phone=COALESCE(?, phone), '
-            'updated_at=? WHERE user_id=?',
+            state.ACTOR_SQL,
             (
-                identity.username,
-                identity.first_name,
-                identity.last_name,
-                identity.phone,
-                now,
                 identity.user_id,
+                'user',
+                identity.username or '',
+                '',  # a person has no channel title
+                identity.first_name or '',
+                identity.last_name or '',
+                identity.phone or '',
+                now,
+                now,
+                now,
             ),
         )
         self._conn.commit()
@@ -183,7 +200,7 @@ class UserStore:
     def has_identity(self, user_id: int) -> bool:
         """Whether this user's username/name is known (skip re-enrich)."""
         row = self._conn.execute(
-            'SELECT username, first_name FROM users WHERE user_id=?',
+            'SELECT username, first_name FROM actors WHERE peer_id=?',
             (user_id,),
         ).fetchone()
         return bool(row and (row['username'] or row['first_name']))
@@ -193,7 +210,7 @@ class UserStore:
         row = self._conn.execute(
             'SELECT COUNT(*) AS total, '
             'COALESCE(SUM(subscribed), 0) AS subscribed, '
-            'COALESCE(SUM(msg_count), 0) AS messages FROM users'
+            'COALESCE(SUM(msg_count), 0) AS messages FROM audience'
         ).fetchone()
         total = int(row['total'])
         subscribed = int(row['subscribed'])
@@ -208,8 +225,11 @@ class UserStore:
     def top_commenters(self, limit: int = 5) -> list[dict[str, object]]:
         """Return the most active commenters (by stored message count)."""
         rows = self._conn.execute(
-            'SELECT user_id, username, first_name, msg_count FROM users '
-            'WHERE msg_count > 0 ORDER BY msg_count DESC, user_id LIMIT ?',
+            'SELECT a.peer_id AS user_id, a.username, a.first_name, '
+            'n.msg_count FROM audience n '
+            'JOIN actors a ON a.peer_id = n.peer_id '
+            'WHERE n.msg_count > 0 '
+            'ORDER BY n.msg_count DESC, a.peer_id LIMIT ?',
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -217,9 +237,9 @@ class UserStore:
     def recent_events(self, limit: int = 5) -> list[dict[str, object]]:
         """Return the latest join/leave events, newest first, with name."""
         rows = self._conn.execute(
-            'SELECT e.user_id, e.event, e.ts, u.username, u.first_name '
-            'FROM membership_events e '
-            'LEFT JOIN users u ON u.user_id = e.user_id '
+            'SELECT e.peer_id AS user_id, e.event, e.ts, a.username, '
+            'a.first_name FROM membership_events e '
+            'LEFT JOIN actors a ON a.peer_id = e.peer_id '
             'ORDER BY e.id DESC LIMIT ?',
             (limit,),
         ).fetchall()
@@ -228,10 +248,13 @@ class UserStore:
     def history(self, user_id: int) -> dict[str, object]:
         """One user's full record: their row plus their ordered event log."""
         user = self._conn.execute(
-            'SELECT * FROM users WHERE user_id=?', (user_id,)
+            'SELECT a.*, n.subscribed, n.msg_count FROM actors a '
+            'LEFT JOIN audience n ON n.peer_id = a.peer_id '
+            'WHERE a.peer_id = ?',
+            (user_id,),
         ).fetchone()
         events = self._conn.execute(
-            'SELECT event, ts FROM membership_events WHERE user_id=? '
+            'SELECT event, ts FROM membership_events WHERE peer_id=? '
             'ORDER BY id',
             (user_id,),
         ).fetchall()

@@ -621,6 +621,8 @@ def test_load_reaction_params_reads_the_pool() -> None:
 _EXPOSURE_PEAK = 0.675  # argmax of the default Wundt curve (c1.45 c2.90 k8)
 _RECIP_TARGET = 0.20
 _CONVERGE_TOL = 0.05
+_COMMENTER = 770
+_EARLIER = 108
 _CONVERGE_N = 2000
 _LIKE_CAP = 5
 _STICKER_CAP = 2
@@ -636,18 +638,18 @@ def _no_caps(tmp_path: Path, seed: int = 0, **over: object) -> object:
 def test_decide_engage_always_likes_the_first_comment(tmp_path: Path) -> None:
     """A newcomer's very first comment is always engaged (a warm hello)."""
     brain = _no_caps(tmp_path)
-    assert brain.decide_engage('newbie') is True
-    assert brain.ledger.row('newbie').offered == 1
-    assert brain.ledger.row('newbie').taken == 1
+    assert brain.decide_engage(101) is True
+    assert brain.ledger.row(101).offered == 1
+    assert brain.ledger.row(101).taken == 1
 
 
 def test_exposure_converges_to_the_wundt_peak(tmp_path: Path) -> None:
     """engaged/commented for a heavy commenter converges on ~0.67, not 1."""
     brain = _no_caps(tmp_path, seed=7)
-    engaged = sum(brain.decide_engage('heavy') for _ in range(_CONVERGE_N))
+    engaged = sum(brain.decide_engage(102) for _ in range(_CONVERGE_N))
     p = engaged / _CONVERGE_N
     assert abs(p - _EXPOSURE_PEAK) < _CONVERGE_TOL
-    assert brain.ledger.row('heavy').offered == _CONVERGE_N
+    assert brain.ledger.row(102).offered == _CONVERGE_N
 
 
 def test_reciprocity_converges_to_the_target(tmp_path: Path) -> None:
@@ -656,9 +658,9 @@ def test_reciprocity_converges_to_the_target(tmp_path: Path) -> None:
     engaged = 0
     stickered = 0
     for _ in range(_CONVERGE_N):
-        if brain.decide_engage('fan'):
+        if brain.decide_engage(103):
             engaged += 1
-            if brain.decide_sticker('fan', content_ok=True):
+            if brain.decide_sticker(103, content_ok=True):
                 stickered += 1
     r = stickered / engaged
     assert abs(r - _RECIP_TARGET) < _CONVERGE_TOL
@@ -667,12 +669,12 @@ def test_reciprocity_converges_to_the_target(tmp_path: Path) -> None:
 def test_a_steered_skip_is_recorded_not_re_rolled(tmp_path: Path) -> None:
     """A skipped comment bumps commented once and is never engaged later."""
     brain = _no_caps(tmp_path, seed=1)
-    brain.decide_engage('p')  # first: always engaged
+    brain.decide_engage(104)  # first: always engaged
     # Drive p above the peak so the next draws are skips, then count.
-    before = brain.ledger.row('p').offered
-    decisions = [brain.decide_engage('p') for _ in range(50)]
-    assert brain.ledger.row('p').offered == before + 50  # each counted once
-    taken = brain.ledger.row('p').taken
+    before = brain.ledger.row(104).offered
+    decisions = [brain.decide_engage(104) for _ in range(50)]
+    assert brain.ledger.row(104).offered == before + 50  # each counted once
+    taken = brain.ledger.row(104).taken
     assert taken <= 1 + sum(decisions)  # no phantom likes
 
 
@@ -680,9 +682,9 @@ def test_daily_like_cap_clamps_engagements(tmp_path: Path) -> None:
     """like_max_per_day caps total engagements in a day, no matter the flow."""
     brain = _brain(tmp_path, like_max_per_day=_LIKE_CAP, sticker_max_per_day=0)
     for _ in range(200):
-        brain.decide_engage('spammer')
+        brain.decide_engage(105)
     assert brain.likes_today(_ts()) == _LIKE_CAP
-    assert brain.ledger.row('spammer').taken == _LIKE_CAP
+    assert brain.ledger.row(105).taken == _LIKE_CAP
 
 
 def test_daily_sticker_cap_clamps_stickers(tmp_path: Path) -> None:
@@ -694,19 +696,19 @@ def test_daily_sticker_cap_clamps_stickers(tmp_path: Path) -> None:
         seed=3,
     )
     for _ in range(500):
-        if brain.decide_engage('fan'):
-            brain.decide_sticker('fan', content_ok=True)
+        if brain.decide_engage(103):
+            brain.decide_sticker(103, content_ok=True)
     assert brain.stickers_today(_ts()) == _STICKER_CAP
-    assert brain.ledger.row('fan').recip == _STICKER_CAP
+    assert brain.ledger.row(103).recip == _STICKER_CAP
 
 
 def test_a_question_comment_never_becomes_a_sticker(tmp_path: Path) -> None:
     """content_ok False keeps a plain like; the reciprocity roll is spared."""
     brain = _no_caps(tmp_path)
-    brain.decide_engage('asker')  # engaged
+    brain.decide_engage(106)  # engaged
     for _ in range(20):
-        assert brain.decide_sticker('asker', content_ok=False) is False
-    assert brain.ledger.row('asker').recip == 0
+        assert brain.decide_sticker(106, content_ok=False) is False
+    assert brain.ledger.row(106).recip == 0
 
 
 def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
@@ -717,25 +719,30 @@ def test_attachment_counters_persist_across_a_reload(tmp_path: Path) -> None:
     )
     brain.clock = _ts
     for _ in range(30):
-        if brain.decide_engage('mem'):
-            brain.decide_sticker('mem', content_ok=True)
-    saved = brain.ledger.row('mem')
+        if brain.decide_engage(107):
+            brain.decide_sticker(107, content_ok=True)
+    saved = brain.ledger.row(107)
 
     fresh = reactions.ReactionBrain(
         _params(like_max_per_day=0), store, random.Random(2)
     )
-    assert fresh.ledger.row('mem') == saved
+    assert fresh.ledger.row(107) == saved
 
 
-def test_remember_caches_commenter_name_and_persists(tmp_path: Path) -> None:
-    """A remembered @name shows in warmth and survives a reload."""
+def test_a_commenter_is_keyed_by_id_and_survives_a_reload(
+    tmp_path: Path,
+) -> None:
+    """The ledger keys a commenter by their Telegram id, as a number.
+
+    It used to be the id stringified at the door and a display name cached
+    beside it. Both are gone: who they are lives once, in ``actors``.
+    """
     store = _store(tmp_path)
     brain = reactions.ReactionBrain(_params(), store, random.Random(0))
-    brain.decide_engage('770')
-    brain.remember('770', '@vasya (770)')
-    assert next(w.label for w in brain.warmth()) == '@vasya (770)'
+    brain.decide_engage(770)
+
     fresh = reactions.ReactionBrain(_params(), store, random.Random(0))
-    assert next(w.label for w in fresh.warmth()) == '@vasya (770)'
+    assert next(w.peer_id for w in fresh.warmth()) == _COMMENTER
 
 
 def _ticking(start: float) -> Callable[[], float]:
@@ -753,13 +760,13 @@ def test_warmth_lists_recent_commenters_first(tmp_path: Path) -> None:
     brain = _no_caps(tmp_path, seed=5)
     brain.clock = _ticking(_ts())
     for _ in range(40):
-        if brain.decide_engage('a'):
-            brain.decide_sticker('a', content_ok=True)
-    brain.decide_engage('b')  # commented more recently than 'a'
+        if brain.decide_engage(108):
+            brain.decide_sticker(108, content_ok=True)
+    brain.decide_engage(109)  # commented more recently than 108
     warm = brain.warmth()
-    assert [w.label for w in warm] == ['b', 'a']  # newest first, not by score
-    brain.decide_engage('a')  # 'a' comments again -> back to the front
-    assert next(w.label for w in brain.warmth()) == 'a'
+    assert [w.peer_id for w in warm] == [109, 108]  # newest first, not score
+    brain.decide_engage(108)  # 108 comments again -> back to the front
+    assert next(w.peer_id for w in brain.warmth()) == _EARLIER
 
 
 # --- the constants file means what it says --------------------------------

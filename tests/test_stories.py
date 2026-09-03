@@ -100,7 +100,6 @@ def _cand(
         story_ids=ids,
         max_id=max(ids),
         last_ts=last_ts,
-        label=f'@u{peer}',
     )
 
 
@@ -358,29 +357,17 @@ def test_plan_attaches_reactions(tmp_path: Path) -> None:
     assert view.react_emoji in brain.params.react_pool
 
 
-def test_remember_fills_a_peer_name_and_persists(tmp_path: Path) -> None:
-    """A peer viewed before the name cache existed can be labelled later."""
-    store = _store(tmp_path)
-    brain = stories.StoryBrain(_params(), store, rng=random.Random(0))
-    brain.mark_viewed(552, (1, 2), ts=_NOON)  # no label -> raw id in warmth
-    assert next(w.label for w in brain.warmth()) == '552'
-    brain.remember('552', '@liriiu (552)')  # status path resolves it
-    assert next(w.label for w in brain.warmth()) == '@liriiu (552)'
-    fresh = stories.StoryBrain(_params(), store, rng=random.Random(0))
-    assert next(w.label for w in fresh.warmth()) == '@liriiu (552)'
-
-
 def test_warmth_lists_recent_peers_first(tmp_path: Path) -> None:
     """warmth() reports per-peer p/r/index, most RECENT peer first."""
     brain = _brain(tmp_path)
     # peer 7 (earlier): viewed 2 of 3 offered (p~0.67), reacted to 1 (r 0.5)
     brain._record_skips(7, (100,))  # 1 offered, skipped
-    brain.mark_viewed(7, (101, 102), label='@warm', ts=_NOON)
+    brain.mark_viewed(7, (101, 102), ts=_NOON)
     brain.mark_reacted(7, 1, _NOON)
     # peer 8 (an hour later): viewed all, no reactions (r 0)
-    brain.mark_viewed(8, (200, 201), label='@cool', ts=_NOON + 3600)
+    brain.mark_viewed(8, (200, 201), ts=_NOON + 3600)
     rows = brain.warmth()
-    assert [w.label for w in rows] == ['@cool', '@warm']  # newest first
+    assert [w.peer_id for w in rows] == [8, 7]  # newest first
     cool, warm = rows
     assert warm.r == 0.5  # noqa: PLR2004 -- 1 reaction of 2 viewed
     assert cool.r == 0.0  # no reactions -> zero reciprocity
@@ -419,29 +406,28 @@ def test_tracked_peers_are_lru_bounded(tmp_path: Path) -> None:
     for peer in (1, 2, 3):  # a minute apart, so "least recent" is a fact
         brain.mark_viewed(peer, (1,), ts=_NOON + peer * 60)
     assert {r.peer_id for r in brain.store.peers()} == {
-        '2',
-        '3',
+        2,
+        3,
     }  # peer 1 evicted
 
 
 def test_every_view_is_logged(tmp_path: Path) -> None:
     """Check every view is logged."""
     brain = _brain(tmp_path)
-    brain.mark_viewed(1, (1, 2), label='@a', ts=_NOON)
-    brain.mark_viewed(2, (9,), label='@b', ts=_NOON)
+    brain.mark_viewed(1, (1, 2), ts=_NOON)
+    brain.mark_viewed(2, (9,), ts=_NOON)
     log = brain.recent_log(10)
     assert len(log) == _TWO  # one entry per view
     by_peer = {e.peer_id: e for e in log}
     assert by_peer[1].count == _TWO
-    assert by_peer[1].label == '@a'
     assert by_peer[2].count == 1
 
 
 def test_recent_log_is_newest_first(tmp_path: Path) -> None:
     """Check recent log is newest first."""
     brain = _brain(tmp_path)
-    brain.mark_viewed(1, (1,), label='@a', ts=_NOON)
-    brain.mark_viewed(2, (1,), label='@b', ts=_NOON)
+    brain.mark_viewed(1, (1,), ts=_NOON)
+    brain.mark_viewed(2, (1,), ts=_NOON)
     recent = brain.recent_log(5)
     assert [r.peer_id for r in recent] == [2, 1]
 
@@ -620,16 +606,17 @@ def _watcher(
             account=account,  # type: ignore[arg-type]
             brain=brain,
             source=0,
-            label=names,
+            learn=names,
+            name=lambda peer_id: f'@peer{peer_id}',
         )
     )
     return watch, brain, names
 
 
 class _Names:
-    """The host's chat-label resolver, counting what it was asked.
+    """The host's peer resolver, counting what it was asked.
 
-    Resolving a name is a Telegram round trip, so a view that recorded
+    Resolving a peer is a Telegram round trip, so a view that recorded
     nothing must not spend one.
     """
 
@@ -647,7 +634,6 @@ def _view(**over: object) -> stories.StoryView:
         'story_ids': (_STORY_A, _STORY_B),
         'max_id': _STORY_B,
         'when': _NOON,
-        'label': '@peer7',
     }
     base.update(over)
     return stories.StoryView(**base)  # type: ignore[arg-type]

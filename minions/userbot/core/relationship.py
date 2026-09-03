@@ -75,10 +75,14 @@ class Warmth:
     ``index`` is the FULL Berlyne index over all four factors. ``p`` and ``r``
     are the two we steer, so they are shown beside it; irregularity and
     clumping are measured, not steered, and fold into ``index`` alone.
+
+    A peer is named by id and nothing else. Who they are lives in ``actors``
+    and is looked up by whoever renders this -- a readout row used to carry
+    a display label too, which meant the same person's name travelled beside
+    every number about them.
     """
 
-    label: str
-    peer_id: str  # the raw id, so a readout can strip it back off the label
+    peer_id: int
     p: float  # taken / offered (exposure)
     r: float  # recip / taken (reciprocity)
     index: float
@@ -139,11 +143,11 @@ class Ledger:
     recip_day: str = ''
     recip_today: int = 0
 
-    def row(self, peer: str) -> state.PeerRow:
+    def row(self, peer: int) -> state.PeerRow:
         """Return a peer's standing (all zeroes if we have not met them)."""
         return self.store.peer(peer)
 
-    def take_prob(self, peer: str, control: Control) -> float:
+    def take_prob(self, peer: int, control: Control) -> float:
         """Exposure probability for one more of ``peer``'s offers.
 
         Uses the fraction recorded BEFORE this offer, so the caller computes
@@ -155,7 +159,7 @@ class Ledger:
         return steer(p_cur, p_star, control.take_gain)
 
     def recip_prob(
-        self, peer: str, control: Control, *, taken_now: bool
+        self, peer: int, control: Control, *, taken_now: bool
     ) -> float:
         """Reciprocity probability among ``peer``'s taken exposures.
 
@@ -169,7 +173,7 @@ class Ledger:
         return steer(r_cur, control.recip_target, control.recip_gain)
 
     def add_offer(
-        self, peer: str, n: int = 1, now: float | None = None
+        self, peer: int, n: int = 1, now: float | None = None
     ) -> None:
         """Record ``n`` more chances from ``peer`` (offers, not taken).
 
@@ -180,20 +184,20 @@ class Ledger:
         self.store.bump(peer, {'offered': n}, now)
 
     def add_take(  # noqa: PLR0913 -- peer + count + (control, now) read best flat
-        self, peer: str, n: int, control: Control, now: float
+        self, peer: int, n: int, control: Control, now: float
     ) -> None:
         """Record ``n`` exposures actually taken (also counts them offered)."""
         counts: dict[str, float] = {'offered': n, 'taken': n}
         counts |= _gap_stats(self._gap(peer, now), n, control.burst_gap_sec)
         self.store.bump(peer, counts, now)
 
-    def bump_take(self, peer: str, control: Control, now: float) -> None:
+    def bump_take(self, peer: int, control: Control, now: float) -> None:
         """Count one already-offered exposure as taken (decide-time commit)."""
         counts: dict[str, float] = {'taken': 1}
         counts |= _gap_stats(self._gap(peer, now), 1, control.burst_gap_sec)
         self.store.bump(peer, counts, now)
 
-    def _gap(self, peer: str, now: float) -> float:
+    def _gap(self, peer: int, now: float) -> float:
         """Seconds since we last engaged ``peer``; 0 when this is the first.
 
         Measured from ``take_at``, not ``last_at``: the offer that precedes an
@@ -203,12 +207,12 @@ class Ledger:
         last = self.row(peer).take_at
         return now - last if last > 0.0 else 0.0
 
-    def bump_recip(self, peer: str, now: float | None = None) -> None:
+    def bump_recip(self, peer: int, now: float | None = None) -> None:
         """Count one reciprocation whose daily slot is already spent."""
         self.store.bump(peer, {'recip': 1}, now)
 
     def add_recip(  # noqa: PLR0913 -- peer + count + (now, tz) read best flat
-        self, peer: str, n: int, now: float, tz: float
+        self, peer: int, n: int, now: float, tz: float
     ) -> None:
         """Record ``n`` reciprocations to ``peer`` and the daily counter."""
         stamp = humanize.local(now, tz).date().isoformat()
@@ -263,12 +267,8 @@ class Ledger:
         stamp = humanize.local(now, tz).date().isoformat()
         return self.recip_today if self.recip_day == stamp else 0
 
-    def remember(self, peer: str, label: str) -> None:
-        """Cache ``peer``'s display label (@name / title) for /status."""
-        self.store.remember(peer, label)
-
-    def evict(self, peer: str) -> None:
-        """Drop a peer's counters and cached name (rolled off the set)."""
+    def evict(self, peer: int) -> None:
+        """Drop a peer's counters with this engine (rolled off the set)."""
         self.store.forget(peer)
 
     def counters(self) -> dict[str, object]:
@@ -359,9 +359,5 @@ def warmth(ledger: Ledger, control: Control) -> list[Warmth]:
             p=p, v=_irregularity(row), r=r, c=_clumping(row)
         )
         idx = attachment.attachment_index(factors, control.wundt)
-        rows.append(
-            Warmth(
-                row.label or row.peer_id, row.peer_id, p, r, idx, row.offered
-            )
-        )
+        rows.append(Warmth(row.peer_id, p, r, idx, row.offered))
     return rows

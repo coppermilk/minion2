@@ -750,7 +750,7 @@ class ReactionBrain:
             burst_gap_sec=p.session_idle_sec,
         )
 
-    def _grant_engage(self, person: str) -> bool:
+    def _grant_engage(self, person: int) -> bool:
         """Commit one engagement (like) to the ledger if the cap allows."""
         led = self.ledger
         control, now = self._control(), self.clock()
@@ -759,7 +759,7 @@ class ReactionBrain:
         led.bump_take(person, control, now)
         return True
 
-    def decide_engage(self, person: str) -> bool:
+    def decide_engage(self, person: int) -> bool:
         """Whether to like ``person``'s comment, steering p -> the Wundt peak.
 
         Exposure control: the running ``taken/offered`` is nudged toward the
@@ -779,7 +779,7 @@ class ReactionBrain:
         self._save()
         return ok
 
-    def decide_sticker(self, person: str, *, content_ok: bool) -> bool:
+    def decide_sticker(self, person: int, *, content_ok: bool) -> bool:
         """Whether to upgrade this engagement to a sticker, steering r -> 0.20.
 
         Reciprocity control among the comments we engage: the stronger,
@@ -808,13 +808,6 @@ class ReactionBrain:
     def warmth(self) -> list[relationship.Warmth]:
         """Per-commenter attachment readout for /status, most recent first."""
         return relationship.warmth(self.ledger, self._control())
-
-    def remember(self, person: str, label: str) -> None:
-        """Cache a commenter's @name for /status (persisted)."""
-        if not label or label == person:
-            return
-        self.ledger.remember(person, label)
-        self._save()
 
     def likes_today(self, now: float) -> int:
         """Engagements (likes) placed on the local date of ``now`` (else 0)."""

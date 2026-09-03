@@ -135,10 +135,10 @@ class CommentWatch:
             msg_id=msg.id,
             text=trim(msg.text),
         )
-        self._schedule_comment(ref, str(msg.sender_id), engaged=engaged)
+        self._schedule_comment(ref, msg.sender_id, engaged=engaged)
 
     def _schedule_comment(
-        self, comment: Comment, person: str, *, engaged: bool
+        self, comment: Comment, person: int, *, engaged: bool
     ) -> None:
         """Schedule (and arm) a reaction for a commenter under a post.
 
@@ -195,7 +195,7 @@ class CommentWatch:
         self._arm_reaction(reaction)
 
     def _choose_reaction(
-        self, person: str, comment: Comment
+        self, person: int, comment: Comment
     ) -> tuple[list[Emoji], str] | None:
         """Pick (emoji specs, kind) for this comment: a like or a sticker.
 
@@ -326,7 +326,7 @@ class CommentWatch:
         ref = Comment(
             chat=chat, root=root, msg_id=message.id, text=trim(message.text)
         )
-        self._schedule_comment(ref, str(message.sender_id), engaged=False)
+        self._schedule_comment(ref, message.sender_id, engaged=False)
 
     async def requeue(self) -> None:
         """Rescan + refresh the pending-reaction queue (the /requeue cmd).
