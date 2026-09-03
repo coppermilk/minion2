@@ -218,6 +218,29 @@ class StatusReport:
         )
         return int(row['peer_id']) if row is not None else None
 
+    def _arc_line(self, peer_id: int, b: str) -> list[str]:
+        """Say where this person is on their curve; nothing when it is off.
+
+        Worth one line at the top of /who because it is the reason a
+        percentage looks the way it does: somebody eleven days into a cold
+        shoulder is SUPPOSED to read as neglected, and without this the
+        readout below is a mystery to be re-derived from dates every time.
+        """
+        brain = self.bot.stories
+        control = brain._control()  # noqa: SLF001 -- the arc is its own config
+        if not control.arc.enabled:
+            return []
+        since = brain.store.met(peer_id)
+        now = brain.clock()
+        leg = control.arc.leg(since, now, peer_id)
+        met = _when(since) if since > 0 else 'just now'
+        return [
+            f'{b} {leg.name}, round {control.arc.rounds(since, now)} '
+            f'{b} met {met} {b} '
+            f'aiming {control.take_target(leg):.0%} seen, '
+            f'{control.recip_goal(leg):.0%} back'
+        ]
+
     def _who_lines(self, peer_id: int) -> list[str]:
         """Return the header, the per-service totals, and the recent acts.
 
@@ -228,7 +251,7 @@ class StatusReport:
         """
         db, b = self._db(), self.bullet()
         actor = db.actor(peer_id)
-        lines = [f'{render.tagged(actor)}']
+        lines = [f'{render.tagged(actor)}', *self._arc_line(peer_id, b)]
         for service, ladder in ACTS.items():
             store = db.store(service)
             row = store.peer(peer_id)

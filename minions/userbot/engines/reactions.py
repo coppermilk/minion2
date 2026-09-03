@@ -268,6 +268,12 @@ class ReactionParams:
     # the message-shaped stickers, the real ban surface. 0 disables the cap.
     like_max_per_day: int = 400
     sticker_max_per_day: int = 40
+    # The individual curve this person is walked around: honeymoon, cold
+    # shoulder, then an unpredictable swing between the two. Shared with
+    # the story engine through the persona block, because it is ONE
+    # person's attention -- warming to somebody on stories while going
+    # cold on their comments is not a mood swing, it is two people.
+    arc: relationship.Arc = relationship.NO_ARC
     # Optional persona nickname for this engine (e.g. "cat"). When set,
     # the neutral reaction commands ALSO answer under it -- /<label>now and
     # /<label>_on|off|test|live -- so the persona keeps its own vocabulary
@@ -745,6 +751,7 @@ class ReactionBrain:
             recip_gain=p.recip_control_gain,
             take_cap=p.like_max_per_day,
             recip_cap=p.sticker_max_per_day,
+            arc=p.arc,
             # One answering session IS the burst this engine clumps into, so
             # the clumping factor reuses that gate rather than adding a knob.
             burst_gap_sec=p.session_idle_sec,
@@ -771,7 +778,7 @@ class ReactionBrain:
         """
         led, control, now = self.ledger, self._control(), self.clock()
         first = led.row(person).offered == 0
-        take = first or self.rng.random() < led.take_prob(person, control)
+        take = first or self.rng.random() < led.take_prob(person, control, now)
         # The cap is the last word: a take it refuses is an ignore.
         ok = take and led.spend_take(control, now, self._tz())
         if ok:
@@ -799,10 +806,10 @@ class ReactionBrain:
             return False
         led = self.ledger
         ctrl = self._control()
-        prob = led.recip_prob(person, ctrl, taken_now=True)
+        now = self.clock()
+        prob = led.recip_prob(person, ctrl, now, taken_now=True)
         if self.rng.random() >= prob:
             return False
-        now = self.clock()
         if not led.spend_recip(ctrl, now, self._tz()):
             return False
         led.bump_recip(person, comment, now)
@@ -964,5 +971,6 @@ def load_reaction_params(data: dict[str, object]) -> ReactionParams:
             'active_end': codec.num(
                 cfg.get('active_end_hour'), ReactionParams.active_end
             ),
+            'arc': relationship.load_arc(cfg),
         },
     )

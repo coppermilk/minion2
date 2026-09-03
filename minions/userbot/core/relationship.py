@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
@@ -89,18 +90,199 @@ class Warmth:
     offered: int
 
 
+DAY = 86400.0
+"""Seconds in a day -- an arc leg is configured in days, not seconds."""
+
+
+@dataclass(frozen=True)
+class Leg:
+    """One leg of the arc, and what it does to the two steered fractions.
+
+    ``days`` is how long it lasts. ``exposure`` and ``recip`` are SHARES OF
+    THE STEADY-STATE TARGET in [0, 1], not absolute fractions: 1.0 means the
+    Wundt peak itself, 0.15 means a seventh of it. So the peak is the arc's
+    CEILING by construction -- the warmest leg sits exactly on the optimum
+    and no configuration can push a person past it into the aversion arm,
+    where attention stops reading as interest and starts reading as
+    surveillance. The arc withdraws attention; it never oversupplies it.
+
+    The controller converges each person on whatever this resolves to,
+    exactly as it always did. The steering law does not change at all --
+    only what it is aimed at.
+    """
+
+    name: str
+    days: float
+    exposure: float
+    recip: float
+
+
+@dataclass(frozen=True)
+class Arc:
+    """The individual curve every person is walked around, on their own clock.
+
+    Their clock, not ours: it starts the moment WE first act on THEM, so a
+    person met today gets the same opening a person met last year got, and
+    two people met a month apart are in different legs of it at the same
+    instant. That is the whole point of "one curve per person" -- a global
+    schedule would put the entire audience into a cold shoulder on the same
+    Tuesday, which is a mood, not a relationship.
+
+    ``legs`` runs in order and then repeats, and each repetition is a ROUND.
+    The last leg is the one that keeps working: an unpredictable alternation
+    between the two before it, redrawn once a day. Ferster & Skinner (1957)
+    is already cited in ``core/attachment.py`` for exactly this -- a variable
+    schedule is the one most resistant to extinction, and the fixed legs
+    before it are what teach the two states it alternates BETWEEN.
+
+    Holds no state of its own and stores nothing: a leg is a pure function of
+    when we met a person, when it is now, and their id. So it survives a
+    restart, is the same before and after a backup, and ``/who`` can say
+    which leg somebody is in without a column to disagree with.
+    """
+
+    legs: tuple[Leg, ...]
+    enabled: bool = False
+
+    def leg(self, since: float, now: float, peer: int) -> Leg:
+        """Return which leg of the arc a person is in right now.
+
+        ``since`` is when we met them (0 = right now, so: the first leg).
+        The swing leg redraws from the fixed legs once a local day, keyed on
+        the person and the day, so it is stable within a day, different
+        between two people on the same day, and needs nothing written down.
+        """
+        span = sum(leg.days for leg in self.legs) * DAY
+        elapsed = max(0.0, now - since) if since > 0 else 0.0
+        into = elapsed % span
+        for leg in self.legs:
+            if into < leg.days * DAY:
+                return self._drawn(leg, now, peer)
+            into -= leg.days * DAY
+        return self.legs[-1]  # the modulo above cannot land here
+
+    def rounds(self, since: float, now: float) -> int:
+        """Return which time around the arc a person is on (1 = the first)."""
+        span = sum(leg.days for leg in self.legs) * DAY
+        elapsed = max(0.0, now - since) if since > 0 else 0.0
+        return int(elapsed // span) + 1
+
+    def _drawn(self, leg: Leg, now: float, peer: int) -> Leg:
+        """Resolve the swing leg to one of the fixed legs for today.
+
+        Any leg but the last is itself. The last one is the swing, and what
+        it swings between is every leg before it -- so the alternation is
+        made of states the person has already learned, which is what makes
+        it read as a withdrawal of something rather than as noise.
+
+        Weighted by each fixed leg's own ``days``, so the longer leg is also
+        the more common face of the swing and no second set of knobs has to
+        agree with the first. The drawn leg keeps its own name behind the
+        swing's (``swing:cold``), because "which face is it today" is the
+        one thing an operator reading /who actually wants to know.
+        """
+        if leg is not self.legs[-1] or len(self.legs) < _SWING_MIN:
+            return leg
+        fixed = self.legs[:-1]
+        total = sum(one.days for one in fixed)
+        cut = _spin(peer, int(now // DAY)) / _RANGE64 * total
+        for one in fixed:
+            if cut < one.days:
+                return replace(one, name=f'{leg.name}:{one.name}')
+            cut -= one.days
+        return replace(fixed[-1], name=f'{leg.name}:{fixed[-1].name}')
+
+
+NO_ARC = Arc(())
+"""No arc at all: the steady Wundt peak forever, which is the old behaviour.
+
+A shared frozen value rather than a default built per dataclass, so an engine
+that never configures one carries the same object every other engine does and
+"is there an arc" is a field read, not a construction.
+"""
+
+_SWING_MIN = 3
+"""Legs needed before the last one can swing (two to alternate, plus it)."""
+
+_MASK64 = (1 << 64) - 1
+_RANGE64 = 1 << 64
+_MIX_A = 0xFF51AFD7ED558CCD
+_MIX_B = 0xC4CEB9FE1A85EC53
+_ODD = 0x9E3779B97F4A7C15  # golden-ratio odd constant, so ids never collide
+
+
+def _spin(peer: int, day: int) -> int:
+    """Return a stable pseudo-random 64-bit draw from (person, day).
+
+    Murmur3's finalizer, not ``hash()`` and not plain arithmetic. Both
+    alternatives fail here in ways that would be hard to see:
+
+    - ``hash()`` of anything string-shaped is salted per process, so the
+      swing would re-roll on every restart -- our randomness, not a schedule
+      the person on the other end can feel.
+    - a linear mix (``peer * K + day``) alternates the low bit every day, so
+      a two-leg swing becomes a strict odd/even metronome. Perfectly
+      predictable, which is exactly what a variable schedule must not be --
+      Ferster & Skinner's whole point is that the UNPREDICTABLE one is the
+      one that does not extinguish.
+
+    So the bits have to avalanche, and this is the standard way to do it.
+    """
+    x = ((peer & _MASK64) * _ODD ^ (day & _MASK64)) & _MASK64
+    x = ((x ^ (x >> 33)) * _MIX_A) & _MASK64
+    x = ((x ^ (x >> 33)) * _MIX_B) & _MASK64
+    return x ^ (x >> 33)
+
+
+def load_arc(cfg: Mapping[str, object]) -> Arc:
+    """Build the arc from one engine's sub-config (``arc`` + ``arc_enabled``).
+
+    Every leg names itself, so the config reads as the shape it describes and
+    ``/who`` can print the name back without a second table mapping index to
+    word. An empty or one-leg list is an arc that cannot alternate, so it is
+    left disabled whatever the flag says -- a "swing" with nothing to swing
+    between would silently be a constant, which is the failure mode this
+    would be hardest to notice.
+    """
+    legs = tuple(
+        Leg(
+            name=codec.text(row.get('name')),
+            days=codec.num(row.get('days')),
+            exposure=codec.num(row.get('exposure')),
+            recip=codec.num(row.get('recip')),
+        )
+        for row in (codec.table(item) for item in codec.rows(cfg.get('arc')))
+    )
+    on = bool(cfg.get('arc_enabled')) and len(legs) >= _LEGS_MIN
+    return Arc(legs=legs, enabled=on)
+
+
+_LEGS_MIN = 2
+"""An arc needs at least two legs, or it is one constant with a name."""
+
+
 @dataclass(frozen=True)
 class Control:
     """The tunables of the relationship control (shared stories/likes).
 
-    ``wundt``'s argmax IS the exposure target (engage a person ~2/3 of the
-    time -- the Wundt peak, not everything, since everything reads as
-    stalking/desperation). ``recip_target`` is the fraction of taken exposures
-    answered with the stronger act (a heart, a sticker). ``take_cap`` /
-    ``recip_cap`` are per-day ceilings on the two acts (0 = uncapped).
-    ``burst_gap_sec`` is how close two engagements must be to count as one
-    sitting rather than two -- it is what separates spread-out attention from
-    massed attention for the clumping factor.
+    ``wundt``'s argmax is the STEADY-STATE exposure target (engage a person
+    ~2/3 of the time -- the Wundt peak, not everything, since everything
+    reads as stalking/desperation), and it is what an arc-less account
+    steers to forever. ``recip_target`` is the same for the fraction of taken
+    exposures answered with the stronger act (a heart, a sticker).
+
+    ``arc`` scales both DOWN, per person, per leg -- see ``Arc``. It only
+    ever scales down: a leg is a share of these two in [0, 1], so the peak
+    stays the maximum any person is ever given and the arc is built out of
+    how much attention is WITHHELD rather than out of overshoot. Which also
+    keeps ``attachment.index`` honest -- the warmest leg sits on the argmax
+    of the very curve the index scores against, so the readout peaks where
+    the model says it should instead of dipping on its own aversion arm.
+
+    ``take_cap`` / ``recip_cap`` are per-day ceilings on the two acts
+    (0 = uncapped). ``burst_gap_sec`` is how close two engagements must be to
+    count as one sitting rather than two -- it is what separates spread-out
+    attention from massed attention for the clumping factor.
     """
 
     wundt: attachment.WundtParams
@@ -110,10 +292,23 @@ class Control:
     take_cap: int = 0
     recip_cap: int = 0
     burst_gap_sec: float = 900.0
+    arc: Arc = Arc(())
 
-    def take_target(self) -> float:
-        """Return the exposure fraction to steer toward (the Wundt peak)."""
-        return attachment.exposure_peak(self.wundt)
+    def take_target(self, leg: Leg | None = None) -> float:
+        """Return the exposure fraction to steer toward.
+
+        The Wundt peak with no arc running, and that peak scaled by the
+        leg's share when one is -- so the peak is the ceiling either way and
+        the controller below does not know the difference.
+        """
+        peak = attachment.exposure_peak(self.wundt)
+        return peak if leg is None else peak * _clip(leg.exposure)
+
+    def recip_goal(self, leg: Leg | None = None) -> float:
+        """Return the reciprocity fraction to steer toward (same rule)."""
+        if leg is None:
+            return self.recip_target
+        return self.recip_target * _clip(leg.recip)
 
 
 def _rolled(day: str, today: int, stamp: str) -> tuple[str, int]:
@@ -147,19 +342,39 @@ class Ledger:
         """Return a peer's standing (all zeroes if we have not met them)."""
         return self.store.peer(peer)
 
-    def take_prob(self, peer: int, control: Control) -> float:
+    def leg(self, peer: int, control: Control, now: float) -> Leg | None:
+        """Return which leg of their arc a person is in, or None if it is off.
+
+        One query for when we met them, then pure arithmetic -- so this is
+        cheap enough to ask per decision and there is no leg column anywhere
+        to drift out of step with the clock that defines it.
+        """
+        if not control.arc.enabled:
+            return None
+        return control.arc.leg(self.store.met(peer), now, peer)
+
+    def take_prob(
+        self, peer: int, control: Control, now: float = 0.0
+    ) -> float:
         """Exposure probability for one more of ``peer``'s offers.
 
         Uses the fraction recorded BEFORE this offer, so the caller computes
-        it first and records the offer after.
+        it first and records the offer after. ``now`` places them on their
+        own arc; left out, the steady-state Wundt peak is the target, which
+        is what an account with no arc configured does forever.
         """
         row = self.row(peer)
-        p_star = control.take_target()
+        p_star = control.take_target(self.leg(peer, control, now))
         p_cur = row.taken / row.offered if row.offered else p_star
         return steer(p_cur, p_star, control.take_gain)
 
-    def recip_prob(
-        self, peer: int, control: Control, *, taken_now: bool
+    def recip_prob(  # noqa: PLR0913 -- peer + control + now + the one flag
+        self,
+        peer: int,
+        control: Control,
+        now: float = 0.0,
+        *,
+        taken_now: bool,
     ) -> float:
         """Reciprocity probability among ``peer``'s taken exposures.
 
@@ -170,7 +385,8 @@ class Ledger:
         row = self.row(peer)
         taken = max(0, row.taken - 1) if taken_now else row.taken
         r_cur = row.recip / (taken or 1)
-        return steer(r_cur, control.recip_target, control.recip_gain)
+        goal = control.recip_goal(self.leg(peer, control, now))
+        return steer(r_cur, goal, control.recip_gain)
 
     def add_offer(
         self,

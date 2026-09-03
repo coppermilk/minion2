@@ -230,6 +230,18 @@ def apply_persona(data: dict[str, object]) -> dict[str, object]:
     _fan_key(
         data, ('reactions', 'stories'), 'quiet_hours', _quiet_hours(persona)
     )
+    # One arc, for the same reason: it is the shape of ONE person's attention
+    # to somebody over months. Two arcs would warm to them on stories while
+    # going cold on their comments, which is not a mood swing, it is two
+    # people. Fanned as a whole list -- an engine that sets its own `arc`
+    # still wins, the way every other persona key works.
+    _fan_key(data, ('reactions', 'stories'), 'arc', persona.get('arc'))
+    _fan_key(
+        data,
+        ('reactions', 'stories'),
+        'arc_enabled',
+        persona.get('arc_enabled'),
+    )
     return data
 
 

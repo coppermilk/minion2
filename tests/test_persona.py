@@ -142,3 +142,41 @@ def test_no_persona_block_is_a_noop() -> None:
     """Without a persona block the config is returned untouched."""
     data: dict[str, object] = {'engines': {'reactions': {}}}
     assert config.apply_persona(data) == {'engines': {'reactions': {}}}
+
+
+def test_one_arc_reaches_both_engines_that_steer_a_person() -> None:
+    """The relationship curve is fanned like every other persona trait.
+
+    For the same reason: it is the shape of ONE person's attention to
+    somebody over months. Warming to them on stories while going cold on
+    their comments is not a mood swing, it is two people -- which is what
+    two independently configured arcs would produce.
+    """
+    arc = [{'name': 'honeymoon', 'days': 14, 'exposure': 1.0, 'recip': 1.0}]
+    data = cast(
+        'dict[str, object]',
+        {'persona': {**_persona(), 'arc': arc, 'arc_enabled': True}},
+    )
+
+    config.apply_persona(data)
+
+    for name in ('reactions', 'stories'):
+        assert _block(data, name)['arc'] == arc
+        assert _block(data, name)['arc_enabled'] is True
+
+
+def test_an_engine_keeps_an_arc_it_set_for_itself() -> None:
+    """setdefault, like every other persona key -- a deliberate exception."""
+    mine = [{'name': 'mine', 'days': 1, 'exposure': 0.5, 'recip': 0.5}]
+    data = cast(
+        'dict[str, object]',
+        {
+            'persona': {**_persona(), 'arc': [], 'arc_enabled': True},
+            'engines': {'stories': {'arc': mine}},
+        },
+    )
+
+    config.apply_persona(data)
+
+    assert _block(data, 'stories')['arc'] == mine
+    assert _block(data, 'reactions')['arc'] == []

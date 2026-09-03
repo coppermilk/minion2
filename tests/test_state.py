@@ -1053,3 +1053,22 @@ def test_a_service_cannot_log_an_act_it_has_no_word_for(
             "VALUES (?, ?, 'reactions', 'seen')",
             (WATCHED, 100.0),
         )
+
+
+def test_when_we_met_somebody_is_one_answer_for_the_whole_person(
+    tmp_path: Path,
+) -> None:
+    """``met`` crosses services on purpose, and it is the only thing that.
+
+    An arc belongs to a PERSON: one account is one person, so the day we met
+    somebody is the same day whether the story engine noticed them first or
+    the like engine did. Two clocks would put the same person in the
+    honeymoon on one and the cold shoulder on the other.
+    """
+    db = Database(tmp_path / DB_NAME)
+    db.store('reactions').bump(WATCHED, {'offered': 1}, 100.0, (5,))
+    db.store('stories').bump(WATCHED, {'offered': 1}, 300.0, (STORY_A,))
+
+    assert db.store('stories').met(WATCHED) == 100.0  # noqa: PLR2004
+    assert db.store('reactions').met(WATCHED) == 100.0  # noqa: PLR2004
+    assert db.store('stories').met(999) == 0.0  # never met: not a date

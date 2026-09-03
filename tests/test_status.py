@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 from minion_core.pace import Lane
 from minions.userbot import main
 from minions.userbot.core import config
+from minions.userbot.core import relationship
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Consts
@@ -638,3 +640,42 @@ def test_who_without_a_name_explains_itself(tmp_path: Path) -> None:
     bot = _who_bot(tmp_path)
     assert bot.report.who(['/who']).startswith('/who ')
     assert 'never seen' in bot.report.who(['/who', '@nobody'])
+
+
+def test_who_says_which_leg_of_their_own_arc_a_person_is_on(
+    tmp_path: Path,
+) -> None:
+    """The line that makes the numbers under it make sense.
+
+    Somebody eleven days into a cold shoulder is SUPPOSED to read as
+    neglected. Without this line the percentages below are a mystery to be
+    re-derived from dates, which is the class of question /who exists to
+    stop.
+    """
+    bot = _who_bot(tmp_path)
+    bot.stories.clock = lambda: NOW  # a day after the acts _who_bot writes
+    bot.stories.params = replace(
+        bot.stories.params,
+        arc=relationship.Arc(
+            legs=(
+                relationship.Leg('honeymoon', 14, exposure=1.0, recip=1.0),
+                relationship.Leg('cold', 10, exposure=0.1, recip=0.0),
+                relationship.Leg('swing', 21, exposure=0.0, recip=0.0),
+            ),
+            enabled=True,
+        ),
+    )
+
+    got = bot.report.who(['/who', '@alice']).splitlines()[1]
+
+    assert 'honeymoon' in got
+    assert 'round 1' in got
+    assert 'aiming' in got
+
+
+def test_who_says_nothing_about_an_arc_that_is_not_running(
+    tmp_path: Path,
+) -> None:
+    """No arc configured, no line -- not an empty one and not "none"."""
+    got = _who_bot(tmp_path).report.who(['/who', '@alice']).splitlines()
+    assert 'round' not in got[1]

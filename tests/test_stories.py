@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from minions.userbot import main
 from minions.userbot.core import config
+from minions.userbot.core import relationship
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Database
 from minions.userbot.core.state import StateStore
@@ -798,3 +799,59 @@ def test_the_shipped_rate_leaves_one_or_two_likes_a_week(
     got = [_likes_in_a_week(tmp_path, seed) for seed in range(_SEEDS)]
 
     assert _WEEK_LIKES_MIN <= sum(got) / len(got) <= _WEEK_LIKES_MAX
+
+
+_ARC_MET = 1_760_000_000.0
+_ARC_HONEYMOON_DAY = 3
+_ARC_COLD_DAY = 18
+_ARC_STORIES = 40
+
+
+def _arc_params() -> stories.StoryParams:
+    """Shipped params with the real Wundt curve, so the arc has room."""
+    return _params(
+        exposure_c2=0.9,
+        arc=relationship.Arc(
+            legs=(
+                relationship.Leg('honeymoon', 14, exposure=1.0, recip=1.0),
+                relationship.Leg('cold', 10, exposure=0.1, recip=0.0),
+                relationship.Leg('swing', 21, exposure=0.0, recip=0.0),
+            ),
+            enabled=True,
+        ),
+    )
+
+
+def _watched_on(tmp_path: Path, day: int) -> int:
+    """Return how many of one peer's stories get opened on a given day.
+
+    Walks the real planner, on a peer the engine has already met, so what
+    this measures is the arc reaching the decision -- not a target read back
+    out of the object that was just handed it.
+    """
+    peer = 77
+    room = tmp_path / f'day{day}'
+    room.mkdir()
+    brain = stories.StoryBrain(
+        _arc_params(), _store(room), rng=random.Random(1)
+    )
+    brain.store.bump(peer, {'offered': 1}, _ARC_MET, (1,))  # the day we met
+    now = _ARC_MET + day * 86400.0
+    fresh = tuple(range(100, 100 + _ARC_STORIES))
+    view, _skip = brain._view_split(peer, fresh, brain._view_target(peer, now))
+    return len(view)
+
+
+def test_the_arc_reaches_the_view_decision_itself(tmp_path: Path) -> None:
+    """A person in their cold shoulder is watched far less than in honeymoon.
+
+    The end of the wire: config -> persona fan -> params -> control -> the
+    per-story Bernoulli. Every earlier test says the arc computes the right
+    target; this one says the target is what the planner actually uses.
+    """
+    warm = _watched_on(tmp_path, _ARC_HONEYMOON_DAY)
+    cold = _watched_on(tmp_path, _ARC_COLD_DAY)
+
+    assert cold < warm
+    assert warm > _ARC_STORIES // 2  # the honeymoon sits at the Wundt peak
+    assert cold < _ARC_STORIES // 4

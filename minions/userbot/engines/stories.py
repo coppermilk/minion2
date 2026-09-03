@@ -132,6 +132,12 @@ class StoryParams:
     # amount spread out. Well under spacing_log_mu, which is the gap BETWEEN
     # sessions, so a real second visit is never mistaken for the same one.
     burst_gap_sec: float = 900.0
+    # The individual curve this person is walked around: honeymoon,
+    # cold shoulder, then an unpredictable swing between the two. Shared
+    # with the like engine through the persona block, because it is one
+    # person's attention. Built by relationship.load_arc, not by the
+    # codec, since it is a list of objects rather than a scalar.
+    arc: relationship.Arc = relationship.NO_ARC
 
 
 @dataclass(frozen=True)
@@ -461,15 +467,23 @@ class StoryBrain:
             take_cap=0,
             recip_cap=p.react_max_per_day,
             burst_gap_sec=p.burst_gap_sec,
+            arc=p.arc,
         )
 
     def _tz(self) -> float:
         """Return the persona timezone offset (for the daily counters)."""
         return self.params.tz_offset_hours
 
-    def _view_target(self) -> float:
-        """Return the per-peer view fraction to steer toward (Wundt peak)."""
-        return self._control().take_target()
+    def _view_target(self, peer_id: int = 0, now: float = 0.0) -> float:
+        """Return the view fraction to steer THIS peer toward right now.
+
+        The Wundt peak, scaled by whichever leg of their own arc they are in
+        -- so two people watched in the same session can be aimed at very
+        different fractions, which is the whole point of a curve per person.
+        With no arc configured it is the peak for everybody, forever.
+        """
+        ctrl = self._control()
+        return ctrl.take_target(self.ledger.leg(peer_id, ctrl, now))
 
     def _view_split(
         self, peer_id: int, unseen: tuple[int, ...], p_star: float
@@ -517,8 +531,12 @@ class StoryBrain:
             return 0
         return self.ledger.recip_left(self._control(), now, self._tz())
 
-    def _plan_reacts(
-        self, peer_id: int, view_ids: tuple[int, ...], budget: int
+    def _plan_reacts(  # noqa: PLR0913 -- peer + what + (budget, now) read flat
+        self,
+        peer_id: int,
+        view_ids: tuple[int, ...],
+        budget: int,
+        now: float = 0.0,
     ) -> tuple[tuple[int, ...], int]:
         """Pick which viewed ids to react to, steering recip/taken -> target.
 
@@ -533,7 +551,7 @@ class StoryBrain:
         for sid in view_ids:
             if budget <= 0:
                 break
-            prob = self.ledger.recip_prob(key, ctrl, taken_now=False)
+            prob = self.ledger.recip_prob(key, ctrl, now, taken_now=False)
             if self.rng.random() < prob:
                 chosen.append(sid)
                 budget -= 1
@@ -553,7 +571,6 @@ class StoryBrain:
         between-session cursor is pushed a long, heavy-tailed spacing past the
         last view (principle 2).
         """
-        p_star = self._view_target()
         budget = self._react_budget(now)
         when = now + humanize.lognormal(
             self.rng, self.params.latency_log_mu, self.params.latency_log_sigma
@@ -561,12 +578,14 @@ class StoryBrain:
         self.state.session_start_at = when
         views: list[StoryView] = []
         for cand, unseen in chosen:
-            view_ids, skip_ids = self._view_split(cand.peer_id, unseen, p_star)
+            view_ids, skip_ids = self._view_split(
+                cand.peer_id, unseen, self._view_target(cand.peer_id, now)
+            )
             self._record_skips(cand.peer_id, skip_ids)
             if not view_ids:
                 continue  # this peer was skipped entirely this pass
             react_ids, budget = self._plan_reacts(
-                cand.peer_id, view_ids, budget
+                cand.peer_id, view_ids, budget, now
             )
             pool = self.params.react_pool
             emoji = self.rng.choice(pool) if react_ids and pool else ''
@@ -744,9 +763,10 @@ def load_story_params(
     """Load the stories engine's parameters from the JSON 'stories' key.
 
     Every knob reads its own key and falls back to its own declared default
-    (``core/codec.py``). Only the re-poll cadence is spelled out: it is per
-    profile (test tight, live relaxed), mirroring the reactions rescan
-    interval, and both fall back to ``poll_sec``.
+    (``core/codec.py``). Two are spelled out: the re-poll cadence, which is
+    per profile (test tight, live relaxed), mirroring the reactions rescan
+    interval, and both fall back to ``poll_sec``; and the arc, which is a
+    list of objects rather than a scalar, so it is built by its own loader.
     """
     cfg = codec.engine(data, 'stories')
     poll_key = 'poll_sec_test' if mode == 'test' else 'poll_sec_live'
@@ -754,5 +774,8 @@ def load_story_params(
     return codec.decode(
         StoryParams,
         cfg,
-        {'poll_sec': codec.num(cfg.get(poll_key), default_poll)},
+        {
+            'poll_sec': codec.num(cfg.get(poll_key), default_poll),
+            'arc': relationship.load_arc(cfg),
+        },
     )

@@ -10,6 +10,7 @@ engine's plan/commit wiring.
 from __future__ import annotations
 
 import random
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import attachment
@@ -27,6 +28,7 @@ _TARGET = 0.20
 _TOL = 0.05
 _STEPS = 3000
 _CAP = 4
+_TWO_ROUNDS = 2
 _CONTROL = relationship.Control(wundt=attachment.WundtParams())
 
 
@@ -261,3 +263,166 @@ def test_warmth_index_carries_the_measured_factors(tmp_path: Path) -> None:
     assert scored[12].p == scored[15].p  # same exposure
     assert scored[12].r == scored[15].r  # same reciprocity
     assert scored[15].index > scored[12].index
+
+
+# ------------------------------------------- the arc: one curve per person
+# Honeymoon, cold shoulder, then an unpredictable swing between the two --
+# per person, on the clock that starts when we first act on THEM.
+
+_MET = 1_760_000_000.0
+_ARC = relationship.Arc(
+    legs=(
+        relationship.Leg('honeymoon', days=14, exposure=1.0, recip=1.0),
+        relationship.Leg('cold', days=10, exposure=0.12, recip=0.0),
+        relationship.Leg('swing', days=21, exposure=0.0, recip=0.0),
+    ),
+    enabled=True,
+)
+_HONEYMOON_END = 13
+_COLD_DAY = 18
+_SWING_DAY = 30
+_ROUND_TWO = 50
+_SWING_SPAN = range(24, 45)
+
+
+def _at(day: float) -> float:
+    """Return the moment ``day`` days after we met somebody."""
+    return _MET + day * relationship.DAY
+
+
+def _arc_control(arc: relationship.Arc) -> relationship.Control:
+    """Return a control with no caps, running ``arc``."""
+    return relationship.Control(
+        wundt=attachment.WundtParams(), recip_target=_TARGET, arc=arc
+    )
+
+
+def test_the_wundt_peak_is_the_ceiling_of_the_whole_arc() -> None:
+    """No leg, however configured, aims a person past the peak.
+
+    The arc is built out of attention WITHHELD, not attention oversupplied:
+    a leg is a share in [0, 1] of the steady target, so the warmest one sits
+    exactly on the argmax of the curve the index scores against. Past it is
+    the aversion arm, where more attention reads as surveillance rather than
+    as interest -- and a config typo must not be able to go there.
+    """
+    greedy = relationship.Arc(
+        legs=(
+            relationship.Leg('greedy', days=1, exposure=5.0, recip=5.0),
+            relationship.Leg('cold', days=1, exposure=0.1, recip=0.0),
+        ),
+        enabled=True,
+    )
+    ctrl = _arc_control(greedy)
+    peak = ctrl.take_target()
+
+    aimed = [ctrl.take_target(leg) for leg in greedy.legs]
+    backs = [ctrl.recip_goal(leg) for leg in greedy.legs]
+
+    assert max(aimed) == peak
+    assert max(backs) == _TARGET
+
+
+def test_the_clock_starts_when_we_met_them_not_when_the_bot_did() -> None:
+    """Two people met a month apart are in different legs the same evening.
+
+    The whole point of a curve PER PERSON. One schedule for everybody would
+    put the entire audience into a cold shoulder on the same Tuesday, which
+    is a mood, not a relationship.
+    """
+    evening = _at(_COLD_DAY)
+    old_friend = _ARC.leg(_MET, evening, 111)
+    just_met = _ARC.leg(evening, evening, 222)
+
+    assert old_friend.name == 'cold'
+    assert just_met.name == 'honeymoon'
+
+
+def test_a_person_with_no_history_at_all_starts_at_the_beginning() -> None:
+    """Zero is not a missing value -- it is somebody we are meeting now."""
+    assert _ARC.leg(0.0, _at(_SWING_DAY), 111).name == 'honeymoon'
+
+
+def test_the_legs_run_in_order_and_then_go_round_again() -> None:
+    """One trip through the legs is a round, and the rounds keep counting."""
+    names = [_ARC.leg(_MET, _at(d), 111).name for d in (0, _COLD_DAY)]
+
+    assert names == ['honeymoon', 'cold']
+    assert _ARC.leg(_MET, _at(_HONEYMOON_END), 111).name == 'honeymoon'
+    assert _ARC.rounds(_MET, _at(0)) == 1
+    assert _ARC.rounds(_MET, _at(_ROUND_TWO)) == _TWO_ROUNDS
+    assert _ARC.leg(_MET, _at(_ROUND_TWO), 111).name == 'honeymoon'
+
+
+def test_the_swing_is_unpredictable_and_not_a_metronome() -> None:
+    """A strict daily alternation is a schedule anyone can learn.
+
+    Ferster & Skinner (1957) -- cited in ``core/attachment.py`` for exactly
+    this -- is about the VARIABLE schedule being the one that does not
+    extinguish. A cheap mix of person and day alternates the low bit every
+    day and gives a perfect odd/even metronome, so the bits have to
+    avalanche, and this is what says they do: the same face has to repeat on
+    consecutive days at least once.
+    """
+    faces = [_ARC.leg(_MET, _at(d), 111).name for d in _SWING_SPAN]
+
+    assert all(name.startswith('swing:') for name in faces)
+    assert {name.split(':')[1] for name in faces} == {'honeymoon', 'cold'}
+    assert any(a == b for a, b in pairwise(faces))
+
+
+def test_the_swing_survives_a_restart_and_differs_between_people() -> None:
+    """Stable per (person, day): our randomness would not be a schedule.
+
+    Asked twice it answers the same, so a restart mid-swing does not re-roll
+    the day -- and two people never share a swing, or the "unpredictable"
+    leg would be one coin flipped for the whole audience.
+    """
+    days = list(_SWING_SPAN)
+    once = [_ARC.leg(_MET, _at(d), 111).name for d in days]
+    again = [_ARC.leg(_MET, _at(d), 111).name for d in days]
+    somebody_else = [_ARC.leg(_MET, _at(d), 222).name for d in days]
+
+    assert once == again
+    assert once != somebody_else
+
+
+def test_an_arc_that_is_off_aims_at_the_wundt_peak_forever() -> None:
+    """No arc configured is the behaviour every account had before one."""
+    ctrl = _arc_control(relationship.NO_ARC)
+    assert ctrl.take_target(None) == attachment.exposure_peak(ctrl.wundt)
+    assert ctrl.recip_goal(None) == _TARGET
+
+
+def test_an_arc_with_nothing_to_alternate_stays_off(tmp_path: Path) -> None:
+    """One leg is a constant wearing a curve's name, so it never turns on.
+
+    The flag says yes and the list cannot deliver: silently steering
+    everybody at one hard-coded fraction under the name "arc" is the failure
+    this would be hardest to notice from the outside.
+    """
+    one = relationship.load_arc(
+        {'arc_enabled': True, 'arc': [{'name': 'only', 'days': 3}]}
+    )
+    none = relationship.load_arc({'arc_enabled': True, 'arc': []})
+
+    assert one.enabled is False
+    assert none.enabled is False
+
+
+def test_the_ledger_puts_each_peer_on_their_own_leg(tmp_path: Path) -> None:
+    """End to end: the steering target follows the person's own history.
+
+    ``met`` reads the contact log, so the arc is anchored on a fact already
+    written rather than on a column that could disagree with it.
+    """
+    led = _ledger(tmp_path)
+    ctrl = _arc_control(_ARC)
+    led.add_take(111, _ids(1), _CONTROL, _MET)  # met a fortnight ago
+
+    warm = led.take_prob(111, ctrl, _at(1))
+    cold = led.take_prob(111, ctrl, _at(_COLD_DAY))
+
+    assert cold < warm
+    assert led.leg(111, ctrl, _at(_COLD_DAY)).name == 'cold'
+    assert led.leg(111, _arc_control(relationship.NO_ARC), _at(1)) is None

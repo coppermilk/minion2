@@ -624,6 +624,28 @@ class StateStore:
         ).fetchone()
         return _row(got) if got is not None else PeerRow(peer_id)
 
+    def met(self, peer_id: int) -> float:
+        """Return when we first did ANYTHING with a person; 0 if never.
+
+        Deliberately not bound to this view's service, and the one method
+        here that is not. An arc belongs to a PERSON, not to a service: one
+        account is one person, so the day we met somebody is the same day
+        whether the story engine noticed them first or the like engine did,
+        and two clocks would put the same person in the honeymoon over here
+        and the cold shoulder over there.
+
+        Read from ``contact`` rather than ``actors.first_seen``, because a
+        peer we have acted on always has a row here, while ``first_seen`` is
+        only set once somebody resolves their name. Zero means no history at
+        all, which is not a missing value -- it is a person we are meeting
+        right now, and the arc starts them at its beginning.
+        """
+        got = self.conn.execute(
+            'SELECT min(at) AS first FROM contact WHERE peer_id = ?',
+            (peer_id,),
+        ).fetchone()
+        return float(got['first']) if got['first'] is not None else 0.0
+
     def peers(self, limit: int = 0) -> list[PeerRow]:
         """Return this service's peers, most recently engaged first."""
         sql = 'SELECT * FROM standing WHERE service = ? ORDER BY last_at DESC'
