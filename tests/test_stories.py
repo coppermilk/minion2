@@ -10,12 +10,15 @@ opening/marking against Telegram; none of that is exercised here.
 
 from __future__ import annotations
 
+import pathlib
 import random
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from minions.userbot import main
+from minions.userbot.core import config
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Database
 from minions.userbot.core.state import StateStore
@@ -90,6 +93,11 @@ def _seen(brain: stories.StoryBrain, peer: int) -> set[int]:
             'SELECT key FROM marks WHERE key LIKE ?', (f'{peer}:%',)
         )
     }
+
+
+def _ids(n: int) -> tuple[int, ...]:
+    """Return ``n`` distinct story ids -- what the acts were about."""
+    return tuple(range(900, 900 + n))
 
 
 def _cand(
@@ -312,7 +320,7 @@ def test_react_fraction_converges_to_target(tmp_path: Path) -> None:
         sid += 3
         r_ids, budget = brain._plan_reacts(peer, ids, budget)
         brain.mark_viewed(peer, ids, ts=_NOON)
-        brain.mark_reacted(peer, len(r_ids), _NOON)
+        brain.mark_reacted(peer, tuple(r_ids), _NOON)
     key = str(peer)
     ratio = brain.ledger.row(key).recip / brain.ledger.row(key).taken
     assert abs(ratio - _R_TARGET) < _EXPO_TOL
@@ -322,9 +330,9 @@ def test_react_budget_caps_the_day(tmp_path: Path) -> None:
     """No more than react_max_per_day reactions go out, then it floors at 0."""
     brain = _brain(tmp_path, react_max_per_day=_THREE)
     assert brain._react_budget(_NOON) == _THREE
-    brain.mark_reacted(7, _TWO, _NOON)
+    brain.mark_reacted(7, _ids(_TWO), _NOON)
     assert brain._react_budget(_NOON) == _THREE - _TWO
-    brain.mark_reacted(7, _FIVE, _NOON)  # overshoots via one call
+    brain.mark_reacted(7, _ids(_FIVE), _NOON)  # overshoots via one call
     assert brain._react_budget(_NOON) == 0
 
 
@@ -340,9 +348,9 @@ def test_react_disabled_plans_no_reactions(tmp_path: Path) -> None:
 def test_react_counter_rolls_over_daily(tmp_path: Path) -> None:
     """The daily counter resets at local midnight; the per-peer tally stays."""
     brain = _brain(tmp_path)
-    brain.mark_reacted(7, _FIVE, _NOON)
+    brain.mark_reacted(7, _ids(_FIVE), _NOON)
     assert brain.ledger.recip_today == _FIVE
-    brain.mark_reacted(7, _TWO, _NOON + 86400.0)  # the next day
+    brain.mark_reacted(7, _ids(_TWO), _NOON + 86400.0)  # the next day
     assert brain.ledger.recip_today == _TWO  # reset, then +2
     assert brain.ledger.row('7').recip == _FIVE + _TWO  # cumulative per peer
 
@@ -363,7 +371,7 @@ def test_warmth_lists_recent_peers_first(tmp_path: Path) -> None:
     # peer 7 (earlier): viewed 2 of 3 offered (p~0.67), reacted to 1 (r 0.5)
     brain._record_skips(7, (100,))  # 1 offered, skipped
     brain.mark_viewed(7, (101, 102), ts=_NOON)
-    brain.mark_reacted(7, 1, _NOON)
+    brain.mark_reacted(7, _ids(1), _NOON)
     # peer 8 (an hour later): viewed all, no reactions (r 0)
     brain.mark_viewed(8, (200, 201), ts=_NOON + 3600)
     rows = brain.warmth()
@@ -685,3 +693,108 @@ def test_a_wholly_refused_view_records_nothing(tmp_path: Path) -> None:
     assert _seen(brain, 7) == set()
     assert brain.state.total_views == 0
     assert names.asked == 0  # no round trip for a view that recorded nothing
+
+
+def test_a_story_ends_up_ignored_seen_or_liked(tmp_path: Path) -> None:
+    """The three outcomes a story can have, each one row in the history.
+
+    A skipped story is an ``ignore``, an opened one a ``seen``, and a heart
+    is a ``like`` ON TOP of the seen -- a second row, because it is a second
+    moment: we open it, and then, a beat later, react. What the counters say
+    has to be exactly what these rows add up to.
+    """
+    brain = _brain(tmp_path, exposure_c2=0.9)  # the real ~2/3 curve
+    peer, offered = 42, tuple(range(600, 610))
+    view, skip = brain._view_split(peer, offered, brain._view_target())
+    brain._record_skips(peer, skip)
+    brain.mark_viewed(peer, view, _NOON)
+    brain.mark_reacted(peer, view[:1], _NOON + 60)
+
+    assert brain.store.acts(peer) == {
+        'ignore': len(skip),
+        'seen': len(view),
+        'like': 1,
+    }
+    assert brain.store.tally(peer) == {
+        'offered': len(offered),
+        'taken': len(view),
+        'recip': 1,
+    }
+
+
+def test_the_counters_stay_a_running_total_of_the_log(tmp_path: Path) -> None:
+    """Drive the real engine for a week; the invariant holds per person.
+
+    The counters are what every percentage in /status is computed from, and
+    before the log they were the only copy of their own input -- so a
+    surprising number could not be checked, only re-simulated.
+    """
+    brain = _brain(tmp_path, exposure_c2=0.9, react_fraction_target=0.1)
+    sid = 1
+    for day in range(7):
+        for peer in (11, 22, 33):
+            fresh = tuple(range(sid, sid + 2))
+            sid += 2
+            at = _NOON + day * 86400.0
+            view, skip = brain._view_split(peer, fresh, brain._view_target())
+            brain._record_skips(peer, skip)
+            brain.mark_viewed(peer, view, at)
+            react, _ = brain._plan_reacts(peer, view, brain._react_budget(at))
+            brain.mark_reacted(peer, react, at)
+
+    for row in brain.store.peers():
+        logged = brain.store.tally(row.peer_id)
+        assert row.offered == logged['offered']
+        assert row.taken == logged['taken']
+        assert row.recip == logged['recip']
+
+
+_CIRCLE = (11, 22, 33)
+_WEEK_LIKES_MIN = 1.0
+_WEEK_LIKES_MAX = 2.8
+_SEEDS = 30
+
+
+def _shipped() -> stories.StoryParams:
+    """Load the story params the bot actually ships with."""
+    root = pathlib.Path(main.__file__).with_name('aggregator_constants.json')
+    data = config.read_json(root)
+    config.apply_persona(data)
+    return stories.load_story_params(data)
+
+
+def _likes_in_a_week(tmp_path: Path, seed: int) -> int:
+    """Run the shipped engine over a week of a small circle; count hearts."""
+    db = Database(tmp_path / f'{seed}.db')
+    brain = stories.StoryBrain(_shipped(), db.store('stories'))
+    brain.rng = random.Random(seed)
+    sid, liked = 1, 0
+    for day in range(7):
+        for peer in _CIRCLE:
+            fresh, sid = (sid,), sid + 1
+            at = _NOON + day * 86400.0
+            view, skip = brain._view_split(peer, fresh, brain._view_target())
+            brain._record_skips(peer, skip)
+            brain.mark_viewed(peer, view, at)
+            react, _ = brain._plan_reacts(peer, view, brain._react_budget(at))
+            brain.mark_reacted(peer, react, at)
+            liked += len(react)
+    return liked
+
+
+def test_the_shipped_rate_leaves_one_or_two_likes_a_week(
+    tmp_path: Path,
+) -> None:
+    """A heart has to stay rare, or it stops meaning anything.
+
+    We watch a lot and react seldom: the reaction is the only thing the
+    other person is meant to read as deliberate, and one arriving every few
+    days says that, where one every other view says only that something is
+    running. Pinned as a WEEKLY COUNT over the real config rather than as
+    the fraction, because the fraction is the knob and this is the effect
+    -- and a circle of three posting once a day is the case it was set for.
+    At the previous 0.20 the same week averages 3.7, well outside this.
+    """
+    got = [_likes_in_a_week(tmp_path, seed) for seed in range(_SEEDS)]
+
+    assert _WEEK_LIKES_MIN <= sum(got) / len(got) <= _WEEK_LIKES_MAX

@@ -789,3 +789,44 @@ def test_a_written_quiet_hours_list_is_honoured() -> None:
 
     written = load({'engines': {'reactions': {'quiet_hours': [1, 2]}}})
     assert written.quiet_hours == frozenset({1, 2})
+
+
+def test_a_comment_leaves_one_row_saying_what_we_did_with_it(
+    tmp_path: Path,
+) -> None:
+    """Ignore or like -- the pool of outcomes a comment can end in.
+
+    The decision is made before anything is written, so a comment we
+    answered is logged ``like`` and never ``ignore``. Recording the chance
+    up front and the answer afterwards -- which is how this worked -- put an
+    ``ignore`` under every comment we ever liked, and the history was then a
+    list of opportunities rather than a list of decisions.
+    """
+    brain = _no_caps(tmp_path, seed=1)
+    person = 108
+    liked = sum(brain.decide_engage(person, n) for n in range(1, 51))
+
+    acts = brain.store.acts(person)
+    assert acts['like'] == liked
+    assert acts['ignore'] == 50 - liked
+    assert 'seen' not in acts  # a story word, and this is not stories
+
+
+def test_the_daily_cap_turns_a_would_be_like_into_an_ignore(
+    tmp_path: Path,
+) -> None:
+    """The cap is the last word, and the log says what actually happened.
+
+    A like the budget refused is not a like: the person saw nothing. The
+    log has to agree with them rather than with our intention.
+    """
+    brain = _brain(tmp_path, like_max_per_day=_LIKE_CAP, sticker_max_per_day=0)
+    for n in range(200):
+        brain.decide_engage(109, n)
+
+    assert brain.store.acts(109)['like'] == _LIKE_CAP
+    assert brain.store.tally(109) == {
+        'offered': 200,
+        'taken': _LIKE_CAP,
+        'recip': 0,
+    }

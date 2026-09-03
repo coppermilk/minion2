@@ -30,6 +30,15 @@ _CAP = 4
 _CONTROL = relationship.Control(wundt=attachment.WundtParams())
 
 
+def _ids(n: int) -> tuple[int, ...]:
+    """Return ``n`` distinct subjects -- the things an act was about.
+
+    The ledger counts what it is given rather than a bare number now, so a
+    test that means "three offers" says which three.
+    """
+    return tuple(range(1, n + 1))
+
+
 def _ledger(tmp_path: Path) -> relationship.Ledger:
     """Return a ledger over a fresh store (the counters live in SQLite)."""
     store = Database(tmp_path / DB_NAME).store('reactions')
@@ -66,8 +75,9 @@ def test_take_prob_converges_offered_taken_to_the_wundt_peak(
     peer = 1
     for _ in range(_STEPS):
         if rng.random() < led.take_prob(peer, ctrl):
-            led.bump_take(peer, _CONTROL, _NOON)
-        led.add_offer(peer)
+            led.add_take(peer, _ids(1), _CONTROL, _NOON)
+        else:
+            led.add_offer(peer, _ids(1))
     ratio = led.row(peer).taken / led.row(peer).offered
     assert abs(ratio - ctrl.take_target()) < _TOL
 
@@ -81,7 +91,7 @@ def test_recip_prob_converges_recip_taken_to_the_target(
     rng = random.Random(1)
     peer = 1
     for _ in range(_STEPS):
-        led.bump_take(peer, _CONTROL, _NOON)  # a taken exposure
+        led.add_take(peer, _ids(1), _CONTROL, _NOON)  # a taken exposure
         if rng.random() < led.recip_prob(peer, ctrl, taken_now=True):
             led.bump_recip(peer)
     ratio = led.row(peer).recip / led.row(peer).taken
@@ -109,7 +119,7 @@ def test_recip_left_reads_without_consuming(tmp_path: Path) -> None:
     led = _ledger(tmp_path)
     ctrl = relationship.Control(wundt=attachment.WundtParams(), recip_cap=_CAP)
     assert led.recip_left(ctrl, _NOON, _TZ) == _CAP
-    led.add_recip(1, 1, _NOON, _TZ)
+    led.add_recip(1, _ids(1), _NOON, _TZ)
     assert led.recip_left(ctrl, _NOON, _TZ) == _CAP - 1
     assert led.recip_left(ctrl, _NOON, _TZ) == _CAP - 1  # still, read-only
 
@@ -120,12 +130,12 @@ def test_warmth_orders_by_recency_and_evict_drops_a_peer(
     """warmth() lists the most recent peer first; evict removes a peer."""
     early, late = 111, 222
     led = _ledger(tmp_path)
-    led.add_take(early, 2, _CONTROL, _NOON)
-    led.add_recip(early, 1, _NOON, _TZ)
-    led.add_offer(late, 3)  # interacted with more recently
+    led.add_take(early, _ids(2), _CONTROL, _NOON)
+    led.add_recip(early, _ids(1), _NOON, _TZ)
+    led.add_offer(late, _ids(3))  # interacted with more recently
     rows = relationship.warmth(led, _CONTROL)
     assert [row.peer_id for row in rows] == [late, early]  # newest first
-    led.add_offer(early)  # touching them again moves them to the front
+    led.add_offer(early, _ids(1))  # touching them again moves them up
     assert next(r.peer_id for r in relationship.warmth(led, _CONTROL)) == early
     led.evict(early)
     assert led.row(early).offered == 0
@@ -141,7 +151,7 @@ def test_a_readout_row_names_a_peer_by_id_and_nothing_else(
     @name read as two different people down the readout.
     """
     led = _ledger(tmp_path)
-    led.add_take(552, 1, _CONTROL, _NOON)
+    led.add_take(552, _ids(1), _CONTROL, _NOON)
 
     row = next(iter(relationship.warmth(led, _CONTROL)))
 
@@ -176,12 +186,12 @@ def _moments(gaps: list[float]) -> list[float]:
 def _engage(led: relationship.Ledger, peer: int, gaps: list[float]) -> None:
     """Engage ``peer`` once per gap, the way decide_engage does it.
 
-    An offer then a take, so the peer reaches ``warmth`` (which skips anyone
-    who never offered) and the timing lands on a real ledger row.
+    One take per gap -- which counts the chance too, the way the engines do
+    -- so the peer reaches ``warmth`` (which skips anyone who never offered)
+    and the timing lands on a real ledger row.
     """
     for at in _moments(gaps):
-        led.add_offer(peer)
-        led.bump_take(peer, _CONTROL, at)
+        led.add_take(peer, _ids(1), _CONTROL, at)
 
 
 def _poisson(seed: int) -> list[float]:
@@ -227,8 +237,8 @@ def test_a_batch_of_views_is_one_sitting_not_many_gaps(
     irregularity when it is in fact a single visit.
     """
     led = _ledger(tmp_path)
-    led.add_take(14, 1, _CONTROL, _NOON)  # first visit: no gap behind it
-    led.add_take(14, _BATCH, _CONTROL, _NOON + _DAY)
+    led.add_take(14, _ids(1), _CONTROL, _NOON)  # first visit: no gap behind it
+    led.add_take(14, _ids(_BATCH), _CONTROL, _NOON + _DAY)
     row = led.row(14)
     assert row.gap_n == 1  # one interval, not _BATCH of them
     assert row.gap_sum == _DAY
@@ -246,7 +256,7 @@ def test_warmth_index_carries_the_measured_factors(tmp_path: Path) -> None:
     _engage(led, 12, [60.0] * _TOUCHES)
     _engage(led, 15, _poisson(3))
     for peer in (12, 15):
-        led.add_recip(peer, _TOUCHES // 2, _NOON, _TZ)
+        led.add_recip(peer, _ids(_TOUCHES // 2), _NOON, _TZ)
     scored = {row.peer_id: row for row in relationship.warmth(led, _CONTROL)}
     assert scored[12].p == scored[15].p  # same exposure
     assert scored[12].r == scored[15].r  # same reciprocity

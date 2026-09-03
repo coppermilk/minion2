@@ -174,7 +174,9 @@ class CommentWatch:
         # person's comments (the first is always liked). A steered skip still
         # leaves the key recorded as decided (schedule marked it), so a rescan
         # never re-rolls it into a like.
-        if attach and not self.deps.brain.decide_engage(person):
+        if attach and not self.deps.brain.decide_engage(
+            person, comment.msg_id
+        ):
             return
         # Choose the like reaction vs. the rarer thread sticker (deterministic
         # in the comment id), then place it.
@@ -209,7 +211,9 @@ class CommentWatch:
         allow_sticker = not needs_human(comment.text, self.deps.human_words)
         # The reciprocity control decides sticker vs like at our target rate
         # (no activity-burst gate); a question/link comment stays a plain like.
-        if self.deps.brain.decide_sticker(person, content_ok=allow_sticker):
+        if self.deps.brain.decide_sticker(
+            person, comment.msg_id, content_ok=allow_sticker
+        ):
             specs, kind = self.deps.brain.pick_reaction(seed), 'reply'
         else:
             specs, kind = self.deps.brain.pick_like(seed), 'react'

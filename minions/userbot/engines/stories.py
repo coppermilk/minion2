@@ -508,7 +508,7 @@ class StoryBrain:
         ]
         if not fresh:
             return
-        self.ledger.add_offer(peer_id, len(fresh), self.clock())
+        self.ledger.add_offer(peer_id, tuple(fresh), self.clock())
         self._trim_peers()
 
     def _react_budget(self, now: float) -> int:
@@ -618,7 +618,7 @@ class StoryBrain:
         ]
         if not fresh:
             return
-        self.ledger.add_take(peer_id, len(fresh), self._control(), now)
+        self.ledger.add_take(peer_id, tuple(fresh), self._control(), now)
         self.store.trim_marks(f'{peer_id}:', self.params.seen_per_peer)
         self._trim_peers()
         self.state.last_view = now
@@ -627,16 +627,20 @@ class StoryBrain:
         del self.state.log[: -self.params.log_limit]
         self._save()
 
-    def mark_reacted(self, peer_id: int, count: int, now: float) -> None:
-        """Record ``count`` reactions sent to ``peer_id`` (persisted).
+    def mark_reacted(
+        self, peer_id: int, story_ids: tuple[int, ...], now: float
+    ) -> None:
+        """Record the reactions sent to ``peer_id`` (persisted).
 
         Rolls the per-day counter over at local midnight, bumps the per-peer
         reaction tally (so r = reacted/viewed stays true), and stamps the last
-        reaction time. Called by the glue after the reactions actually go out.
+        reaction time. Called by the glue after the reactions actually go out,
+        with the ids they landed on -- so the log says which story got the
+        heart, not merely that one did.
         """
-        if count <= 0:
+        if not story_ids:
             return
-        self.ledger.add_recip(peer_id, count, now, self._tz())
+        self.ledger.add_recip(peer_id, story_ids, now, self._tz())
         self.state.last_react = now
         self._save()
 

@@ -237,7 +237,7 @@ class StoryWatch:
         params = self.deps.brain.params
         react_set = set(view.react_ids)
         opened: list[int] = []
-        sent = 0
+        reacted: list[int] = []
         for sid in view.story_ids:
             await asyncio.sleep(
                 random.uniform(  # noqa: S311 -- human dwell, not crypto
@@ -247,14 +247,16 @@ class StoryWatch:
             if not await self.deps.account.view_story(peer, sid):
                 continue
             opened.append(sid)
-            if sid in react_set:
-                sent += await self.deps.account.react_to_story(
-                    peer, sid, view.react_emoji
-                )
+            if sid in react_set and await self.deps.account.react_to_story(
+                peer, sid, view.react_emoji
+            ):
+                reacted.append(sid)
         await self.deps.account.read_stories(peer, view.max_id)
-        if sent:
-            self.deps.brain.mark_reacted(view.peer_id, sent, time.time())
-        self._note_unplaced(view, len(react_set), sent)
+        if reacted:
+            self.deps.brain.mark_reacted(
+                view.peer_id, tuple(reacted), time.time()
+            )
+        self._note_unplaced(view, len(react_set), len(reacted))
         return tuple(opened)
 
     def _note_unplaced(

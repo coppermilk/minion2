@@ -161,6 +161,15 @@ class Userbot:
             self._dbs[where] = db
         return db
 
+    def database(self, service: str) -> Database:
+        """Return the state database of one service's profile directory.
+
+        Public because identity is not per-service: /who reads ``actors``,
+        which every service in that directory shares, so it needs the file
+        rather than one service's view of it.
+        """
+        return self._db(self.modes.service_dir(service))
+
     def _store(self, service: str, where: Path | None = None) -> StateStore:
         """Return one service's view of its profile's state database.
 

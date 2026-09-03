@@ -10,6 +10,7 @@ engines at once, so its exact text is pinned by tests/test_status.py.
 from __future__ import annotations
 
 import time
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -20,6 +21,9 @@ from minions.userbot.core import render
 from minions.userbot.core.render import emoji_markup
 from minions.userbot.core.render import trim
 from minions.userbot.core.runtime import fmt_eta
+from minions.userbot.core.state import ACTS
+from minions.userbot.core.state import RUNGS
+from minions.userbot.glue.commands import COMMAND_WHO
 from minions.userbot.glue.commands import SERVICE_ACTIONS
 from minions.userbot.glue.commands import SERVICE_NAMES
 
@@ -28,11 +32,22 @@ from minions.userbot.glue.commands import SERVICE_NAMES
 PENDING_ROWS = 12
 # How many of the warmest story peers to list in the attachment readout.
 STATUS_WARM_PEERS = 3
+TWO_WORDS = 2
+"""A /who with no name is the usage line, not a lookup."""
+
+WHO_ROWS = 12
+"""How many recent acts /who lists per service.
+
+Enough to see a pattern, short enough to read on a phone. The
+counters on the line above are over ALL of them, not just these.
+"""
 
 if TYPE_CHECKING:
     from minions.userbot.core import relationship
     from minions.userbot.core.models import Emoji
     from minions.userbot.core.state import Actor
+    from minions.userbot.core.state import Database
+    from minions.userbot.core.state import PeerRow
     from minions.userbot.engines import stories
     from minions.userbot.main import Userbot
 
@@ -73,6 +88,28 @@ def _tag(known: dict[int, Actor], peer_id: int) -> str:
     """Name a chat for the ROUTING lines, where the raw id is the point."""
     found = known.get(peer_id)
     return render.tagged(found) if found is not None else str(peer_id)
+
+
+def _when(at: float) -> str:
+    """Render one act's moment for /who: a date and a clock, in UTC."""
+    return datetime.fromtimestamp(at, tz=UTC).strftime('%m-%d %H:%M')
+
+
+def _drift(row: PeerRow, logged: dict[str, int]) -> str:
+    """Say so when the counters and the log they summarise disagree.
+
+    Silent when they agree, which is the normal case and needs no words --
+    they are written in one transaction. Loud when they do not, because a
+    counter that has drifted from its own history is the one thing /who
+    exists to make visible: every percentage in /status is computed from
+    the left-hand side of this comparison.
+    """
+    off = [
+        f'{rung} {getattr(row, rung)}!={logged.get(rung, 0)}'
+        for rung in RUNGS
+        if getattr(row, rung) != logged.get(rung, 0)
+    ]
+    return f'  <- LOG DISAGREES: {", ".join(off)}' if off else ''
 
 
 def _pool_markup(pool: tuple[Emoji, ...]) -> str:
@@ -142,6 +179,73 @@ class StatusReport:
             )
             parts += ['', legend]
         return '\n'.join(parts)
+
+    def who(self, words: list[str]) -> str:
+        """Return one person's relationship history (the /who command).
+
+        /status shows running totals; this shows what they are totals OF.
+        The two are written in one transaction, so a percentage that looks
+        wrong is settled by reading down this list rather than by guessing
+        -- which is what asking it used to take.
+        """
+        if len(words) < TWO_WORDS:
+            return f'{COMMAND_WHO} @name  (or an id)'
+        peer_id = self._find(words[1].strip())
+        if peer_id is None:
+            return f'{words[1]}: never seen'
+        return '\n'.join(self._who_lines(peer_id))
+
+    def _db(self) -> Database:
+        """Return the database /who reads: the story engine's profile.
+
+        Identity and the contact log live in the FILE, not in one service's
+        view of it, and the two engines that keep a ledger share one when
+        their modes agree -- which they do unless somebody is sandboxing.
+        """
+        return self.bot.database('stories')
+
+    def _find(self, wanted: str) -> int | None:
+        """Resolve '@name' or a raw id to a peer we actually know."""
+        if wanted.lstrip('-').isdigit():
+            return int(wanted)
+        row = (
+            self._db()
+            .conn.execute(
+                'SELECT peer_id FROM actors WHERE username = ?',
+                (wanted.lstrip('@'),),
+            )
+            .fetchone()
+        )
+        return int(row['peer_id']) if row is not None else None
+
+    def _who_lines(self, peer_id: int) -> list[str]:
+        """Return the header, the per-service totals, and the recent acts.
+
+        Each service counts in its OWN words (``state.ACTS``), so the totals
+        line reads the way the acts under it do -- ``6 seen . 2 like`` above
+        a list of seens and likes, rather than a second vocabulary the reader
+        has to translate.
+        """
+        db, b = self._db(), self.bullet()
+        actor = db.actor(peer_id)
+        lines = [f'{render.tagged(actor)}']
+        for service, ladder in ACTS.items():
+            store = db.store(service)
+            row = store.peer(peer_id)
+            if row.offered <= 0:
+                continue
+            _, took, back = ladder
+            lines.append(
+                f'{b} {service}: {row.offered} offered '
+                f'{b} {row.taken} {took} {b} {row.recip} {back}'
+                f'{_drift(row, store.tally(peer_id))}'
+            )
+            lines += [
+                f'    {_when(c.at)} {c.act}'
+                + (f' #{c.subject}' if c.subject else '')
+                for c in store.history(peer_id, WHO_ROWS)
+            ]
+        return lines if len(lines) > 1 else [*lines, f'{b} nothing yet']
 
     def _greeter_lines(self) -> list[str]:
         """Greeter section: on/off, DMs today, admin-log cursor, next check."""

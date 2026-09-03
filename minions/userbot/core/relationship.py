@@ -173,29 +173,41 @@ class Ledger:
         return steer(r_cur, control.recip_target, control.recip_gain)
 
     def add_offer(
-        self, peer: int, n: int = 1, now: float | None = None
+        self,
+        peer: int,
+        subjects: tuple[int, ...] = (),
+        now: float | None = None,
     ) -> None:
-        """Record ``n`` more chances from ``peer`` (offers, not taken).
+        """Record the chances ``peer`` gave us that we did NOT take.
+
+        The other half of ``add_take``: both are called once per chance, at
+        the moment the answer is known, so every chance leaves exactly one
+        row saying which way it went (``ignore`` here, the middle rung
+        there).
+
+        ``subjects`` names them -- the story ids, the comment's message id --
+        and its length is the count. A caller with nothing to name passes
+        one empty subject rather than a bare number, so the log always has a
+        row per offer even when it cannot say which.
 
         ``now`` is the engine's moment; it moves the peer to the front of the
         recency order without touching ``take_at``, which only our own
         engagements advance.
         """
-        self.store.bump(peer, {'offered': n}, now)
+        self.store.bump(peer, {'offered': len(subjects)}, now, subjects)
 
-    def add_take(  # noqa: PLR0913 -- peer + count + (control, now) read best flat
-        self, peer: int, n: int, control: Control, now: float
+    def add_take(  # noqa: PLR0913 -- peer + what + (control, now) read best flat
+        self,
+        peer: int,
+        subjects: tuple[int, ...],
+        control: Control,
+        now: float,
     ) -> None:
-        """Record ``n`` exposures actually taken (also counts them offered)."""
+        """Record the exposures taken (which also counts them offered)."""
+        n = len(subjects)
         counts: dict[str, float] = {'offered': n, 'taken': n}
         counts |= _gap_stats(self._gap(peer, now), n, control.burst_gap_sec)
-        self.store.bump(peer, counts, now)
-
-    def bump_take(self, peer: int, control: Control, now: float) -> None:
-        """Count one already-offered exposure as taken (decide-time commit)."""
-        counts: dict[str, float] = {'taken': 1}
-        counts |= _gap_stats(self._gap(peer, now), 1, control.burst_gap_sec)
-        self.store.bump(peer, counts, now)
+        self.store.bump(peer, counts, now, subjects)
 
     def _gap(self, peer: int, now: float) -> float:
         """Seconds since we last engaged ``peer``; 0 when this is the first.
@@ -207,20 +219,22 @@ class Ledger:
         last = self.row(peer).take_at
         return now - last if last > 0.0 else 0.0
 
-    def bump_recip(self, peer: int, now: float | None = None) -> None:
-        """Count one reciprocation whose daily slot is already spent."""
-        self.store.bump(peer, {'recip': 1}, now)
-
-    def add_recip(  # noqa: PLR0913 -- peer + count + (now, tz) read best flat
-        self, peer: int, n: int, now: float, tz: float
+    def bump_recip(
+        self, peer: int, subject: int = 0, now: float | None = None
     ) -> None:
-        """Record ``n`` reciprocations to ``peer`` and the daily counter."""
+        """Count one reciprocation whose daily slot is already spent."""
+        self.store.bump(peer, {'recip': 1}, now, (subject,))
+
+    def add_recip(  # noqa: PLR0913 -- peer + what + (now, tz) read best flat
+        self, peer: int, subjects: tuple[int, ...], now: float, tz: float
+    ) -> None:
+        """Record the reciprocations to ``peer`` and the daily counter."""
         stamp = humanize.local(now, tz).date().isoformat()
         self.recip_day, self.recip_today = _rolled(
             self.recip_day, self.recip_today, stamp
         )
-        self.recip_today += n
-        self.store.bump(peer, {'recip': n}, now)
+        self.recip_today += len(subjects)
+        self.store.bump(peer, {'recip': len(subjects)}, now, subjects)
 
     def spend_take(self, control: Control, now: float, tz: float) -> bool:
         """Consume one take slot from today's budget; False when capped."""

@@ -750,36 +750,40 @@ class ReactionBrain:
             burst_gap_sec=p.session_idle_sec,
         )
 
-    def _grant_engage(self, person: int) -> bool:
-        """Commit one engagement (like) to the ledger if the cap allows."""
-        led = self.ledger
-        control, now = self._control(), self.clock()
-        if not led.spend_take(control, now, self._tz()):
-            return False
-        led.bump_take(person, control, now)
-        return True
-
-    def decide_engage(self, person: int) -> bool:
+    def decide_engage(self, person: int, comment: int = 0) -> bool:
         """Whether to like ``person``'s comment, steering p -> the Wundt peak.
 
         Exposure control: the running ``taken/offered`` is nudged toward the
         peak (~0.67) by a per-comment Bernoulli, so a heavy commenter is
         throttled (no desperate like-everything) while a newcomer is kept warm.
         The FIRST comment from a person is always engaged (a warm hello); the
-        control starts from the second. Records the comment as offered either
-        way, so a rescan never re-rolls a decided comment.
+        control starts from the second. Counts the comment either way, so a
+        rescan never re-rolls a decided comment.
+
+        Decides BEFORE it records, and then records once, naming the outcome:
+        a comment we passed on is logged ``ignore``, one we answered ``like``.
+        Recording the chance first and the answer after would leave the log
+        saying we ignored every comment we ever liked.
+
+        ``comment`` is that comment's message id, and it is what the history
+        row is ABOUT: without it the log could say we liked four of their
+        comments but not which four.
         """
-        led = self.ledger
+        led, control, now = self.ledger, self._control(), self.clock()
         first = led.row(person).offered == 0
-        prob = led.take_prob(person, self._control())
-        take = first or self.rng.random() < prob
-        # count this comment (recorded before granting)
-        led.add_offer(person, now=self.clock())
-        ok = self._grant_engage(person) if take else False
+        take = first or self.rng.random() < led.take_prob(person, control)
+        # The cap is the last word: a take it refuses is an ignore.
+        ok = take and led.spend_take(control, now, self._tz())
+        if ok:
+            led.add_take(person, (comment,), control, now)
+        else:
+            led.add_offer(person, (comment,), now)
         self._save()
         return ok
 
-    def decide_sticker(self, person: int, *, content_ok: bool) -> bool:
+    def decide_sticker(
+        self, person: int, comment: int = 0, *, content_ok: bool
+    ) -> bool:
         """Whether to upgrade this engagement to a sticker, steering r -> 0.20.
 
         Reciprocity control among the comments we engage: the stronger,
@@ -801,7 +805,7 @@ class ReactionBrain:
         now = self.clock()
         if not led.spend_recip(ctrl, now, self._tz()):
             return False
-        led.bump_recip(person, now)
+        led.bump_recip(person, comment, now)
         self._save()
         return True
 

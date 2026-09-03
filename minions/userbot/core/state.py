@@ -52,7 +52,52 @@ log = logging.getLogger('userbot')
 DB_NAME = 'userbot.db'
 """The one state file, per profile directory (live and test each get one)."""
 
-_SCHEMA = """
+RUNGS = ('offered', 'taken', 'recip')
+"""The three steps of any engagement, weakest first -- the MODEL's names.
+
+They are the first three ``COUNTERS`` by design, so a counter and the log
+rows it totals stay tied to each other. What each step is CALLED, though,
+depends on the service: see ``ACTS``.
+"""
+
+ACTS = {
+    'reactions': ('ignore', 'like', 'sticker'),
+    'stories': ('ignore', 'seen', 'like'),
+}
+"""What the person on the other side would call each rung of ``RUNGS``.
+
+One entry per service that keeps a ledger, listed weakest first and lined up
+with ``RUNGS`` position by position:
+
+===========  ==========  =========  ==========
+service      offered     taken      recip
+===========  ==========  =========  ==========
+reactions    ``ignore``  ``like``   ``sticker``
+stories      ``ignore``  ``seen``   ``like``
+===========  ==========  =========  ==========
+
+``offered`` is a chance we did not take, so from outside it IS the ignore --
+the same row, named for what happened rather than for what was possible.
+Naming the rungs per service is the difference between a history that reads
+``taken #405`` and one that reads ``seen #405``: the same fact, but only the
+second says what the other person actually saw. And they are not the same
+act across services -- a like costs nothing on a comment and is the strongest
+thing we ever do to a story -- which a single shared vocabulary would hide.
+
+Every rung is spelled out here rather than derived, because the CHECK below
+is built from this table: a service can only log the acts it has words for,
+and a typo becomes an IntegrityError instead of a row nobody ever reads.
+"""
+
+_ACT_CHECK = '\n        OR '.join(
+    "(service = '{name}' AND act IN ({acts}))".format(
+        name=name, acts=', '.join(f"'{act}'" for act in ladder)
+    )
+    for name, ladder in ACTS.items()
+)
+"""The ``contact.act`` CHECK, generated from ``ACTS`` so it cannot drift."""
+
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS actors (
     peer_id    INTEGER PRIMARY KEY,
     kind       TEXT NOT NULL DEFAULT '',
@@ -83,6 +128,15 @@ CREATE TABLE IF NOT EXISTS standing (
     gap_sq  REAL    NOT NULL DEFAULT 0,
     burst   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (service, peer_id)
+);
+CREATE TABLE IF NOT EXISTS contact (
+    id      INTEGER PRIMARY KEY,
+    peer_id INTEGER NOT NULL,
+    at      REAL    NOT NULL,
+    service TEXT    NOT NULL,
+    act     TEXT    NOT NULL,
+    subject INTEGER NOT NULL DEFAULT 0,
+    CHECK ({_ACT_CHECK})
 );
 CREATE TABLE IF NOT EXISTS marks (
     service TEXT NOT NULL,
@@ -124,6 +178,19 @@ rendered string, so the display layer had to un-render it
 (``status.py`` stripped the id back off by exact suffix) to show a name.
 Storage keeps fields; rendering makes strings; the two stop meeting.
 
+``contact`` is WHAT HAPPENED -- one append-only row per act, named in the
+service's own vocabulary (``ACTS``), which makes it the history of our
+relationship with a person and the thing ``standing`` is a running total OF.
+That is the point: the counters used to be the only copy of the model's
+inputs, so a surprising number (why is exposure 44%?) had nothing behind it
+to check against, and answering took a simulation rather than a query.
+
+Every chance leaves EXACTLY ONE row saying what we did with it -- ``ignore``
+or the rung we reached -- so the log is a list of decisions rather than a
+list of opportunities with the decisions filed elsewhere. A reciprocation
+adds a second row on top, because it is a second moment: a story is seen,
+and then, later, hearted.
+
 ``audience`` and ``standing`` are both AGGREGATES over that one actor:
 membership of our channel, and our relationship with them per service.
 ``state`` is a service's scalar state as JSON, one row -- deliberately ONE
@@ -133,6 +200,7 @@ conventions.
 
 _INDEXES = """
 CREATE INDEX IF NOT EXISTS standing_recent ON standing (service, last_at DESC);
+CREATE INDEX IF NOT EXISTS contact_when ON contact (peer_id, at DESC);
 CREATE INDEX IF NOT EXISTS ix_membership_peer ON membership_events (peer_id);
 CREATE INDEX IF NOT EXISTS ix_messages_peer ON messages (peer_id);
 """
@@ -265,6 +333,22 @@ class Actor:
     first_name: str = ''
     last_name: str = ''
     phone: str = ''  # only ever set for a mutual contact
+
+
+@dataclass(frozen=True)
+class Contact:
+    """One touch between us and a peer: what happened, when, about what.
+
+    ``subject`` is the thing the act was about -- a story id, a comment's
+    message id -- so the log says WHICH story we opened, not merely that we
+    opened one. 0 when the caller has nothing to name, which is honest
+    rather than absent: the act still happened and still counts.
+    """
+
+    peer_id: int
+    at: float
+    act: str
+    subject: int = 0
 
 
 @dataclass(frozen=True)
@@ -548,19 +632,28 @@ class StateStore:
             sql, args = sql + ' LIMIT ?', (self.service, limit)
         return [_row(r) for r in self.conn.execute(sql, args)]
 
-    def bump(
+    def bump(  # noqa: PLR0913 -- peer + counts + moment + what it was about
         self,
         peer_id: int,
         counts: Mapping[str, float],
         at: float | None = None,
+        subjects: tuple[int, ...] = (),
     ) -> None:
-        """Add to a peer's counters, creating the row on first sight.
+        """Record what happened: the log rows AND the running totals.
+
+        Both, in one call and one transaction, because they are one fact
+        told twice. ``contact`` gets a row per subject -- what we did and
+        which story or comment we did it about -- and ``standing`` gets the
+        same acts added to its counters. Written apart, the two would be free
+        to disagree, and the counter is what the model reads.
+
+        The row says the HIGHEST rung this bump reached: a bump that counts
+        an offer and a take is one story seen, not one ignored and one seen.
+        Which is why ``_reached`` reads ``RUNGS`` backwards.
 
         ``counts`` names the columns to add to (any of ``COUNTERS``); absent
         ones are left alone. The gap statistics are floats, the rest whole
-        numbers, and SQLite stores each by its column's affinity. One row is
-        written, whatever the audience size -- that is the whole point of
-        this module.
+        numbers, and SQLite stores each by its column's affinity.
 
         ``at`` is when the CALLER decided, and it is what ``last_at`` records.
         The engines run on an injectable clock, so a store reading
@@ -574,6 +667,11 @@ class StateStore:
         with this peer", which orders the readout and the trim, and the offer
         lands at the very instant the engagement following it measures back
         from.
+
+        ``subjects`` names the things acted upon, one per counted unit. Fewer
+        (or none) is allowed and still logs the right NUMBER of rows, with 0
+        for the ones nobody named -- the act happened either way, and a log
+        that dropped it would stop matching the counter beside it.
         """
         adds = [counts.get(name, 0) for name in COUNTERS]
         moment = time.time() if at is None else at
@@ -581,7 +679,87 @@ class StateStore:
         self.conn.execute(
             _BUMP_SQL, (self.service, peer_id, *adds, moment, took)
         )
+        act, done = self._reached(counts)
+        self.conn.executemany(
+            'INSERT INTO contact (peer_id, at, service, act, subject) '
+            'VALUES (?, ?, ?, ?, ?)',
+            [
+                (peer_id, moment, self.service, act, subject)
+                for subject in _each(done, subjects)
+            ],
+        )
         self.conn.commit()
+
+    def _reached(self, counts: Mapping[str, float]) -> tuple[str, int]:
+        """Return the act this bump amounts to, in this service's words.
+
+        Highest rung wins, so ``{'offered': 2, 'taken': 2}`` is two stories
+        SEEN rather than two ignored and two seen. Nothing counted is not an
+        error -- the timing statistics bump on their own -- and logs nothing.
+        """
+        ladder = ACTS[self.service]
+        for rung in reversed(range(len(RUNGS))):
+            done = int(counts.get(RUNGS[rung], 0))
+            if done:
+                return ladder[rung], done
+        return '', 0
+
+    # --- the relationship history ----------------------------------------
+
+    def history(self, peer_id: int, limit: int = 0) -> list[Contact]:
+        """Return everything we ever did with a peer, most recent first.
+
+        The question this whole table exists to answer, in one query. It
+        used to take four: the counters here, the dedup keys in ``marks``
+        under a stringly-typed key, a rolling log inside a JSON blob, and
+        the audience tables -- none of which could be joined to the others.
+        """
+        sql = (
+            'SELECT peer_id, at, act, subject FROM contact '
+            'WHERE peer_id = ? AND service = ? ORDER BY at DESC, id DESC'
+        )
+        args: tuple[object, ...] = (peer_id, self.service)
+        if limit > 0:
+            sql, args = sql + ' LIMIT ?', (peer_id, self.service, limit)
+        return [
+            Contact(
+                peer_id=int(r['peer_id']),
+                at=float(r['at']),
+                act=str(r['act']),
+                subject=int(r['subject']),
+            )
+            for r in self.conn.execute(sql, args)
+        ]
+
+    def acts(self, peer_id: int) -> dict[str, int]:
+        """Count a peer's logged acts by kind, in this service's words."""
+        rows = self.conn.execute(
+            'SELECT act, count(*) AS n FROM contact '
+            'WHERE peer_id = ? AND service = ? GROUP BY act',
+            (peer_id, self.service),
+        )
+        return {str(r['act']): int(r['n']) for r in rows}
+
+    def tally(self, peer_id: int) -> dict[str, int]:
+        """Return the counters as the LOG says they should be.
+
+        The other half of the invariant: ``peer()`` reads what we recorded,
+        this recomputes it from what happened, and a test (and /who) assert
+        the two agree. That is the whole reason the log is written in the
+        same transaction as the totals.
+
+        ``offered`` is every chance -- the ones we passed on plus the ones we
+        took -- because a chance we took was never separately offered. The
+        top rung is counted on its own, since a reciprocation is a second
+        act on a subject the middle rung already counted.
+        """
+        seen = self.acts(peer_id)
+        passed, took, back = ACTS[self.service]
+        return {
+            'offered': seen.get(passed, 0) + seen.get(took, 0),
+            'taken': seen.get(took, 0),
+            'recip': seen.get(back, 0),
+        }
 
     def forget(self, peer_id: int) -> None:
         """Drop a peer's standing WITH THIS SERVICE (it rolled off the set).
@@ -742,6 +920,19 @@ class StateStore:
             (self.service, json.dumps(data, ensure_ascii=False)),
         )
         self.conn.commit()
+
+
+def _each(count: int, subjects: tuple[int, ...]) -> list[int]:
+    """Return one subject per counted unit, padding with 0 when short.
+
+    The COUNT is what has to match, because it is what the model reads off
+    ``standing``. Naming the things is better and usually possible, but a
+    caller that cannot name them still gets the right number of rows.
+    """
+    if count <= 0:
+        return []
+    named = list(subjects[:count])
+    return named + [0] * (count - len(named))
 
 
 def _actor(row: sqlite3.Row) -> Actor:

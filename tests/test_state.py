@@ -17,6 +17,8 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING
 
+import pytest
+
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Actor
 from minions.userbot.core.state import Database
@@ -27,10 +29,11 @@ from minions.userbot.core.state import adopt
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
-
 TOP_N = 2
 """How many rows the limited readout asks for."""
+
+ONE_STANDING_ONE_LOG = 2
+"""What one act on one subject costs: the counters, and the row behind them."""
 
 CROWD = 1000
 """The audience size the old design produced a 47 323-line file at."""
@@ -289,18 +292,26 @@ def test_a_thousand_peers_still_write_one_row_each(tmp_path: Path) -> None:
     assert store.read()['mood'] == MOOD
 
 
-def test_one_peer_write_touches_one_row(tmp_path: Path) -> None:
-    """A write must be O(1) in the audience, not O(N).
+def test_a_write_costs_the_same_whatever_the_audience(tmp_path: Path) -> None:
+    """A write must be O(1) in the AUDIENCE, not O(N).
 
-    Proved through SQLite's own change counter: bumping one peer among a
-    hundred reports exactly one changed row.
+    Proved through SQLite's own change counter: the same bump costs the same
+    among one peer and among a hundred. What it costs is a standing row and
+    a contact row per SUBJECT -- flat in how many people the account has ever
+    met, and flat in which rung the act reached.
     """
-    store = _store(tmp_path)
+    alone, crowded = _store(tmp_path), _store(tmp_path, 'stories')
     for i in range(100):
-        store.bump(i, {'offered': 1})
-    before = store.conn.total_changes
-    store.bump(50, {'taken': 1})
-    assert store.conn.total_changes - before == 1
+        crowded.bump(i, {'offered': 1})
+
+    costs = []
+    for store in (alone, crowded):
+        before = store.conn.total_changes
+        store.bump(50, {'offered': 1, 'taken': 1})
+        costs.append(store.conn.total_changes - before)
+
+    assert costs[0] == costs[1]
+    assert costs[0] == ONE_STANDING_ONE_LOG
 
 
 def test_the_database_file_stands_alone(tmp_path: Path) -> None:
@@ -898,3 +909,147 @@ def test_an_older_file_opens_before_it_is_indexed(tmp_path: Path) -> None:
         ]
         == LEGACY_USER
     )
+
+
+# --------------------------------------------- the relationship history
+
+LIKED = 'like'
+"""What the top rung is called on a story -- and the middle one on a comment.
+
+The same word for two different rungs, which is the whole reason ``ACTS`` is
+per service: a like costs nothing under a comment and is the strongest thing
+we ever do to a story.
+"""
+
+STORY_A = 397
+STORY_B = 398
+WATCHED = 360724480
+
+
+def test_the_history_answers_what_happened_with_one_person(
+    tmp_path: Path,
+) -> None:
+    """Everything we ever did with a peer, in one query, newest first.
+
+    This is the question the whole table exists for. It used to take four:
+    the counters here, the dedup keys under a stringly-typed key in
+    ``marks``, a rolling log inside a JSON blob, and the audience tables --
+    none of which could be joined to the others, because the same person had
+    two ids of two different types.
+    """
+    store = _store(tmp_path, 'stories')
+    store.bump(WATCHED, {'offered': 1}, 100.0, (STORY_A,))
+    store.bump(WATCHED, {'offered': 1, 'taken': 1}, 200.0, (STORY_B,))
+    store.bump(WATCHED, {'recip': 1}, 300.0, (STORY_B,))
+    store.bump(999, {'offered': 1}, 250.0, (1,))  # somebody else entirely
+
+    got = store.history(WATCHED)
+
+    # Newest first, in the words the person on the other side would use: one
+    # story of theirs we let pass, one we opened, and then hearted. The
+    # middle bump counts an offer AND a take and is ONE row -- a story seen,
+    # not a story ignored beside the same story seen.
+    assert [(c.act, c.subject) for c in got] == [
+        (LIKED, STORY_B),
+        ('seen', STORY_B),
+        ('ignore', STORY_A),
+    ]
+    assert all(c.peer_id == WATCHED for c in got)
+
+
+def test_the_counters_are_a_running_total_of_the_log(tmp_path: Path) -> None:
+    """``standing`` must equal the log it summarises, for every peer.
+
+    The invariant this tier exists to create. Before it, a surprising number
+    had nothing behind it: asking why exposure read 44% meant running a
+    simulation, because the counter was the only copy of its own input.
+    Written in one transaction so the two cannot drift.
+    """
+    store = _store(tmp_path, 'stories')
+    for i, peer in enumerate((11, 22, 33)):
+        store.bump(peer, {'offered': i + 1}, 100.0 + i, tuple(range(i + 1)))
+        store.bump(peer, {'offered': 1, 'taken': 1}, 200.0 + i, (9 + i,))
+        if peer == 33:  # noqa: PLR2004 -- one of the peers written above
+            store.bump(peer, {'recip': 1}, 300.0, (9 + i,))
+
+    for row in store.peers():
+        logged = store.tally(row.peer_id)
+        assert row.offered == logged['offered']
+        assert row.taken == logged['taken']
+        assert row.recip == logged['recip']
+
+
+def test_an_unnamed_act_is_still_one_row_in_the_log(tmp_path: Path) -> None:
+    """A caller that cannot name what it acted on still logs the act.
+
+    The COUNT is what the model reads off ``standing``, so the log has to
+    carry the same number of rows whether or not anyone could say which
+    story or comment each one was -- otherwise the invariant above holds
+    only for the callers that happen to know.
+    """
+    store = _store(tmp_path)
+    store.bump(77, {'offered': 3, 'taken': 3}, 100.0)  # three, none named
+
+    assert store.acts(77)[LIKED] == 3  # noqa: PLR2004 -- the count above
+    assert [c.subject for c in store.history(77)] == [0, 0, 0]
+
+
+def test_the_history_is_a_service_view_like_everything_else(
+    tmp_path: Path,
+) -> None:
+    """One person, two services, two histories -- the binding still holds."""
+    db = Database(tmp_path / DB_NAME)
+    db.store('stories').bump(77, {'taken': 1}, 100.0, (STORY_A,))
+    db.store('reactions').bump(77, {'taken': 1}, 200.0, (5,))
+
+    assert [c.subject for c in db.store('stories').history(77)] == [STORY_A]
+    assert [c.subject for c in db.store('reactions').history(77)] == [5]
+
+
+def test_a_chance_we_passed_on_is_logged_as_an_ignore(tmp_path: Path) -> None:
+    """The pool of outcomes is ignore / seen / like, and the log says which.
+
+    Every chance leaves exactly one row naming what we did with it, so the
+    history reads as a list of DECISIONS. Logging the chance and the answer
+    separately would put an ``ignore`` under every story we watched.
+    """
+    store = _store(tmp_path, 'stories')
+    store.bump(WATCHED, {'offered': 1}, 100.0, (STORY_A,))
+    store.bump(WATCHED, {'offered': 1, 'taken': 1}, 200.0, (STORY_B,))
+
+    assert store.acts(WATCHED) == {'ignore': 1, 'seen': 1}
+
+
+def test_the_same_rung_is_named_for_the_service_it_happened_in(
+    tmp_path: Path,
+) -> None:
+    """A reciprocation is a heart on a story and a sticker on a comment.
+
+    The identical bump, logged in two services, gets two words -- because it
+    is two acts, and a shared vocabulary would report the rarest thing we do
+    to a story under the same name as a throwaway reply to a comment.
+    """
+    db = Database(tmp_path / DB_NAME)
+    for service in ('stories', 'reactions'):
+        db.store(service).bump(WATCHED, {'recip': 1}, 100.0, (STORY_A,))
+
+    assert db.store('stories').acts(WATCHED) == {LIKED: 1}
+    assert db.store('reactions').acts(WATCHED) == {'sticker': 1}
+
+
+def test_a_service_cannot_log_an_act_it_has_no_word_for(
+    tmp_path: Path,
+) -> None:
+    """The CHECK is generated from ACTS, so the table refuses the rest.
+
+    'seen' is a real act -- in the OTHER service. A row that files it under
+    reactions is not a typo the log should keep quietly; nothing reads
+    ``contact`` often enough to notice one on its own.
+    """
+    store = _store(tmp_path)
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            'INSERT INTO contact (peer_id, at, service, act) '
+            "VALUES (?, ?, 'reactions', 'seen')",
+            (WATCHED, 100.0),
+        )

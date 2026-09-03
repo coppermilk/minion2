@@ -53,6 +53,12 @@ COMMAND_USERS = '/users'
 # /stories prints the story-viewer log: how many stories were viewed and whose,
 # most recent first (when the story viewer is enabled).
 COMMAND_STORIES = '/stories'
+# /who prints one person's relationship history: '/who @name' or '/who <id>'.
+# Every act with them, newest first, from the contact log -- the counters in
+# /status are running totals OF this, so it is where a surprising percentage
+# is checked against what actually happened. Takes an argument, so it is
+# matched by prefix, not by exact text.
+COMMAND_WHO = '/who'
 # /comod manages the cabinet ("shkaf"): '/comod <nick> <amount>' moves a
 # supporter onto a named shelf (a 30-day timer) and posts the rendered cabinet
 # photo plus the move-in announcement; '/comod' alone re-posts the cabinet;
@@ -135,6 +141,9 @@ class CommandRouter:
         # by its leading word rather than by the exact-text table below.
         if text.split()[:1] == [COMMAND_COMOD]:
             await self.bot.cabinet.command(text)
+            return True
+        if text.split()[:1] == [COMMAND_WHO]:
+            await self.who_report(text)
             return True
         # /services, /features and every '/<service>_<action>' tap command.
         # Matched here (before the exact table) because the service name is
@@ -230,3 +239,12 @@ class CommandRouter:
         summary = await self.bot.greeter.sync_now()
         await self.bot.say(summary)
         log.info('greetnow: %s', summary)
+
+    async def who_report(self, text: str) -> None:
+        """Print one person's whole relationship history (the /who command).
+
+        Reads the contact log rather than the counters: /status shows the
+        running totals, and this is what they are totals OF. A percentage
+        that looks wrong is settled here, by looking at what happened.
+        """
+        await self.bot.say(self.bot.report.who(text.split(maxsplit=1)))

@@ -193,8 +193,8 @@ def _bot(tmp_path: Path) -> main.Userbot:
             emojis=(('11', 'a'),),
         ),
     ]
-    brain.ledger.add_take(PEER_A, 3, brain._control(), NOW)
-    brain.ledger.add_offer(PEER_A, 1)
+    brain.ledger.add_take(PEER_A, (1, 2, 3), brain._control(), NOW)
+    brain.ledger.add_offer(PEER_A, (4,))
     bot.reactions = brain
     bot.comment_watch = reactions_glue.CommentWatch(
         reactions_glue.CommentDeps(
@@ -486,7 +486,7 @@ def test_the_story_list_names_each_person_once(
     bot = _bot(tmp_path)
     control, ledger = bot.stories._control(), bot.stories.ledger
     for peer, taken in ((PEER_A, 4), (PEER_B, 2)):
-        ledger.add_take(str(peer), taken, control, NOW - 86400)
+        ledger.add_take(peer, tuple(range(taken)), control, NOW - 86400)
 
     got = _section(
         bot.report.text(_known({PEER_A: 'alice', PEER_B: 'bob'})), '[S]'
@@ -563,3 +563,78 @@ def test_people_with_nothing_new_are_still_named(
     assert '    @alice . 3 up . first time' in got
     assert '    @bob . 1 up . first time' in got
     assert 'viewing' not in got
+
+
+# ------------------------------------------ /who: one person's whole history
+
+WHO_SEEN = 2
+WHO_STORY = 401
+
+
+def _who_bot(tmp_path: Path) -> main.Userbot:
+    """Return a bot whose story ledger holds one person's week."""
+    bot = _bot(tmp_path)
+    bot.modes = SimpleNamespace(
+        mode_of=bot.modes.mode_of, service_dir=lambda _name: tmp_path
+    )
+    bot._dbs = {tmp_path: Database(tmp_path / DB_NAME)}
+    bot.database('stories').note_actor(Actor(PEER_A, 'user', username='alice'))
+    ledger = bot.stories.ledger
+    control = bot.stories._control()
+    ledger.add_take(PEER_A, (400, WHO_STORY), control, NOW - 86400)
+    ledger.add_recip(PEER_A, (WHO_STORY,), NOW - 86000, 0.0)
+    ledger.add_offer(PEER_A, (402,), NOW - 3600)
+    return bot
+
+
+def test_who_lists_every_act_with_one_person(tmp_path: Path) -> None:
+    """The question the contact log exists for, answered in one command.
+
+    Not a summary: the acts themselves, newest first, each naming the story
+    it was about, in the words the person on the other side would use --
+    they saw a view and a heart, not a "take" and a "recip". /status shows
+    what these add up to.
+    """
+    got = _who_bot(tmp_path).report.who(['/who', '@alice'])
+
+    assert got.splitlines()[0] == f'@alice ({PEER_A})'
+    assert f'{WHO_SEEN} seen' in got  # the totals line, in story words
+    assert got.count('seen #') == WHO_SEEN  # and one line per story opened
+    assert f'like #{WHO_STORY}' in got
+    assert 'ignore #402' in got  # the chance we let pass is IN the history
+
+
+def test_who_takes_a_bare_id_as_well_as_a_name(tmp_path: Path) -> None:
+    """An operator with an id and no name still gets the history."""
+    bot = _who_bot(tmp_path)
+    assert bot.report.who(['/who', str(PEER_A)]) == bot.report.who(
+        ['/who', '@alice']
+    )
+
+
+def test_who_says_when_the_counters_left_their_own_log_behind(
+    tmp_path: Path,
+) -> None:
+    """A counter that drifted from its history is the thing to shout about.
+
+    Every percentage in /status is computed from the counter, so a counter
+    that no longer matches the acts behind it makes the whole readout a
+    guess -- silently, until something says otherwise.
+    """
+    bot = _who_bot(tmp_path)
+    quiet = bot.report.who(['/who', '@alice'])
+    db = bot.database('stories')
+    db.conn.execute(
+        'UPDATE standing SET taken = 99 WHERE peer_id = ?', (PEER_A,)
+    )
+    db.conn.commit()
+
+    assert 'DISAGREES' not in quiet
+    assert 'DISAGREES' in bot.report.who(['/who', '@alice'])
+
+
+def test_who_without_a_name_explains_itself(tmp_path: Path) -> None:
+    """No argument is a usage line, not an error and not everybody."""
+    bot = _who_bot(tmp_path)
+    assert bot.report.who(['/who']).startswith('/who ')
+    assert 'never seen' in bot.report.who(['/who', '@nobody'])
