@@ -45,6 +45,7 @@ All texts/ids live in the constants JSON, so this source stays ASCII.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import time
@@ -63,8 +64,8 @@ from minions.userbot.core.humanize import recency_penalty
 from minions.userbot.core.humanize import weighted_choice
 
 if TYPE_CHECKING:
+    import sqlite3
     from collections.abc import Callable
-    from collections.abc import Mapping
     from datetime import datetime
 
     from minions.userbot.core.models import Emoji
@@ -132,37 +133,36 @@ def _emojis_from_row(raw: object) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _reaction(raw: object) -> Reaction | None:
-    """Rebuild one queued Reaction from its cursor row, or None if broken."""
-    if not isinstance(raw, dict):
-        return None
-    try:
-        reply_to = codec.whole(raw['reply_to'])
-        chat = codec.whole(raw['chat'])
-    except (KeyError, TypeError, ValueError):
-        return None
+def _queued(row: sqlite3.Row) -> Reaction:
+    """Rebuild one queued Reaction from its row in ``scheduled``.
+
+    Every field is a column now except ``emojis``, which stays JSON on
+    purpose: it is the chosen (id, fallback) pairs for THIS one reaction --
+    a composite value belonging to the row, not a collection of entities
+    that anything would ever query across.
+    """
     return Reaction(
-        chat=chat,
-        reply_to=reply_to,
-        root=codec.whole(raw.get('root'), reply_to),
-        when=codec.num(raw.get('when')),
-        text=str(raw.get('text', '')),
-        emojis=_emojis_from_row(raw.get('emojis')),
-        kind=str(raw.get('kind', 'react')),
+        chat=int(row['chat']),
+        reply_to=int(row['reply_to']),
+        root=int(row['root']),
+        when=float(row['due_at']),
+        text=str(row['text']),
+        emojis=_emojis_from_row(json.loads(str(row['emojis']))),
+        kind=str(row['kind']),
     )
 
 
-def _queue_row(reaction: Reaction) -> dict[str, object]:
-    """Return one queued Reaction as its readable cursor row."""
-    return {
-        'chat': reaction.chat,
-        'reply_to': reaction.reply_to,
-        'root': reaction.root,
-        'when': reaction.when,
-        'text': reaction.text,
-        'emojis': [[eid, fb] for eid, fb in reaction.emojis],
-        'kind': reaction.kind,
-    }
+def _queue_row(reaction: Reaction) -> tuple[object, ...]:
+    """Return one queued Reaction as the columns ``enqueue`` writes."""
+    return (
+        reaction.chat,
+        reaction.reply_to,
+        reaction.root,
+        reaction.when,
+        reaction.kind,
+        reaction.text,
+        json.dumps([[eid, fb] for eid, fb in reaction.emojis]),
+    )
 
 
 @dataclass(frozen=True)
@@ -300,15 +300,15 @@ class ReactionState:
     )
     session_start_at: float = 0.0  # when the current burst began
     session_last_at: float = 0.0  # last reaction placed in the current burst
+    # The three collections below are WORKING COPIES of their own tables --
+    # the blob holds scalars only, so each is loaded from and written to
+    # `scheduled`, `watching` and `emoji_used` rather than serialised here.
+    # They stay in memory because each is small and read per decision.
     reaction_last: dict[str, float] = field(
         default_factory=dict
     )  # id -> last ts
     posts: list[tuple[int, int]] = field(default_factory=list)  # comment tgts
     pending: list[Reaction] = field(default_factory=list)  # due reactions
-    alive: dict[str, float] = field(
-        default_factory=dict
-    )  # hour -> decayed obs
-    alive_ts: float = 0.0  # last heartbeat, for decay
 
 
 def _local(ts: float, params: ReactionParams) -> datetime:
@@ -435,7 +435,7 @@ class ReactionBrain:
         self.state.posts.append(pair)
         del self.state.posts[: -self.params.watch_posts]  # keep the last N
         self.store.keep_marks(tuple(f'{c}:{m}:' for c, m in self.state.posts))
-        self._save()
+        self.store.watch(self.state.posts, self.clock())
 
     def answered(self) -> int:
         """How many (post, commenter) pairs have already been reacted to."""
@@ -454,7 +454,7 @@ class ReactionBrain:
         was scheduled -- not a fresh random one at send time.
         """
         self.state.pending.append(reaction)
-        self._save()
+        self._flush_queue()
 
     def done_pending(self, chat: int, reply_to: int) -> None:
         """Forget a reaction once it has been sent (or abandoned)."""
@@ -463,7 +463,7 @@ class ReactionBrain:
             for p in self.state.pending
             if not (p.chat == chat and p.reply_to == reply_to)
         ]
-        self._save()
+        self._flush_queue()
 
     def rearm(self, *, renew_all: bool = False) -> list[Reaction]:
         """Return pending reactions to re-arm, renewing missed ones.
@@ -491,7 +491,8 @@ class ReactionBrain:
             when = self._fire_time(now, engaged=False) if due else queued.when
             fresh.append(replace(queued, when=when))
         self.state.pending = fresh
-        self._save()
+        self._flush_queue()
+        self._save()  # /requeue also reset the session cursors above
         return list(fresh)
 
     def due_now(self) -> list[Reaction]:
@@ -500,7 +501,7 @@ class ReactionBrain:
         self.state.pending = [
             replace(queued, when=now) for queued in self.state.pending
         ]
-        self._save()
+        self._flush_queue()
         return list(self.state.pending)
 
     def schedule(self, key: str, *, engaged: bool) -> float | None:
@@ -620,17 +621,22 @@ class ReactionBrain:
         Called on a timer while running, this builds the real on-hours curve.
         A long gap (a shutdown) just decays the old buckets -- the dead hours
         are never credited, so the learned uptime tracks reality.
+
+        ONE ROW, and nothing else. This runs every sixty seconds, and while
+        the curve lived in the JSON blob each beat rewrote the whole block --
+        about 15 MB a day to store a number that fits in eight bytes. It is
+        the write this whole tier was measured against, so the test beside it
+        asserts the cost rather than trusting the shape.
         """
-        prev = self.state.alive_ts
-        if prev > 0 and self.params.uptime_half_life_sec > 0:
-            decay = 0.5 ** ((now - prev) / self.params.uptime_half_life_sec)
-            self.state.alive = {
-                h: w * decay for h, w in self.state.alive.items()
-            }
-        hour = str(_local(now, self.params).hour)
-        self.state.alive[hour] = self.state.alive.get(hour, 0.0) + _ALIVE_STEP
-        self.state.alive_ts = now
-        self._save()
+        self.store.note_hour(
+            _local(now, self.params).hour,
+            self.params.uptime_half_life_sec,
+            now,
+        )
+
+    def learned_hours(self) -> dict[int, float]:
+        """Return the learned uptime curve, decayed to now (/status)."""
+        return self.store.hours(self.params.uptime_half_life_sec, self.clock())
 
     def _alive_fraction(self, ts: float) -> float:
         """How up the host tends to be at ``ts``'s hour, in [0, 1].
@@ -639,12 +645,13 @@ class ReactionBrain:
         cold, it follows the window; with history, it follows what the NAS
         actually does -- even hours outside the declared window.
         """
-        peak = max(self.state.alive.values(), default=0.0)
+        alive = self.store.hours(self.params.uptime_half_life_sec, ts)
+        peak = max(alive.values(), default=0.0)
         hour = _local(ts, self.params).hour
-        observed = self.state.alive.get(str(hour), 0.0) / peak if peak else 0.0
+        observed = alive.get(hour, 0.0) / peak if peak else 0.0
         prior = 1.0 if _in_window(float(hour), self.params) else 0.0
         target = self.params.uptime_learn_obs
-        total = sum(self.state.alive.values())
+        total = sum(alive.values())
         conf = min(1.0, total / target) if target > 0 else 1.0
         return conf * observed + (1.0 - conf) * prior
 
@@ -736,6 +743,7 @@ class ReactionBrain:
         roll = random.Random(key)  # noqa: S311 -- mimicry, reproducible-in-key
         chosen = weighted_choice(roll, pool, weights)
         self.state.reaction_last[chosen.id] = now  # principle 3: recency
+        self.store.note_emoji(chosen.id, now)
         self._save()
         return [chosen]
 
@@ -856,71 +864,45 @@ class ReactionBrain:
         """Reload the state block, or start fresh when there is none."""
         raw = self.store.read()
         self.ledger.restore(raw)
-        if not raw:
-            return ReactionState()
-        queued = [_reaction(row) for row in codec.rows(raw.get('queue'))]
         return ReactionState(
-            mood=float(raw.get('mood', 0.0)),  # type: ignore[arg-type]
-            mood_day=str(raw.get('mood_day', '')),
-            next_session_at=_at(raw, 'next_at'),
-            session_start_at=_at(raw, 'start_at'),
-            session_last_at=_at(raw, 'last_at'),
-            reaction_last=_floats(raw.get('emoji_last')),
-            posts=[
-                (codec.whole(c), codec.whole(m))
-                for c, m in _pairs(raw.get('posts'))
-            ],
-            pending=[q for q in queued if q is not None],
-            alive=_floats(raw.get('alive')),
-            alive_ts=codec.num(raw.get('alive_at')),
+            mood=codec.num(raw.get('mood')),
+            mood_day=codec.text(raw.get('mood_day')),
+            next_session_at=codec.num(raw.get('next_at')),
+            session_start_at=codec.num(raw.get('start_at')),
+            session_last_at=codec.num(raw.get('last_at')),
+            reaction_last=self.store.emoji_seen(),
+            posts=self.store.watched(),
+            pending=[_queued(row) for row in self.store.queued()],
         )
 
+    def _flush_queue(self) -> None:
+        """Write the pending queue to its own table.
+
+        Still the whole collection, and that is what the caller means: the
+        queue is re-planned as a set (a /requeue re-arms every timer). What
+        changed is that writing it no longer drags the mood, the counters and
+        the learned uptime curve along with it.
+        """
+        self.store.enqueue(_queue_row(q) for q in self.state.pending)
+
     def _save(self) -> None:
-        """Publish this engine's state block."""
+        """Publish this engine's state block -- SCALARS ONLY.
+
+        The session marks used to be a nested ``session`` object, which is a
+        dict, which is a collection, which is what the rule forbids. Three
+        flat keys instead: it is three values, and nesting them said nothing
+        the names did not already say.
+        """
         self.store.write(
             {
                 'mood': self.state.mood,
                 'mood_day': self.state.mood_day,
-                'session': {
-                    'next_at': self.state.next_session_at,
-                    'start_at': self.state.session_start_at,
-                    'last_at': self.state.session_last_at,
-                },
-                'emoji_last': self.state.reaction_last,
-                'posts': [[c, m] for c, m in self.state.posts],
-                'queue': [_queue_row(q) for q in self.state.pending],
-                'alive': self.state.alive,
-                'alive_at': self.state.alive_ts,
+                'next_at': self.state.next_session_at,
+                'start_at': self.state.session_start_at,
+                'last_at': self.state.session_last_at,
                 **self.ledger.counters(),
             },
         )
-
-
-_PAIR = 2
-"""A persisted (chat, post) row is exactly two numbers."""
-
-
-def _pairs(raw: object) -> list[tuple[object, object]]:
-    """Return a persisted list of two-item rows, skipping anything else."""
-    return [
-        (row[0], row[1])
-        for row in codec.rows(raw)
-        if isinstance(row, (list, tuple)) and len(row) == _PAIR
-    ]
-
-
-def _floats(raw: object) -> dict[str, float]:
-    """Coerce a persisted ``{key: number}`` block to ``dict[str, float]``."""
-    if not isinstance(raw, dict):
-        return {}
-    return {str(k): float(v) for k, v in raw.items()}
-
-
-def _at(cursor: Mapping[str, object], key: str) -> float:
-    """Read one timestamp out of the nested ``session`` block."""
-    session = cursor.get('session')
-    block = session if isinstance(session, dict) else {}
-    return float(block.get(key, 0.0))
 
 
 def _peaks(

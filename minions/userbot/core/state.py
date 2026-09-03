@@ -41,6 +41,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import TypeGuard
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -144,6 +145,36 @@ CREATE TABLE IF NOT EXISTS marks (
     at      REAL NOT NULL,
     PRIMARY KEY (service, key)
 );
+CREATE TABLE IF NOT EXISTS uptime (
+    hour   INTEGER PRIMARY KEY,
+    weight REAL    NOT NULL DEFAULT 0,
+    at     REAL    NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS scheduled (
+    id       INTEGER PRIMARY KEY,
+    service  TEXT    NOT NULL,
+    chat     INTEGER NOT NULL,
+    reply_to INTEGER NOT NULL,
+    root     INTEGER NOT NULL DEFAULT 0,
+    due_at   REAL    NOT NULL,
+    kind     TEXT    NOT NULL DEFAULT '',
+    text     TEXT    NOT NULL DEFAULT '',
+    emojis   TEXT    NOT NULL DEFAULT '[]',
+    UNIQUE (service, chat, reply_to)
+);
+CREATE TABLE IF NOT EXISTS watching (
+    service TEXT    NOT NULL,
+    chat_id INTEGER NOT NULL,
+    post_id INTEGER NOT NULL,
+    at      REAL    NOT NULL DEFAULT 0,
+    PRIMARY KEY (service, chat_id, post_id)
+);
+CREATE TABLE IF NOT EXISTS emoji_used (
+    service  TEXT NOT NULL,
+    emoji_id TEXT NOT NULL,
+    at       REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (service, emoji_id)
+);
 CREATE TABLE IF NOT EXISTS state (
     service TEXT PRIMARY KEY,
     blob    TEXT NOT NULL
@@ -193,9 +224,20 @@ and then, later, hearted.
 
 ``audience`` and ``standing`` are both AGGREGATES over that one actor:
 membership of our channel, and our relationship with them per service.
-``state`` is a service's scalar state as JSON, one row -- deliberately ONE
-table for what used to be five hand-rolled files under three naming
-conventions.
+
+``uptime``, ``scheduled``, ``watching`` and ``emoji_used`` are a service's
+COLLECTIONS. The rule that put them here: a column holds one value, a plural
+is a table, and the blob keeps only scalars. It is not tidiness. Each of
+these lived inside the JSON blob, and a blob is rewritten WHOLE on every
+touch -- so the heartbeat, storing one number sixty times an hour, rewrote
+the reactions block (~11 KB with a real audience) each time: 15 MB a day to
+record ``+1``. ``uptime`` makes that one row.
+
+``state`` is what is left: a service's SCALAR state as JSON, one row --
+deliberately ONE table for what used to be five hand-rolled files under
+three naming conventions. A test walks every block of a filled database and
+fails on any value that is a list or a dict, so the rule stays a fact about
+the schema rather than a habit of whoever last edited a ``_save``.
 """
 
 _INDEXES = """
@@ -277,6 +319,12 @@ Three combine rules, and the difference between them is the point:
 ``take_at`` takes the later of the two -- so a bump that is not an engagement
 of ours can pass 0 and leave it alone.
 """
+
+_ALIVE_STEP = 1.0
+"""One observation added to an hour bucket per heartbeat."""
+
+_FOREVER = 1e18
+"""Stand-in half-life when decay is switched off (0): nothing ever fades."""
 
 IDENTITY = ('kind', 'username', 'title', 'first_name', 'last_name', 'phone')
 """The fields that say WHO a peer is.
@@ -417,16 +465,177 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "AND name IN ('peers', 'users')"
         )
     }
-    if not old:
+    if old:
+        with conn:
+            if 'peers' in old:
+                _fold_peers(conn)
+            if 'users' in old:
+                _fold_users(conn)
+            for table in old:
+                conn.execute(f'DROP TABLE {table}')
+        log.info(
+            'state: folded %s into actors/standing', ', '.join(sorted(old))
+        )
+    _drain_blobs(conn)
+
+
+_BLOB_KEYS = ('alive', 'queue', 'posts', 'emoji_last', 'log', 'session')
+"""The collections that used to live inside ``state.blob``.
+
+Their presence in a block is what says this file predates the tier that gave
+each of them a table. Draining is keyed on them rather than on a version
+number, so it is idempotent by construction: the keys are removed as they
+are read, and a file that has none is already current.
+"""
+
+
+def _drain_blobs(conn: sqlite3.Connection) -> None:
+    """Move the collections out of every state blob into their tables, once.
+
+    The last shape change of this tier, and the one with a real loss to
+    declare: an ``alive`` bucket carried no timestamp of its own (one shared
+    heartbeat stamp decayed them all), so each is adopted as if last touched
+    NOW. The curve keeps its shape and its relative weights; what it loses is
+    that the whole thing should already have faded by however long the host
+    was down before this upgrade. It re-earns that within a half-life.
+
+    Everything else moves whole. ``log`` is DROPPED rather than moved: it was
+    a capped second copy of acts ``contact`` already holds, and /status reads
+    the sittings back out of that now.
+    """
+    blocks = {
+        str(r['service']): json.loads(str(r['blob']))
+        for r in conn.execute('SELECT service, blob FROM state')
+    }
+    stale = {
+        name: block
+        for name, block in blocks.items()
+        if isinstance(block, dict) and any(key in block for key in _BLOB_KEYS)
+    }
+    if not stale:
         return
+    now = time.time()
     with conn:
-        if 'peers' in old:
-            _fold_peers(conn)
-        if 'users' in old:
-            _fold_users(conn)
-        for table in old:
-            conn.execute(f'DROP TABLE {table}')
-    log.info('state: folded %s into actors/standing', ', '.join(sorted(old)))
+        for name, block in stale.items():
+            _Drain(conn, name, now).run(block)
+            conn.execute(
+                'UPDATE state SET blob = ? WHERE service = ?',
+                (json.dumps(block), name),
+            )
+    log.info('state: drained collections out of %s', ', '.join(sorted(stale)))
+
+
+@dataclass
+class _Drain:
+    """One service's move out of the blob, table by table.
+
+    A tiny bound object rather than four arguments repeated five times: the
+    connection, whose service is being drained, and the moment we are doing
+    it are the same for every table below.
+    """
+
+    conn: sqlite3.Connection
+    service: str
+    now: float
+
+    def run(self, block: dict[str, object]) -> None:
+        """Empty ``block``'s collections into the tables, mutating it."""
+        self.uptime(block.pop('alive', None))
+        self.queue(block.pop('queue', None))
+        self.watching(block.pop('posts', None))
+        self.emoji(block.pop('emoji_last', None))
+        block.pop('log', None)  # a second copy of contact; contact wins
+        block.pop('alive_at', None)  # each bucket carries its own stamp now
+        session = block.pop('session', None)
+        if isinstance(session, dict):
+            block.update({str(k): v for k, v in session.items()})
+
+    def uptime(self, raw: object) -> None:
+        """Adopt the learned uptime curve, one row per hour bucket."""
+        for hour, weight in _floats(raw).items():
+            self.conn.execute(
+                'INSERT OR REPLACE INTO uptime (hour, weight, at) '
+                'VALUES (?, ?, ?)',
+                (int(hour), weight, self.now),
+            )
+
+    def queue(self, raw: object) -> None:
+        """Adopt the scheduled reactions."""
+        for row in _rows(raw):
+            self.conn.execute(
+                'INSERT OR REPLACE INTO scheduled '
+                '(service, chat, reply_to, root, due_at, kind, text, emojis) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (
+                    self.service,
+                    _as_int(row.get('chat')),
+                    _as_int(row.get('reply_to')),
+                    _as_int(row.get('root')),
+                    _as_float(row.get('when')),
+                    str(row.get('kind', 'react')),
+                    str(row.get('text', '')),
+                    json.dumps(row.get('emojis', [])),
+                ),
+            )
+
+    def watching(self, raw: object) -> None:
+        """Adopt the watch window of (chat, post) pairs."""
+        for pair in _rows(raw, shape=list):
+            self.conn.execute(
+                'INSERT OR REPLACE INTO watching '
+                '(service, chat_id, post_id, at) VALUES (?, ?, ?, ?)',
+                (self.service, _as_int(pair[0]), _as_int(pair[1]), self.now),
+            )
+
+    def emoji(self, raw: object) -> None:
+        """Adopt when each emoji was last used."""
+        for emoji, at in _floats(raw).items():
+            self.conn.execute(
+                'INSERT OR REPLACE INTO emoji_used (service, emoji_id, at) '
+                'VALUES (?, ?, ?)',
+                (self.service, emoji, at),
+            )
+
+
+def _as_int(value: object) -> int:
+    """Read one persisted number as an int; 0 for anything else."""
+    return int(value) if _number(value) else 0
+
+
+def _as_float(value: object) -> float:
+    """Read one persisted number as a float; 0.0 for anything else."""
+    return float(value) if _number(value) else 0.0
+
+
+def _floats(raw: object) -> dict[str, float]:
+    """Read a persisted ``{key: number}`` block, skipping anything else."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): float(v) for k, v in raw.items() if _number(v)}
+
+
+def _number(value: object) -> TypeGuard[int | float]:
+    """Whether a persisted value is a plain number.
+
+    A TypeGuard, not a bool, so the readers above narrow: ``int(value)`` on
+    an ``object`` is the kind of thing that only fails once a hand-edited
+    JSON file reaches it. Bools are excluded on purpose -- ``True`` is an
+    ``int`` in Python, and a chat id of 1 is not what a written ``true``
+    meant.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _rows(raw: object, shape: type = dict) -> list:  # type: ignore[type-arg]
+    """Read a persisted list, keeping only entries of the wanted shape."""
+    if not isinstance(raw, list):
+        return []
+    keep = (list, tuple) if shape is list else shape
+    return [r for r in raw if isinstance(r, keep) and len(r) >= _PAIR]
+
+
+_PAIR = 2
+"""A persisted (chat, post) row is two numbers; a queue row has more keys."""
 
 
 def _fold_peers(conn: sqlite3.Connection) -> None:
@@ -762,6 +971,56 @@ class StateStore:
         )
         return {str(r['act']): int(r['n']) for r in rows}
 
+    def acts_since(self, act: str, at: float) -> list[float]:
+        """Return when each ``act`` happened since ``at``, oldest first.
+
+        For "how many today", which the odometer in the blob could not
+        answer: it counted forever, and the rolling log that could answer it
+        was capped, so a busy day read short.
+        """
+        return [
+            float(r['at'])
+            for r in self.conn.execute(
+                'SELECT at FROM contact '
+                'WHERE service = ? AND act = ? AND at >= ? ORDER BY at',
+                (self.service, act, at),
+            )
+        ]
+
+    def glances(self, act: str, gap: float, limit: int) -> list[sqlite3.Row]:
+        """Group a service's acts into SITTINGS, most recent first.
+
+        Acts of one person closer together than ``gap`` are one visit, which
+        is what a reader of /status means by "watched 5 of her stories" --
+        five rows in the log, one line in the readout.
+
+        This is why the rolling view log inside the JSON blob is gone rather
+        than moved: it was a SECOND recording of acts ``contact`` already
+        holds, capped at 50 and therefore quietly disagreeing with the
+        counters as soon as the 51st landed. Derived, it cannot disagree,
+        and it is no longer capped at all.
+
+        Gaps-and-islands: a row more than ``gap`` after the previous one of
+        the same person opens a new run, the running sum of those numbers
+        the runs, and the group-by counts them. ``gap`` is the same
+        ``burst_gap_sec`` that decides massed attention for the model, so
+        "one sitting" means one thing in this file.
+        """
+        return list(
+            self.conn.execute(
+                'SELECT peer_id, count(*) AS n, max(at) AS ts,'
+                '       max(id) AS last FROM ('
+                '  SELECT peer_id, id, at, sum(fresh) OVER'
+                '    (PARTITION BY peer_id ORDER BY at, id) AS run FROM ('
+                '    SELECT peer_id, id, at, CASE WHEN at - lag(at) OVER'
+                '      (PARTITION BY peer_id ORDER BY at, id) <= ?'
+                '      THEN 0 ELSE 1 END AS fresh'
+                '    FROM contact WHERE service = ? AND act = ?))'
+                ' GROUP BY peer_id, run ORDER BY ts DESC, last DESC LIMIT ?',
+                (gap, self.service, act, limit),
+            )
+        )
+
     def tally(self, peer_id: int) -> dict[str, int]:
         """Return the counters as the LOG says they should be.
 
@@ -813,6 +1072,120 @@ class StateStore:
         for peer_id in dropped:
             self.forget(peer_id)
         return dropped
+
+    # --- the host's learned uptime ---------------------------------------
+
+    def note_hour(self, hour: int, half_life: float, at: float) -> None:
+        """Heartbeat: credit one observation to ``hour``, decaying what is.
+
+        ONE row, whatever else the service holds. This is the write that
+        motivated the whole tier: it runs every sixty seconds, and while it
+        lived in the JSON blob each ``+1`` rewrote the entire block -- about
+        15 MB a day to store a number that fits in eight bytes.
+
+        The decay is per row, from that row's OWN last touch, not from one
+        shared heartbeat stamp. Exponential decay composes, so decaying a
+        bucket by the time since IT was touched gives exactly what decaying
+        every bucket on every beat gave -- and it costs one row instead of
+        twenty-four plus a scalar to remember when they were last swept.
+        """
+        self.conn.execute(
+            'INSERT INTO uptime (hour, weight, at) VALUES (?, ?, ?) '
+            'ON CONFLICT (hour) DO UPDATE SET '
+            'weight = weight * '
+            'pow(0.5, (excluded.at - uptime.at) / ?) + excluded.weight, '
+            'at = excluded.at',
+            (hour, _ALIVE_STEP, at, half_life or _FOREVER),
+        )
+        self.conn.commit()
+
+    def hours(self, half_life: float, at: float) -> dict[int, float]:
+        """Return the learned uptime curve, every bucket decayed to ``at``.
+
+        Decaying on READ is what lets the write above touch one row: a
+        bucket nobody has visited in a month is worth less than one visited
+        yesterday, and that is a property of when it was last written, not
+        of how often the sweep ran.
+        """
+        return {
+            int(r['hour']): float(r['weight'])
+            * 0.5 ** ((at - float(r['at'])) / (half_life or _FOREVER))
+            for r in self.conn.execute('SELECT hour, weight, at FROM uptime')
+        }
+
+    # --- the queue, the watch window, the emoji recency ------------------
+
+    def enqueue(self, rows: Iterable[tuple[object, ...]]) -> None:
+        """Replace this service's scheduled work with ``rows``.
+
+        Still a whole-collection write, and deliberately so: the queue is
+        re-planned as a set (a /requeue re-arms every timer), so writing it
+        as one is what the caller actually means. What changed is that it no
+        longer drags the mood, the counters and the uptime curve along with
+        it -- a queue write now costs the queue.
+        """
+        self.conn.execute(
+            'DELETE FROM scheduled WHERE service = ?', (self.service,)
+        )
+        self.conn.executemany(
+            'INSERT OR REPLACE INTO scheduled '
+            '(service, chat, reply_to, root, due_at, kind, text, emojis) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [(self.service, *row) for row in rows],
+        )
+        self.conn.commit()
+
+    def queued(self) -> list[sqlite3.Row]:
+        """Return this service's scheduled work, soonest first."""
+        return list(
+            self.conn.execute(
+                'SELECT chat, reply_to, root, due_at, kind, text, emojis '
+                'FROM scheduled WHERE service = ? ORDER BY due_at',
+                (self.service,),
+            )
+        )
+
+    def watch(self, posts: Iterable[tuple[int, int]], at: float) -> None:
+        """Set the posts this service is watching for comments."""
+        self.conn.execute(
+            'DELETE FROM watching WHERE service = ?', (self.service,)
+        )
+        self.conn.executemany(
+            'INSERT OR REPLACE INTO watching '
+            '(service, chat_id, post_id, at) VALUES (?, ?, ?, ?)',
+            [(self.service, chat, post, at) for chat, post in posts],
+        )
+        self.conn.commit()
+
+    def watched(self) -> list[tuple[int, int]]:
+        """Return the (chat, post) pairs inside the watch window."""
+        return [
+            (int(r['chat_id']), int(r['post_id']))
+            for r in self.conn.execute(
+                'SELECT chat_id, post_id FROM watching '
+                'WHERE service = ? ORDER BY at, post_id',
+                (self.service,),
+            )
+        ]
+
+    def note_emoji(self, emoji_id: str, at: float) -> None:
+        """Stamp when an emoji was last used (one row, for the recency law)."""
+        self.conn.execute(
+            'INSERT INTO emoji_used (service, emoji_id, at) VALUES (?, ?, ?) '
+            'ON CONFLICT (service, emoji_id) DO UPDATE SET at = excluded.at',
+            (self.service, emoji_id, at),
+        )
+        self.conn.commit()
+
+    def emoji_seen(self) -> dict[str, float]:
+        """Return when each emoji was last used, for the recency penalty."""
+        return {
+            str(r['emoji_id']): float(r['at'])
+            for r in self.conn.execute(
+                'SELECT emoji_id, at FROM emoji_used WHERE service = ?',
+                (self.service,),
+            )
+        }
 
     # --- dedup marks -----------------------------------------------------
 

@@ -59,7 +59,6 @@ def _params(**over: object) -> stories.StoryParams:
         'dwell_max_sec': 9.0,
         'max_peers_tracked': 500,
         'seen_per_peer': 40,
-        'log_limit': 50,
         'catch_up_max': 12,
         # Push the aversion arm out of [0,1] so the Wundt peak is p=1: these
         # mechanic tests then view every unseen id (the exposure-fraction tests
@@ -399,7 +398,7 @@ def test_mark_viewed_is_idempotent(tmp_path: Path) -> None:
     before = brain.seen_count()
     brain.mark_viewed(7, (1, 2), ts=_NOON)  # nothing new
     assert brain.seen_count() == before
-    assert len(brain.state.log) == 1  # no second log line
+    assert len(brain.recent_log(5)) == 1  # no second sitting
 
 
 def test_seen_list_is_bounded_per_peer(tmp_path: Path) -> None:
@@ -441,12 +440,23 @@ def test_recent_log_is_newest_first(tmp_path: Path) -> None:
     assert [r.peer_id for r in recent] == [2, 1]
 
 
-def test_log_is_bounded(tmp_path: Path) -> None:
-    """Check log is bounded."""
-    brain = _brain(tmp_path, log_limit=_LOG_CAP)
+def test_the_view_log_is_derived_and_no_longer_capped(
+    tmp_path: Path,
+) -> None:
+    """/status reads its sittings out of the contact log, not beside it.
+
+    It used to be a rolling list inside the JSON blob with a cap of 50, so
+    the 51st view silently made the readout disagree with the counters --
+    two recordings of the same act, one of them lossy. Derived, it asks for
+    as many as it wants and cannot drift.
+    """
+    brain = _brain(tmp_path)
     for peer in range(_MANY):
         brain.mark_viewed(peer, (1,), ts=_NOON)
-    assert len(brain.state.log) == _LOG_CAP
+
+    assert len(brain.recent_log(_MANY)) == _MANY  # every one of them
+    assert len(brain.recent_log(_LOG_CAP)) == _LOG_CAP  # asked for fewer
+    assert not hasattr(brain.state, 'log')
 
 
 def test_state_survives_reopening_the_store(tmp_path: Path) -> None:

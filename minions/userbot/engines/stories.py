@@ -29,8 +29,9 @@ The human logic, mapped to code:
    author) means the pile is skimmed, not processed exhaustively.
 4. Quiet hours and the odd silent day: no views overnight, and a whole day is
    occasionally skipped, both read from the persona's timezone.
-5. State is persisted (the seen set, the session cursor, a rolling view log),
-   so a restart keeps its memory and never double-counts.
+5. State is persisted (the seen set, the session cursor), so a restart keeps
+   its memory and never double-counts. What the account DID lives in the
+   contact log, and the /status view log is read back out of it.
 
 All human-visible text (none is needed here) would live in the constants JSON;
 this source stays ASCII.
@@ -105,7 +106,6 @@ class StoryParams:
     dwell_max_sec: float = 9.0
     max_peers_tracked: int = 500  # cap the persisted seen map (oldest go)
     seen_per_peer: int = 40  # cap the per-peer seen id list (newest kept)
-    log_limit: int = 50  # recent views kept for /status and /stories
     catch_up_max: int = 12  # peers per poll in view_all (anti-binge)
     # Berlyne exposure control: we view a FRACTION of each peer's stories,
     # toward the Wundt peak (~2/3), not all -- viewing everything sits
@@ -255,12 +255,15 @@ class ViewLog:
 
 @dataclass
 class StoryState:
-    """The engine's cursors: session marks and a bounded rolling log.
+    """The engine's cursors -- six scalars, and nothing else.
 
-    What grew with the audience has moved to the state store -- the seen
-    story ids as marks (principle 1, never re-view), and the per-peer ledger
-    as rows. What is left is bounded: five scalars and the last ``log_limit``
-    views.
+    Everything that was a collection has left: the seen story ids are marks
+    (principle 1, never re-view), the per-peer ledger is rows in
+    ``standing``, and the rolling view log is DERIVED from ``contact`` now
+    rather than kept beside it. A blob is rewritten whole on every touch, so
+    a collection in here costs its whole length per write; and the view log
+    additionally disagreed with the counters as soon as its cap threw a row
+    away.
     """
 
     last_view: float = 0.0
@@ -268,7 +271,6 @@ class StoryState:
     session_start_at: float = 0.0
     session_last_at: float = 0.0
     total_views: int = 0  # stories viewed all-time (a simple odometer)
-    log: list[ViewLog] = field(default_factory=list)
     last_react: float = 0.0  # ts of the last reaction, for the min-gap pacing
 
 
@@ -642,8 +644,6 @@ class StoryBrain:
         self._trim_peers()
         self.state.last_view = now
         self.state.total_views += len(fresh)
-        self.state.log.append(ViewLog(peer_id, len(fresh), now))
-        del self.state.log[: -self.params.log_limit]
         self._save()
 
     def mark_reacted(
@@ -674,8 +674,21 @@ class StoryBrain:
             self.store.drop_marks(f'{peer}:')
 
     def recent_log(self, limit: int) -> list[ViewLog]:
-        """Return recent views, newest first (for /status, /stories)."""
-        return list(reversed(self.state.log))[:limit]
+        """Return recent SITTINGS, newest first (for /status, /stories).
+
+        Derived from the contact log rather than kept beside it. It used to
+        be a rolling list inside the JSON blob, capped at 50 rows -- a
+        second recording of acts already written, which began disagreeing
+        with the counters the moment the cap threw one away.
+        """
+        return [
+            ViewLog(int(r['peer_id']), int(r['n']), float(r['ts']))
+            for r in self.store.glances(
+                state_store.ACTS['stories'][1],
+                self.params.burst_gap_sec,
+                limit,
+            )
+        ]
 
     def seen_count(self) -> int:
         """Return how many stories have been viewed all-time (the odometer)."""
@@ -692,69 +705,51 @@ class StoryBrain:
     def views_today(self, now: float, tz: float) -> int:
         """Return how many stories were viewed on the local date of ``now``.
 
-        Summed from the view log (each entry carries its ``ts`` and ``count``),
-        so it resets naturally at local midnight -- what /status shows instead
-        of the all-time odometer.
+        Counted straight off the contact log, so it resets naturally at
+        local midnight -- what /status shows instead of the all-time
+        odometer -- and it no longer stops at whatever the rolling blob log
+        happened to still be holding.
         """
         today = humanize.local(now, tz).date()
         return sum(
-            row.count
-            for row in self.state.log
-            if humanize.local(row.ts, tz).date() == today
+            1
+            for act in self.store.acts_since(
+                state_store.ACTS['stories'][1], now - 2 * 86400.0
+            )
+            if humanize.local(act, tz).date() == today
         )
 
     def _load(self) -> StoryState:
         """Reload the state block, or start fresh when there is none."""
         raw = self.store.read()
         self.ledger.restore(raw)
-        if not raw:
-            return StoryState()
-        session = raw.get('session')
-        block = session if isinstance(session, dict) else {}
-        rows = raw.get('log')
         return StoryState(
-            last_view=float(raw.get('last_view', 0.0)),  # type: ignore[arg-type]
-            next_session_at=codec.num(block.get('next_at')),
-            session_start_at=codec.num(block.get('start_at')),
-            session_last_at=codec.num(block.get('last_at')),
+            last_view=codec.num(raw.get('last_view')),
+            next_session_at=codec.num(raw.get('next_at')),
+            session_start_at=codec.num(raw.get('start_at')),
+            session_last_at=codec.num(raw.get('last_at')),
             total_views=codec.whole(raw.get('total_views')),
-            log=[_view(r) for r in codec.rows(rows)],
             last_react=codec.num(raw.get('last_react')),
         )
 
     def _save(self) -> None:
-        """Publish this engine's state block."""
+        """Publish this engine's state block -- SCALARS ONLY.
+
+        The rolling view log and the nested ``session`` object are both gone
+        from here: one was a second copy of ``contact``, the other was three
+        scalars wearing a dict.
+        """
         self.store.write(
             {
                 'last_view': self.state.last_view,
-                'session': {
-                    'next_at': self.state.next_session_at,
-                    'start_at': self.state.session_start_at,
-                    'last_at': self.state.session_last_at,
-                },
+                'next_at': self.state.next_session_at,
+                'start_at': self.state.session_start_at,
+                'last_at': self.state.session_last_at,
                 'total_views': self.state.total_views,
-                'log': [
-                    {
-                        'peer_id': row.peer_id,
-                        'count': row.count,
-                        'ts': row.ts,
-                    }
-                    for row in self.state.log
-                ],
                 'last_react': self.state.last_react,
                 **self.ledger.counters(),
             },
         )
-
-
-def _view(raw: object) -> ViewLog:
-    """Rebuild one view-log line from its cursor row."""
-    row = raw if isinstance(raw, dict) else {}
-    return ViewLog(
-        peer_id=int(row.get('peer_id', 0)),
-        count=int(row.get('count', 0)),
-        ts=float(row.get('ts', 0.0)),
-    )
 
 
 def load_story_params(

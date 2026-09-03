@@ -141,7 +141,6 @@
       "dwell_max_sec": 9.0,
       "max_peers_tracked": 500,
       "seen_per_peer": 40,
-      "log_limit": 50,
       "_note_exposure": "Berlyne exposure control: we view a FRACTION of each person's stories toward the peak of the Wundt curve (~2/3), not all of them -- viewing everything reads as stalking. exposure_c1/c2/k shape the curve (reward turns on at c1, overexposure-aversion at c2>c1, slope k; see engines/attachment.py) and its peak IS the per-peer view target. view_control_gain is how hard a peer above/below target is corrected. To view everything again, push exposure_c2 past 1 (aversion never kicks in -> peak at p=1).",
       "exposure_c1": 0.45,
       "exposure_c2": 0.9,

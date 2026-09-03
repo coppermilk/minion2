@@ -35,6 +35,9 @@ STATUS_WARM_PEERS = 3
 TWO_WORDS = 2
 """A /who with no name is the usage line, not a lookup."""
 
+UPTIME_ROWS = 6
+"""How many of the busiest learned hours /status names."""
+
 WHO_ROWS = 12
 """How many recent acts /who lists per service.
 
@@ -395,8 +398,8 @@ class StatusReport:
         enabled = brain.params.enabled
         state = 'on' if enabled else 'off'
         window = f'{brain.params.active_start:g}-{brain.params.active_end:g}h'
-        alive = brain.state.alive
-        top = sorted(alive, key=lambda h: alive[h], reverse=True)[:6]
+        alive = brain.learned_hours()
+        top = sorted(alive, key=lambda h: alive[h], reverse=True)[:UPTIME_ROWS]
         learned = ', '.join(f'{h}h' for h in top) or '(learning)'
         likes = _pool_markup(brain.params.like_pool)
         pool = _pool_markup(brain.params.pool)

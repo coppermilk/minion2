@@ -557,9 +557,9 @@ def test_state_round_trips_through_the_store(tmp_path: Path) -> None:
     store = _store(tmp_path)
     brain = reactions.ReactionBrain(_params(), store, random.Random(0))
     brain.state.mood = 0.5
-    brain.state.reaction_last = {'1': 123.0}
     brain.state.next_session_at = 999.0
     brain._save()
+    store.note_emoji('1', 123.0)  # recency is a row now, not a blob key
     store.mark('x')
 
     fresh = reactions.ReactionBrain(_params(), store, random.Random(0))
@@ -830,3 +830,62 @@ def test_the_daily_cap_turns_a_would_be_like_into_an_ignore(
         'taken': _LIKE_CAP,
         'recip': 0,
     }
+
+
+_BEATS = 60
+_HEARTBEAT_HOUR = 14
+
+
+def test_the_heartbeat_costs_one_row_and_never_the_block(
+    tmp_path: Path,
+) -> None:
+    """The write the whole blob-to-table move was measured against.
+
+    It runs every sixty seconds. While the learned uptime curve lived in the
+    JSON block, each beat rewrote the WHOLE block -- roughly 11 KB with a
+    real audience, so about 15 MB a day to record ``+1``. Asserted here on
+    the engine rather than on the store, because the store having a cheap
+    method proves nothing if ``mark_alive`` still saves afterwards.
+    """
+    brain = _brain(tmp_path)
+    brain.state.mood = 0.5
+    brain._save()
+    block = brain.store.read()
+
+    before = brain.store.conn.total_changes
+    brain.mark_alive(_ts())
+    cost = brain.store.conn.total_changes - before
+
+    assert cost == 1
+    assert brain.store.read() == block  # the block was not touched at all
+
+
+def test_an_hour_the_host_is_never_up_stays_out_of_the_curve(
+    tmp_path: Path,
+) -> None:
+    """The learned curve is what the host DID, one bucket per beat."""
+    brain = _brain(tmp_path)
+    noon = _ts()
+    for _ in range(_BEATS):
+        brain.mark_alive(noon)
+
+    learned = brain.learned_hours()
+    hour = max(learned, key=lambda h: learned[h])
+
+    assert learned[hour] == _BEATS
+    assert len(learned) == 1  # only the hour the beats landed in
+
+
+def test_one_service_never_sees_another_s_queue(tmp_path: Path) -> None:
+    """The scheduled work is service-bound, like every other view.
+
+    The whole point of a shared file with bound views: two services in one
+    database must not be able to read or clear each other's rows, and a
+    queue is the one where crossing them would actually send something.
+    """
+    db = Database(tmp_path / DB_NAME)
+    db.store('reactions').enqueue([(-100, 9, 7, 5.0, 'react', '', '[]')])
+    db.store('stories').enqueue([(-200, 4, 4, 6.0, 'react', '', '[]')])
+
+    assert [r['reply_to'] for r in db.store('reactions').queued()] == [9]
+    assert [r['reply_to'] for r in db.store('stories').queued()] == [4]

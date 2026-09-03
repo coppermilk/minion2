@@ -135,6 +135,4 @@ def attachment_index(f: Factors, params: WundtParams = _DEFAULT) -> float:
     Bounded by [0, 1.6): ``exposure``, ``recip`` and ``mass_pen`` are each at
     most 1, and ``variety`` reaches 1.6 at maximum irregularity.
     """
-    return (
-        exposure(f.p, params) * variety(f.v) * recip(f.r) * mass_pen(f.c)
-    )
+    return exposure(f.p, params) * variety(f.v) * recip(f.r) * mass_pen(f.c)

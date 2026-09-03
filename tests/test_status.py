@@ -182,7 +182,11 @@ def _bot(tmp_path: Path) -> main.Userbot:
     brain = reactions.ReactionBrain(params, store)
     brain.clock = lambda: NOW
     brain.state.mood = 0.25
-    brain.state.alive = {'12': 5.0, '13': 3.0}
+    # The learned uptime curve is rows now, so it is seeded the way the
+    # heartbeat actually builds it: one observation per beat.
+    for hour, beats in ((12, 5), (13, 3)):
+        for _ in range(beats):
+            store.note_hour(hour, params.uptime_half_life_sec, NOW)
     brain.state.posts = [(TARGET, 77)]
     store.mark(f'{TARGET}:77:alice')
     brain.state.pending = [

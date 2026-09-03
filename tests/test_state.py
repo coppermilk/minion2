@@ -15,6 +15,7 @@ import logging
 import sqlite3
 import subprocess
 import sys
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -25,6 +26,8 @@ from minions.userbot.core.state import Database
 from minions.userbot.core.state import PeerRow
 from minions.userbot.core.state import StateStore
 from minions.userbot.core.state import adopt
+from minions.userbot.engines import reactions
+from minions.userbot.engines import stories
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1072,3 +1075,176 @@ def test_when_we_met_somebody_is_one_answer_for_the_whole_person(
     assert db.store('stories').met(WATCHED) == 100.0  # noqa: PLR2004
     assert db.store('reactions').met(WATCHED) == 100.0  # noqa: PLR2004
     assert db.store('stories').met(999) == 0.0  # never met: not a date
+
+
+# ------------------------------------- the rule: a plural is a table
+# A column holds one value, a plural is a table, and the blob keeps only
+# scalars. Not tidiness: a blob is rewritten WHOLE on every touch, so a
+# collection inside one costs its whole length per write.
+
+HOUR = 14
+HALF_LIFE = 864000.0
+BEATS = 60
+
+
+def test_the_heartbeat_costs_one_row(tmp_path: Path) -> None:
+    """The write this whole tier was measured against.
+
+    It runs every sixty seconds. While the uptime curve lived in the JSON
+    blob each beat rewrote the entire reactions block -- about 11 KB with a
+    real audience, so roughly 15 MB a day to record ``+1``. Asserted through
+    SQLite's own change counter, and asserted to touch ``state`` not at all,
+    because "it is a table now" is a claim about the schema and this is a
+    claim about the write.
+    """
+    store = _store(tmp_path)
+    store.write({'mood': MOOD})  # a block for it to be tempted to rewrite
+
+    before = store.conn.total_changes
+    store.note_hour(HOUR, HALF_LIFE, TAKE_AT)
+    cost = store.conn.total_changes - before
+
+    assert cost == 1
+    assert store.read() == {'mood': MOOD}
+
+
+def test_the_uptime_curve_decays_from_each_bucket_s_own_last_touch(
+    tmp_path: Path,
+) -> None:
+    """One shared heartbeat stamp is what made the cheap write impossible.
+
+    Decaying every bucket on every beat needs all of them written; decaying
+    each from ITS own last touch gives the same numbers -- exponential decay
+    composes -- for one row. This pins that they really are the same: a
+    bucket left alone for exactly one half-life is worth half of what it was.
+    """
+    store = _store(tmp_path)
+    store.note_hour(HOUR, HALF_LIFE, TAKE_AT)
+    store.note_hour(HOUR, HALF_LIFE, TAKE_AT + HALF_LIFE)  # one half-life on
+
+    assert store.hours(HALF_LIFE, TAKE_AT + HALF_LIFE)[HOUR] == 1.5  # noqa: PLR2004
+    faded = store.hours(HALF_LIFE, TAKE_AT + 2 * HALF_LIFE)[HOUR]
+    assert faded == 0.75  # noqa: PLR2004 -- 1.5 left alone for a half-life
+
+
+def test_no_state_block_holds_a_list_or_a_dict(tmp_path: Path) -> None:
+    """The rule, as a property of the file rather than of good intentions.
+
+    Walks every service's block in a database the real engines have filled
+    and fails on any value that is a collection. Without this the rule lasts
+    exactly as long as whoever next edits a ``_save`` remembers it -- and the
+    cost of forgetting is invisible until something profiles the disk.
+    """
+    db = Database(tmp_path / DB_NAME)
+    _fill(db)
+
+    blocks = {
+        str(r['service']): json.loads(str(r['blob']))
+        for r in db.conn.execute('SELECT service, blob FROM state')
+    }
+
+    assert blocks, 'the engines wrote no state at all'
+    fat = {
+        f'{service}.{key}'
+        for service, block in blocks.items()
+        for key, value in block.items()
+        if isinstance(value, (list, dict))
+    }
+    assert fat == set()
+
+
+def _fill(db: Database) -> None:
+    """Drive the real engines until every one of them has saved a block.
+
+    The engines, not a fixture that imitates them: the rule is about what
+    ``_save`` actually writes, so a stand-in here would assert the rule
+    against itself.
+    """
+    likes = reactions.ReactionBrain(
+        reactions.ReactionParams(enabled=True), db.store('reactions')
+    )
+    likes.mark_alive(TAKE_AT)
+    likes.note_post(-100, 7)
+    likes.add_pending(
+        reactions.Reaction(chat=-100, reply_to=8, root=7, when=TAKE_AT)
+    )
+    likes.decide_engage(WATCHED, 8)
+
+    watch = stories.StoryBrain(
+        stories.StoryParams(enabled=True), db.store('stories')
+    )
+    watch.mark_viewed(WATCHED, (STORY_A, STORY_B), ts=TAKE_AT)
+    watch.mark_reacted(WATCHED, (STORY_A,), TAKE_AT)
+
+
+def test_an_older_file_moves_its_collections_out_of_the_blob(
+    tmp_path: Path,
+) -> None:
+    """A deployed file opens once and the blob keeps only scalars after.
+
+    ``CREATE TABLE IF NOT EXISTS`` builds the new tables in an existing file
+    but puts nothing in them, so without this the curve, the queue and the
+    watch window would all read as empty on the upgrade -- a silent reset of
+    everything the account had learned, which is exactly the shape of loss
+    nobody notices until a week later.
+    """
+    path = tmp_path / DB_NAME
+    Database(path).conn.close()
+    old = sqlite3.connect(path)
+    old.execute(
+        'INSERT INTO state (service, blob) VALUES (?, ?)',
+        (
+            'reactions',
+            json.dumps(
+                {
+                    'mood': MOOD,
+                    'session': {'next_at': TAKE_AT, 'start_at': 0.0},
+                    'alive': {'14': 8.0, '15': 4.0},
+                    'emoji_last': {'55': TAKE_AT},
+                    'posts': [[-100, 7], [-100, 8]],
+                    'queue': [
+                        {'chat': -100, 'reply_to': 9, 'root': 7, 'when': 5.0}
+                    ],
+                    'log': [{'peer_id': 1, 'count': 2, 'ts': 3.0}],
+                }
+            ),
+        ),
+    )
+    old.commit()
+    old.close()
+
+    store = Database(path).store('reactions')
+
+    assert store.read() == {'mood': MOOD, 'next_at': TAKE_AT, 'start_at': 0.0}
+    adopted = store.hours(HALF_LIFE, time.time())
+    assert adopted == pytest.approx({14: 8.0, 15: 4.0})
+    assert store.emoji_seen() == {'55': TAKE_AT}
+    assert store.watched() == [(-100, 7), (-100, 8)]
+    assert [q['reply_to'] for q in store.queued()] == [9]
+
+
+def test_moving_the_collections_out_happens_exactly_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Re-opening must not re-adopt what the engines have since changed.
+
+    Draining removes the old keys as it reads, so the move itself cannot
+    happen twice -- a restart could not resurrect a queue the engine had
+    already emptied even if it tried. The guard on top of that is about
+    COST: an up-to-date file must open without writing anything, or every
+    start would rewrite every service's block to no effect and announce a
+    migration that did not happen.
+    """
+    path = tmp_path / DB_NAME
+    Database(path).store('reactions').write(
+        {'mood': MOOD, 'alive': {'14': 8.0}}
+    )
+    adopted = time.time()
+    Database(path).store('reactions').note_hour(14, HALF_LIFE, adopted)
+
+    with caplog.at_level(logging.INFO, logger='userbot'):
+        again = Database(path).store('reactions')
+
+    assert again.hours(HALF_LIFE, adopted) == pytest.approx({14: 9.0})
+    assert 'alive' not in again.read()
+    assert 'drained' not in caplog.text  # nothing to drain, nothing claimed
