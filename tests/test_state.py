@@ -52,6 +52,9 @@ MOOD = 0.25
 TAKE_AT = 1000.0
 """A moment to bump at, so take_at is a value and not just "now"."""
 
+PUBLISHED_AT = 1785578400.0
+"""2026-08-01T10:00:00Z, the ISO a pre-upgrade poster block holds."""
+
 
 def _store(tmp_path: Path, service: str = 'reactions') -> StateStore:
     """Return one service's view of the state database in a temp dir."""
@@ -1282,7 +1285,9 @@ def test_an_older_file_gets_an_actor_for_every_peer_it_mentions(
 
     again = Database(path)
 
-    assert again.actor(WATCHED).peer_id == WATCHED
+    # ``actor()`` answers with a bare Actor for a peer it has never heard of,
+    # so asking IT would pass whether or not the row exists. Ask the table.
+    assert again.actors([WATCHED]) != {}
 
 
 def test_every_time_in_the_file_is_an_epoch(tmp_path: Path) -> None:
@@ -1310,3 +1315,42 @@ def test_every_time_in_the_file_is_an_epoch(tmp_path: Path) -> None:
 
     assert times, 'the engines wrote no timestamps at all'
     assert [t for t in times if not isinstance(t[2], float)] == []
+
+
+def test_an_adopted_post_keeps_the_moment_it_was_published(
+    tmp_path: Path,
+) -> None:
+    """The poster's ISO stamps become epochs on the way in, not zeroes.
+
+    ``at`` is what the re-post guard measures against, so a stamp read as 0
+    makes every adopted post look ancient and lets a duplicate straight
+    through -- the exact failure the guard exists to prevent, arriving as a
+    side effect of an upgrade.
+    """
+    path = tmp_path / DB_NAME
+    Database(path).store('aggregator').write(
+        {'posted': [{'title': 'Posted one', 'at': '2026-08-01T10:00:00Z'}]}
+    )
+
+    row = Database(path).store('aggregator').rows_of('posted')[0]
+
+    assert float(row['at']) == PUBLISHED_AT
+
+
+def test_a_register_comes_back_in_the_order_it_was_written(
+    tmp_path: Path,
+) -> None:
+    """Insertion order, not sorted: it is what "newest" means after a restart.
+
+    Each register is capped from the front, so the poster keeps the tail --
+    and a reader that handed them back in any other order would make the cap
+    throw away the wrong ones on the next save.
+    """
+    store = _store(tmp_path, 'aggregator')
+    store.set_rows('rejected', [('first',), ('second',), ('third',)])
+
+    assert [str(r['title']) for r in store.rows_of('rejected')] == [
+        'first',
+        'second',
+        'third',
+    ]
