@@ -323,6 +323,27 @@ class Control:
             return passed
         return back if self.recip_goal(leg) > 0 else took
 
+    def leg_name(self, leg: Leg | None = None) -> str:
+        """Return the leg's name for a READER, not its name in the config.
+
+        The two differ for exactly one leg. The fixed legs are phases the
+        operator named and gave a length to, so ``honeymoon`` is what they
+        are and what they should be called. The swing has no phase of its
+        own -- it is redrawn daily -- so naming its face after whichever
+        fixed leg it copied says the mechanism, when the only thing that
+        matters is what the face DOES. ``swing:ignore`` beside a column
+        reading "ignoring" is one vocabulary; ``swing:cold`` beside it was
+        two words for one fact, and the reader had to learn the mapping.
+
+        Derived here rather than baked in by ``Arc``, which knows nothing
+        about the attachment curve the stance is measured against -- and
+        because a name for a reader is a rendering, not a stored field.
+        """
+        if leg is None:
+            return ''
+        head, mark, _ = leg.name.partition(':')
+        return f'{head}:{self.stance(leg)}' if mark else leg.name
+
     def recip_goal(self, leg: Leg | None = None) -> float:
         """Return the reciprocity fraction to steer toward (same rule)."""
         if leg is None:
@@ -385,7 +406,14 @@ class Ledger:
         row = self.row(peer)
         p_star = control.take_target(self.leg(peer, control, now))
         p_cur = row.taken / row.offered if row.offered else p_star
-        return steer(p_cur, p_star, control.take_gain)
+        # Never above what this leg aims at. The controller corrects the
+        # LIFETIME fraction, so a honeymoon following a cold shoulder found
+        # itself dragging 43% up to the peak and rolled 92% to do it --
+        # opening nearly every story, which is the aversion arm the peak
+        # exists to stay off. The target is the ceiling by construction
+        # everywhere else in this file; clamping here makes that true of the
+        # dice too, and not only of the number they are aimed at.
+        return min(p_star, steer(p_cur, p_star, control.take_gain))
 
     def recip_prob(  # noqa: PLR0913 -- peer + control + now + the one flag
         self,

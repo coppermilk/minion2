@@ -10,6 +10,7 @@ engine's plan/commit wiring.
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from itertools import pairwise
 from typing import TYPE_CHECKING
 
@@ -426,3 +427,98 @@ def test_the_ledger_puts_each_peer_on_their_own_leg(tmp_path: Path) -> None:
     assert cold < warm
     assert led.leg(111, ctrl, _at(_COLD_DAY)).name == 'cold'
     assert led.leg(111, _arc_control(relationship.NO_ARC), _at(1)) is None
+
+
+def test_a_swing_face_is_named_for_what_it_does(tmp_path: Path) -> None:
+    """``swing:ignore``, not ``swing:cold`` -- the reader gets one vocabulary.
+
+    The fixed legs keep the names the operator gave them: those are phases
+    with a length, and ``honeymoon`` is what one IS. The swing has no phase
+    of its own, so naming its face after whichever leg it copied describes
+    the mechanism, when the only thing that matters is what the face does --
+    and it sat beside a column already reading "ignoring", which made two
+    words for one fact and a mapping the reader had to learn.
+    """
+    ctrl = _arc_control(_ARC)
+    faces = {
+        ctrl.leg_name(_ARC.leg(_MET, _at(day), 111)) for day in _SWING_SPAN
+    }
+
+    assert faces == {'swing:ignore', 'swing:like'}
+    assert ctrl.leg_name(_ARC.legs[0]) == 'honeymoon'  # a phase keeps its name
+    assert ctrl.leg_name(None) == ''
+
+
+def test_the_face_name_follows_the_config_not_the_leg_it_copied(
+    tmp_path: Path,
+) -> None:
+    """Retune the leg the swing draws from and its face is renamed with it.
+
+    The name is derived from what the controller is aimed at, so it cannot
+    become a label that used to be true -- which is the whole reason it is
+    not stored.
+    """
+    quiet = relationship.Arc(
+        legs=(
+            replace(_ARC.legs[0], recip=0.0),  # warm, but answers nothing
+            _ARC.legs[1],
+            _ARC.legs[2],
+        ),
+        enabled=True,
+    )
+    ctrl = _arc_control(quiet)
+
+    faces = {
+        ctrl.leg_name(quiet.leg(_MET, _at(day), 111)) for day in _SWING_SPAN
+    }
+
+    assert faces == {'swing:ignore', 'swing:seen'}
+
+
+def test_the_dice_never_roll_above_what_the_leg_aims_at(
+    tmp_path: Path,
+) -> None:
+    """The peak is the ceiling for the ROLL, not only for the target.
+
+    The controller corrects the LIFETIME fraction, so a honeymoon following
+    a cold shoulder found itself dragging 43% up to the peak and rolled 92%
+    to do it -- opening nearly every story, which is the aversion arm the
+    peak exists to stay off. Everywhere else in this module the target is
+    the ceiling by construction; this asserts the dice obey it too.
+    """
+    led = _ledger(tmp_path)
+    ctrl = _arc_control(_ARC)
+    peer = 111
+    led.add_take(peer, _ids(1), _CONTROL, _MET)
+    # A long cold shoulder: many chances, almost none taken.
+    for _ in range(_STEPS // 30):
+        led.add_offer(peer, _ids(1), _at(_COLD_DAY))
+
+    behind = led.row(peer)
+    warm = led.take_prob(peer, ctrl, _at(1))  # back in the honeymoon
+
+    assert behind.taken / behind.offered < _TOL * 2  # genuinely far behind
+    assert warm == ctrl.take_target(_ARC.legs[0])  # and still only the peak
+
+
+def test_a_peer_below_target_is_still_pulled_up_to_it(
+    tmp_path: Path,
+) -> None:
+    """Clamping the roll must not stop it converging, only overshooting.
+
+    Rolling AT the target is what makes a running fraction converge ON the
+    target; the overshoot only ever bought speed, and bought it by leaving
+    the curve the whole model is built on.
+    """
+    led = _ledger(tmp_path)
+    ctrl = _steer_only()
+    rng = random.Random(5)
+    peer = 222
+    for _ in range(_STEPS):
+        if rng.random() < led.take_prob(peer, ctrl):
+            led.add_take(peer, _ids(1), _CONTROL, _NOON)
+        else:
+            led.add_offer(peer, _ids(1))
+
+    row = led.row(peer)
+    assert abs(row.taken / row.offered - ctrl.take_target()) < _TOL

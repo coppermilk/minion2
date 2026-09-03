@@ -258,7 +258,8 @@ class StatusReport:
             return 'no arc'
         since, now = brain.store.met(peer_id), brain.clock()
         leg = control.arc.leg(since, now, peer_id)
-        return f'{leg.name}, round {control.arc.rounds(since, now)}'
+        name = control.leg_name(leg)
+        return f'{name}, round {control.arc.rounds(since, now)}'
 
     def _db(self) -> Database:
         """Return the database /who reads: the story engine's profile.
@@ -300,7 +301,8 @@ class StatusReport:
         leg = control.arc.leg(since, now, peer_id)
         met = _when(since) if since > 0 else 'just now'
         return [
-            f'{b} {leg.name}, round {control.arc.rounds(since, now)} '
+            f'{b} {control.leg_name(leg)}, '
+            f'round {control.arc.rounds(since, now)} '
             f'{b} met {met} {b} '
             f'aiming {control.take_target(leg):.0%} seen, '
             f'{control.recip_goal(leg):.0%} back'
