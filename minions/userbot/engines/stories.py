@@ -513,18 +513,29 @@ class StoryBrain:
             offered += 1
         return tuple(view_ids), tuple(skip_ids)
 
-    def _record_skips(self, peer_id: int, skip_ids: tuple[int, ...]) -> None:
+    def _record_skips(
+        self, peer_id: int, skip_ids: tuple[int, ...], now: float = 0.0
+    ) -> None:
         """Mark deliberately-skipped stories seen (offered, never viewed).
 
         Decided once at plan time so a skipped story is not re-offered every
-        poll (which would drive p back to 1); it counts as offered, not viewed.
+        poll (which would drive p back to 1); it counts as offered, not
+        viewed.
+
+        ``now`` is the session's moment, the same one ``mark_viewed`` is
+        given, so an ignore and a seen decided in one glance are stamped
+        alike. Reading the clock here instead put every ignore at plan time
+        while the views landed minutes later as the session staggered them --
+        and the arc anchors on the FIRST contact row, so under an injected
+        clock the two disagreeing left the whole curve measured from the
+        wrong day.
         """
         fresh = [
             sid for sid in skip_ids if self.store.mark(_seen_key(peer_id, sid))
         ]
         if not fresh:
             return
-        self.ledger.add_offer(peer_id, tuple(fresh), self.clock())
+        self.ledger.add_offer(peer_id, tuple(fresh), now or self.clock())
         self._trim_peers()
 
     def _react_budget(self, now: float) -> int:
@@ -583,7 +594,7 @@ class StoryBrain:
             view_ids, skip_ids = self._view_split(
                 cand.peer_id, unseen, self._view_target(cand.peer_id, now)
             )
-            self._record_skips(cand.peer_id, skip_ids)
+            self._record_skips(cand.peer_id, skip_ids, now)
             if not view_ids:
                 continue  # this peer was skipped entirely this pass
             react_ids, budget = self._plan_reacts(

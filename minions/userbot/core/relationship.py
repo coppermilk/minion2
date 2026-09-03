@@ -304,6 +304,25 @@ class Control:
         peak = attachment.exposure_peak(self.wundt)
         return peak if leg is None else peak * _clip(leg.exposure)
 
+    def stance(self, leg: Leg | None = None) -> str:
+        """Return what we are DOING with somebody, as a rung of ``ACTS``.
+
+        The readout's answer to "what is happening with this person", in one
+        word, derived from what the controller is aimed at rather than from
+        the leg's name -- so retuning a leg in the JSON moves the word with
+        it instead of leaving a label that used to be true.
+
+        Reading down the ladder: a leg that answers nothing is ``ignore``
+        however much it watches; one that watches but never answers is
+        ``seen``; one doing both is ``like``. The words are ``ACTS`` rungs
+        because they are the same three acts the history is written in --
+        the reader learns one vocabulary, not two.
+        """
+        passed, took, back = state.ACTS['stories']
+        if self.take_target(leg) < self.wundt.c1:
+            return passed
+        return back if self.recip_goal(leg) > 0 else took
+
     def recip_goal(self, leg: Leg | None = None) -> float:
         """Return the reciprocity fraction to steer toward (same rule)."""
         if leg is None:

@@ -38,6 +38,13 @@ TWO_WORDS = 2
 UPTIME_ROWS = 6
 """How many of the busiest learned hours /status names."""
 
+PEOPLE_ROWS = 30
+"""How many people /people lists, most recently touched first.
+
+The whole roster can run to hundreds; this is a screen of the ones the
+account is actually busy with. Anyone further down is a /who away.
+"""
+
 WHO_ROWS = 12
 """How many recent acts /who lists per service.
 
@@ -207,6 +214,51 @@ class StatusReport:
         if peer_id is None:
             return f'{words[1]}: never seen'
         return '\n'.join(self._who_lines(peer_id))
+
+    def people(self) -> str:
+        """Return the whole roster: who we know, and what we do with them.
+
+        /status shows the handful with stories up right now, /who shows one
+        person's every act. This is the middle one nothing answered: the
+        list of everybody, each with the word for what is happening with
+        them and where they are on their own curve.
+
+        Ordered by how recently we touched them, so the top of the list is
+        who the account is actually busy with.
+        """
+        db, b = self._db(), self.bullet()
+        views = db.store('stories')
+        rows = views.peers(limit=PEOPLE_ROWS)
+        if not rows:
+            return f'{b} nobody yet'
+        known = db.actors([row.peer_id for row in rows])
+        return '\n'.join(
+            [f'{len(rows)} people, most recently touched first:']
+            + [self._person_line(row, known, b) for row in rows]
+        )
+
+    def _person_line(
+        self, row: PeerRow, known: dict[int, Actor], b: str
+    ) -> str:
+        """Return one roster line: name, what we do, where on the curve."""
+        seen = row.taken / row.offered if row.offered else 0.0
+        back = row.recip / row.taken if row.taken else 0.0
+        return (
+            f'{b} {_name(known, row.peer_id)} {b} {self.doing(row.peer_id)} '
+            f'{b} {self._glyph("watched", "w")} {seen:.0%} '
+            f'{self._glyph("liked", "l")} {back:.0%} '
+            f'{b} {self._leg_of(row.peer_id)}'
+        )
+
+    def _leg_of(self, peer_id: int) -> str:
+        """Return 'honeymoon, round 2' for a peer, or '' with no arc."""
+        brain = self.bot.stories
+        control = brain._control()  # noqa: SLF001 -- the arc is its own config
+        if not control.arc.enabled:
+            return 'no arc'
+        since, now = brain.store.met(peer_id), brain.clock()
+        leg = control.arc.leg(since, now, peer_id)
+        return f'{leg.name}, round {control.arc.rounds(since, now)}'
 
     def _db(self) -> Database:
         """Return the database /who reads: the story engine's profile.
@@ -700,20 +752,43 @@ class StatusReport:
         return f'{name} (archived)' if row.hidden else name
 
     def _record(self, row: stories.Seen) -> str:
-        """Return a peer's all-time record, or say we have no history.
+        """Return what we are doing with a peer, then their all-time record.
+
+        The word first, because it is the question: percentages say what has
+        happened on average and the verb says what is happening NOW, and
+        somebody eleven days into a cold shoulder reads as neglected in the
+        numbers without it ever saying so.
 
         "first time" rather than 0%: a person we have never engaged reads
         completely differently from one we have been steadily skipping,
         and a bare zero cannot tell them apart.
         """
+        doing = self.doing(row.peer_id)
         held = row.standing
         if not held.offered:
-            return 'first time'
+            return f'{doing} {self.bullet()} first time'
         watched = 100 * held.viewed / held.offered
         liked = 100 * held.reacted / held.viewed if held.viewed else 0.0
         eye = self._glyph('watched', 'w')
         thumb = self._glyph('liked', 'l')
-        return f'{eye} {watched:.0f}% {thumb} {liked:.0f}%'
+        return (
+            f'{doing} {self.bullet()} '
+            f'{eye} {watched:.0f}% {thumb} {liked:.0f}%'
+        )
+
+    def doing(self, peer_id: int) -> str:
+        """Return the one word for what we are doing with somebody now.
+
+        Derived from what the controller is AIMED at in this person's
+        current leg, so it moves with a retuned ``persona.arc`` instead of
+        becoming a label that used to be true. The word itself lives in the
+        constants JSON, keyed by the ladder rung, so this file stays ASCII
+        and the vocabulary stays the operator's.
+        """
+        brain = self.bot.stories
+        control = brain._control()  # noqa: SLF001 -- the arc is its own config
+        leg = brain.ledger.leg(peer_id, control, brain.clock())
+        return self._glyph(f'act_{control.stance(leg)}', control.stance(leg))
 
     def _view_eta(self, peer_id: int) -> str:
         """Return ' . in ~3m 10s' for a queued peer, '' once it has fired."""

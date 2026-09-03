@@ -341,12 +341,12 @@ GOLDEN = """\
 3m 10s
 . glance 4m 10s ago . 4 with stories
 . viewing (1):
-    @alice . 3 of 5 new . [w] 80% [l] 25% . in ~3m 10s
+    @alice . 3 of 5 new . like . [w] 80% [l] 25% . in ~3m 10s
 . passed this glance (2):
-    @bob . 4 new . [w] 33% [l] 0%
-    @carol (archived) . 2 new . first time
+    @bob . 4 new . like . [w] 33% [l] 0%
+    @carol (archived) . 2 new . like . first time
 . already seen (1):
-    @dave . 3 up . first time
+    @dave . 3 up . like . first time
 
 [H] Schedule
 . tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
@@ -438,7 +438,7 @@ def test_a_blocked_session_names_its_reason_once(
 
     assert '. cooldown 4949s (2):' in got
     assert got.count('cooldown 4949s') == 1
-    assert '    @alice . 2 new . first time' in got
+    assert '    @alice . 2 new . like . first time' in got
 
 
 # --- the fixture above is not the file the bot ships -----------------------
@@ -569,8 +569,8 @@ def test_people_with_nothing_new_are_still_named(
     )
 
     assert '. already seen (2):' in got
-    assert '    @alice . 3 up . first time' in got
-    assert '    @bob . 1 up . first time' in got
+    assert '    @alice . 3 up . like . first time' in got
+    assert '    @bob . 1 up . like . first time' in got
     assert 'viewing' not in got
 
 
@@ -686,3 +686,87 @@ def test_who_says_nothing_about_an_arc_that_is_not_running(
     """No arc configured, no line -- not an empty one and not "none"."""
     got = _who_bot(tmp_path).report.who(['/who', '@alice']).splitlines()
     assert 'round' not in got[1]
+
+
+def _arc_bot(tmp_path: Path) -> main.Userbot:
+    """Return a /who bot whose people are on a real arc."""
+    bot = _who_bot(tmp_path)
+    bot.stories.clock = lambda: NOW
+    bot.stories.params = replace(
+        bot.stories.params,
+        arc=relationship.Arc(
+            legs=(
+                relationship.Leg('honeymoon', 14, exposure=1.0, recip=1.0),
+                relationship.Leg('cold', 10, exposure=0.1, recip=0.0),
+                relationship.Leg('swing', 21, exposure=0.0, recip=0.0),
+            ),
+            enabled=True,
+        ),
+    )
+    return bot
+
+
+def test_a_person_row_says_what_we_are_doing_with_them_now(
+    tmp_path: Path,
+) -> None:
+    """One word, before the percentages, and it follows the arc.
+
+    The numbers are averages over everything that ever happened; the word is
+    what is happening TODAY. Somebody eleven days into a cold shoulder reads
+    as neglected in the percentages without them ever saying so.
+    """
+    bot = _arc_bot(tmp_path)
+    warm = bot.report.doing(PEER_A)  # met yesterday: still the honeymoon
+    bot.stories.clock = lambda: NOW + 18 * 86400.0
+
+    assert warm == 'like'
+    assert bot.report.doing(PEER_A) == 'ignore'
+
+
+def test_the_doing_word_follows_the_config_not_the_leg_name(
+    tmp_path: Path,
+) -> None:
+    """Retuning a leg moves the word, so it cannot become a stale label.
+
+    Derived from what the controller is AIMED at rather than from the name
+    in the JSON: a leg called "honeymoon" that stops answering is a leg we
+    only watch, and the readout has to say so.
+    """
+    bot = _arc_bot(tmp_path)
+    quiet = replace(
+        bot.stories.params.arc.legs[0], recip=0.0
+    )  # same name, no reciprocation
+    bot.stories.params = replace(
+        bot.stories.params,
+        arc=replace(bot.stories.params.arc, legs=(quiet,)),
+    )
+
+    assert bot.report.doing(PEER_A) == 'seen'
+
+
+def test_people_lists_everyone_with_what_we_do_and_where_they_are(
+    tmp_path: Path,
+) -> None:
+    """The middle view: /status is now, /who is one person, this is all.
+
+    Ordered by how recently we touched somebody, so the top of the list is
+    who the account is actually busy with.
+    """
+    got = _arc_bot(tmp_path).report.people()
+
+    assert 'people, most recently touched first' in got
+    assert '@alice' in got
+    assert 'like' in got  # what we are doing with them
+    assert 'honeymoon, round 1' in got  # and where on their own curve
+
+
+def test_people_says_so_when_there_is_nobody(tmp_path: Path) -> None:
+    """An empty roster is a sentence, not a header over nothing."""
+    bot = _bot(tmp_path)
+    bot.modes = SimpleNamespace(
+        mode_of=bot.modes.mode_of, service_dir=lambda _name: tmp_path / 'e'
+    )
+    (tmp_path / 'e').mkdir()
+    bot._dbs = {tmp_path / 'e': Database(tmp_path / 'e' / DB_NAME)}
+
+    assert 'nobody yet' in bot.report.people()

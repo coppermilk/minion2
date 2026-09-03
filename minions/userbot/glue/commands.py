@@ -59,6 +59,12 @@ COMMAND_STORIES = '/stories'
 # is checked against what actually happened. Takes an argument, so it is
 # matched by prefix, not by exact text.
 COMMAND_WHO = '/who'
+# /people prints the roster: everyone we have a relationship with, most
+# recently touched first, each with the ONE WORD for what we are doing with
+# them now and where they are on their own curve. It is the middle view
+# nothing answered -- /status shows the few with stories up this minute,
+# /who shows one person's every act, and this is the list.
+COMMAND_PEOPLE = '/people'
 # /comod manages the cabinet ("shkaf"): '/comod <nick> <amount>' moves a
 # supporter onto a named shelf (a 30-day timer) and posts the rendered cabinet
 # photo plus the move-in announcement; '/comod' alone re-posts the cabinet;
@@ -161,6 +167,7 @@ class CommandRouter:
             COMMAND_GREETNOW: self.greet_now,
             COMMAND_USERS: self.bot.audience.report,
             COMMAND_STORIES: self.bot.story_watch.report,
+            COMMAND_PEOPLE: self.people_report,
             COMMAND_PROPISKA: self.bot.cabinet.propiska,
             COMMAND_TEST: self.enter_test,
             COMMAND_LIVE: self.enter_live,
@@ -239,6 +246,10 @@ class CommandRouter:
         summary = await self.bot.greeter.sync_now()
         await self.bot.say(summary)
         log.info('greetnow: %s', summary)
+
+    async def people_report(self) -> None:
+        """Print the roster and what we do with each of them (/people)."""
+        await self.bot.say(self.bot.report.people())
 
     async def who_report(self, text: str) -> None:
         """Print one person's whole relationship history (the /who command).
