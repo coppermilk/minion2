@@ -110,7 +110,7 @@ class Posted:
     """A readable record of one video that was posted (state log + dedup)."""
 
     title: str
-    at: str  # ISO 8601 UTC, e.g. '2026-07-23T14:20:00Z'
+    at: float  # unix epoch, UTC -- ISO is a RENDERING, made in status.py
     links: dict[str, str]  # platform -> url
     msg_ids: list[int]  # the source messages consumed by this post
 

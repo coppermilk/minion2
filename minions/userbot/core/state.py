@@ -40,6 +40,7 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import TypeGuard
 
@@ -90,6 +91,25 @@ is built from this table: a service can only log the acts it has words for,
 and a typo becomes an IntegrityError instead of a row nobody ever reads.
 """
 
+SERVICES = ('aggregator', 'reactions', 'stories', 'greeter', 'comod')
+"""Every service that owns rows in this file, and the only legal ``service``.
+
+Deliberately NOT ``glue/commands.SERVICE_NAMES``, which is the list of tap
+commands: that one carries ``users`` (which has no service column -- the
+audience belongs to the profile) and lacks ``comod`` (which has no on/off
+switch but does keep a cabinet). Two lists because they answer two
+questions; sharing one would make each wrong about the other.
+
+The CHECK below is generated from this, so a service name that does not
+exist becomes an IntegrityError at the write rather than a partition of the
+database that nobody ever reads back.
+"""
+
+_SERVICE_CHECK = 'service IN ({})'.format(
+    ', '.join(f"'{name}'" for name in SERVICES)
+)
+"""The ``service`` CHECK, generated from ``SERVICES`` so it cannot drift."""
+
 _ACT_CHECK = '\n        OR '.join(
     "(service = '{name}' AND act IN ({acts}))".format(
         name=name, acts=', '.join(f"'{act}'" for act in ladder)
@@ -114,7 +134,8 @@ CREATE TABLE IF NOT EXISTS actors (
 CREATE TABLE IF NOT EXISTS audience (
     peer_id    INTEGER PRIMARY KEY,
     subscribed INTEGER NOT NULL DEFAULT 0,
-    msg_count  INTEGER NOT NULL DEFAULT 0
+    msg_count  INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (peer_id) REFERENCES actors (peer_id)
 );
 CREATE TABLE IF NOT EXISTS standing (
     service TEXT    NOT NULL,
@@ -128,7 +149,9 @@ CREATE TABLE IF NOT EXISTS standing (
     gap_sum REAL    NOT NULL DEFAULT 0,
     gap_sq  REAL    NOT NULL DEFAULT 0,
     burst   INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (service, peer_id)
+    PRIMARY KEY (service, peer_id),
+    FOREIGN KEY (peer_id) REFERENCES actors (peer_id),
+    CHECK ({_SERVICE_CHECK})
 );
 CREATE TABLE IF NOT EXISTS contact (
     id      INTEGER PRIMARY KEY,
@@ -137,13 +160,15 @@ CREATE TABLE IF NOT EXISTS contact (
     service TEXT    NOT NULL,
     act     TEXT    NOT NULL,
     subject INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (peer_id) REFERENCES actors (peer_id),
     CHECK ({_ACT_CHECK})
 );
 CREATE TABLE IF NOT EXISTS marks (
     service TEXT NOT NULL,
     key     TEXT NOT NULL,
     at      REAL NOT NULL,
-    PRIMARY KEY (service, key)
+    PRIMARY KEY (service, key),
+    CHECK ({_SERVICE_CHECK})
 );
 CREATE TABLE IF NOT EXISTS uptime (
     hour   INTEGER PRIMARY KEY,
@@ -160,31 +185,59 @@ CREATE TABLE IF NOT EXISTS scheduled (
     kind     TEXT    NOT NULL DEFAULT '',
     text     TEXT    NOT NULL DEFAULT '',
     emojis   TEXT    NOT NULL DEFAULT '[]',
-    UNIQUE (service, chat, reply_to)
+    UNIQUE (service, chat, reply_to),
+    CHECK ({_SERVICE_CHECK})
 );
 CREATE TABLE IF NOT EXISTS watching (
     service TEXT    NOT NULL,
     chat_id INTEGER NOT NULL,
     post_id INTEGER NOT NULL,
     at      REAL    NOT NULL DEFAULT 0,
-    PRIMARY KEY (service, chat_id, post_id)
+    PRIMARY KEY (service, chat_id, post_id),
+    CHECK ({_SERVICE_CHECK})
 );
 CREATE TABLE IF NOT EXISTS emoji_used (
     service  TEXT NOT NULL,
     emoji_id TEXT NOT NULL,
     at       REAL NOT NULL DEFAULT 0,
-    PRIMARY KEY (service, emoji_id)
+    PRIMARY KEY (service, emoji_id),
+    CHECK ({_SERVICE_CHECK})
+);
+CREATE TABLE IF NOT EXISTS posted (
+    id      INTEGER PRIMARY KEY,
+    title   TEXT NOT NULL,
+    at      REAL NOT NULL DEFAULT 0,
+    links   TEXT NOT NULL DEFAULT '{{}}',
+    msg_ids TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS pending (
+    id      INTEGER PRIMARY KEY,
+    title   TEXT NOT NULL,
+    since   REAL NOT NULL DEFAULT 0,
+    items   TEXT NOT NULL DEFAULT '{{}}',
+    msg_ids TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS rejected (
+    id    INTEGER PRIMARY KEY,
+    title TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cabinet (
+    nick   TEXT PRIMARY KEY,
+    at     REAL NOT NULL DEFAULT 0,
+    amount TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS state (
     service TEXT PRIMARY KEY,
-    blob    TEXT NOT NULL
+    blob    TEXT NOT NULL,
+    CHECK ({_SERVICE_CHECK})
 );
 CREATE TABLE IF NOT EXISTS membership_events (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     peer_id      INTEGER NOT NULL,
     event        TEXT    NOT NULL,
     ts           REAL    NOT NULL,
-    admin_log_id INTEGER UNIQUE
+    admin_log_id INTEGER UNIQUE,
+    FOREIGN KEY (peer_id) REFERENCES actors (peer_id)
 );
 CREATE TABLE IF NOT EXISTS messages (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,7 +247,8 @@ CREATE TABLE IF NOT EXISTS messages (
     root    INTEGER,
     text    TEXT,
     ts      REAL    NOT NULL,
-    UNIQUE (chat_id, msg_id)
+    UNIQUE (chat_id, msg_id),
+    FOREIGN KEY (peer_id) REFERENCES actors (peer_id)
 );
 """
 """Every table in the file, declared once.
@@ -269,6 +323,25 @@ All of them are ADDITIVE, which is the whole reason the timing statistics fit
 here: a running mean would need read-modify-write, but a sum does not, so the
 one ``INSERT ... ON CONFLICT DO UPDATE`` below still writes a single row per
 event whatever the audience size.
+"""
+
+_REGISTERS = {
+    'posted': ('title', 'at', 'links', 'msg_ids'),
+    'pending': ('title', 'since', 'items', 'msg_ids'),
+    'rejected': ('title',),
+}
+"""The poster's three registers, and the columns each one carries.
+
+Named here rather than passed in, because the table name reaches SQL as a
+STRING -- an identifier cannot be a bound parameter. Looking it up in this
+table is what makes that safe: a caller can only ask for a register that was
+declared here, so nothing a caller says ever becomes SQL.
+
+``links``, ``items`` and ``msg_ids`` stay JSON on purpose. They are the
+platform->url map, the platform->item map and the source message ids OF ONE
+PUBLICATION -- composite values belonging to their row, not collections of
+entities anything would query across. The rule is about plurals that grow
+with the world, and these do not.
 """
 
 JOURNAL = 'DELETE'
@@ -444,6 +517,11 @@ def connect(path: Path | str) -> sqlite3.Connection:
     _migrate(conn)  # bring an older file to this shape...
     conn.executescript(_INDEXES)  # ...before indexing it
     conn.commit()
+    # LAST, and that order is the point: SQLite checks foreign keys as rows
+    # are written, so the fold above -- which moves rows between tables in a
+    # deliberate order -- runs with them off, and everything the running bot
+    # writes runs with them on.
+    conn.execute('PRAGMA foreign_keys = ON')
     return conn
 
 
@@ -477,9 +555,59 @@ def _migrate(conn: sqlite3.Connection) -> None:
             'state: folded %s into actors/standing', ', '.join(sorted(old))
         )
     _drain_blobs(conn)
+    _adopt_orphans(conn)
 
 
-_BLOB_KEYS = ('alive', 'queue', 'posts', 'emoji_last', 'log', 'session')
+_REFERRERS = (
+    'standing',
+    'contact',
+    'audience',
+    'membership_events',
+    'messages',
+)
+"""Every table whose ``peer_id`` points at ``actors``."""
+
+
+def _adopt_orphans(conn: sqlite3.Connection) -> None:
+    """Give every peer we have rows about an ``actors`` row, if it lacks one.
+
+    A deployed file predates the foreign key, and ``CREATE TABLE IF NOT
+    EXISTS`` cannot add one to a table that is already there -- so the
+    constraint is declared for new files while THIS is what makes the claim
+    true of old ones. Rebuilding five tables to attach the key would be a far
+    riskier way to reach the same place.
+
+    An adopted row carries nothing but the id: who they are is unknown until
+    somebody resolves them, and inventing a blank name would be worse than
+    admitting we only have a number.
+    """
+    made = 0
+    with conn:
+        for table in _REFERRERS:
+            cur = conn.execute(
+                f'INSERT OR IGNORE INTO actors (peer_id) '  # noqa: S608
+                f'SELECT DISTINCT peer_id FROM {table} WHERE peer_id NOT IN '
+                '(SELECT peer_id FROM actors)'
+            )
+            made += max(0, cur.rowcount)
+    if made:
+        log.info('state: adopted %d peer(s) that had rows but no actor', made)
+
+
+_BLOB_KEYS = (
+    'alive',
+    'queue',
+    'posts',
+    'emoji_last',
+    'log',
+    'session',
+    'left',
+    'posted',
+    'pending',
+    'rejected',
+    'groups',
+    'processed_ids',
+)
 """The collections that used to live inside ``state.blob``.
 
 Their presence in a block is what says this file predates the tier that gave
@@ -544,7 +672,14 @@ class _Drain:
         self.queue(block.pop('queue', None))
         self.watching(block.pop('posts', None))
         self.emoji(block.pop('emoji_last', None))
+        self.departures(block.pop('left', None))
+        self.register('posted', block.pop('posted', None))
+        self.register('pending', block.pop('pending', None))
+        self.rejected(block.pop('rejected', None))
+        self.roster(block)
         block.pop('log', None)  # a second copy of contact; contact wins
+        block.pop('groups', None)  # the pending key's older name
+        block.pop('processed_ids', None)  # rebuilt from posted.msg_ids now
         block.pop('alive_at', None)  # each bucket carries its own stamp now
         session = block.pop('session', None)
         if isinstance(session, dict):
@@ -587,6 +722,65 @@ class _Drain:
                 (self.service, _as_int(pair[0]), _as_int(pair[1]), self.now),
             )
 
+    def departures(self, raw: object) -> None:
+        """Adopt the greeter's welcome-back memory as marks."""
+        for uid in _rows(raw, shape=int):
+            self.conn.execute(
+                'INSERT OR IGNORE INTO marks (service, key, at) '
+                'VALUES (?, ?, ?)',
+                (self.service, f'left:{_as_int(uid)}', self.now),
+            )
+
+    def register(self, table: str, raw: object) -> None:
+        """Adopt the poster's posted or pending register.
+
+        ``at`` and ``since`` were ISO strings in the blob and are epochs in
+        the table, so this is where that conversion happens -- once, on the
+        way in, rather than on every comparison the re-post guard makes.
+        """
+        stamp = 'at' if table == 'posted' else 'since'
+        for row in _rows(raw):
+            self.conn.execute(
+                f'INSERT INTO {table} '  # noqa: S608 -- a literal, twice above
+                f'(title, {stamp}, {"links" if stamp == "at" else "items"}, '
+                'msg_ids) VALUES (?, ?, ?, ?)',
+                (
+                    str(row.get('title', '')),
+                    _epoch(row.get(stamp)),
+                    json.dumps(
+                        row.get('links' if stamp == 'at' else 'items') or {}
+                    ),
+                    json.dumps(row.get('msg_ids') or []),
+                ),
+            )
+
+    def rejected(self, raw: object) -> None:
+        """Adopt the poster's rejected titles, in order."""
+        for title in _rows(raw, shape=str):
+            self.conn.execute(
+                'INSERT INTO rejected (title) VALUES (?)', (str(title),)
+            )
+
+    def roster(self, block: dict[str, object]) -> None:
+        """Adopt the cabinet, whose whole block WAS the roster.
+
+        No named key to pop: every entry mapping a nick to an object with an
+        ``at`` was a resident, so the block empties itself here. Only the
+        cabinet ever wrote a block shaped like that, which is what makes it
+        safe to recognise by shape rather than by name.
+        """
+        for nick in [k for k, v in block.items() if _resident(v)]:
+            entry = _table(block.pop(nick))
+            self.conn.execute(
+                'INSERT OR REPLACE INTO cabinet (nick, at, amount) '
+                'VALUES (?, ?, ?)',
+                (
+                    nick,
+                    _as_float(entry.get('at')),
+                    str(entry.get('amount', '')),
+                ),
+            )
+
     def emoji(self, raw: object) -> None:
         """Adopt when each emoji was last used."""
         for emoji, at in _floats(raw).items():
@@ -595,6 +789,33 @@ class _Drain:
                 'VALUES (?, ?, ?)',
                 (self.service, emoji, at),
             )
+
+
+def _resident(value: object) -> bool:
+    """Whether one blob entry is a cabinet resident (a nick -> {at, ...})."""
+    return isinstance(value, dict) and 'at' in value and 'amount' in value
+
+
+def _table(value: object) -> dict[str, object]:
+    """Read one persisted value as an object; an empty one when it is not."""
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _epoch(value: object) -> float:
+    """Read a persisted moment, whether it is a number or an ISO string.
+
+    The poster wrote ISO into its blob and epochs go into its table, so this
+    is the one place the two formats meet. An unreadable stamp reads as NOW,
+    not as 0: the only consumer is the re-post guard, and a record that looks
+    freshly posted BLOCKS a re-post while one that looks ancient lets a
+    duplicate through. Damaged state should cost a missed post, not a double.
+    """
+    if _number(value):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return time.time()
 
 
 def _as_int(value: object) -> int:
@@ -627,11 +848,18 @@ def _number(value: object) -> TypeGuard[int | float]:
 
 
 def _rows(raw: object, shape: type = dict) -> list:  # type: ignore[type-arg]
-    """Read a persisted list, keeping only entries of the wanted shape."""
+    """Read a persisted list, keeping only entries of the wanted shape.
+
+    A pair-shaped entry (the watch window's ``[chat, post]``) additionally
+    has to have both halves; a scalar entry is kept as it is.
+    """
     if not isinstance(raw, list):
         return []
-    keep = (list, tuple) if shape is list else shape
-    return [r for r in raw if isinstance(r, keep) and len(r) >= _PAIR]
+    if shape is list:
+        return [
+            r for r in raw if isinstance(r, (list, tuple)) and len(r) >= _PAIR
+        ]
+    return [r for r in raw if isinstance(r, shape)]
 
 
 _PAIR = 2
@@ -907,6 +1135,14 @@ class StateStore:
         adds = [counts.get(name, 0) for name in COUNTERS]
         moment = time.time() if at is None else at
         took = moment if counts.get('taken') else 0.0
+        # A person exists the moment we act on them, whether or not anybody
+        # has resolved their name yet. Without this the foreign key would
+        # refuse the write -- and rightly: a standing row for somebody with
+        # no row in ``actors`` is a relationship with an id, which is what
+        # /who used to print when it could not find them.
+        self.conn.execute(
+            'INSERT OR IGNORE INTO actors (peer_id) VALUES (?)', (peer_id,)
+        )
         self.conn.execute(
             _BUMP_SQL, (self.service, peer_id, *adds, moment, took)
         )
@@ -1187,6 +1423,77 @@ class StateStore:
             )
         }
 
+    # --- the poster's registers and the cabinet --------------------------
+    # No service column on these four, deliberately: each has exactly ONE
+    # owner, the way ``actors`` and ``audience`` belong to the profile rather
+    # than to a service. A column saying 'aggregator' on every row of a table
+    # only the poster ever touches would be a fact about nothing.
+
+    def set_rows(self, table: str, rows: Iterable[tuple[object, ...]]) -> None:
+        """Replace one single-owner register with ``rows``.
+
+        The poster keeps its registers as capped, ordered lists it rewrites
+        as a whole (a post is appended and the oldest falls off), so writing
+        them whole is what the caller means. What it no longer means is
+        rewriting the pending groups and the rejected titles too, which is
+        what one shared JSON block made every save do.
+        """
+        self.conn.execute(f'DELETE FROM {table}')  # noqa: S608
+        marks = ', '.join('?' * len(_REGISTERS[table]))
+        self.conn.executemany(
+            f'INSERT INTO {table} ({", ".join(_REGISTERS[table])}) '  # noqa: S608
+            f'VALUES ({marks})',
+            rows,
+        )
+        self.conn.commit()
+
+    def rows_of(self, table: str) -> list[sqlite3.Row]:
+        """Return one single-owner register in insertion order."""
+        if table not in _REGISTERS:
+            msg = f'not a register: {table}'
+            raise KeyError(msg)
+        return list(
+            self.conn.execute(
+                f'SELECT {", ".join(_REGISTERS[table])} FROM {table} '  # noqa: S608
+                'ORDER BY id'
+            )
+        )
+
+    def shelve(self, nick: str, at: float, amount: str) -> None:
+        """Move one supporter onto a cabinet shelf (or refresh their timer)."""
+        self.conn.execute(
+            'INSERT INTO cabinet (nick, at, amount) VALUES (?, ?, ?) '
+            'ON CONFLICT (nick) DO UPDATE SET '
+            'at = excluded.at, amount = excluded.amount',
+            (nick, at, amount),
+        )
+        self.conn.commit()
+
+    def evict(self, nick: str) -> bool:
+        """Remove one resident by hand; True if they were there."""
+        cur = self.conn.execute('DELETE FROM cabinet WHERE nick = ?', (nick,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def residents(self, since: float) -> list[sqlite3.Row]:
+        """Return everyone who moved in at or after ``since``, newest first.
+
+        Expiry is a WHERE clause now rather than a rebuild-and-rewrite on
+        every read, so nobody is pruned by the act of looking.
+        """
+        return list(
+            self.conn.execute(
+                'SELECT nick, at, amount FROM cabinet '
+                'WHERE at >= ? ORDER BY at DESC',
+                (since,),
+            )
+        )
+
+    def sweep_cabinet(self, since: float) -> None:
+        """Drop residents whose month ran out (called when one moves in)."""
+        self.conn.execute('DELETE FROM cabinet WHERE at < ?', (since,))
+        self.conn.commit()
+
     # --- dedup marks -----------------------------------------------------
 
     def mark(self, key: str) -> bool:
@@ -1266,8 +1573,16 @@ class StateStore:
     def read(self) -> dict[str, object]:
         """Return this service's state block, or ``{}`` if it has none.
 
-        Missing and unreadable both mean "start from your defaults". A caller
-        for whom that would silently discard history calls ``read_strict``.
+        Missing and unreadable both mean "start from your defaults", which
+        is safe for everything still kept here: a mood, a cursor, a daily
+        counter, each cheaply re-earned.
+
+        There used to be a ``read_strict`` beside this, for the one caller
+        whose empty result would have been a LIE -- the poster reading
+        "nothing was ever posted", disarming its re-post guard and
+        republishing the backlog. Its log is ``posted`` now, and rows do not
+        half-parse: they are there or the database is, so the failure it
+        guarded against cannot be reached from here any more.
         """
         got = self.conn.execute(
             'SELECT blob FROM state WHERE service = ?', (self.service,)
@@ -1280,24 +1595,6 @@ class StateStore:
             log.warning('state: %s has an unreadable block', self.service)
             return {}
         return dict(raw) if isinstance(raw, dict) else {}
-
-    def read_strict(self) -> dict[str, object]:
-        """Return this service's state block, raising rather than degrading.
-
-        For the caller whose empty result would be a LIE: the poster reading
-        "nothing was ever posted" disarms its re-post guard and republishes
-        the backlog. Better to fail loudly and let the watchdog restart us.
-        """
-        got = self.conn.execute(
-            'SELECT blob FROM state WHERE service = ?', (self.service,)
-        ).fetchone()
-        if got is None:
-            return {}
-        data = json.loads(got[0])
-        if not isinstance(data, dict):
-            msg = f'{self.service}: state is not an object'
-            raise TypeError(msg)
-        return data
 
     def write(self, data: Mapping[str, object]) -> None:
         """Replace this service's state block; the transaction is atomicity.
@@ -1455,6 +1752,14 @@ def adopt(where: Path) -> None:
     an unexpected file ends up doing.
     """
     conn = connect(where / DB_NAME)
+    # Off for the import, like the fold inside ``connect``, and for the same
+    # reason: rows arrive table by table, so a ledger row can land before the
+    # actor it names. ``_adopt_orphans`` closes that gap once every file is
+    # in, and the pragma goes back on before anything live writes. SQLite
+    # ignores this inside a transaction, which is why it is set out here.
+    # This connection is closed at the end of the import; every later open
+    # turns them back on, so nothing live ever writes without them.
+    conn.execute('PRAGMA foreign_keys = OFF')
     try:
         older = [p for p in sorted(where.glob('*.db')) if p.name != DB_NAME]
         taken = [(p, _absorb(conn, p)) for p in older]

@@ -184,12 +184,12 @@ def test_returning_subscriber_gets_welcome_back(tmp_path: Path) -> None:
     client.log += [_leave(2, 5)]
     asyncio.run(g.sync())
     assert (5, 'bye') in client.dms
-    assert _UID_5 in g.state.left
+    assert g.store.marked(f'left:{_UID_5}')
     client.log += [_join(3, 5)]  # 5 comes back
     asyncio.run(g.sync())
     assert (5, 'whale') in client.dms  # welcome_back, not the plain welcome
     assert (5, 'hi') not in client.dms
-    assert _UID_5 not in g.state.left
+    assert not g.store.marked(f'left:{_UID_5}')
 
 
 def test_name_placeholder_is_filled(tmp_path: Path) -> None:
@@ -289,7 +289,8 @@ def test_empty_farewell_sends_nothing_on_leave(tmp_path: Path) -> None:
     client.log += [_leave(2, 5)]
     asyncio.run(g.sync())
     assert not any(uid == _UID_5 for uid, _ in client.dms)
-    assert _UID_5 in g.state.left  # still remembered for a welcome_back
+    # still remembered for a welcome_back
+    assert g.store.marked(f'left:{_UID_5}')
     assert g.state.last_event_id == _EVENT_2  # committed
 
 
@@ -372,7 +373,9 @@ def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
     )
     assert g.state.started is False  # re-baseline (no mass DM)
     assert g.state.last_event_id == 0
-    assert g.state.left == [9]  # welcome_back memory carried over
+    # The welcome_back memory is marks now, so re-baselining the cursor
+    # does not forget who left -- it never lived in this block.
+    assert g.store.marked('left:9')
 
 
 def test_load_greeter_params_defaults_off_with_target_channel() -> None:
@@ -457,9 +460,9 @@ def test_departures_stop_growing_forever(tmp_path: Path) -> None:
     )
     for uid in range(_OVER_LEFT_CAP):
         g._note_departure(uid)
-    assert len(g.state.left) == greeter.LEFT_CAP
-    assert g.state.left[-1] == _OVER_LEFT_CAP - 1  # the newest survived
-    assert 0 not in g.state.left  # the oldest rolled off
+    assert g.store.count_marks() == greeter.LEFT_CAP
+    assert g.store.marked(f'left:{_OVER_LEFT_CAP - 1}')  # newest survived
+    assert not g.store.marked('left:0')  # the oldest rolled off
 
 
 def test_a_returning_subscriber_is_forgotten_once(tmp_path: Path) -> None:
@@ -471,6 +474,6 @@ def test_a_returning_subscriber_is_forgotten_once(tmp_path: Path) -> None:
     )
     g._note_departure(7)
     g._note_departure(7)  # the same person leaving twice is one memory
-    assert g.state.left == [7]
+    assert g.store.count_marks() == 1
     g._forget_departure(7)
-    assert g.state.left == []
+    assert g.store.count_marks() == 0

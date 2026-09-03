@@ -54,6 +54,9 @@ PEER_A = 5001
 PEER_B = 5002
 PEER_C = 5003
 PEER_D = 5004
+# 2026-08-01T10:00:00Z as an epoch: the file keeps one time
+# format, and the ISO the golden text shows is made in the render.
+POSTED_AT = 1785578400.0
 
 
 async def _unused_posted(target: int, post_id: int) -> None:
@@ -161,7 +164,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
         posted=[
             Posted(
                 title='Posted one',
-                at='2026-08-01T10:00:00Z',
+                at=POSTED_AT,
                 links={'a': 'u'},
                 msg_ids=[1],
             )

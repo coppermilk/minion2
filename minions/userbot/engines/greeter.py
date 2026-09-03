@@ -39,7 +39,6 @@ import logging
 import random
 import time
 from dataclasses import dataclass
-from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
@@ -82,21 +81,26 @@ class GreeterParams:
 class GreeterState:
     """Persisted: welcome-back memory, baseline flag, cursor, DM counter."""
 
-    # Unsubscribed, oldest first, capped at LEFT_CAP: they get welcome_back
-    # if they return while still remembered, else the plain welcome.
-    left: list[int] = field(default_factory=list)
     started: bool = False  # the silent baseline has been established
     last_event_id: int = 0  # highest admin-log event id already handled
     dm_day: str = ''  # UTC date of dm_today
     dm_today: int = 0  # DMs already sent today (against max_dm_per_day)
 
 
-# Departed subscribers remembered for a welcome_back, newest last. Unbounded
+# Departed subscribers remembered for a welcome_back, newest kept. Unbounded
 # it was the one part of greeter state that grew for as long as the channel
 # had turnover; 500 matches the story engine's tracked-peer ceiling. Someone
 # who rolled off and later returns is greeted as new, which is the mild end
-# of getting it wrong.
+# of getting it wrong. Kept as MARKS -- a bounded dedup set, which is what
+# ``marks`` is for -- rather than as a list in the state block, where its
+# whole length was rewritten on every greeter save.
 LEFT_CAP = 500
+_LEFT_PREFIX = 'left:'
+
+
+def _left_key(uid: int) -> str:
+    """Return the mark that remembers one departure."""
+    return f'{_LEFT_PREFIX}{uid}'
 
 
 class _FloodStopError(Exception):
@@ -313,19 +317,22 @@ class Greeter:
         return await self._dm(uid, self.params.farewell)
 
     def _note_departure(self, uid: int) -> None:
-        """Remember one departure for a later welcome_back, within the cap."""
-        self._forget_departure(uid)  # keep it once, and keep it newest
-        self.state.left.append(uid)
-        del self.state.left[:-LEFT_CAP]
+        """Remember one departure for a later welcome_back, within the cap.
+
+        A mark, not a list in the state block. It is a bounded dedup set --
+        exactly what ``marks`` is -- and as a list it was one more collection
+        making every greeter save rewrite the whole block.
+        """
+        self.store.mark(_left_key(uid))
+        self.store.trim_marks(_LEFT_PREFIX, LEFT_CAP)
 
     def _forget_departure(self, uid: int) -> None:
         """Drop one departure from the memory (they came back)."""
-        if uid in self.state.left:
-            self.state.left.remove(uid)
+        self.store.drop_marks(_left_key(uid))
 
     def _welcome_text(self, uid: int) -> str:
         """Return welcome_back for a returning subscriber, else welcome."""
-        if uid in self.state.left:
+        if self.store.marked(_left_key(uid)):
             return self.params.welcome_back or self.params.welcome
         return self.params.welcome
 
@@ -412,7 +419,8 @@ class Greeter:
         A pre-admin-log file (member-diff format: has 'members', no
         'last_event_id') is also re-baselined -- keeping its cursor at 0 would
         re-read the whole admin log and mass-DM. The welcome_back memory
-        (``left``) is carried over in that migration.
+        survives all of it: it lives in ``marks`` now, not in this block, so
+        re-baselining the cursor no longer forgets who left.
         """
         raw = self.store.read()
         if not raw:  # before the 'last_event_id' probe: nothing is not legacy
@@ -425,13 +433,10 @@ class Greeter:
                 self.params.channel,
             )
             return GreeterState()
-        carried = [codec.whole(m) for m in codec.rows(raw.get('left'))]
-        del carried[:-LEFT_CAP]
         if 'last_event_id' not in raw:
             log.info('greeter: migrating to admin-log, re-baselining')
-            return GreeterState(left=carried)
+            return GreeterState()
         return GreeterState(
-            left=carried,
             started=bool(raw.get('started', False)),
             last_event_id=codec.whole(raw.get('last_event_id')),
             dm_day=codec.text(raw.get('dm_day')),
@@ -443,7 +448,6 @@ class Greeter:
         data = {
             'channel': self.params.channel,  # the channel this is for
             # Insertion order, NOT sorted: the cap keeps the newest.
-            'left': list(self.state.left),
             'started': self.state.started,
             'last_event_id': self.state.last_event_id,
             'dm_day': self.state.dm_day,

@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
-from datetime import UTC
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,11 +29,18 @@ from minions.userbot.glue import aggregator
 
 
 def _post(title: str, age_days: float) -> Posted:
-    """Build a posted record ``age_days`` old (ISO time, second precision)."""
-    at = datetime.fromtimestamp(
-        time.time() - age_days * 86400, tz=UTC
-    ).strftime('%Y-%m-%dT%H:%M:%SZ')
-    return Posted(title=title, at=at, links={}, msg_ids=[])
+    """Build a posted record ``age_days`` old.
+
+    An epoch, like every other time in the file: the guard used to parse an
+    ISO string on every comparison, which meant a corrupt one had to be
+    given a meaning before the guard could answer.
+    """
+    return Posted(
+        title=title,
+        at=time.time() - age_days * 86400,
+        links={},
+        msg_ids=[],
+    )
 
 
 WEEK = 604800.0

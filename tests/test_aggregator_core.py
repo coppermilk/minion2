@@ -11,6 +11,7 @@ attributes the method under test touches -- no live client.
 from __future__ import annotations
 
 import json
+import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -171,20 +172,33 @@ def test_youtube_thumb_only_from_youtube() -> None:
 
 # ------------------------------------------------------ the poster shapes
 
+POSTED = ('title', 'at', 'links', 'msg_ids')
+PENDING = ('title', 'since', 'items', 'msg_ids')
+
+
+def _row(values: tuple[object, ...], columns: tuple[str, ...]) -> dict:  # type: ignore[type-arg]
+    """Return one written row as the mapping a reader gets back.
+
+    ``sqlite3.Row`` is a mapping over its columns, and so is this -- so the
+    round trip is tested against what the codec writes, not against a shape
+    invented here.
+    """
+    return dict(zip(columns, values, strict=True))
+
 
 def test_posted_round_trip() -> None:
-    """A Posted record survives dict serialization unchanged."""
-    post = Posted('T', '2026-08-20T15:05:21Z', {'yt': 'u'}, [1, 2])
-    back = poststate.posted_from_dict(poststate.posted_dict(post))
+    """A Posted record survives its row unchanged."""
+    post = Posted('T', 1_755_700_000.0, {'yt': 'u'}, [1, 2])
+    back = poststate.posted_from_row(_row(poststate.posted_row(post), POSTED))
     assert back == post
 
 
 def test_pending_round_trip_keeps_items_and_time() -> None:
-    """A pending Group survives dict serialization (items, ids, created_at)."""
+    """A pending Group survives its row (items, ids, created_at)."""
     item = Item('tiktok', 'tiktok', 'T', 'u', '', '30', 9)
     group = Group('T', {'tiktok': item}, {9}, created_at=1_700_000_000.0)
-    back = poststate.pending_from_dict(
-        poststate.pending_dict(group, ('tiktok', 'youtube'))
+    back = poststate.pending_from_row(
+        _row(poststate.pending_row(group), PENDING)
     )
     assert back.title == 'T'
     assert back.msg_ids == {9}
@@ -222,7 +236,7 @@ def _bare_core() -> aggregator.LinkAggregator:
 def test_recently_posted_blocks_same_title() -> None:
     """A title matching a posted record is a re-post; a new one is not."""
     agg = _bare_core()
-    agg.posted = [Posted('Salsa dance', '2026-08-22T00:00:00Z', {}, [])]
+    agg.posted = [Posted('Salsa dance', time.time(), {}, [])]
     assert agg._recently_posted('Salsa dance #x')
     assert not agg._recently_posted('Totally different clip')
 
@@ -230,7 +244,7 @@ def test_recently_posted_blocks_same_title() -> None:
 def test_group_for_skips_recent_repost() -> None:
     """_group_for returns None for a title already posted in-window."""
     agg = _bare_core()
-    agg.posted = [Posted('Salsa dance', '2026-08-22T00:00:00Z', {}, [])]
+    agg.posted = [Posted('Salsa dance', time.time(), {}, [])]
     item = Item('tiktok', 'tiktok', 'Salsa dance #x', 'u', '', '', 5)
     assert agg._group_for(item) is None
 

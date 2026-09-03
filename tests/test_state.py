@@ -15,19 +15,24 @@ import logging
 import sqlite3
 import subprocess
 import sys
-import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 
+from minions.userbot.core.models import Group
+from minions.userbot.core.models import Posted
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Actor
 from minions.userbot.core.state import Database
 from minions.userbot.core.state import PeerRow
 from minions.userbot.core.state import StateStore
 from minions.userbot.core.state import adopt
+from minions.userbot.engines import comod
+from minions.userbot.engines import greeter
 from minions.userbot.engines import reactions
 from minions.userbot.engines import stories
+from minions.userbot.glue import aggregator
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -229,28 +234,21 @@ def test_read_is_a_copy_not_the_live_block(tmp_path: Path) -> None:
     assert store.read()['total_views'] == 1
 
 
-def test_an_unreadable_block_starts_fresh_but_read_strict_raises(
-    tmp_path: Path,
-) -> None:
-    """Two readers, on purpose: one degrades, one refuses to.
+def test_an_unreadable_block_starts_fresh(tmp_path: Path) -> None:
+    """A block that will not parse means "use your defaults", not a crash.
 
-    An engine reading "no mood yet" starts from its defaults and loses
-    nothing. The poster reading "nothing was ever posted" disarms its
-    re-post guard and republishes the backlog, so it must fail instead.
+    Everything still kept in a block is cheaply re-earned -- a mood, a
+    cursor, a daily counter. What was NOT cheap to lose has left: the
+    poster's published log is rows now, so an unparseable block can no
+    longer read as "nothing was ever posted" and republish the backlog.
     """
     store = _store(tmp_path)
     store.conn.execute(
-        "INSERT INTO state (service, blob) VALUES ('reactions', '{oops')"
+        "INSERT INTO state (service, blob) VALUES ('reactions', 'not json')"
     )
     store.conn.commit()
 
     assert store.read() == {}
-    try:
-        store.read_strict()
-    except ValueError:
-        return
-    msg = 'read_strict swallowed a broken block'
-    raise AssertionError(msg)
 
 
 def test_the_block_survives_a_kill_with_nothing_flushed(
@@ -535,9 +533,13 @@ def test_adopt_folds_every_older_shape_into_the_one_file(
     assert views.read() == {'total_views': 38}
 
     assert db.store('greeter').read() == {'last_event_id': 41}  # shape 2b
-    assert db.store('aggregator').read_strict()['posted'] == [
-        {'title': 'Posted one'}
+    # The poster's registers are tables now, so an adopted file arrives with
+    # its published log in ``posted`` rather than inside the JSON block.
+    poster = db.store('aggregator')
+    assert [str(r['title']) for r in poster.rows_of('posted')] == [
+        'Posted one'
     ]
+    assert 'posted' not in poster.read()
 
     seen = db.conn.execute(  # shape 3, under no service at all
         'SELECT a.username, n.msg_count FROM actors a '
@@ -1154,11 +1156,13 @@ def test_no_state_block_holds_a_list_or_a_dict(tmp_path: Path) -> None:
 
 
 def _fill(db: Database) -> None:
-    """Drive the real engines until every one of them has saved a block.
+    """Drive EVERY engine that owns a block until each has saved one.
 
     The engines, not a fixture that imitates them: the rule is about what
     ``_save`` actually writes, so a stand-in here would assert the rule
-    against itself.
+    against itself. Every service with a block has to be here too -- the rule
+    is only as wide as this function, and a service missing from it is a
+    service the rule does not cover.
     """
     likes = reactions.ReactionBrain(
         reactions.ReactionParams(enabled=True), db.store('reactions')
@@ -1176,75 +1180,133 @@ def _fill(db: Database) -> None:
     watch.mark_viewed(WATCHED, (STORY_A, STORY_B), ts=TAKE_AT)
     watch.mark_reacted(WATCHED, (STORY_A,), TAKE_AT)
 
+    comod.CabinetRoster(db.store('comod')).add('someone', '500', TAKE_AT)
 
-def test_an_older_file_moves_its_collections_out_of_the_blob(
+    _fill_poster(db.store('aggregator'))
+    _fill_greeter(db.store('greeter'))
+
+
+def _fill_poster(store: StateStore) -> None:
+    """Save a poster block holding a post, a pending group and a refusal."""
+    poster = object.__new__(aggregator.LinkAggregator)
+    poster.deps = SimpleNamespace(store=store)
+    poster.posted = [Posted('Posted one', TAKE_AT, {'yt': 'u'}, [1])]
+    poster.groups = [Group('Waiting one', {}, {2}, created_at=TAKE_AT)]
+    poster.rejected = ['too long']
+    poster._save()
+
+
+def _fill_greeter(store: StateStore) -> None:
+    """Save a greeter block after a departure it has to remember."""
+    keeper = object.__new__(greeter.Greeter)
+    keeper.store = store
+    keeper.params = greeter.load_greeter_params({}, -100)
+    keeper.state = greeter.GreeterState(started=True, last_event_id=41)
+    keeper._note_departure(9)
+    keeper._save()
+
+
+# ------------------------------------------------- schema hygiene
+# Three claims the file can now make about itself rather than trusting
+# whoever writes to it: every peer_id names an actor, every service is a
+# real one, and time is one format.
+
+
+def test_a_row_about_a_peer_cannot_outlive_the_peer(tmp_path: Path) -> None:
+    """The foreign key is on, and it bites.
+
+    Not decoration: a standing row for somebody with no row in ``actors`` is
+    a relationship with an id and nothing else, which is exactly what /who
+    printed when it could not find them.
+    """
+    store = _store(tmp_path)
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            'INSERT INTO standing (service, peer_id) VALUES (?, ?)',
+            ('reactions', 999),
+        )
+
+
+def test_acting_on_somebody_is_what_makes_them_exist(tmp_path: Path) -> None:
+    """A person exists the moment we act on them, named or not.
+
+    Which is what satisfies the key above without any caller having to
+    remember it: ``actors`` is everyone we ever touched, and a blank row is
+    an honest "we only have a number" rather than an invented name.
+    """
+    db = Database(tmp_path / DB_NAME)
+    db.store('stories').bump(WATCHED, {'offered': 1}, TAKE_AT, (STORY_A,))
+
+    assert db.actor(WATCHED).peer_id == WATCHED
+    assert db.actor(WATCHED).username == ''
+    assert db.store('stories').met(WATCHED) == TAKE_AT
+
+
+def test_a_service_that_does_not_exist_cannot_own_rows(
     tmp_path: Path,
 ) -> None:
-    """A deployed file opens once and the blob keeps only scalars after.
+    """The service CHECK, generated from SERVICES so it cannot drift.
 
-    ``CREATE TABLE IF NOT EXISTS`` builds the new tables in an existing file
-    but puts nothing in them, so without this the curve, the queue and the
-    watch window would all read as empty on the upgrade -- a silent reset of
-    everything the account had learned, which is exactly the shape of loss
-    nobody notices until a week later.
+    A typo used to make a partition of the database that nothing ever read
+    back -- rows written, no error, and the service they belonged to none
+    the wiser.
     """
-    path = tmp_path / DB_NAME
-    Database(path).conn.close()
-    old = sqlite3.connect(path)
-    old.execute(
-        'INSERT INTO state (service, blob) VALUES (?, ?)',
-        (
-            'reactions',
-            json.dumps(
-                {
-                    'mood': MOOD,
-                    'session': {'next_at': TAKE_AT, 'start_at': 0.0},
-                    'alive': {'14': 8.0, '15': 4.0},
-                    'emoji_last': {'55': TAKE_AT},
-                    'posts': [[-100, 7], [-100, 8]],
-                    'queue': [
-                        {'chat': -100, 'reply_to': 9, 'root': 7, 'when': 5.0}
-                    ],
-                    'log': [{'peer_id': 1, 'count': 2, 'ts': 3.0}],
-                }
-            ),
-        ),
-    )
-    old.commit()
-    old.close()
-
-    store = Database(path).store('reactions')
-
-    assert store.read() == {'mood': MOOD, 'next_at': TAKE_AT, 'start_at': 0.0}
-    adopted = store.hours(HALF_LIFE, time.time())
-    assert adopted == pytest.approx({14: 8.0, 15: 4.0})
-    assert store.emoji_seen() == {'55': TAKE_AT}
-    assert store.watched() == [(-100, 7), (-100, 8)]
-    assert [q['reply_to'] for q in store.queued()] == [9]
+    store = _store(tmp_path)
+    with pytest.raises(sqlite3.IntegrityError):
+        store.conn.execute(
+            "INSERT INTO state (service, blob) VALUES ('storys', '{}')"
+        )
 
 
-def test_moving_the_collections_out_happens_exactly_once(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_an_older_file_gets_an_actor_for_every_peer_it_mentions(
+    tmp_path: Path,
 ) -> None:
-    """Re-opening must not re-adopt what the engines have since changed.
+    """A deployed file predates the key, so the fold has to make it true.
 
-    Draining removes the old keys as it reads, so the move itself cannot
-    happen twice -- a restart could not resurrect a queue the engine had
-    already emptied even if it tried. The guard on top of that is about
-    COST: an up-to-date file must open without writing anything, or every
-    start would rewrite every service's block to no effect and announce a
-    migration that did not happen.
+    ``CREATE TABLE IF NOT EXISTS`` cannot add a foreign key to a table that
+    already exists, so the constraint is declared for NEW files and this is
+    what makes the same claim hold for old ones -- without rebuilding five
+    tables to attach it.
     """
     path = tmp_path / DB_NAME
-    Database(path).store('reactions').write(
-        {'mood': MOOD, 'alive': {'14': 8.0}}
+    first = Database(path)
+    first.conn.execute('PRAGMA foreign_keys = OFF')
+    first.conn.execute(
+        'INSERT INTO standing (service, peer_id) VALUES (?, ?)',
+        ('stories', WATCHED),
     )
-    adopted = time.time()
-    Database(path).store('reactions').note_hour(14, HALF_LIFE, adopted)
+    first.conn.commit()
+    first.conn.execute('DELETE FROM actors WHERE peer_id = ?', (WATCHED,))
+    first.conn.commit()
+    first.conn.close()
 
-    with caplog.at_level(logging.INFO, logger='userbot'):
-        again = Database(path).store('reactions')
+    again = Database(path)
 
-    assert again.hours(HALF_LIFE, adopted) == pytest.approx({14: 9.0})
-    assert 'alive' not in again.read()
-    assert 'drained' not in caplog.text  # nothing to drain, nothing claimed
+    assert again.actor(WATCHED).peer_id == WATCHED
+
+
+def test_every_time_in_the_file_is_an_epoch(tmp_path: Path) -> None:
+    """One format for time, so nothing has to parse a date to compare two.
+
+    The poster's ``at`` was an ISO string in this one place, which meant the
+    re-post guard parsed a date on every comparison and an unreadable one
+    had to be given a meaning before it could answer.
+    """
+    db = Database(tmp_path / DB_NAME)
+    _fill(db)
+
+    times = [
+        (table, column, row[column])
+        for table, column in (
+            ('posted', 'at'),
+            ('pending', 'since'),
+            ('cabinet', 'at'),
+            ('contact', 'at'),
+            ('uptime', 'at'),
+            ('scheduled', 'due_at'),
+        )
+        for row in db.conn.execute(f'SELECT {column} FROM {table}')  # noqa: S608
+    ]
+
+    assert times, 'the engines wrote no timestamps at all'
+    assert [t for t in times if not isinstance(t[2], float)] == []

@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 
 from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Item
-from minions.userbot.core.models import parse_iso
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -85,7 +84,7 @@ def is_recent_repost(  # noqa: PLR0913 -- a small pure predicate, flat reads bes
     norm_title = norm(title)
     for idx, post in enumerate(reversed(posted)):  # newest first
         within_count = idx < count
-        within_window = window > 0 and now - parse_iso(post.at) <= window
+        within_window = window > 0 and now - post.at <= window
         if not within_count and not within_window:
             break  # beyond both guards; the rest are older and further back
         if similar(norm_title, norm(post.title)) >= threshold:

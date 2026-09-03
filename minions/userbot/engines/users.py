@@ -121,14 +121,18 @@ class UserStore:
             return False
         now = self.clock() if event.ts is None else event.ts
         kind = 'join' if event.joined else 'leave'
+        # The actor row FIRST: the event points at it, so a foreign key
+        # refuses the event otherwise. It used to be created after, which
+        # worked only because nothing was checking.
+        self._ensure_user(event.user_id, now)
         cur = self._conn.execute(
             'INSERT OR IGNORE INTO membership_events '
             '(peer_id, event, ts, admin_log_id) VALUES (?, ?, ?, ?)',
             (event.user_id, kind, now, event.admin_log_id),
         )
         if cur.rowcount == 0:
+            self._conn.commit()  # the actor row above is still worth keeping
             return False  # already recorded under this admin_log_id
-        self._ensure_user(event.user_id, now)
         self._conn.execute(
             'UPDATE audience SET subscribed=? WHERE peer_id=?',
             (1 if event.joined else 0, event.user_id),
@@ -146,14 +150,15 @@ class UserStore:
         if msg.user_id <= 0 or msg.msg_id <= 0:
             return False
         now = self.clock() if msg.ts is None else msg.ts
+        self._ensure_user(msg.user_id, now)  # the row the message points at
         cur = self._conn.execute(
             'INSERT OR IGNORE INTO messages '
             '(peer_id, chat_id, msg_id, root, text, ts) VALUES (?,?,?,?,?,?)',
             (msg.user_id, msg.chat_id, msg.msg_id, msg.root, msg.text, now),
         )
         if cur.rowcount == 0:
+            self._conn.commit()
             return False  # already stored this message
-        self._ensure_user(msg.user_id, now)
         self._conn.execute(
             'UPDATE audience SET msg_count = msg_count + 1 WHERE peer_id = ?',
             (msg.user_id,),

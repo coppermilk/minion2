@@ -84,44 +84,17 @@ class CabinetRoster:
 
     store: state.StateStore
 
-    def _load(self) -> dict[str, dict[str, object]]:
-        """Reload the roster, tolerating a missing or corrupt block."""
-        out: dict[str, dict[str, object]] = {}
-        for key, value in self.store.read().items():
-            if isinstance(key, str) and isinstance(value, dict):
-                out[key] = {
-                    'at': float(value.get('at', 0.0) or 0.0),
-                    'amount': str(value.get('amount', '')),
-                }
-        return out
-
-    def _write(self, roster: dict[str, dict[str, object]]) -> None:
-        """Persist the roster; the transaction is the atomicity."""
-        self.store.write(roster)
-
     def add(self, nick: str, amount: str, now: float) -> None:
         """Move a nick into the cabinet, pruning anyone whose timer expired."""
         clean = nick.lstrip('@').strip()
         if not clean:
             return
-        roster = self._load()
-        roster[clean] = {'at': now, 'amount': amount.strip()}
-        fresh = {
-            n: e
-            for n, e in roster.items()
-            if now - codec.num(e['at']) < COMOD_TTL_SEC
-        }
-        self._write(fresh)
+        self.store.shelve(clean, now, amount.strip())
+        self.store.sweep_cabinet(now - COMOD_TTL_SEC)
 
     def remove(self, nick: str) -> bool:
         """Evict a nick by hand; True if it was there."""
-        clean = nick.lstrip('@').strip()
-        roster = self._load()
-        if clean not in roster:
-            return False
-        del roster[clean]
-        self._write(roster)
-        return True
+        return self.store.evict(nick.lstrip('@').strip())
 
     def active(self, now: float) -> list[tuple[str, str]]:
         """(nick, amount) still in the cabinet, most recent move-in first."""
@@ -130,17 +103,15 @@ class CabinetRoster:
     def entries(self, now: float) -> list[tuple[str, str, float]]:
         """(nick, amount, move-in epoch), most recent move-in first.
 
-        The dated view behind the month's registry (/propiska): the same fresh
-        residents as ``active`` but carrying their move-in time.
+        The dated view behind the month's registry (/propiska): the same
+        fresh residents as ``active`` but carrying their move-in time.
+        Expiry is a WHERE clause, so reading no longer evicts anybody as a
+        side effect of being read.
         """
-        roster = self._load()
-        fresh = [
-            (codec.num(e['at']), n, str(e['amount']))
-            for n, e in roster.items()
-            if now - codec.num(e['at']) < COMOD_TTL_SEC
+        return [
+            (str(r['nick']), str(r['amount']), float(r['at']))
+            for r in self.store.residents(now - COMOD_TTL_SEC)
         ]
-        fresh.sort(key=lambda row: row[0], reverse=True)
-        return [(nick, amount, at) for at, nick, amount in fresh]
 
 
 def _color(

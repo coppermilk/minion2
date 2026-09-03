@@ -93,6 +93,16 @@ def _tag(known: dict[int, Actor], peer_id: int) -> str:
     return render.tagged(found) if found is not None else str(peer_id)
 
 
+def _day(at: float) -> str:
+    """Render a post's moment as a date, for the published list.
+
+    The rendering side of the epoch: the file keeps one time format and
+    ISO is made HERE, where somebody reads it, rather than stored so that
+    the re-post guard has to parse a date to compare two moments.
+    """
+    return datetime.fromtimestamp(at, tz=UTC).strftime('%Y-%m-%d')
+
+
 def _when(at: float) -> str:
     """Render one act's moment for /who: a date and a clock, in UTC."""
     return datetime.fromtimestamp(at, tz=UTC).strftime('%m-%d %H:%M')
@@ -385,7 +395,7 @@ class StatusReport:
                 f' {self.arrow()} ~{fmt_eta(left)}'
             )
         lines.extend(
-            f'{b} "{trim(post.title)}" {b} {post.at[:10]}'
+            f'{b} "{trim(post.title)}" {b} {_day(post.at)}'
             f' {b} {len(post.links)} links'
             for post in poster.posted[-5:]
         )

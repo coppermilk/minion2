@@ -18,8 +18,6 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
-from minions.userbot.core import codec
-from minions.userbot.core import state
 from minions.userbot.core.matching import action_ok
 from minions.userbot.core.matching import duration_seconds
 from minions.userbot.core.matching import extract_fields
@@ -30,11 +28,10 @@ from minions.userbot.core.matching import similar
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.core.models import Posted
-from minions.userbot.core.models import iso
-from minions.userbot.core.poststate import pending_dict
-from minions.userbot.core.poststate import pending_from_dict
-from minions.userbot.core.poststate import posted_dict
-from minions.userbot.core.poststate import posted_from_dict
+from minions.userbot.core.poststate import pending_from_row
+from minions.userbot.core.poststate import pending_row
+from minions.userbot.core.poststate import posted_from_row
+from minions.userbot.core.poststate import posted_row
 from minions.userbot.core.render import compose
 from minions.userbot.core.render import youtube_thumb
 from minions.userbot.core.runtime import cancel
@@ -43,6 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
 
+    from minions.userbot.core import state
     from minions.userbot.core.humanize import Variety
     from minions.userbot.core.models import Config
     from minions.userbot.core.models import Consts
@@ -303,7 +301,7 @@ class LinkAggregator:
         self.posted.append(
             Posted(
                 title=group.title,
-                at=iso(time.time()),
+                at=time.time(),
                 links=links,
                 msg_ids=sorted(group.msg_ids),
             )
@@ -361,18 +359,20 @@ class LinkAggregator:
         return await self.deps.account.send(target, text)
 
     def _save(self) -> None:
-        """Persist state to disk as readable, indented JSON (atomic)."""
-        data = {
-            'posted': [posted_dict(p) for p in self.posted],
-            'pending': [
-                pending_dict(g, self.deps.config.platforms)
-                for g in self.groups
-            ],
-            # Insertion order, NOT sorted: the cap keeps the newest, so the
-            # order is what makes "newest" mean anything after a restart.
-            'rejected': list(self.rejected),
-        }
-        self.deps.store.write(data)
+        """Persist the three registers, each to its own table.
+
+        Insertion order, NOT sorted: each register is capped from the front,
+        so the order is what makes "newest" mean anything after a restart --
+        and ``id`` preserves it, which is why the reader asks for it.
+
+        The poster's state block is now empty of collections entirely, so a
+        rejected title no longer costs a rewrite of three hundred published
+        posts sitting in the same JSON object.
+        """
+        store = self.deps.store
+        store.set_rows('posted', [posted_row(p) for p in self.posted])
+        store.set_rows('pending', [pending_row(g) for g in self.groups])
+        store.set_rows('rejected', [(t,) for t in self.rejected])
 
     def restore(self) -> None:
         """Reload saved state and re-arm timers (call once at startup).
@@ -382,13 +382,11 @@ class LinkAggregator:
         posted", disarm the re-post guard and re-post the backlog. A read
         error propagates instead.
         """
-        data = self.deps.store.read_strict()
-        # A file written before the cap holds a sorted list; it loads as-is
-        # and only loses the true recency order once.
-        self.rejected = [str(t) for t in codec.rows(data.get('rejected'))]
+        store = self.deps.store
+        self.rejected = [str(r['title']) for r in store.rows_of('rejected')]
         del self.rejected[:-REJECTED_CAP]
-        self._restore_posted(data)
-        self._restore_pending(data)
+        self._restore_posted()
+        self._restore_pending()
         log.info(
             'restored %d pending, %d posted (%d dedup ids); mode=%s',
             len(self.groups),
@@ -397,25 +395,15 @@ class LinkAggregator:
             self.deps.mode,
         )
 
-    def _restore_posted(self, data: dict[str, object]) -> None:
-        """Load the posted log; migrate an old processed_ids-only file."""
-        self.posted = [
-            posted_from_dict(codec.table(p))
-            for p in codec.rows(data.get('posted'))
-        ]
+    def _restore_posted(self) -> None:
+        """Load the posted log and rebuild the dedup id set from it."""
+        store = self.deps.store
+        self.posted = [posted_from_row(r) for r in store.rows_of('posted')]
         self.processed_ids = {i for p in self.posted for i in p.msg_ids}
-        # Back-compat: an old file has no posted log, only raw processed_ids --
-        # seed the dedup set from it so a restart still never re-posts.
-        self.processed_ids |= {
-            codec.whole(i) for i in codec.rows(data.get('processed_ids'))
-        }
 
-    def _restore_pending(self, data: dict[str, object]) -> None:
-        """Load pending groups (new 'pending' key or old 'groups') + re-arm."""
-        raw_groups = codec.rows(data.get('pending')) or codec.rows(
-            data.get('groups')
-        )
-        for raw in raw_groups:
-            group = pending_from_dict(codec.table(raw))
+    def _restore_pending(self) -> None:
+        """Load the groups still collecting platforms, and re-arm each."""
+        for row in self.deps.store.rows_of('pending'):
+            group = pending_from_row(row)
             self.groups.append(group)
             self._arm(group)
