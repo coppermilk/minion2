@@ -563,9 +563,73 @@ def test_a_cold_leg_says_ignore_however_warm_the_history(
     assert ctrl.doing(_ARC.legs[1], led.row(peer)) == 'ignore'
 
 
-def test_somebody_we_have_never_acted_on_is_new_not_ignored(
+def test_somebody_who_has_offered_us_nothing_has_not_been_ignored(
     tmp_path: Path,
 ) -> None:
-    """No record is not a record of neglect -- the intention stands alone."""
-    ctrl = _arc_control(_ARC)
-    assert ctrl.doing(_ARC.legs[0], _ledger(tmp_path).row(404)) == 'like'
+    """Nor have we been liking them -- there was nothing there to notice.
+
+    The roster used to print the leg's whole intention here, promising
+    "liking" beside a 0% like column for everybody a fresh account had
+    merely heard of.
+    """
+    led, ctrl = _ledger(tmp_path), _arc_control(_ARC)
+
+    assert ctrl.doing(_ARC.legs[0], led.row(404)) == relationship.NEW
+    assert ctrl.doing(_ARC.legs[2], led.row(404)) == relationship.NEW
+
+
+def test_one_story_passed_over_is_a_coin_flip_not_a_policy(
+    tmp_path: Path,
+) -> None:
+    """A single chance cannot carry a claim about what we mean to do.
+
+    At the honeymoon's own aim of ~0.68 a lone miss happens a third of the
+    time, and the controller then steers the NEXT draw to twice the target,
+    which saturates -- so in a warm leg this is the only shape an empty
+    record can take at all. Calling it "ignoring" read the dice as intent.
+    """
+    led, ctrl = _ledger(tmp_path), _arc_control(_ARC)
+    led.add_offer(1, _ids(1), _MET)  # one story, and we happened to skip it
+
+    assert ctrl.doing(_ARC.legs[0], led.row(1)) == relationship.MISSED
+
+
+def test_enough_chances_go_by_and_the_empty_record_speaks(
+    tmp_path: Path,
+) -> None:
+    """Once a view was expected and never came, passing IS what we do."""
+    led, ctrl = _ledger(tmp_path), _arc_control(_ARC)
+    led.add_offer(1, _ids(2), _MET)  # 2 * 0.675 >= 1: a view was due
+
+    assert ctrl.doing(_ARC.legs[0], led.row(1)) == 'ignore'
+
+
+def test_the_evidence_threshold_moves_with_the_leg_not_a_number(
+    tmp_path: Path,
+) -> None:
+    """The same row flips as the leg's aim changes, so nothing is baked in.
+
+    "Enough chances" is one in the leg's own target, so a leg aimed at the
+    whole Wundt peak needs two before an empty record means anything, while
+    one aimed a little lower needs three. Retuning persona.arc has to move
+    that with it, or the threshold becomes a constant that used to be right.
+    """
+    led = _ledger(tmp_path)
+    led.add_offer(1, _ids(2), _MET)  # 2 * 0.675 >= 1 > 2 * 0.473
+    row = led.row(1)
+    keen = _arc_control(_ARC)
+    cooler = replace(_ARC.legs[0], exposure=0.7)  # still warm enough to intend
+    faint = _arc_control(replace(_ARC, legs=(cooler, *_ARC.legs[1:])))
+
+    assert keen.doing(keen.arc.legs[0], row) == 'ignore'
+    assert faint.doing(faint.arc.legs[0], row) == relationship.MISSED
+
+
+def test_a_leg_that_means_to_pass_says_so_from_the_first_chance(
+    tmp_path: Path,
+) -> None:
+    """There the bottom rung is the POLICY, and a policy needs no evidence."""
+    led, ctrl = _ledger(tmp_path), _arc_control(_ARC)
+    led.add_offer(1, _ids(1), _MET)
+
+    assert ctrl.doing(_ARC.legs[2], led.row(1)) == 'ignore'

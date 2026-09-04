@@ -69,6 +69,30 @@ def steer(current: float, target: float, gain: float) -> float:
     return _clip(target + gain * (target - current))
 
 
+NEW = 'new'
+"""Readout word: nobody has offered us anything yet, so nothing has happened.
+
+Deliberately NOT a rung of ``state.ACTS``. That ladder is lined up with
+``state.RUNGS`` position by position and generates the CHECK on
+``contact.act``, so a fourth entry there would be a fourth counter nobody
+keeps. These two are words for a READER, derived at render time exactly like
+``Control.leg_name`` -- the log's own vocabulary is untouched.
+"""
+
+MISSED = 'missed'
+"""Readout word: chances came and none landed, but too few to mean anything.
+
+The bottom rung of the ladder is an ABSENCE, and an absence is evidence only
+when there was enough to be absent from. One story passed over at a 67% aim
+is the coin landing tails, not a policy of ignoring somebody -- and with the
+shipped gain of 1.0 it is the ONLY way a warm leg can show an empty record at
+all (after one miss the controller steers the next draw to ``2 * target``,
+which saturates at 1.0, so ``offered >= 2 and taken == 0`` never happens).
+Calling that "ignoring" was a claim about our intent built out of one
+Bernoulli trial.
+"""
+
+
 @dataclass(frozen=True)
 class Warmth:
     """One peer's attachment readout for /status: exposure, recip, index.
@@ -338,7 +362,7 @@ class Control:
         return back if self.recip_goal(leg) > 0 else took
 
     def doing(self, leg: Leg | None, row: state.PeerRow) -> str:
-        """Return what we are doing with ONE person, as a rung of ``ACTS``.
+        """Return what we are doing with ONE person, in one word.
 
         The lesser of what this leg INTENDS and what has actually happened,
         because a readout claiming "liking" beside a 0% like column is not
@@ -352,15 +376,42 @@ class Control:
         somebody in a cold shoulder reads "ignore" however warm their
         history, because that is what we are doing to them now.
 
-        A person with no record at all is not being ignored, they are new,
-        so the intention stands alone for them.
+        The record only earns that veto in one direction, though. ``taken``
+        and ``recip`` are things we DID, and one of them is its own evidence.
+        The bottom rung is an absence, and an absence says nothing until
+        there was enough to be absent from -- which is what ``NEW`` and
+        ``MISSED`` are for, and why the roster used to print the two most
+        opposite words in the vocabulary either side of a single coin flip:
+        nothing offered read "liking", one story passed over read "ignoring",
+        and both meant "we have not started".
         """
+        if not row.offered:
+            return NEW  # there was nothing to notice
         ladder = state.ACTS['stories']
         intend = ladder.index(self.stance(leg))
-        if not row.offered:
-            return ladder[intend]
         done = len([n for n in (row.taken, row.recip) if n])
-        return ladder[min(intend, done)]
+        if done:
+            return ladder[min(intend, done)]
+        if intend and not self._enough_chances(leg, row):
+            return MISSED
+        return ladder[0]  # passing them over: by policy, or for real
+
+    def _enough_chances(self, leg: Leg | None, row: state.PeerRow) -> bool:
+        """Say whether an EMPTY record is long enough to mean we are passing.
+
+        Long enough is when this leg's own aim would have expected a view by
+        now -- one in ``take_target`` chances. Derived rather than a number,
+        so retuning ``persona.arc``, the control gain or the shape of the
+        Wundt curve moves the threshold with them instead of leaving a
+        constant that used to be right. Today that is two chances in the
+        honeymoon and two in the cold shoulder.
+
+        Only ever asked of a leg that intends something (``doing`` checks
+        that first), which is also what keeps a swing's zero target out of
+        the division: there the bottom rung IS the policy, and a policy is
+        true on the first day with no record at all.
+        """
+        return row.offered * self.take_target(leg) >= 1.0
 
     def leg_name(self, leg: Leg | None = None) -> str:
         """Return the leg's name for a READER, not its name in the config.

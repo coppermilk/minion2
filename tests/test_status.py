@@ -34,6 +34,7 @@ from minions.userbot.core.models import Emoji
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
 from minions.userbot.core.render import Glyphs
+from minions.userbot.core.state import ACTS
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Actor
 from minions.userbot.core.state import Database
@@ -221,6 +222,18 @@ def _bot(tmp_path: Path) -> main.Userbot:
         stories.StoryParams(enabled=True, poll_sec=1800.0),
         db.store('stories'),  # its own view, as in production
     )
+    # A record for two of them, written through the ledger rather than made
+    # up beside it: in production stories._standing reads THIS store and so
+    # does the word, and a fixture that fabricates one of the two lets a
+    # golden line claim "like" next to a 0% like column and call it expected.
+    led, ctrl = bot.stories.ledger, bot.stories._control()
+    then = NOW - 3 * 86400.0  # last week's, so "today" stays a clean zero
+    led.add_take(PEER_A, (1, 2, 3, 4, 5, 6, 7, 8), ctrl, then)
+    led.add_offer(PEER_A, (9, 10), then)  # 8 of 10 watched
+    led.bump_recip(PEER_A, 1, then)
+    led.bump_recip(PEER_A, 2, then)  # 2 of those 8 answered
+    led.add_take(PEER_B, (1, 2), ctrl, then)
+    led.add_offer(PEER_B, (3, 4, 5, 6), then)  # 2 of 6 watched, none answered
     # One glance covering every verdict a peer can get: being opened,
     # passed over this time, and nothing we have not already seen -- plus
     # one from the archived feed, which is watched on the same maths.
@@ -233,7 +246,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
                 5,
                 3,
                 stories.VIEWING,
-                standing=stories.Standing(offered=10, viewed=8, reacted=2),
+                standing=bot.stories._standing(PEER_A),
             ),
             stories.Seen(
                 PEER_B,
@@ -241,7 +254,7 @@ def _bot(tmp_path: Path) -> main.Userbot:
                 4,
                 0,
                 stories.PASSED,
-                standing=stories.Standing(offered=6, viewed=2),
+                standing=bot.stories._standing(PEER_B),
             ),
             stories.Seen(PEER_C, 2, 2, 0, stories.PASSED, hidden=True),
             stories.Seen(PEER_D, 3, 0, 0, stories.NOTHING_NEW),
@@ -340,14 +353,15 @@ GOLDEN = """\
 [U] Users DB . (-) off
 [S] Stories . (+) on . 0 today . 0/50 reacted . 1 queued . next view -> in \
 3m 10s
+. all time . 2 people . [w] 57% [l] 12% . warmth 0.12
 . glance 4m 10s ago . 4 with stories
 . viewing (1):
     @alice . 3 of 5 new . like . [w] 80% [l] 25% . in ~3m 10s
 . passed this glance (2):
-    @bob . 4 new . like . [w] 33% [l] 0%
-    @carol (archived) . 2 new . like . first time
+    @bob . 4 new . seen . [w] 33% [l] 0%
+    @carol (archived) . 2 new . new . first time
 . already seen (1):
-    @dave . 3 up . like . first time
+    @dave . 3 up . new . first time
 
 [H] Schedule
 . tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
@@ -428,8 +442,22 @@ def test_a_blocked_session_names_its_reason_once(
     bot.stories.last_glance = stories.Glance(
         at=NOW - 10,
         peers=(
-            stories.Seen(PEER_A, 2, 2, 0, 'cooldown 4949s'),
-            stories.Seen(PEER_B, 1, 1, 0, 'cooldown 4949s'),
+            stories.Seen(
+                PEER_A,
+                2,
+                2,
+                0,
+                'cooldown 4949s',
+                standing=bot.stories._standing(PEER_A),
+            ),
+            stories.Seen(
+                PEER_B,
+                1,
+                1,
+                0,
+                'cooldown 4949s',
+                standing=bot.stories._standing(PEER_B),
+            ),
         ),
         blocked='cooldown 4949s',
     )
@@ -439,7 +467,7 @@ def test_a_blocked_session_names_its_reason_once(
 
     assert '. cooldown 4949s (2):' in got
     assert got.count('cooldown 4949s') == 1
-    assert '    @alice . 2 new . like . first time' in got
+    assert '    @alice . 2 new . like . [w] 80% [l] 25%' in got
 
 
 # --- the fixture above is not the file the bot ships -----------------------
@@ -471,6 +499,22 @@ def test_the_shipped_constants_carry_every_status_glyph() -> None:
     """
     shipped = config.load_constants(config.CONSTANTS_PATH).status
     missing = _glyph_keys_the_report_asks_for() - set(shipped)
+    assert not missing, f'texts.status is missing {sorted(missing)}'
+
+
+def test_the_shipped_constants_carry_a_word_for_every_doing() -> None:
+    """And a word for each of the five things /people can say we are doing.
+
+    The sweep above cannot see these: the key is built as ``f'act_{rung}'``,
+    so a missing one falls back to the bare rung and drops an English
+    "missed" into a Russian roster with nothing failing. Enumerated from the
+    ladder and the two readout words rather than listed, so adding a rung
+    fails here instead of shipping wordless.
+    """
+    shipped = config.load_constants(config.CONSTANTS_PATH).status
+    said = (*ACTS['stories'], relationship.NEW, relationship.MISSED)
+    missing = {f'act_{word}' for word in said} - set(shipped)
+
     assert not missing, f'texts.status is missing {sorted(missing)}'
 
 
@@ -560,8 +604,18 @@ def test_people_with_nothing_new_are_still_named(
     bot.stories.last_glance = stories.Glance(
         at=NOW - 10,
         peers=(
-            stories.Seen(PEER_A, active=3, unseen=0),
-            stories.Seen(PEER_B, active=1, unseen=0),
+            stories.Seen(
+                PEER_A,
+                active=3,
+                unseen=0,
+                standing=bot.stories._standing(PEER_A),
+            ),
+            stories.Seen(
+                PEER_B,
+                active=1,
+                unseen=0,
+                standing=bot.stories._standing(PEER_B),
+            ),
         ),
     )
 
@@ -570,8 +624,8 @@ def test_people_with_nothing_new_are_still_named(
     )
 
     assert '. already seen (2):' in got
-    assert '    @alice . 3 up . like . first time' in got
-    assert '    @bob . 1 up . like . first time' in got
+    assert '    @alice . 3 up . like . [w] 80% [l] 25%' in got
+    assert '    @bob . 1 up . seen . [w] 33% [l] 0%' in got
     assert 'viewing' not in got
 
 
@@ -589,6 +643,12 @@ def _who_bot(tmp_path: Path) -> main.Userbot:
     )
     bot._dbs = {tmp_path: Database(tmp_path / DB_NAME)}
     bot.database('stories').note_actor(Actor(PEER_A, 'user', username='alice'))
+    # /who asserts an exact history, act for act, so it starts from an empty
+    # story ledger rather than on top of the one the golden report seeds.
+    conn = bot.stories.store.conn
+    conn.execute("DELETE FROM contact WHERE service = 'stories'")
+    conn.execute("DELETE FROM standing WHERE service = 'stories'")
+    conn.commit()
     ledger = bot.stories.ledger
     control = bot.stories._control()
     ledger.add_take(PEER_A, (400, WHO_STORY), control, NOW - 86400)
