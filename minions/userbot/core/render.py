@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minions.userbot.core.humanize import Variety
@@ -20,10 +21,12 @@ from minions.userbot.core.matching import primary
 from minions.userbot.core.models import Emoji
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
+from minions.userbot.core.runtime import fmt_span
 from minions.userbot.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from collections.abc import Mapping
 
     from minions.userbot.core.models import Consts
     from minions.userbot.core.state import Actor
@@ -62,15 +65,31 @@ def tagged(actor: Actor) -> str:
 
 @dataclass(frozen=True)
 class Glyphs:
-    """The two /status glyphs a service needs to render its own rows.
+    """The report's wording that a service needs to render its own rows.
 
     The report's icons live in the constants JSON, so a service that renders
     a row of it (the queued reactions) is handed just these rather than the
     whole Consts -- it has no other business with the report's wording.
+
+    ``units`` are the operator's letters for a duration, keyed by the ASCII
+    unit ``fmt_span`` returns. They ride along because a queued row carries
+    an eta, and a service formatting its own would be a second place that
+    decides how long "17h" is written -- which is exactly the drift this
+    bag exists to prevent for the bullet and the arrow.
     """
 
     bullet: str = '-'
     arrow: str = '->'
+    units: Mapping[str, str] = field(default_factory=dict)
+
+    def span(self, seconds: float) -> str:
+        """Return a duration the one way the report writes one: '17h', '3d'.
+
+        One unit, the coarsest that fits: the second one never changed a
+        decision and made the same number read three ways across a report.
+        """
+        count, unit = fmt_span(seconds)
+        return f'{count}{self.units.get(unit) or unit}'
 
 
 def trim(title: str, width: int = 40) -> str:

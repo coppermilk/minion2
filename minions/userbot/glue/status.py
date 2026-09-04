@@ -19,9 +19,9 @@ from typing import TYPE_CHECKING
 from minions.userbot.core import humanize
 from minions.userbot.core import relationship
 from minions.userbot.core import render
+from minions.userbot.core.render import Glyphs
 from minions.userbot.core.render import emoji_markup
 from minions.userbot.core.render import trim
-from minions.userbot.core.runtime import fmt_eta
 from minions.userbot.core.state import ACTS
 from minions.userbot.core.state import RUNGS
 from minions.userbot.glue.commands import COMMAND_WHO
@@ -33,6 +33,13 @@ from minions.userbot.glue.commands import SERVICE_NAMES
 PENDING_ROWS = 12
 # How many of the warmest story peers to list in the attachment readout.
 STATUS_WARM_PEERS = 3
+_UNIT_KEYS = ('s', 'm', 'h', 'd')
+"""Every unit ``fmt_span`` can return, so each gets the operator's letter.
+
+Spelled out rather than discovered, because it is the KEYS of a lookup: a
+unit with no entry falls back to its ASCII name, which is how an English
+"17h" would slip into a Russian report without anything failing.
+"""
 TWO_WORDS = 2
 """A /who with no name is the usage line, not a lookup."""
 
@@ -76,14 +83,6 @@ def _capped(rows: list[str], cap: int = PENDING_ROWS) -> list[str]:
     if len(rows) <= cap:
         return rows
     return [*rows[:cap], f'    ... (+{len(rows) - cap} more)']
-
-
-def _clock_eta(at: float, tz_offset: float) -> str:
-    """Return "HH:MM (in 8m 12s)" for ``at``, read in the persona's zone."""
-    zone = timezone(timedelta(hours=tz_offset))
-    clock = datetime.fromtimestamp(at, tz=zone).strftime('%H:%M')
-    eta = at - time.time()
-    return f'{clock} (in {"now" if eta <= 0 else fmt_eta(eta)})'
 
 
 def _waiting(row: stories.Seen) -> bool:
@@ -161,6 +160,36 @@ class StatusReport:
         """Return a /status glyph from the JSON, or the fallback."""
         return self.bot.consts.status.get(key) or fallback
 
+    def glyphs(self) -> Glyphs:
+        """Return the report's wording, for a service that renders its rows.
+
+        Built here rather than passed in, because these ARE the report's
+        words: a queued reaction rendered by the comment watcher has to come
+        out looking like a line of this report, or /reactnow and /status
+        describe the same queue two ways.
+        """
+        return Glyphs(self.bullet(), self.arrow(), self._units())
+
+    def _units(self) -> dict[str, str]:
+        """Return the operator's letter for each duration unit."""
+        return {unit: self._glyph(f'unit_{unit}', unit) for unit in _UNIT_KEYS}
+
+    def _span(self, seconds: float) -> str:
+        """Return a duration the one way this report writes one: '17h', '3d'.
+
+        Every span in every section comes through here -- an age, a
+        countdown, a window, a timeout -- because the same number written
+        three ways is three things to read.
+        """
+        return self.glyphs().span(seconds)
+
+    def _clock_eta(self, at: float, tz_offset: float) -> str:
+        """Return "HH:MM (in 8h)" for ``at``, read in the persona's zone."""
+        zone = timezone(timedelta(hours=tz_offset))
+        clock = datetime.fromtimestamp(at, tz=zone).strftime('%H:%M')
+        eta = at - time.time()
+        return f'{clock} (in {"now" if eta <= 0 else self._span(eta)})'
+
     def _dot(self, *, on: bool) -> str:
         """Return the green/red status dot."""
         return self._glyph('on', '[on]') if on else self._glyph('off', '[off]')
@@ -190,6 +219,8 @@ class StatusReport:
             *self._videos_lines(),
             '',
             *self._react_status_lines(known),
+            '',
+            *self._plan_lines(known),
             '',
             *self._greeter_lines(),
             '',
@@ -262,28 +293,63 @@ class StatusReport:
         a person is one relationship however many ways we reach them.
         """
         service, code = self._reading(row.peer_id)
-        seen = row.taken / row.offered if row.offered else 0.0
-        back = row.recip / row.taken if row.taken else 0.0
-        return (
-            f'{b} {_name(known, row.peer_id)} '
-            f'{b} {self._act_word(service, code)} '
-            f'{self._ago(row.last_at)} '
-            f'{b} {self._glyph("watched", "w")} {seen:.0%} '
-            f'{self._glyph("liked", "l")} {back:.0%} '
-            f'{b} {self._leg_of(row.peer_id, service)}'
-        )
+        fields = [
+            _name(known, row.peer_id),
+            self._tag(service, code),
+            self._act_word(service, code),
+            self._ago(row.last_at),
+            self._ratio(row.taken, row.offered, row.recip),
+            self._leg_of(row.peer_id, service),
+        ]
+        return f'{b} ' + f' {b} '.join(part for part in fields if part)
+
+    def _tag(self, service: str, code: int) -> str:
+        """Return the short name of the service a verb is speaking about.
+
+        The vocabularies do not overlap -- orbiting is only ever a story and
+        replying only ever a comment -- but that is a mapping the reader
+        would have to learn, and the percentages beside the verb are the
+        fold across BOTH services either way. The tag says which ledger
+        earned the word; /who is where the split lives.
+
+        Blank when nothing has been offered anywhere: no ledger earned that
+        word, so naming one would be the tie-break's arbitrary pick printed
+        as a fact -- and it would say "comments" about somebody we have only
+        ever seen post a story.
+        """
+        if code == relationship.NEW:
+            return ''
+        return self._glyph(f'tag_{service}', service)
+
+    def _ratio(self, taken: int, offered: int, recip: int) -> str:
+        """Return the two shares the one way this report writes them: '67/25'.
+
+        Of what they offered we took this much, and of what we took we
+        answered this much. Written the same in every section: the roster
+        said one thing with an eye and a thumb on every row, the story
+        section another with bracketed letters, and they were the same two
+        numbers. The glyphs move to the legend, where one copy explains all
+        of them.
+        """
+        seen = 100 * taken / offered if offered else 0.0
+        back = 100 * recip / taken if taken else 0.0
+        return f'{seen:.0f}/{back:.0f}'
 
     def _ago(self, at: float) -> str:
-        """Return '3d 4h ago' for the last time we touched somebody.
+        """Return '3d' for the last time we touched somebody, or 'never'.
 
         A verb with no moment is a claim with nothing behind it: "liking"
         reads as something happening, and without a date the reader cannot
         tell it from something that happened in March. The word says WHAT,
         this says WHEN, and only together are they checkable.
+
+        No "ago" on it: the column after the verb is the only place a bare
+        duration appears on the line, so the word would be on every row and
+        carry nothing -- and the row is read across, not parsed.
         """
         if at <= 0:
             return 'never'
-        return f'{fmt_eta(max(0.0, time.time() - at))} ago'
+        return self._span(max(0.0, time.time() - at))
 
     def _leg_of(self, peer_id: int, service: str = 'stories') -> str:
         """Return 'honeymoon, round 2' for a peer, or 'no arc' when it is off.
@@ -302,7 +368,7 @@ class StatusReport:
         since, now = brain.store.met(peer_id), brain.clock()
         leg = control.arc.leg(since, now, peer_id)
         name = control.leg_name(service, leg)
-        return f'{name}, round {control.arc.rounds(since, now)}'
+        return f'{name} {control.arc.rounds(since, now)}'
 
     def _db(self) -> Database:
         """Return the database /who reads: the story engine's profile.
@@ -428,8 +494,8 @@ class StatusReport:
     def _greeter_wake_eta(self, now: float) -> str:
         """Return 'HH:MM (in 14h 30m)' for the greeter's next wake-up.
 
-        Hours are the coarsest unit ``fmt_eta`` prints, and the next wake is
-        under a day away by construction, so there is never a days field.
+        The next wake is under a day away by construction, so the span
+        beside the clock time is hours at its coarsest.
         """
         gp = self.bot.greeter.params
         local = humanize.local(now, gp.tz_offset_hours)
@@ -438,7 +504,7 @@ class StatusReport:
         )
         if wake <= local:
             wake += timedelta(days=1)
-        return _clock_eta(wake.timestamp(), gp.tz_offset_hours)
+        return self._clock_eta(wake.timestamp(), gp.tz_offset_hours)
 
     def _routing_lines(self, known: dict[int, Actor]) -> list[str]:
         """Source, the live targets, and where posts go NOW (test vs live)."""
@@ -462,7 +528,7 @@ class StatusReport:
         """
         secs = self.bot.config.repost_guard
         count = self.bot.config.repost_guard_count
-        time_part = fmt_eta(secs) if secs > 0 else 'off'
+        time_part = self._span(secs) if secs > 0 else 'off'
         count_part = f'last {count}' if count > 0 else 'off'
         if secs <= 0 and count <= 0:
             return 'off'
@@ -471,7 +537,7 @@ class StatusReport:
     def _videos_lines(self) -> list[str]:
         """Videos: counts on the header, then pending + recent posts."""
         b = self.bullet()
-        window = fmt_eta(self.bot.config.timeout)
+        window = self._span(self.bot.config.timeout)
         poster = self.bot.aggregator
         lines = [
             self._header(
@@ -496,7 +562,7 @@ class StatusReport:
             left = self.bot.config.timeout - (time.time() - group.created_at)
             lines.append(
                 f'{b} "{trim(group.title)}" have [{have}] wait [{missing}]'
-                f' {self.arrow()} ~{fmt_eta(left)}'
+                f' {self.arrow()} ~{self._span(left)}'
             )
         lines.extend(
             f'{b} "{trim(post.title)}" {b} {_day(post.at)}'
@@ -536,7 +602,6 @@ class StatusReport:
             *([line] if (line := self._react_rescan_line()) else []),
             *self._react_attach_lines(known),
             *self._last_posts_lines(known),
-            *self._pending_react_lines(),
             f'{b} /reactnow {b} /requeue',
         ]
 
@@ -556,13 +621,12 @@ class StatusReport:
         if not warm:
             return ''
         b = self.bullet()
-        seen = sum(w.p for w in warm) / len(warm)
-        answered = sum(w.r for w in warm) / len(warm)
+        seen = 100 * sum(w.p for w in warm) / len(warm)
+        answered = 100 * sum(w.r for w in warm) / len(warm)
         warmth = sum(w.index for w in warm) / len(warm)
         return (
             f'{b} all time {b} {len(warm)} {noun} '
-            f'{b} {self._glyph("watched", "w")} {seen:.0%} '
-            f'{self._glyph("liked", "l")} {answered:.0%} '
+            f'{b} {seen:.0f}/{answered:.0f} '
             f'{b} warmth {warmth:.2f}'
         )
 
@@ -587,12 +651,11 @@ class StatusReport:
         if not warm:
             return []
         b = self.bullet()
-        eye, thumb = self._glyph('watched', 'w'), self._glyph('liked', 'l')
         return [
             self._attach_line(warm, noun),
             *(
                 f'    {_name(known, w.peer_id)} {b} '
-                f'{eye} {w.p:.0%} {thumb} {w.r:.0%}'
+                f'{100 * w.p:.0f}/{100 * w.r:.0f}'
                 for w in warm[:STATUS_WARM_PEERS]
             ),
         ]
@@ -620,10 +683,56 @@ class StatusReport:
             return ''
         return f'{self.bullet()} rescan: off (use /requeue)'
 
-    def _pending_react_lines(self) -> list[str]:
-        """Return queued reactions: which lands on which comment, when."""
-        rows = self.bot.comment_watch.queued_rows()
-        return [f'{self.bullet()} queued:', *rows] if rows else []
+    def _plan_lines(self, known: dict[int, Actor]) -> list[str]:
+        """Return everything the bot is about to do, both engines, by time.
+
+        One queue, because the operator's question is "what is this bot
+        about to do", not "what is each engine about to do". The comment
+        reactions were listed with their etas and the planned story views
+        were not listed at all -- they only showed as a count in another
+        section's header -- so a reader could see half the plan and had no
+        way to know the other half existed.
+
+        Sorted by the moment each fires, which is the only order that makes
+        two queues one, and capped after the merge so the cut falls on the
+        furthest-out item rather than on whichever engine was rendered
+        second.
+        """
+        rows = [
+            *self.bot.comment_watch.queued_rows(),
+            *self._planned_views(known),
+        ]
+        head = self._header('plan', 'Plan', f'{len(rows)} queued')
+        if not rows:
+            return [head, f'{self.bullet()} nothing scheduled']
+        return [head, *_capped([row for _, row in sorted(rows)])]
+
+    def _planned_views(
+        self, known: dict[int, Actor]
+    ) -> list[tuple[float, str]]:
+        """Return the story views scheduled for this session, as (when, row).
+
+        Says how many of whose stories, and whether a reaction rides along:
+        the plan is decided when the session is laid out, so this is a
+        promise the reader can hold the engine to rather than a guess.
+        """
+        now = time.time()
+        tag = self._glyph('tag_stories', 'stories')
+        b = self.bullet()
+        return [
+            (
+                view.when,
+                f'    {tag} {b} {len(view.story_ids)} stories '
+                f'{_name(known, view.peer_id) or view.peer_id}'
+                f'{f" + {view.react_emoji}" if view.react_ids else ""}'
+                f' {b} {self._due_in(view.when - now)}',
+            )
+            for view in self.bot.story_watch.pending
+        ]
+
+    def _due_in(self, seconds: float) -> str:
+        """Return 'due now' or 'in ~3h' -- how a queued row says when."""
+        return 'due now' if seconds <= 0 else f'in ~{self._span(seconds)}'
 
     def _last_posts_lines(self, known: dict[int, Actor]) -> list[str]:
         """Return the watched comment threads, grouped one line per chat."""
@@ -705,7 +814,8 @@ class StatusReport:
         b = self.bullet()
         if not glance.at:
             return [f'{b} glance: none yet']
-        head = f'{b} glance {fmt_eta(time.time() - glance.at)} ago {b} '
+        age = self._span(time.time() - glance.at)
+        head = f'{b} glance {age} ago {b} '
         if not glance.peers:
             return [head + 'nobody has stories up']
         return [
@@ -735,7 +845,7 @@ class StatusReport:
                 [
                     f'    {self._who(row, known)} {b} '
                     f'{row.viewing} of {row.unseen} new {b} '
-                    f'{self._record(row)}{self._view_eta(row.peer_id)}'
+                    f'{self._record(row)}'
                     for row in sorted(rows, key=lambda r: -r.viewing)
                 ]
             ),
@@ -823,14 +933,8 @@ class StatusReport:
         held = row.standing
         if not held.offered:
             return f'{doing} {self.bullet()} first time'
-        watched = 100 * held.viewed / held.offered
-        liked = 100 * held.reacted / held.viewed if held.viewed else 0.0
-        eye = self._glyph('watched', 'w')
-        thumb = self._glyph('liked', 'l')
-        return (
-            f'{doing} {self.bullet()} '
-            f'{eye} {watched:.0f}% {thumb} {liked:.0f}%'
-        )
+        ratio = self._ratio(held.viewed, held.offered, held.reacted)
+        return f'{doing} {self.bullet()} {ratio}'
 
     def _codes(self, peer_id: int) -> dict[str, tuple[int, int]]:
         """Return ``{service: (rung, offered)}`` for every ledger we keep.
@@ -926,16 +1030,6 @@ class StatusReport:
             return ''
         return f' {self.arrow()} {self._in(lifts - time.time())}'
 
-    def _view_eta(self, peer_id: int) -> str:
-        """Return ' . in ~3m 10s' for a queued peer, '' once it has fired."""
-        b = self.bullet()
-        for view in self.bot.story_watch.pending:
-            if view.peer_id == peer_id:
-                eta = view.when - time.time()
-                due = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
-                return f' {b} {due}'
-        return ''
-
     def _schedule_lines(self) -> list[str]:
         """Return the Schedule section: when each loop next runs, and the pace.
 
@@ -994,13 +1088,13 @@ class StatusReport:
     def _in(self, seconds: float) -> str:
         """Return a countdown, or 'now' for anything under a second.
 
-        Sub-second waits are why the threshold is not zero: fmt_eta floors
-        to whole seconds, so half a second rendered as "in 0s" -- which
+        Sub-second waits are why the threshold is not zero: ``fmt_span``
+        floors to whole seconds, so half a second read "in 0s" -- which
         reads like a broken counter rather than "free". The gate lands
         there constantly, because resolving the report's own chat names
         uses it moments before the report prints it.
         """
-        return 'now' if seconds < 1 else f'in {fmt_eta(seconds)}'
+        return 'now' if seconds < 1 else f'in {self._span(seconds)}'
 
     def _pace_lines(self) -> list[str]:
         """Return the gate's lanes: when each may fire, and any widening.

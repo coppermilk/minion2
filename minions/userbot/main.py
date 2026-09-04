@@ -58,7 +58,6 @@ from minions.userbot.core.config import resolve_state_dir
 from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import THUMB_ALIASES
 from minions.userbot.core.models import Config
-from minions.userbot.core.render import Glyphs
 from minions.userbot.core.runtime import configure_logging
 from minions.userbot.core.runtime import touch_health
 from minions.userbot.core.runtime import watchdog
@@ -206,7 +205,7 @@ class Userbot:
                 brain=self.reactions,
                 targets=self.live_targets,
                 announce=self._send_status,
-                glyphs=Glyphs(self.report.bullet(), self.report.arrow()),
+                glyphs=self.report.glyphs(),
                 human_words=self.consts.human_words,
                 rescan_sec=self.modes.rescan_interval(
                     self.modes.mode_of('reactions')

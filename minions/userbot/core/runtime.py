@@ -134,25 +134,34 @@ def configure_logging() -> None:
     )
 
 
-def fmt_eta(seconds: float) -> str:
-    """Return a short duration: '45s', '8m 12s', '2h 15m' or '7d 4h'.
+def fmt_span(seconds: float) -> tuple[int, str]:
+    """Return a duration as ONE unit: (42, 's'), (17, 'h'), (3, 'd').
 
-    The two coarsest units, always, so the number stays readable at any
-    size -- and it has to work at any size, because the same span is a
-    countdown in one line ("next view in 3m 10s") and an age in another
-    ("last touched 7d 4h ago"). Stopping at hours made the second read
-    "7211h 8m", which is a number nobody converts in their head.
+    The coarsest unit that fits, and only that one. The second unit used to
+    ride along -- "1d 50s", "8m 12s" -- and it never changed a decision: a
+    reader deciding whether to look at somebody does not care that it was a
+    day and fifty seconds rather than a day and forty-three minutes. What it
+    did do was make the same span read three different ways across one
+    report, which is what "one look" was supposed to fix.
+
+    The unit comes back as an ASCII KEY rather than a letter, because the
+    letter a reader sees is the operator's word and lives in the constants
+    JSON with every other one. Arithmetic here, vocabulary there, and this
+    module stays free of both a language and a config.
+
+    Truncating, not rounding: 59 minutes is 59 minutes and not an hour, so a
+    countdown never claims to be shorter than it is.
     """
     total = max(0, int(seconds))
     if total < _SECS_PER_MIN:
-        return f'{total}s'
+        return total, 's'
     mins = total // _SECS_PER_MIN
     if mins < _MINS_PER_HOUR:
-        return f'{mins}m {total % _SECS_PER_MIN}s'
+        return mins, 'm'
     hours = mins // _MINS_PER_HOUR
     if hours < _HOURS_PER_DAY:
-        return f'{hours}h {mins % _MINS_PER_HOUR}m'
-    return f'{hours // _HOURS_PER_DAY}d {hours % _HOURS_PER_DAY}h'
+        return hours, 'h'
+    return hours // _HOURS_PER_DAY, 'd'
 
 
 def cancel(task: asyncio.Task[object] | None) -> None:

@@ -27,7 +27,6 @@ from minions.userbot.core.models import Emoji
 from minions.userbot.core.render import Glyphs
 from minions.userbot.core.render import emoji_markup
 from minions.userbot.core.render import trim
-from minions.userbot.core.runtime import fmt_eta
 from minions.userbot.engines import reactions
 from minions.userbot.engines.premium_emoji import RichText
 
@@ -85,17 +84,23 @@ class CommentWatch:
     # pre-fire thread refresh debounce, keyed by thread root
     _thread_seen: dict[int, float] = field(default_factory=dict)
 
-    def queued_rows(self) -> list[str]:
-        """One capped row per queued reaction, for /status and /requeue."""
+    def queued_rows(self) -> list[tuple[float, str]]:
+        """Return every queued reaction as ``(when, row)``, uncapped.
+
+        The moment rides along because /status merges these with the story
+        engine's planned views into ONE queue -- the operator asks "what is
+        this bot about to do", not "what is each engine about to do" -- and
+        two lists cannot be interleaved by time without it.
+
+        Uncapped for the same reason: a cap applied here would be a cap on
+        half the queue, and the reader would never learn which half was cut.
+        Each caller caps the list it actually shows.
+        """
         now = time.time()
-        rows = [
-            self._queued_row(entry, now)
+        return [
+            (entry.when, self._queued_row(entry, now))
             for entry in self.deps.brain.state.pending
         ]
-        if len(rows) <= QUEUED_ROWS:
-            return rows
-        extra = len(rows) - QUEUED_ROWS
-        return [*rows[:QUEUED_ROWS], f'    ... (+{extra} more)']
 
     def _queued_row(self, queued: reactions.Reaction, now: float) -> str:
         """One queued line: reaction, verb, comment, post, eta."""
@@ -105,7 +110,7 @@ class CommentWatch:
         )
         verb = 'sticker' if queued.kind == 'reply' else 'like'
         eta = queued.when - now
-        when = 'due now' if eta <= 0 else f'in ~{fmt_eta(eta)}'
+        when = 'due now' if eta <= 0 else f'in ~{self.deps.glyphs.span(eta)}'
         return (
             f'    {_queued_markup(queued)} {verb} {self.deps.glyphs.arrow}'
             f' {what} {b} post {queued.root} {b} {when}'
@@ -416,13 +421,17 @@ class CommentWatch:
 
         This is what makes /requeue and /reactnow legible: the operator sees
         the exact reaction, comment, post and eta of every queued item, not a
-        count. The same rows /status shows -- ``queued_react_rows`` builds
-        both.
+        count. The same rows /status shows -- ``queued_rows`` builds both --
+        soonest first, and capped here rather than there because /status
+        merges them with another engine's queue before deciding what fits.
         """
-        rows = self.queued_rows()
+        rows = [row for _, row in sorted(self.queued_rows())]
         if not rows:
             return f'{head} pending reaction(s). Nothing queued.'
-        return '\n'.join([f'{head} pending reaction(s):', *rows])
+        shown = rows[:QUEUED_ROWS]
+        if len(rows) > QUEUED_ROWS:
+            shown.append(f'    ... (+{len(rows) - QUEUED_ROWS} more)')
+        return '\n'.join([f'{head} pending reaction(s):', *shown])
 
     def cancel(self) -> None:
         """Cancel every in-flight fire-later reaction task."""

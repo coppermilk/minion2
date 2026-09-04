@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 import time
 from dataclasses import replace
 from types import SimpleNamespace
@@ -34,7 +35,6 @@ from minions.userbot.core.models import Consts
 from minions.userbot.core.models import Emoji
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
-from minions.userbot.core.render import Glyphs
 from minions.userbot.core.state import ACTS
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Actor
@@ -102,9 +102,8 @@ def _consts() -> Consts:
             'greeter': '[G]',
             'users': '[U]',
             'stories': '[S]',
+            'plan': '[P]',
             'schedule': '[H]',
-            'watched': '[w]',
-            'liked': '[l]',
             'services': '[C]',
             'legend': '[L]',
             'on': '(+)',
@@ -149,6 +148,9 @@ def _bot(tmp_path: Path) -> main.Userbot:
         'greeter': 'live',
     }
     bot.modes = SimpleNamespace(mode_of=service_modes.__getitem__)
+    # Built here, before the services, exactly as main.__init__ does -- they
+    # are handed its words when they are wired.
+    bot.report = StatusReport(bot)
     # One database, one view per service -- exactly as main builds it.
     db = Database(tmp_path / DB_NAME)
     bot.aggregator = aggregator_glue.LinkAggregator(
@@ -213,7 +215,9 @@ def _bot(tmp_path: Path) -> main.Userbot:
             brain=brain,
             targets=lambda: (TARGET,),
             announce=_unused_announce,
-            glyphs=Glyphs('.', '->'),
+            # The report's own words, as main.py wires them: a service that
+            # renders a row of /status must not invent a second vocabulary.
+            glyphs=bot.report.glyphs(),
             rescan_sec=300.0,
         ),
         next_rescan=NOW + 120,
@@ -317,7 +321,6 @@ def _bot(tmp_path: Path) -> main.Userbot:
             Lane('story', 0.4, 1.0),
         ]
     )
-    bot.report = StatusReport(bot)
     return bot
 
 
@@ -329,9 +332,8 @@ GOLDEN = """\
 . target: @dst (-1002)
 . posting -> @dst (-1002)
 
-[V] Videos . pending 1 (timeout 3h 0m) . posted 1 . rejected 1 . guard 7d \
-0h/last 5
-. "Waiting one" have [-] wait [tiktok, youtube] -> ~2h 50m
+[V] Videos . pending 1 (timeout 3h) . posted 1 . rejected 1 . guard 7d/last 5
+. "Waiting one" have [-] wait [tiktok, youtube] -> ~2h
 . "Posted one" . 2026-08-01 . 1 links
 
 [K] Reactions . (+) on . 1 reactions / 1 likes
@@ -340,34 +342,33 @@ GOLDEN = """\
 . mood 0.25 . answered 1 . pending 1
 . window 7-17h (prior) . learned 12h, 13h
 . today likes 0/400 . stickers 0/40
-. all time . 1 commenters . [w] 75% [l] 0% . warmth 0.00
-    @alice . [w] 75% [l] 0%
+. all time . 1 commenters . 75/0 . warmth 0.00
+    @alice . 75/0
 . watching 1 posts:
     @dst (-1002): 77
-. queued:
-    <tg-emoji emoji-id="11">a</tg-emoji> like -> "nice one" . post 77 . in \
-~5m 0s
 . /reactnow . /requeue
+
+[P] Plan . 2 queued
+    stories . 3 stories @alice . in ~3m
+    <tg-emoji emoji-id="11">a</tg-emoji> like -> "nice one" . post 77 . in ~5m
 
 [G] Greeter . (+) on . DMs 2/5 . last event 41
 
 [U] Users DB . (-) off
-[S] Stories . (+) on . 0 today . 0/50 reacted . 1 queued . next view -> in \
-3m 10s
-. all time . 2 people . [w] 57% [l] 12% . warmth 0.12
-. glance 4m 10s ago . 4 with stories
+[S] Stories . (+) on . 0 today . 0/50 reacted . 1 queued . next view -> in 3m
+. all time . 2 people . 57/12 . warmth 0.12
+. glance 4m ago . 4 with stories
 . viewing (1):
-    @alice . 3 of 5 new . like . [w] 80% [l] 25% . in ~3m 10s
+    @alice . 3 of 5 new . like . 80/25
 . passed this glance (2):
-    @bob . 4 new . seen . [w] 33% [l] 0%
+    @bob . 4 new . seen . 33/0
     @carol (archived) . 2 new . new . first time
 . already seen (1):
     @dave . 3 up . new . first time
 
 [H] Schedule
-. tick -> in 42s . probe -> in 3m 20s . lookups 0 queued
-. reactions rescan -> in 2m 0s . stories poll -> in 15m 0s . greeter check \
--> in 1m 0s
+. tick -> in 42s . probe -> in 3m . lookups 0 queued
+. reactions rescan -> in 2m . stories poll -> in 15m . greeter check -> in 1m
 . pace . dm in 44s . read now . write in 3s . story now
 . widened by a flood . dm x2.0
 
@@ -403,6 +404,59 @@ def test_status_text_is_unchanged(
         }
     )
     assert bot.report.text(known) == GOLDEN
+
+
+def test_no_span_in_the_report_carries_a_second_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of one format, asserted rather than eyeballed.
+
+    Every duration in every section goes through one helper, so a second
+    unit anywhere means a call site slipped past it. Checked by pattern
+    because the alternative is reading the report and hoping -- which is
+    how the report came to write the same span three ways.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    known = _known({PEER_A: 'alice', PEER_B: 'bob'})
+
+    both = re.findall(r'\d+[smhd]\s+\d+[smhd]', bot.report.text(known))
+
+    assert not both, f'two-unit spans left: {both}'
+
+
+def test_every_span_in_the_report_uses_the_operator_letters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And they come from the JSON, so a bare ASCII unit is a missed site.
+
+    Marking every unit and then looking for an unmarked one: a call site
+    that formats its own duration keeps the English letter and shows up
+    here, which is the only way to catch one that never runs in a test.
+
+    The learned-hours line is exempt and stays ASCII on purpose -- '7-17h'
+    is an hour of the DAY, not a length of time, and writing it in the
+    duration vocabulary would be the drift this test exists to stop.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    bot.consts = replace(
+        bot.consts,
+        status=bot.consts.status | {f'unit_{u}': f'<{u}>' for u in 'smhd'},
+    )
+    # The words are handed to a service when it is wired, so re-wiring is
+    # what picks up a changed file -- which is what a restart does.
+    bot.comment_watch.deps = replace(
+        bot.comment_watch.deps, glyphs=bot.report.glyphs()
+    )
+
+    got = bot.report.text(_known({PEER_A: 'alice'}))
+    spans = [ln for ln in got.splitlines() if not ln.startswith('. window ')]
+
+    assert '<m>' in got  # the lookup really is reached
+    left = re.findall(r'\d+[smhd]\b', '\n'.join(spans))
+
+    assert not left, f'spans that skipped the lookup: {left}'
 
 
 def test_rendering_the_report_makes_no_requests(
@@ -468,7 +522,7 @@ def test_a_blocked_session_names_its_reason_once(
 
     assert '. cooldown 4949s (2):' in got
     assert got.count('cooldown 4949s') == 1
-    assert '    @alice . 2 new . like . [w] 80% [l] 25%' in got
+    assert '    @alice . 2 new . like . 80/25' in got
 
 
 # --- the fixture above is not the file the bot ships -----------------------
@@ -515,13 +569,22 @@ def test_the_shipped_constants_carry_a_word_for_every_doing() -> None:
     The service is IN the key because ``like`` is the top of what we ever do
     to a story and the middle of what we do to a comment: one shared key
     would have printed "love bombing" over a bare comment like.
+
+    The duration letters and the service tags are here for the same reason
+    and by the same rule: every one of them is looked up by a key the code
+    builds, so none of them is visible to the AST sweep above.
     """
     shipped = config.load_constants(config.CONSTANTS_PATH).status
-    wanted = {'act_new', 'act_missed'} | {
-        f'act_{service}_{act}'
-        for service, ladder in ACTS.items()
-        for act in ladder
-    }
+    wanted = (
+        {'act_new', 'act_missed'}
+        | {f'unit_{unit}' for unit in status._UNIT_KEYS}
+        | {f'tag_{service}' for service in ACTS}
+        | {
+            f'act_{service}_{act}'
+            for service, ladder in ACTS.items()
+            for act in ladder
+        }
+    )
 
     missing = wanted - set(shipped)
 
@@ -656,8 +719,8 @@ def test_people_with_nothing_new_are_still_named(
     )
 
     assert '. already seen (2):' in got
-    assert '    @alice . 3 up . like . [w] 80% [l] 25%' in got
-    assert '    @bob . 1 up . seen . [w] 33% [l] 0%' in got
+    assert '    @alice . 3 up . like . 80/25' in got
+    assert '    @bob . 1 up . seen . 33/0' in got
     assert 'viewing' not in got
 
 
@@ -869,6 +932,66 @@ def test_the_roster_word_is_the_most_we_do_with_them_anywhere(
     assert bot.report.doing(peer) == 'sticker'  # the most, not the least
 
 
+def test_the_plan_merges_both_engines_soonest_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One queue, because the question is what the BOT is about to do.
+
+    The comment reactions were listed with their etas and the planned story
+    views were not listed at all -- they showed as a count in another
+    section's header -- so a reader could see half the plan and never learn
+    the other half existed. Interleaved by time, which is the only order
+    that makes two queues one.
+    """
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    bot.reactions.state.pending = [
+        replace(bot.reactions.state.pending[0], when=NOW + 900),
+    ]
+    bot.story_watch.pending = [
+        stories.StoryView(PEER_B, (1, 2), 2, NOW + 60),
+        stories.StoryView(PEER_C, (3,), 3, NOW + 1800),
+    ]
+
+    rows = _section(
+        bot.report.text(_known({PEER_B: 'bob', PEER_C: 'carol'})), '[P]'
+    )
+    etas = re.findall(r'in ~(\d+)m', rows)
+
+    assert etas == ['1', '15', '30']  # story, comment, story -- by the clock
+    assert '2 stories @bob' in rows
+    assert 'post 77' in rows  # and the comment side is still there
+
+
+def test_the_plan_says_so_when_there_is_nothing_scheduled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty queue is a sentence, not a header over nothing."""
+    monkeypatch.setattr(time, 'time', lambda: NOW)
+    bot = _bot(tmp_path)
+    bot.reactions.state.pending = []
+    bot.story_watch.pending = []
+
+    assert 'nothing scheduled' in _section(bot.report.text({}), '[P]')
+
+
+def test_the_tag_names_the_service_that_earned_the_word(
+    tmp_path: Path,
+) -> None:
+    """The roster says one word; the tag says which ledger it came from.
+
+    The vocabularies do not overlap, but that is a mapping the reader would
+    have to learn -- and the percentages beside the verb are the fold across
+    both services either way.
+    """
+    bot, talker, watched = _arc_bot(tmp_path), 7101, 7102
+    bot.reactions.ledger.add_take(talker, (1, 2, 3), _CTRL, NOW)
+    bot.stories.ledger.add_take(watched, (1, 2, 3), _CTRL, NOW)
+
+    assert bot.report._reading(talker)[0] == 'reactions'
+    assert bot.report._reading(watched)[0] == 'stories'
+
+
 def test_the_roster_names_somebody_we_only_ever_met_in_the_comments(
     tmp_path: Path,
 ) -> None:
@@ -923,9 +1046,39 @@ def test_people_lists_everyone_with_what_we_do_and_where_they_are(
     got = _arc_bot(tmp_path).report.people()
 
     assert 'people, most recently touched first' in got
-    assert '@alice' in got
-    assert 'like' in got  # what we are doing with them
-    assert 'honeymoon, round 1' in got  # and where on their own curve
+    assert got.splitlines()[1] == (
+        '. @alice . stories . like . 0s . 71/20 . honeymoon 1'
+    )
+
+
+def test_a_roster_row_drops_a_field_that_has_nothing_to_say(
+    tmp_path: Path,
+) -> None:
+    """Nothing offered anywhere means no ledger earned the word.
+
+    Naming one would print the tie-break's arbitrary pick as a fact -- and
+    say "comments" about somebody we have only ever seen post a story. The
+    row is read across, so a missing field costs nothing and a wrong one
+    costs the reader's trust in the column.
+    """
+    bot = _arc_bot(tmp_path)
+    db = bot.database('stories')
+    db.note_actor(Actor(7201, 'user', username='stranger'))
+    # The shape the migration leaves for somebody an older file knew about
+    # and we never acted on: a standing row of zeroes.
+    db.conn.execute(
+        'INSERT INTO standing (service, peer_id, offered, taken, recip,'
+        ' last_at, take_at, gap_n, gap_sum, gap_sq, burst)'
+        " VALUES ('stories', 7201, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
+    )
+    db.conn.commit()
+    row = next(
+        line
+        for line in bot.report.people().splitlines()
+        if '@stranger' in line
+    )
+
+    assert row == '. @stranger . new . never . 0/0 . honeymoon 1'
 
 
 def test_people_says_so_when_there_is_nobody(tmp_path: Path) -> None:
