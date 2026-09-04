@@ -240,15 +240,28 @@ class StatusReport:
     def _person_line(
         self, row: PeerRow, known: dict[int, Actor], b: str
     ) -> str:
-        """Return one roster line: name, what we do, where on the curve."""
+        """Return one roster line: name, what we do, when, and where."""
         seen = row.taken / row.offered if row.offered else 0.0
         back = row.recip / row.taken if row.taken else 0.0
         return (
             f'{b} {_name(known, row.peer_id)} {b} {self.doing(row.peer_id)} '
+            f'{self._ago(row.last_at)} '
             f'{b} {self._glyph("watched", "w")} {seen:.0%} '
             f'{self._glyph("liked", "l")} {back:.0%} '
             f'{b} {self._leg_of(row.peer_id)}'
         )
+
+    def _ago(self, at: float) -> str:
+        """Return '3d 4h ago' for the last time we touched somebody.
+
+        A verb with no moment is a claim with nothing behind it: "liking"
+        reads as something happening, and without a date the reader cannot
+        tell it from something that happened in March. The word says WHAT,
+        this says WHEN, and only together are they checkable.
+        """
+        if at <= 0:
+            return 'never'
+        return f'{fmt_eta(max(0.0, time.time() - at))} ago'
 
     def _leg_of(self, peer_id: int) -> str:
         """Return 'honeymoon, round 2' for a peer, or '' with no arc."""
@@ -781,16 +794,22 @@ class StatusReport:
     def doing(self, peer_id: int) -> str:
         """Return the one word for what we are doing with somebody now.
 
-        Derived from what the controller is AIMED at in this person's
-        current leg, so it moves with a retuned ``persona.arc`` instead of
-        becoming a label that used to be true. The word itself lives in the
-        constants JSON, keyed by the ladder rung, so this file stays ASCII
-        and the vocabulary stays the operator's.
+        The lesser of what this person's leg INTENDS and what has actually
+        happened with them -- see ``Control.doing``. Claiming "liking"
+        beside a 0% like column was not two views of one thing, it was a
+        contradiction, and it printed the same word for everybody besides,
+        since an intention is a property of the leg and a fresh account has
+        everybody in the same leg.
+
+        The word itself lives in the constants JSON, keyed by the ladder
+        rung, so this file stays ASCII and the vocabulary stays the
+        operator's.
         """
         brain = self.bot.stories
         control = brain._control()  # noqa: SLF001 -- the arc is its own config
         leg = brain.ledger.leg(peer_id, control, brain.clock())
-        return self._glyph(f'act_{control.stance(leg)}', control.stance(leg))
+        rung = control.doing(leg, brain.store.peer(peer_id))
+        return self._glyph(f'act_{rung}', rung)
 
     def _lifts(self) -> str:
         """Return ' -> in 8h 12m' for a blocked session, '' when it is not.

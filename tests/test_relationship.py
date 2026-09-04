@@ -522,3 +522,50 @@ def test_a_peer_below_target_is_still_pulled_up_to_it(
 
     row = led.row(peer)
     assert abs(row.taken / row.offered - ctrl.take_target()) < _TOL
+
+
+def test_the_word_never_claims_more_than_we_have_done(
+    tmp_path: Path,
+) -> None:
+    """A claim of liking beside a 0% column is a contradiction.
+
+    The intention belongs to the LEG, so on a fresh account every person is
+    in the same leg and the word was identical for all of them -- carrying
+    no information at the exact moment a reader most wants some. Capped by
+    the record it says what has actually happened with each.
+    """
+    led = _ledger(tmp_path)
+    ctrl = _arc_control(_ARC)
+    warm = _ARC.legs[0]  # a leg that intends to like
+    watched, liked, passed = 1, 2, 3
+
+    led.add_take(watched, _ids(3), _CONTROL, _MET)  # seen, never answered
+    led.add_take(liked, _ids(3), _CONTROL, _MET)
+    led.add_recip(liked, _ids(1), _MET, _TZ)
+    led.add_offer(passed, _ids(3), _MET)  # offered, never taken
+
+    assert ctrl.doing(warm, led.row(watched)) == 'seen'
+    assert ctrl.doing(warm, led.row(liked)) == 'like'
+    assert ctrl.doing(warm, led.row(passed)) == 'ignore'
+
+
+def test_a_cold_leg_says_ignore_however_warm_the_history(
+    tmp_path: Path,
+) -> None:
+    """The word is what we are doing NOW, so the leg can only pull it down."""
+    led = _ledger(tmp_path)
+    ctrl = _arc_control(_ARC)
+    peer = 9
+    led.add_take(peer, _ids(3), _CONTROL, _MET)
+    led.add_recip(peer, _ids(3), _MET, _TZ)  # a long, warm record
+
+    assert ctrl.doing(_ARC.legs[0], led.row(peer)) == 'like'
+    assert ctrl.doing(_ARC.legs[1], led.row(peer)) == 'ignore'
+
+
+def test_somebody_we_have_never_acted_on_is_new_not_ignored(
+    tmp_path: Path,
+) -> None:
+    """No record is not a record of neglect -- the intention stands alone."""
+    ctrl = _arc_control(_ARC)
+    assert ctrl.doing(_ARC.legs[0], _ledger(tmp_path).row(404)) == 'like'

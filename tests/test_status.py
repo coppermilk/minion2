@@ -314,8 +314,8 @@ GOLDEN = """\
 . target: @dst (-1002)
 . posting -> @dst (-1002)
 
-[V] Videos . pending 1 (timeout 3h 0m) . posted 1 . rejected 1 . guard 168h \
-0m/last 5
+[V] Videos . pending 1 (timeout 3h 0m) . posted 1 . rejected 1 . guard 7d \
+0h/last 5
 . "Waiting one" have [-] wait [tiktok, youtube] -> ~2h 50m
 . "Posted one" . 2026-08-01 . 1 links
 

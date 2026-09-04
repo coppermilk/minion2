@@ -26,6 +26,7 @@ log = logging.getLogger('userbot')
 
 _SECS_PER_MIN = 60
 _MINS_PER_HOUR = 60
+_HOURS_PER_DAY = 24
 # How often the watchdog thread checks the heartbeat's age.
 _WATCHDOG_POLL_SEC = 30.0
 
@@ -134,14 +135,24 @@ def configure_logging() -> None:
 
 
 def fmt_eta(seconds: float) -> str:
-    """Return a short countdown like '45s', '8m 12s' or '2h 15m'."""
+    """Return a short duration: '45s', '8m 12s', '2h 15m' or '7d 4h'.
+
+    The two coarsest units, always, so the number stays readable at any
+    size -- and it has to work at any size, because the same span is a
+    countdown in one line ("next view in 3m 10s") and an age in another
+    ("last touched 7d 4h ago"). Stopping at hours made the second read
+    "7211h 8m", which is a number nobody converts in their head.
+    """
     total = max(0, int(seconds))
     if total < _SECS_PER_MIN:
         return f'{total}s'
     mins = total // _SECS_PER_MIN
     if mins < _MINS_PER_HOUR:
         return f'{mins}m {total % _SECS_PER_MIN}s'
-    return f'{mins // _MINS_PER_HOUR}h {mins % _MINS_PER_HOUR}m'
+    hours = mins // _MINS_PER_HOUR
+    if hours < _HOURS_PER_DAY:
+        return f'{hours}h {mins % _MINS_PER_HOUR}m'
+    return f'{hours // _HOURS_PER_DAY}d {hours % _HOURS_PER_DAY}h'
 
 
 def cancel(task: asyncio.Task[object] | None) -> None:

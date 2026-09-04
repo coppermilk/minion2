@@ -323,6 +323,31 @@ class Control:
             return passed
         return back if self.recip_goal(leg) > 0 else took
 
+    def doing(self, leg: Leg | None, row: state.PeerRow) -> str:
+        """Return what we are doing with ONE person, as a rung of ``ACTS``.
+
+        The lesser of what this leg INTENDS and what has actually happened,
+        because a readout claiming "liking" beside a 0% like column is not
+        two views of one thing, it is a contradiction -- and it was the same
+        word for everybody, since the intention is a property of the leg and
+        every fresh account is in the same leg.
+
+        Capping it by the record makes the word carry what the reader wanted
+        from it. Somebody we have watched but never answered reads "seen"
+        even inside a honeymoon, because that is what we have done to them;
+        somebody in a cold shoulder reads "ignore" however warm their
+        history, because that is what we are doing to them now.
+
+        A person with no record at all is not being ignored, they are new,
+        so the intention stands alone for them.
+        """
+        ladder = state.ACTS['stories']
+        intend = ladder.index(self.stance(leg))
+        if not row.offered:
+            return ladder[intend]
+        done = len([n for n in (row.taken, row.recip) if n])
+        return ladder[min(intend, done)]
+
     def leg_name(self, leg: Leg | None = None) -> str:
         """Return the leg's name for a READER, not its name in the config.
 
