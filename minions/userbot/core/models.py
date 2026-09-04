@@ -123,6 +123,12 @@ class Comment:
     root: int
     msg_id: int
     text: str = ''  # a snippet of what the commenter wrote (for /status)
+    # Whether this account's own reaction is already sitting on it -- which
+    # means the OPERATOR put it there by hand, since the bot has not acted on
+    # this comment yet. It rides along from the scan (``userchat.Msg`` carries
+    # it), so knowing costs nothing; dropping it here is what made a
+    # hand-placed like invisible to the ledger.
+    mine_reacted: bool = False
 
 
 @dataclass(frozen=True)

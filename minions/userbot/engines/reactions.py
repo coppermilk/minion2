@@ -803,6 +803,36 @@ class ReactionBrain:
         self._save()
         return ok
 
+    def take_by_hand(self, person: int, comment: int) -> None:
+        """Count an engagement the OPERATOR made, because it is still one.
+
+        The model steers on ``taken/offered``, and a like the operator placed
+        by hand was leaving the ledger entirely: the dice were rolled anyway,
+        and a refusal wrote ``ignore`` against a comment they had personally
+        answered. That is the same defect as a word claiming more than the
+        record holds, read from the other end -- the record claiming less
+        than actually happened.
+
+        Counted rather than rolled: the Bernoulli decides what WE do, and
+        this is already done. No daily slot is spent either, because the cap
+        guards OUR ban surface and this act was not ours to place.
+        """
+        self.ledger.add_take(person, (comment,), self._control(), self.clock())
+        self._save()
+
+    def recip_by_hand(self, person: int, comment: int) -> None:
+        """Count an operator's written reply as the strong act it is.
+
+        A reply in the thread is exactly what the sticker rung means -- a
+        message, the expensive act, the one held rare -- so it belongs on
+        the top rung rather than counting as one more like. The chance and
+        the take are already recorded (this is only reached from a reaction
+        we had queued, which counted both), so this raises the record by the
+        one step the operator actually added.
+        """
+        self.ledger.bump_recip(person, comment, self.clock())
+        self._save()
+
     def decide_sticker(
         self, person: int, comment: int = 0, *, content_ok: bool
     ) -> bool:

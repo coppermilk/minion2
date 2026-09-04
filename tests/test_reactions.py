@@ -8,19 +8,24 @@ design, so every one of the nine behavioural principles is checked here.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import random
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
+from typing import cast
 
+from minion_core.adapters import userchat
 from minions.userbot.core import relationship
+from minions.userbot.core.models import Comment
 from minions.userbot.core.models import Emoji
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Database
 from minions.userbot.core.state import StateStore
 from minions.userbot.engines import reactions
+from minions.userbot.glue import reactions as reactions_glue
 
 _BURST_SIZE = 6
 _HALF = 0.5
@@ -28,6 +33,7 @@ _MIGRATED_AT = 555.0
 _NEAR_ONE = 0.99
 _SESSION_AT = 999.0
 _THREAD_ROOT = 800
+_CHAT = -1002  # the discussion group comments live in
 _WATCH_POSTS = 4
 
 if TYPE_CHECKING:
@@ -927,3 +933,159 @@ def test_one_service_never_sees_another_s_queue(tmp_path: Path) -> None:
 
     assert [r['reply_to'] for r in db.store('reactions').queued()] == [9]
     assert [r['reply_to'] for r in db.store('stories').queued()] == [4]
+
+
+# --- what the OPERATOR did by hand is still something that happened --------
+
+
+class _Account:
+    """The two reads the manual-answer check makes, and nothing else."""
+
+    def __init__(
+        self, replies: tuple[object, ...] = (), comment: object = None
+    ) -> None:
+        self.replies = replies
+        self.comment = comment
+
+    async def history(self, chat: int, window: object) -> list[object]:
+        """Return the thread's recent messages (an outgoing one is a reply)."""
+        del chat, window
+        return list(self.replies)
+
+    async def message(self, chat: int, msg_id: int) -> object:
+        """Return the comment, which carries our own reaction if any."""
+        del chat, msg_id
+        return self.comment
+
+
+async def _no_announce(text: str) -> None:
+    """Operator channel these tests never use."""
+
+
+def _watch(brain: object, account: object) -> reactions_glue.CommentWatch:
+    """Return a comment watcher over one brain and a stubbed account."""
+    return reactions_glue.CommentWatch(
+        reactions_glue.CommentDeps(
+            account=cast('userchat.Account', account),
+            brain=cast('reactions.ReactionBrain', brain),
+            targets=lambda: (_CHAT,),
+            announce=_no_announce,
+        )
+    )
+
+
+def test_a_comment_the_operator_already_liked_is_counted_not_rolled(
+    tmp_path: Path,
+) -> None:
+    """Their like is a chance taken, so it belongs in the record as one.
+
+    It used to be rolled for like any other comment, and a refusal wrote
+    ``ignore`` against a comment the operator had personally answered --
+    teaching the curve we were neglecting somebody we had just engaged. The
+    signal rides along from the scan (``Msg.mine_reacted``), so knowing it
+    costs no call; ``Comment`` was simply dropping it.
+    """
+    brain = _brain(tmp_path)
+    brain.note_post(_CHAT, _THREAD_ROOT)
+    watch = _watch(brain, _Account())
+    msg = userchat.Msg(
+        id=501,
+        chat_id=_CHAT,
+        sender_id=77,
+        text='hi',
+        root=_THREAD_ROOT,
+        reply_to=_THREAD_ROOT,
+        mine_reacted=True,
+    )
+
+    watch.on_message(msg)  # the live path, as a comment arrives
+
+    assert brain.ledger.row(77).offered == 1
+    assert brain.ledger.row(77).taken == 1
+    assert brain.store.acts(77) == {'like': 1}  # not an ignore
+    assert not brain.state.pending  # and we do not pile one on top
+
+
+def test_the_hand_signal_survives_the_backfill_too(tmp_path: Path) -> None:
+    """Both ways a comment reaches us carry it; one used to drop it.
+
+    A comment can arrive live or be picked up by the rescan that walks a
+    thread, and each builds its own ``Comment``. The signal is worth nothing
+    if only one of the two carries it, and nothing was asserting the second.
+    """
+    brain = _brain(tmp_path)
+    watch = _watch(brain, _Account())
+    msg = userchat.Msg(
+        id=511, chat_id=_CHAT, sender_id=88, text='hi', mine_reacted=True
+    )
+
+    watch._schedule_from_message(_CHAT, _THREAD_ROOT, msg)
+
+    assert brain.store.acts(88) == {'like': 1}
+
+
+def test_a_hand_like_is_left_alone_when_we_are_told_to_pile_on(
+    tmp_path: Path,
+) -> None:
+    """One flag, one behaviour: counting it here would double the take.
+
+    With ``skip_if_manually_replied`` off the operator wants us to react
+    anyway, and the reaction we then place is counted by ``decide_engage``.
+    """
+    brain = _brain(tmp_path, skip_if_manually_replied=False)
+    watch = _watch(brain, _Account())
+    comment = Comment(
+        chat=_CHAT, root=_THREAD_ROOT, msg_id=502, mine_reacted=True
+    )
+
+    assert watch._took_by_hand(comment, 78) is False
+    assert brain.ledger.row(78).taken == 0
+
+
+async def _skipped(watch: object, chat: int, comment_id: int) -> bool:
+    """Run the delivery-time hand check for one queued reaction."""
+    queued = reactions.Reaction(
+        chat=chat, reply_to=comment_id, root=_THREAD_ROOT, when=0.0
+    )
+    return await watch._should_skip_reaction(queued)
+
+
+def test_an_operator_reply_counts_as_the_strong_act(tmp_path: Path) -> None:
+    """A written answer IS the sticker rung, so it goes on the top rung.
+
+    Standing down silently left that person's record short by something that
+    really happened -- and by the expensive act, the one held rare.
+    """
+    brain = _brain(tmp_path)
+    brain.ledger.add_take(79, (503,), brain._control(), _ts())
+    reply = userchat.Msg(id=999, chat_id=_CHAT, out=True, reply_to=503)
+    comment = userchat.Msg(id=503, chat_id=_CHAT, sender_id=79)
+    watch = _watch(brain, _Account(replies=(reply,), comment=comment))
+
+    assert asyncio.run(_skipped(watch, _CHAT, 503)) is True
+    assert brain.ledger.row(79).recip == 1
+
+
+def test_a_hand_reaction_alone_adds_nothing_to_the_record(
+    tmp_path: Path,
+) -> None:
+    """The chance and the take were counted when the reaction was queued."""
+    brain = _brain(tmp_path)
+    brain.ledger.add_take(80, (504,), brain._control(), _ts())
+    comment = userchat.Msg(
+        id=504, chat_id=_CHAT, sender_id=80, mine_reacted=True
+    )
+    watch = _watch(brain, _Account(comment=comment))
+
+    assert asyncio.run(_skipped(watch, _CHAT, 504)) is True
+    assert brain.ledger.row(80).recip == 0
+    assert brain.ledger.row(80).taken == 1
+
+
+def test_an_unanswered_comment_still_gets_its_reaction(tmp_path: Path) -> None:
+    """The gate only closes on a hand signal; nothing found means fire."""
+    brain = _brain(tmp_path)
+    comment = userchat.Msg(id=505, chat_id=_CHAT, sender_id=81)
+    watch = _watch(brain, _Account(comment=comment))
+
+    assert asyncio.run(_skipped(watch, _CHAT, 505)) is False

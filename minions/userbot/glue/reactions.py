@@ -134,6 +134,7 @@ class CommentWatch:
             root=msg.root,
             msg_id=msg.id,
             text=trim(msg.text),
+            mine_reacted=msg.mine_reacted,
         )
         self._schedule_comment(ref, msg.sender_id, engaged=engaged)
 
@@ -156,24 +157,18 @@ class CommentWatch:
         fresh
         random one.
         """
-        # When liking everything OR steering exposure per person, key per
-        # COMMENT (chat:root:person:msg) so each comment is decided once;
-        # otherwise once per (post, person). The key keeps the 'chat:root:'
-        # prefix so note_post's pruning holds. Both flags widen the key the
-        # same way; where they disagree, attach decides -- see decide_engage
-        # below, which runs after the schedule and can still say no.
-        attach = self.deps.brain.params.attach_enabled
-        per_comment = self.deps.brain.params.like_all or attach
-        key = f'{comment.chat}:{comment.root}:{person}'
-        if per_comment:
-            key = f'{key}:{comment.msg_id}'
-        when = self.deps.brain.schedule(key, engaged=engaged)
+        when = self.deps.brain.schedule(
+            self._dedup_key(comment, person), engaged=engaged
+        )
         if when is None:
             return
+        if self._took_by_hand(comment, person):
+            return
         # Berlyne exposure control: like only a Wundt-peak fraction of a
-        # person's comments (the first is always liked). A steered skip still
-        # leaves the key recorded as decided (schedule marked it), so a rescan
-        # never re-rolls it into a like.
+        # person's comments. A steered skip still leaves the key recorded as
+        # decided (schedule marked it), so a rescan never re-rolls it into a
+        # like.
+        attach = self.deps.brain.params.attach_enabled
         if attach and not self.deps.brain.decide_engage(
             person, comment.msg_id
         ):
@@ -195,6 +190,47 @@ class CommentWatch:
         )
         self.deps.brain.add_pending(reaction)
         self._arm_reaction(reaction)
+
+    def _dedup_key(self, comment: Comment, person: int) -> str:
+        """Return the key that decides this comment once, and only once.
+
+        When liking everything OR steering exposure per person, key per
+        COMMENT so each comment is decided on its own; otherwise once per
+        (post, person). The key keeps the ``chat:root:`` prefix either way so
+        ``note_post``'s pruning holds. Both flags widen it the same way;
+        where they disagree ``attach`` decides, through ``decide_engage``,
+        which runs after the schedule and can still say no.
+        """
+        params = self.deps.brain.params
+        key = f'{comment.chat}:{comment.root}:{person}'
+        if params.like_all or params.attach_enabled:
+            return f'{key}:{comment.msg_id}'
+        return key
+
+    def _took_by_hand(self, comment: Comment, person: int) -> bool:
+        """Count the operator's own reaction on this comment, if there is one.
+
+        They got there first, so the chance was taken -- by hand, but taken.
+        Counting it and standing down replaces rolling for it, which used to
+        write ``ignore`` against a comment the operator had personally
+        answered and then teach the curve we were neglecting somebody we had
+        just engaged.
+
+        The signal rides along from the scan, so knowing costs no call. The
+        same flag that stops the bot piling a reaction on top governs it: with
+        that off the operator wants us to react anyway, and counting their
+        like here as well would put two takes on one comment.
+
+        Reached at most once per comment -- ``schedule`` returns None for a
+        key already decided -- which is what keeps the count from repeating
+        on every rescan.
+        """
+        if not comment.mine_reacted:
+            return False
+        if not self.deps.brain.params.skip_if_manually_replied:
+            return False
+        self.deps.brain.take_by_hand(person, comment.msg_id)
+        return True
 
     def _choose_reaction(
         self, person: int, comment: Comment
@@ -328,7 +364,11 @@ class CommentWatch:
         if message.out or not message.sender_id or not message.id:
             return
         ref = Comment(
-            chat=chat, root=root, msg_id=message.id, text=trim(message.text)
+            chat=chat,
+            root=root,
+            msg_id=message.id,
+            text=trim(message.text),
+            mine_reacted=message.mine_reacted,
         )
         self._schedule_comment(ref, message.sender_id, engaged=False)
 
@@ -421,9 +461,7 @@ class CommentWatch:
             await asyncio.sleep(delay)
         await self._refresh_before_fire(reaction)
         try:
-            if not await self._should_skip_reaction(
-                reaction.chat, reaction.reply_to
-            ):
+            if not await self._should_skip_reaction(reaction):
                 await self._deliver(reaction)
         except asyncio.CancelledError:
             raise
@@ -435,41 +473,47 @@ class CommentWatch:
             )
         self.deps.brain.done_pending(reaction.chat, reaction.reply_to)
 
-    async def _should_skip_reaction(self, chat: int, comment_id: int) -> bool:
+    async def _should_skip_reaction(
+        self, reaction: reactions.Reaction
+    ) -> bool:
         """Skip the reaction if the operator already answered by hand.
 
         "By hand" is either a manual reply to the comment OR a manual reaction
         already sitting on it -- in both cases the operator has engaged, so the
         bot does not pile a reaction on top.
-        """
-        if not self.deps.brain.params.skip_if_manually_replied:
-            return False
-        answered = await self._human_answered(chat, comment_id)
-        if answered:
-            log.info(
-                'reaction: %s already answered by hand, skipping', comment_id
-            )
-        return answered
 
-    async def _human_answered(self, chat: int, comment_id: int) -> bool:
-        """Whether the operator already answered ``comment_id`` by hand.
+        A written reply is also RECORDED, because it is the strong act: it is
+        what the thread sticker is, and standing down silently left the top
+        rung of that person's record short by something that really happened.
+        A hand-placed reaction needs nothing here -- the chance and the take
+        were counted when this reaction was queued.
 
-        Two hand signals count, either one wins: an outgoing (manual) reply to
-        the comment, or this account's own reaction already sitting on it. The
-        reaction has not been placed yet, so any such reply/reaction is the
-        operator's own -- do not pile a reaction on top of it.
+        The comment is fetched either way now, where the reply check used to
+        short-circuit it: a queued reaction does not carry who wrote the
+        comment (``scheduled`` has no column for it), and the message does.
+        One extra read on the path where the operator answered by hand, which
+        is the rare one.
 
         Fail-open by construction: an unreadable thread comes back empty and
         an unreadable comment comes back None, so the reaction still fires
-        rather than wedging the queue.
+        rather than wedging the queue -- and an unattributable reply is
+        skipped without being recorded, never recorded against the wrong
+        person.
         """
+        if not self.deps.brain.params.skip_if_manually_replied:
+            return False
+        chat, comment_id = reaction.chat, reaction.reply_to
         history = await self.deps.account.history(
             chat, userchat.Slice(limit=MANUAL_REPLY_SCAN)
         )
-        if any(m.out and m.reply_to == comment_id for m in history):
-            return True
+        replied = any(m.out and m.reply_to == comment_id for m in history)
         comment = await self.deps.account.message(chat, comment_id)
-        return comment is not None and comment.mine_reacted
+        if not replied and not (comment is not None and comment.mine_reacted):
+            return False
+        if replied and comment is not None and comment.sender_id:
+            self.deps.brain.recip_by_hand(comment.sender_id, comment_id)
+        log.info('reaction: %s already answered by hand, skipping', comment_id)
+        return True
 
     async def _deliver(self, reaction: reactions.Reaction) -> None:
         """Place the scheduled reaction: a like REACTION, or a thread STICKER.
