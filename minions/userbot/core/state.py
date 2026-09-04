@@ -294,6 +294,68 @@ fails on any value that is a list or a dict, so the rule stays a fact about
 the schema rather than a habit of whoever last edited a ``_save``.
 """
 
+_MOMENTS = {
+    'actors': ('first_seen', 'last_seen', 'updated_at'),
+    'standing': ('last_at', 'take_at'),
+    'contact': ('at',),
+    'marks': ('at',),
+    'uptime': ('at',),
+    'scheduled': ('due_at',),
+    'watching': ('at',),
+    'emoji_used': ('at',),
+    'posted': ('at',),
+    'pending': ('since',),
+    'cabinet': ('at',),
+    'membership_events': ('ts',),
+    'messages': ('ts',),
+}
+"""Every column in the file that holds a moment, per table.
+
+Time is stored as a unix epoch, which is one of the three representations
+SQLite itself blesses (TEXT ISO-8601, REAL julian day, INTEGER epoch -- it
+has no date type of its own). Epoch is the right one HERE because every
+consumer does arithmetic on it: gap statistics, the uptime decay, the
+re-post window, the arc's day counting. ISO would mean parsing a date on
+every comparison, which is exactly what moving ``Posted.at`` off it removed.
+
+What epoch costs is a person opening the file in a browser and reading
+1785578400.0. That cost is paid back by the views below rather than by the
+storage, so nothing on a write path converts anything and the readable form
+cannot drift from the real one -- it IS the real one, formatted.
+"""
+
+
+def _view_of(name: str, cols: tuple[str, ...]) -> str:
+    """Return the CREATE VIEW for one table, epochs rendered beside the rows.
+
+    The table and column names reach SQL as text because an identifier
+    cannot be a bound parameter. They come from ``_MOMENTS`` and from
+    nowhere else, which is what makes that safe: nothing a caller says ever
+    becomes SQL here.
+    """
+    shown = ', '.join(
+        f"strftime('%Y-%m-%d %H:%M:%S', {col}, 'unixepoch') AS {col}_utc"
+        for col in cols
+    )
+    return (
+        f'CREATE VIEW IF NOT EXISTS {name}_readable AS '  # noqa: S608
+        f'SELECT *, {shown} FROM {name};\n'
+    )
+
+
+_VIEWS = ''.join(_view_of(name, cols) for name, cols in _MOMENTS.items())
+"""One ``<table>_readable`` view per table, epochs rendered beside the rows.
+
+``SELECT * FROM contact_readable`` answers "what did we do with people, and
+when" in a database browser without anyone converting anything by hand. The
+underlying column is still there, so a query can sort or filter on the
+number and read the date in the same result.
+
+Generated from ``_MOMENTS`` rather than written out, so a view cannot go
+stale against a table that gained a column: adding the column to that table
+is what adds it to the view.
+"""
+
 _INDEXES = """
 CREATE INDEX IF NOT EXISTS standing_recent ON standing (service, last_at DESC);
 CREATE INDEX IF NOT EXISTS contact_when ON contact (peer_id, at DESC);
@@ -516,6 +578,7 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.commit()
     _migrate(conn)  # bring an older file to this shape...
     conn.executescript(_INDEXES)  # ...before indexing it
+    conn.executescript(_VIEWS)  # ...and giving a human a way to read it
     conn.commit()
     # LAST, and that order is the point: SQLite checks foreign keys as rows
     # are written, so the fold above -- which moves rows between tables in a

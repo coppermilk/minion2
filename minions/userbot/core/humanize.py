@@ -76,6 +76,50 @@ def is_silent_day(ts: float, tz_offset_hours: float, prob: float) -> bool:
     return roll < prob
 
 
+HOUR = 3600.0
+"""Both gates below switch on the hour, so an hour is the search step."""
+
+_LOOK_AHEAD_HOURS = 24 * 14
+"""How far ``next_awake`` looks before giving up (a fortnight).
+
+Bounded because the two gates can, between them, be shut forever: a persona
+whose ``quiet_hours`` covers all 24 has no waking hour to find, and a search
+for one would spin. Two weeks is far past any real schedule, so reaching the
+end means the config says "never", which is an answer worth returning rather
+than hanging on.
+"""
+
+
+def next_awake(  # noqa: PLR0913 -- a moment plus the three gates
+    ts: float,
+    tz_offset_hours: float,
+    quiet_hours: frozenset[int],
+    silent_prob: float,
+) -> float | None:
+    """Return the first moment past ``ts`` that is neither quiet nor silent.
+
+    The answer to "it says blocked, but until when" -- one number covering
+    both gates, because the reader does not care which of them is shut, only
+    when something will happen. A quiet hour that ends at 05:00 on a day the
+    persona has already decided to sit out is not un-blocked at 05:00, and
+    naming the nearer gate alone would say it is.
+
+    Both gates are pure functions of the local hour and date, so this is a
+    walk forward rather than anything remembered. ``None`` when nothing opens
+    inside the look-ahead: the configuration means never.
+    """
+    step = local(ts, tz_offset_hours).replace(
+        minute=0, second=0, microsecond=0
+    )
+    at = step.timestamp()
+    for _ in range(_LOOK_AHEAD_HOURS):
+        at += HOUR
+        quiet = in_quiet_hours(at, tz_offset_hours, quiet_hours)
+        if not quiet and not is_silent_day(at, tz_offset_hours, silent_prob):
+            return at
+    return None
+
+
 # --- WHICH thing a person picks -----------------------------------------
 
 

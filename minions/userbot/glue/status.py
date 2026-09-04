@@ -706,7 +706,7 @@ class StatusReport:
         b = self.bullet()
         why = glance.blocked or 'passed this glance'
         return [
-            f'{b} {why} ({len(rows)}):',
+            f'{b} {why}{self._lifts()} ({len(rows)}):',
             *_capped(
                 [
                     f'    {self._who(row, known)} {b} '
@@ -791,6 +791,22 @@ class StatusReport:
         control = brain._control()  # noqa: SLF001 -- the arc is its own config
         leg = brain.ledger.leg(peer_id, control, brain.clock())
         return self._glyph(f'act_{control.stance(leg)}', control.stance(leg))
+
+    def _lifts(self) -> str:
+        """Return ' -> in 8h 12m' for a blocked session, '' when it is not.
+
+        A reason on its own says the engine is waiting and nothing about how
+        long, and the difference between a cooldown and a silent day is
+        minutes against most of a day. Read fresh rather than from the
+        glance, which may be an hour old by the time anyone looks.
+        """
+        brain = self.bot.stories
+        if not brain.blocked_reason():
+            return ''
+        lifts = brain.blocked_until()
+        if lifts is None:
+            return ''
+        return f' {self.arrow()} {self._in(lifts - time.time())}'
 
     def _view_eta(self, peer_id: int) -> str:
         """Return ' . in ~3m 10s' for a queued peer, '' once it has fired."""

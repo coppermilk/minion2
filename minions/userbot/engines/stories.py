@@ -407,6 +407,30 @@ class StoryBrain:
             return f'cooldown {int(wait)}s'
         return None
 
+    def blocked_until(self, now: float | None = None) -> float | None:
+        """Return when the current blocker lifts, or None when it never does.
+
+        The other half of ``blocked_reason``: naming a state without saying
+        when it ends leaves the reader with "it is waiting" and no idea for
+        how long -- which for a silent day is the difference between minutes
+        and most of a day.
+
+        The cooldown answers from its own cursor; the two persona gates
+        answer together, because "quiet hours end at 05:00" is not when
+        anything happens if the persona has already decided to sit that day
+        out. ``disabled`` returns None: a switch is not a wait.
+        """
+        now = self.clock() if now is None else now
+        if not self.params.enabled:
+            return None
+        gate = humanize.next_awake(
+            now,
+            self.params.tz_offset_hours,
+            self.params.quiet_hours,
+            self.params.silent_day_prob,
+        )
+        return max(self.state.next_session_at, gate) if gate else gate
+
     def _eligible(
         self, candidates: list[StoryCandidate]
     ) -> list[tuple[StoryCandidate, tuple[int, ...]]]:

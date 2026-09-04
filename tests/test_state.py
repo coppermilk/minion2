@@ -22,6 +22,7 @@ import pytest
 
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Posted
+from minions.userbot.core.state import _MOMENTS
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Actor
 from minions.userbot.core.state import Database
@@ -54,6 +55,9 @@ TAKE_AT = 1000.0
 
 PUBLISHED_AT = 1785578400.0
 """2026-08-01T10:00:00Z, the ISO a pre-upgrade poster block holds."""
+
+BLOCK_BYTES = 400
+"""A state block is cursors and counters; anything larger is a smell."""
 
 
 def _store(tmp_path: Path, service: str = 'reactions') -> StateStore:
@@ -1354,3 +1358,85 @@ def test_a_register_comes_back_in_the_order_it_was_written(
         'second',
         'third',
     ]
+
+
+def test_every_moment_can_be_read_as_a_date(tmp_path: Path) -> None:
+    """A person opening the file sees a date, and the arithmetic keeps epochs.
+
+    SQLite has no date type: TEXT ISO-8601, REAL julian day and INTEGER
+    epoch are all it blesses, so "the database's own format" is a choice,
+    not a given. Epoch is right here because every consumer does arithmetic
+    on it -- gap statistics, the uptime decay, the re-post window, the arc
+    counting days -- and ISO would mean parsing a date on every comparison.
+
+    What epoch costs is exactly one thing: 1785578400.0 in a browser. The
+    views pay it back without a write path converting anything, so the
+    readable form cannot drift from the stored one -- it IS the stored one,
+    formatted, in the same row.
+    """
+    db = Database(tmp_path / DB_NAME)
+    db.note_actor(Actor(WATCHED, 'user', username='eliza'))
+    db.store('stories').bump(WATCHED, {'offered': 1}, PUBLISHED_AT, (STORY_A,))
+
+    row = db.conn.execute('SELECT at, at_utc FROM contact_readable').fetchone()
+
+    assert row['at'] == PUBLISHED_AT  # the number is still there to sort on
+    assert row['at_utc'] == '2026-08-01 10:00:00'
+
+
+def test_no_time_column_is_left_without_a_readable_view(
+    tmp_path: Path,
+) -> None:
+    """The views are generated, so one cannot go stale against its table.
+
+    A view written out by hand rots the moment a table gains a column; this
+    fails instead, naming the table, if a moment is ever added without being
+    declared -- which is what keeps "the file is readable" true rather than
+    true on the day it was written.
+    """
+    db = Database(tmp_path / DB_NAME)
+    tables = {
+        str(r['name'])
+        for r in db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+
+    missed = {
+        table: [
+            str(c['name'])
+            for c in db.conn.execute(f'PRAGMA table_info({table})')
+            if str(c['name']) in {'at', 'ts', 'since', 'due_at'}
+            or str(c['name']).endswith(('_at', '_seen'))
+        ]
+        for table in tables - set(_MOMENTS)
+    }
+
+    assert {t: c for t, c in missed.items() if c} == {}
+
+
+def test_the_state_block_is_scalars_and_nothing_larger(
+    tmp_path: Path,
+) -> None:
+    """What ``state`` is FOR, now that every collection has left it.
+
+    Per-service cursors and daily counters: a mood, a session mark, a date
+    and a count against a cap. Small enough that rewriting one whole is
+    free, which is what makes a JSON blob the right shape for it -- the
+    15 MB/day that argued against blobs was a collection inside one, and
+    there are none left.
+    """
+    db = Database(tmp_path / DB_NAME)
+    _fill(db)
+
+    blocks = [
+        json.loads(str(r['blob']))
+        for r in db.conn.execute('SELECT blob FROM state')
+    ]
+
+    assert blocks
+    for block in blocks:
+        assert len(str(block)) < BLOCK_BYTES
+        for value in block.values():
+            assert isinstance(value, (int, float, str, bool))
