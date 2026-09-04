@@ -771,9 +771,17 @@ class ReactionBrain:
         Exposure control: the running ``taken/offered`` is nudged toward the
         peak (~0.67) by a per-comment Bernoulli, so a heavy commenter is
         throttled (no desperate like-everything) while a newcomer is kept warm.
-        The FIRST comment from a person is always engaged (a warm hello); the
-        control starts from the second. Counts the comment either way, so a
-        rescan never re-rolls a decided comment.
+        Counts the comment either way, so a rescan never re-rolls a decided
+        comment.
+
+        The first comment is drawn like every other one. It used to be an
+        automatic like -- a warm hello -- which was the one place the two
+        services stopped being one engine: a first story has never been a
+        free view, and somebody who first wrote to us on a cold-shoulder day
+        got a like the arc says they should not have. ``take_prob`` reads
+        ``p_cur = p_star`` with nothing recorded, so their first chance is
+        drawn at exactly the leg's aim, which is what ``_view_split`` does
+        with a first story.
 
         Decides BEFORE it records, and then records once, naming the outcome:
         a comment we passed on is logged ``ignore``, one we answered ``like``.
@@ -785,8 +793,7 @@ class ReactionBrain:
         comments but not which four.
         """
         led, control, now = self.ledger, self._control(), self.clock()
-        first = led.row(person).offered == 0
-        take = first or self.rng.random() < led.take_prob(person, control, now)
+        take = self.rng.random() < led.take_prob(person, control, now)
         # The cap is the last word: a take it refuses is an ignore.
         ok = take and led.spend_take(control, now, self._tz())
         if ok:

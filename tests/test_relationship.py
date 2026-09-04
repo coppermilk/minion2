@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from minions.userbot.core import attachment
 from minions.userbot.core import relationship
 from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import RUNGS
 from minions.userbot.core.state import Database
 
 if TYPE_CHECKING:
@@ -31,6 +32,13 @@ _STEPS = 3000
 _CAP = 4
 _TWO_ROUNDS = 2
 _CONTROL = relationship.Control(wundt=attachment.WundtParams())
+_PASSED, _TOOK, _BACK = range(len(RUNGS))
+"""The three rungs by position -- what ``Control.doing`` answers with.
+
+A number rather than a word because the answer is a POSITION: the same rung
+is ``seen`` of a story and ``like`` of a comment, and the model must not
+have to pick one of the two.
+"""
 
 
 def _ids(n: int) -> tuple[int, ...]:
@@ -441,12 +449,31 @@ def test_a_swing_face_is_named_for_what_it_does(tmp_path: Path) -> None:
     """
     ctrl = _arc_control(_ARC)
     faces = {
-        ctrl.leg_name(_ARC.leg(_MET, _at(day), 111)) for day in _SWING_SPAN
+        ctrl.leg_name('stories', _ARC.leg(_MET, _at(day), 111))
+        for day in _SWING_SPAN
     }
 
     assert faces == {'swing:ignore', 'swing:like'}
-    assert ctrl.leg_name(_ARC.legs[0]) == 'honeymoon'  # a phase keeps its name
-    assert ctrl.leg_name(None) == ''
+    assert ctrl.leg_name('stories', _ARC.legs[0]) == 'honeymoon'  # a phase
+    assert ctrl.leg_name('stories', None) == ''
+
+
+def test_the_same_face_is_spelled_in_each_service_own_ladder() -> None:
+    """One aim, two vocabularies -- the leg does not depend on the service.
+
+    ``stance`` reads only the leg, so a swing day aimed at the middle rung
+    is the same day for both engines; it is ``swing:seen`` of somebody's
+    stories and ``swing:like`` of their comments because that is what the
+    middle rung is CALLED there. Naming it in one ladder for both was how a
+    comment came to be described in story words.
+    """
+    ctrl = _arc_control(_ARC)
+    days = [_at(day) for day in _SWING_SPAN]
+    story = {ctrl.leg_name('stories', _ARC.leg(_MET, d, 111)) for d in days}
+    talk = {ctrl.leg_name('reactions', _ARC.leg(_MET, d, 111)) for d in days}
+
+    assert story == {'swing:ignore', 'swing:like'}
+    assert talk == {'swing:ignore', 'swing:sticker'}
 
 
 def test_the_face_name_follows_the_config_not_the_leg_it_copied(
@@ -469,7 +496,8 @@ def test_the_face_name_follows_the_config_not_the_leg_it_copied(
     ctrl = _arc_control(quiet)
 
     faces = {
-        ctrl.leg_name(quiet.leg(_MET, _at(day), 111)) for day in _SWING_SPAN
+        ctrl.leg_name('stories', quiet.leg(_MET, _at(day), 111))
+        for day in _SWING_SPAN
     }
 
     assert faces == {'swing:ignore', 'swing:seen'}
@@ -544,9 +572,9 @@ def test_the_word_never_claims_more_than_we_have_done(
     led.add_recip(liked, _ids(1), _MET, _TZ)
     led.add_offer(passed, _ids(3), _MET)  # offered, never taken
 
-    assert ctrl.doing(warm, led.row(watched)) == 'seen'
-    assert ctrl.doing(warm, led.row(liked)) == 'like'
-    assert ctrl.doing(warm, led.row(passed)) == 'ignore'
+    assert ctrl.doing(warm, led.row(watched)) == _TOOK
+    assert ctrl.doing(warm, led.row(liked)) == _BACK
+    assert ctrl.doing(warm, led.row(passed)) == _PASSED
 
 
 def test_a_cold_leg_says_ignore_however_warm_the_history(
@@ -559,8 +587,8 @@ def test_a_cold_leg_says_ignore_however_warm_the_history(
     led.add_take(peer, _ids(3), _CONTROL, _MET)
     led.add_recip(peer, _ids(3), _MET, _TZ)  # a long, warm record
 
-    assert ctrl.doing(_ARC.legs[0], led.row(peer)) == 'like'
-    assert ctrl.doing(_ARC.legs[1], led.row(peer)) == 'ignore'
+    assert ctrl.doing(_ARC.legs[0], led.row(peer)) == _BACK
+    assert ctrl.doing(_ARC.legs[1], led.row(peer)) == _PASSED
 
 
 def test_somebody_who_has_offered_us_nothing_has_not_been_ignored(
@@ -601,7 +629,7 @@ def test_enough_chances_go_by_and_the_empty_record_speaks(
     led, ctrl = _ledger(tmp_path), _arc_control(_ARC)
     led.add_offer(1, _ids(2), _MET)  # 2 * 0.675 >= 1: a view was due
 
-    assert ctrl.doing(_ARC.legs[0], led.row(1)) == 'ignore'
+    assert ctrl.doing(_ARC.legs[0], led.row(1)) == _PASSED
 
 
 def test_the_evidence_threshold_moves_with_the_leg_not_a_number(
@@ -621,7 +649,7 @@ def test_the_evidence_threshold_moves_with_the_leg_not_a_number(
     cooler = replace(_ARC.legs[0], exposure=0.7)  # still warm enough to intend
     faint = _arc_control(replace(_ARC, legs=(cooler, *_ARC.legs[1:])))
 
-    assert keen.doing(keen.arc.legs[0], row) == 'ignore'
+    assert keen.doing(keen.arc.legs[0], row) == _PASSED
     assert faint.doing(faint.arc.legs[0], row) == relationship.MISSED
 
 
@@ -632,4 +660,4 @@ def test_a_leg_that_means_to_pass_says_so_from_the_first_chance(
     led, ctrl = _ledger(tmp_path), _arc_control(_ARC)
     led.add_offer(1, _ids(1), _MET)
 
-    assert ctrl.doing(_ARC.legs[2], led.row(1)) == 'ignore'
+    assert ctrl.doing(_ARC.legs[2], led.row(1)) == _PASSED

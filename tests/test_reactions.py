@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import itertools
 import random
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from minions.userbot.core import relationship
 from minions.userbot.core.models import Emoji
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Database
@@ -637,12 +639,46 @@ def _no_caps(tmp_path: Path, seed: int = 0, **over: object) -> object:
     return _brain(tmp_path, seed, **over)
 
 
-def test_decide_engage_always_likes_the_first_comment(tmp_path: Path) -> None:
-    """A newcomer's very first comment is always engaged (a warm hello)."""
+def test_the_first_comment_is_drawn_like_every_other_one(
+    tmp_path: Path,
+) -> None:
+    """No free hello: the first chance goes through the arc, as a story does.
+
+    It used to be an automatic like, which was the one place the two
+    services stopped being one engine -- a first STORY has never been a free
+    view, and somebody who first wrote to us on a cold-shoulder day got a
+    like their leg says they should not have. With nothing recorded
+    ``take_prob`` reads ``p_cur = p_star``, so the draw lands at exactly the
+    leg's aim, which is what ``_view_split`` does with a first story.
+
+    Either way the chance is counted, so a rescan never re-rolls it.
+    """
     brain = _no_caps(tmp_path)
-    assert brain.decide_engage(101) is True
-    assert brain.ledger.row(101).offered == 1
-    assert brain.ledger.row(101).taken == 1
+    took = brain.decide_engage(101)
+    row = brain.ledger.row(101)
+
+    assert row.offered == 1  # counted whichever way it went
+    assert row.taken == int(took)
+
+
+def test_a_leg_that_passes_refuses_even_a_first_comment(
+    tmp_path: Path,
+) -> None:
+    """The arc has the last word from the first act, both services alike."""
+    brain = _no_caps(tmp_path)
+    brain.params = replace(
+        brain.params,
+        arc=relationship.Arc(
+            legs=(
+                relationship.Leg('cold', 30, exposure=0.0, recip=0.0),
+                relationship.Leg('cold2', 30, exposure=0.0, recip=0.0),
+            ),
+            enabled=True,
+        ),
+    )
+
+    assert brain.decide_engage(101) is False
+    assert brain.ledger.row(101).offered == 1  # the chance still counts
 
 
 def test_exposure_converges_to_the_wundt_peak(tmp_path: Path) -> None:

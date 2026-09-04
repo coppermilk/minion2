@@ -17,6 +17,7 @@ from datetime import timezone
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import humanize
+from minions.userbot.core import relationship
 from minions.userbot.core import render
 from minions.userbot.core.render import emoji_markup
 from minions.userbot.core.render import trim
@@ -52,8 +53,16 @@ Enough to see a pattern, short enough to read on a phone. The
 counters on the line above are over ALL of them, not just these.
 """
 
+_BELOW = {relationship.NEW: 'new', relationship.MISSED: 'missed'}
+"""The two states BELOW the ladder, and the key each looks its word up by.
+
+They are shared across services where the rungs are not: "nothing has been
+offered" and "one chance, and it did not land" are the same fact whether the
+chance was a story or a comment, so one word serves both. Built from the
+constants themselves so a renamed state cannot leave a key behind.
+"""
+
 if TYPE_CHECKING:
-    from minions.userbot.core import relationship
     from minions.userbot.core.models import Emoji
     from minions.userbot.core.state import Actor
     from minions.userbot.core.state import Database
@@ -225,10 +234,14 @@ class StatusReport:
 
         Ordered by how recently we touched them, so the top of the list is
         who the account is actually busy with.
+
+        The roster is the UNION of the services, not the story engine's
+        slice of it: a person we have only ever met in the comments has a
+        standing under the other service, and listing one service left them
+        out of the list of people entirely.
         """
         db, b = self._db(), self.bullet()
-        views = db.store('stories')
-        rows = views.peers(limit=PEOPLE_ROWS)
+        rows = db.roster(limit=PEOPLE_ROWS)
         if not rows:
             return f'{b} nobody yet'
         known = db.actors([row.peer_id for row in rows])
@@ -240,15 +253,24 @@ class StatusReport:
     def _person_line(
         self, row: PeerRow, known: dict[int, Actor], b: str
     ) -> str:
-        """Return one roster line: name, what we do, when, and where."""
+        """Return one roster line: name, what we do, when, and where.
+
+        One line and one voice: the service that earns the verb also spells
+        the swing's face beside it, so the reader is never handed a word
+        from one ladder next to a leg named on another. The counts are
+        already the fold across services (see ``Database.roster``), because
+        a person is one relationship however many ways we reach them.
+        """
+        service, code = self._reading(row.peer_id)
         seen = row.taken / row.offered if row.offered else 0.0
         back = row.recip / row.taken if row.taken else 0.0
         return (
-            f'{b} {_name(known, row.peer_id)} {b} {self.doing(row.peer_id)} '
+            f'{b} {_name(known, row.peer_id)} '
+            f'{b} {self._act_word(service, code)} '
             f'{self._ago(row.last_at)} '
             f'{b} {self._glyph("watched", "w")} {seen:.0%} '
             f'{self._glyph("liked", "l")} {back:.0%} '
-            f'{b} {self._leg_of(row.peer_id)}'
+            f'{b} {self._leg_of(row.peer_id, service)}'
         )
 
     def _ago(self, at: float) -> str:
@@ -263,15 +285,23 @@ class StatusReport:
             return 'never'
         return f'{fmt_eta(max(0.0, time.time() - at))} ago'
 
-    def _leg_of(self, peer_id: int) -> str:
-        """Return 'honeymoon, round 2' for a peer, or '' with no arc."""
-        brain = self.bot.stories
+    def _leg_of(self, peer_id: int, service: str = 'stories') -> str:
+        """Return 'honeymoon, round 2' for a peer, or 'no arc' when it is off.
+
+        ``service`` names the ladder a swing's face is spelled in, and the
+        caller passes whichever one it just spoke the verb in -- so a line
+        reads in one voice. The leg itself does not depend on it: the arc is
+        anchored on ``met()``, which is one day per person whichever engine
+        asks, so both services put the same person in the same leg on the
+        same evening.
+        """
+        brain = getattr(self.bot, service)
         control = brain._control()  # noqa: SLF001 -- the arc is its own config
         if not control.arc.enabled:
             return 'no arc'
         since, now = brain.store.met(peer_id), brain.clock()
         leg = control.arc.leg(since, now, peer_id)
-        name = control.leg_name(leg)
+        name = control.leg_name(service, leg)
         return f'{name}, round {control.arc.rounds(since, now)}'
 
     def _db(self) -> Database:
@@ -304,8 +334,15 @@ class StatusReport:
         percentage looks the way it does: somebody eleven days into a cold
         shoulder is SUPPOSED to read as neglected, and without this the
         readout below is a mystery to be re-derived from dates every time.
+
+        One line for the person, not one per service: the arc is anchored on
+        ``met()``, which is the day we first did ANYTHING with them, so both
+        ladders below it are walking the same leg on the same evening. The
+        swing's face is spelled in the ladder of whichever service we are
+        doing the most in, the same one the roster names them by.
         """
-        brain = self.bot.stories
+        service, _ = self._reading(peer_id)
+        brain = getattr(self.bot, service)
         control = brain._control()  # noqa: SLF001 -- the arc is its own config
         if not control.arc.enabled:
             return []
@@ -314,7 +351,7 @@ class StatusReport:
         leg = control.arc.leg(since, now, peer_id)
         met = _when(since) if since > 0 else 'just now'
         return [
-            f'{b} {control.leg_name(leg)}, '
+            f'{b} {control.leg_name(service, leg)}, '
             f'round {control.arc.rounds(since, now)} '
             f'{b} met {met} {b} '
             f'aiming {control.take_target(leg):.0%} seen, '
@@ -777,8 +814,12 @@ class StatusReport:
         "first time" rather than 0%: a person we have never engaged reads
         completely differently from one we have been steadily skipping,
         and a bare zero cannot tell them apart.
+
+        The STORY word, not the person's strongest anywhere: this line sits
+        in the story section beside story percentages, and a verb borrowed
+        from the comments would be the contradiction all over again.
         """
-        doing = self.doing(row.peer_id)
+        doing = self._doing('stories', row.peer_id)
         held = row.standing
         if not held.offered:
             return f'{doing} {self.bullet()} first time'
@@ -791,25 +832,83 @@ class StatusReport:
             f'{eye} {watched:.0f}% {thumb} {liked:.0f}%'
         )
 
+    def _codes(self, peer_id: int) -> dict[str, tuple[int, int]]:
+        """Return ``{service: (rung, offered)}`` for every ledger we keep.
+
+        One arc, walked by two services. ``Control.doing`` answers per
+        service because the record is per service, so this asks each one and
+        the callers below decide whether they want a single service's answer
+        or the strongest of them.
+
+        Each engine is reachable by its own service name -- ``bot.stories``
+        keeps ``'stories'`` -- and ``ACTS`` names exactly the services that
+        keep a ledger, so the pair drives the loop instead of a second list
+        that could fall out of step with the first.
+
+        Each standing is read through that engine's OWN store rather than
+        through one shared file, because a service can be sandboxed into its
+        own profile while the other stays live, and then its record really
+        does live somewhere else.
+        """
+        found = {}
+        for service in ACTS:
+            brain = getattr(self.bot, service)
+            control = brain._control()  # noqa: SLF001 -- the arc is its config
+            row = brain.store.peer(peer_id)
+            leg = brain.ledger.leg(peer_id, control, brain.clock())
+            found[service] = (control.doing(leg, row), row.offered)
+        return found
+
+    def _reading(self, peer_id: int) -> tuple[str, int]:
+        """Return the strongest thing we do with a person, and where.
+
+        A person is one relationship -- the arc is anchored on ``met()``,
+        which is deliberately not bound to a service -- so the roster says
+        one word about them, and the honest one is the most we do anywhere.
+        ``Control.doing`` counts rungs rather than naming them precisely so
+        that "the most" is ``max`` and not a table of cases.
+
+        Ties go to the service we have more record with, and a dead heat to
+        the earlier name: at that point both words are equally true, and
+        picking stably matters more than picking cleverly.
+        """
+        codes = self._codes(peer_id)
+        best = max(codes, key=lambda s: codes[s])
+        return best, codes[best][0]
+
+    def _act_word(self, service: str, code: int) -> str:
+        """Return the operator's word for one rung of one service's ladder.
+
+        Below the ladder the word is shared: "nothing has happened yet" and
+        "one chance, and it did not land" are the same fact whichever
+        service was offering. On the ladder it is not -- ``like`` is the top
+        of what we ever do to a story and the middle of what we do to a
+        comment -- so the key carries the service and the two cannot collide.
+
+        The words live in the constants JSON, so this file stays ASCII and
+        the vocabulary stays the operator's.
+        """
+        below = _BELOW.get(code)
+        if below is not None:
+            return self._glyph(f'act_{below}', below)
+        act = ACTS[service][code]
+        return self._glyph(f'act_{service}_{act}', act)
+
+    def _doing(self, service: str, peer_id: int) -> str:
+        """Return the word for ONE service -- what its own section is about."""
+        return self._act_word(service, self._codes(peer_id)[service][0])
+
     def doing(self, peer_id: int) -> str:
         """Return the one word for what we are doing with somebody now.
 
         The lesser of what this person's leg INTENDS and what has actually
-        happened with them -- see ``Control.doing``. Claiming "liking"
-        beside a 0% like column was not two views of one thing, it was a
-        contradiction, and it printed the same word for everybody besides,
-        since an intention is a property of the leg and a fresh account has
-        everybody in the same leg.
-
-        The word itself lives in the constants JSON, keyed by the ladder
-        rung, so this file stays ASCII and the vocabulary stays the
-        operator's.
+        happened with them, across every service -- see ``Control.doing``.
+        Claiming "liking" beside a 0% like column was not two views of one
+        thing, it was a contradiction, and it printed the same word for
+        everybody besides, since an intention is a property of the leg and a
+        fresh account has everybody in the same leg.
         """
-        brain = self.bot.stories
-        control = brain._control()  # noqa: SLF001 -- the arc is its own config
-        leg = brain.ledger.leg(peer_id, control, brain.clock())
-        rung = control.doing(leg, brain.store.peer(peer_id))
-        return self._glyph(f'act_{rung}', rung)
+        return self._act_word(*self._reading(peer_id))
 
     def _lifts(self) -> str:
         """Return ' -> in 8h 12m' for a blocked session, '' when it is not.

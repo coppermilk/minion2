@@ -1126,6 +1126,48 @@ class Database:
         """
         return StateStore(self.conn, service)
 
+    def roster(self, limit: int = 0) -> list[PeerRow]:
+        """Return every peer any service has a record with, folded into one.
+
+        ``StateStore.peers`` answers per service by construction, which left
+        the roster unable to name somebody we only ever met in the comments:
+        their standing exists, under the other service, and nothing joined
+        the two. One person is one relationship here -- the arc is anchored
+        on ``met()``, which is deliberately not service-bound -- so the list
+        of people has to be the union, not one service's slice of it.
+
+        The counters are summed across services on purpose: ``offered`` is
+        every chance they gave us anywhere and ``taken`` every one we took,
+        so the fraction reads "of everything they put in front of us". The
+        per-service split is what ``/who`` is for. ``last_at`` is the latest
+        of them, because recency is about the person.
+
+        The timing statistics stay zero here. They describe the rhythm of
+        ONE service's engagements, and adding a story gap to a comment gap
+        would produce a number that measures nothing -- ``warmth`` reads
+        them per service, where they mean something.
+        """
+        sql = (
+            'SELECT peer_id, sum(offered) AS offered, sum(taken) AS taken,'
+            '       sum(recip) AS recip, max(last_at) AS last_at,'
+            '       max(take_at) AS take_at'
+            '  FROM standing GROUP BY peer_id ORDER BY last_at DESC'
+        )
+        args: tuple[object, ...] = ()
+        if limit > 0:
+            sql, args = sql + ' LIMIT ?', (limit,)
+        return [
+            PeerRow(
+                peer_id=int(r['peer_id']),
+                offered=int(r['offered']),
+                taken=int(r['taken']),
+                recip=int(r['recip']),
+                last_at=float(r['last_at']),
+                take_at=float(r['take_at']),
+            )
+            for r in self.conn.execute(sql, args)
+        ]
+
     # --- who: one identity, shared by every service ----------------------
 
     def actor(self, peer_id: int) -> Actor:

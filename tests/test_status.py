@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 from minion_core.pace import Lane
 from minions.userbot import main
+from minions.userbot.core import attachment
 from minions.userbot.core import config
 from minions.userbot.core import relationship
 from minions.userbot.core.humanize import Variety
@@ -503,19 +504,50 @@ def test_the_shipped_constants_carry_every_status_glyph() -> None:
 
 
 def test_the_shipped_constants_carry_a_word_for_every_doing() -> None:
-    """And a word for each of the five things /people can say we are doing.
+    """And a word for every rung of every ladder, plus the two below them.
 
-    The sweep above cannot see these: the key is built as ``f'act_{rung}'``,
-    so a missing one falls back to the bare rung and drops an English
-    "missed" into a Russian roster with nothing failing. Enumerated from the
-    ladder and the two readout words rather than listed, so adding a rung
-    fails here instead of shipping wordless.
+    The sweep above cannot see these: the key is built as
+    ``f'act_{service}_{act}'``, so a missing one falls back to the bare act
+    and drops an English "sticker" into a Russian roster with nothing
+    failing. Enumerated from ``ACTS`` rather than listed, so a new service
+    or a new rung fails here instead of shipping wordless.
+
+    The service is IN the key because ``like`` is the top of what we ever do
+    to a story and the middle of what we do to a comment: one shared key
+    would have printed "love bombing" over a bare comment like.
     """
     shipped = config.load_constants(config.CONSTANTS_PATH).status
-    said = (*ACTS['stories'], relationship.NEW, relationship.MISSED)
-    missing = {f'act_{word}' for word in said} - set(shipped)
+    wanted = {'act_new', 'act_missed'} | {
+        f'act_{service}_{act}'
+        for service, ladder in ACTS.items()
+        for act in ladder
+    }
+
+    missing = wanted - set(shipped)
 
     assert not missing, f'texts.status is missing {sorted(missing)}'
+
+
+def test_the_word_is_looked_up_under_its_own_service(tmp_path: Path) -> None:
+    """Rendered against the shipped file, each ladder reads its own entry.
+
+    The coverage test above proves the keys EXIST; this proves they are the
+    keys actually used. Both matter, and neither implies the other: drop the
+    service from the lookup and every word falls back to the bare English
+    act, which no test comparing rung names would notice -- and the bottom
+    rung is spelled the same in both ladders, so it is the one that pins the
+    lookup down.
+    """
+    shipped = config.load_constants(config.CONSTANTS_PATH).status
+    bot = _bot(tmp_path)
+    bot.consts = replace(bot.consts, status=shipped)
+
+    for service, ladder in ACTS.items():
+        for rung, act in enumerate(ladder):
+            got = bot.report._act_word(service, rung)
+
+            assert got == shipped[f'act_{service}_{act}']
+            assert got != act  # never the bare fallback
 
 
 # --- the story section names each person once -----------------------------
@@ -749,22 +781,52 @@ def test_who_says_nothing_about_an_arc_that_is_not_running(
     assert 'round' not in got[1]
 
 
+_ARC = relationship.Arc(
+    legs=(
+        relationship.Leg('honeymoon', 14, exposure=1.0, recip=1.0),
+        relationship.Leg('cold', 10, exposure=0.1, recip=0.0),
+        relationship.Leg('swing', 21, exposure=0.0, recip=0.0),
+    ),
+    enabled=True,
+)
+"""The curve both engines walk -- ONE arc, as config.apply_persona fans it."""
+
+_CTRL = relationship.Control(wundt=attachment.WundtParams())
+"""A plain control, for seeding a ledger: only its gap statistics are used."""
+
+
 def _arc_bot(tmp_path: Path) -> main.Userbot:
-    """Return a /who bot whose people are on a real arc."""
+    """Return a /who bot whose people are on a real arc, in both services.
+
+    The shipped config puts the same ``persona.arc`` in both engine blocks,
+    so a fixture that armed one of them would let the readout look right
+    while the two services quietly walked different curves.
+    """
     bot = _who_bot(tmp_path)
     bot.stories.clock = lambda: NOW
-    bot.stories.params = replace(
-        bot.stories.params,
-        arc=relationship.Arc(
-            legs=(
-                relationship.Leg('honeymoon', 14, exposure=1.0, recip=1.0),
-                relationship.Leg('cold', 10, exposure=0.1, recip=0.0),
-                relationship.Leg('swing', 21, exposure=0.0, recip=0.0),
-            ),
-            enabled=True,
-        ),
-    )
+    bot.reactions.clock = lambda: NOW
+    bot.stories.params = replace(bot.stories.params, arc=_ARC)
+    bot.reactions.params = replace(bot.reactions.params, arc=_ARC)
     return bot
+
+
+def test_both_services_put_a_person_in_the_same_leg(tmp_path: Path) -> None:
+    """One person, one curve -- whichever engine is asked.
+
+    The anchor is ``met()``, which is deliberately not bound to a service,
+    and the arc is fanned into both engine blocks from ``persona``. Nothing
+    asserted that the two ends actually meet, and they are what make the
+    roster able to say one word about somebody.
+    """
+    bot = _arc_bot(tmp_path)
+    for clock in (NOW, NOW + 18 * 86400.0):
+        bot.stories.clock = bot.reactions.clock = lambda c=clock: c
+
+        assert bot.stories.store.met(PEER_A) == bot.reactions.store.met(PEER_A)
+        assert (
+            bot.report._leg_of(PEER_A, 'stories').split(':')[0]
+            == (bot.report._leg_of(PEER_A, 'reactions').split(':')[0])
+        )
 
 
 def test_a_person_row_says_what_we_are_doing_with_them_now(
@@ -777,11 +839,56 @@ def test_a_person_row_says_what_we_are_doing_with_them_now(
     as neglected in the percentages without them ever saying so.
     """
     bot = _arc_bot(tmp_path)
-    warm = bot.report.doing(PEER_A)  # met yesterday: still the honeymoon
+    warm = bot.report._doing('stories', PEER_A)  # met yesterday: honeymoon
     bot.stories.clock = lambda: NOW + 18 * 86400.0
 
     assert warm == 'like'
-    assert bot.report.doing(PEER_A) == 'ignore'
+    assert bot.report._doing('stories', PEER_A) == 'ignore'
+
+
+def test_the_roster_word_is_the_most_we_do_with_them_anywhere(
+    tmp_path: Path,
+) -> None:
+    """Two services, one person, one word -- and the word is the strongest.
+
+    Same leg, same day, different RECORD: we watch their stories and never
+    answer, and we answer their comments. Reading one ledger called that
+    "orbiting" and dropped the half where we actually talk to them.
+
+    The two words also come from different ladders -- ``seen`` is not a rung
+    the comment engine has, ``sticker`` is not one the story engine has --
+    which is why the model counts rungs and the renderer names them.
+    """
+    bot, peer = _arc_bot(tmp_path), 7001  # ONE person, both ledgers
+    bot.stories.ledger.add_take(peer, (1, 2, 3, 4), _CTRL, NOW)
+    bot.reactions.ledger.add_take(peer, (1, 2, 3, 4), _CTRL, NOW)
+    bot.reactions.ledger.bump_recip(peer, 1, NOW)
+
+    assert bot.report._doing('stories', peer) == 'seen'
+    assert bot.report._doing('reactions', peer) == 'sticker'
+    assert bot.report.doing(peer) == 'sticker'  # the most, not the least
+
+
+def test_the_roster_names_somebody_we_only_ever_met_in_the_comments(
+    tmp_path: Path,
+) -> None:
+    """The list of people is the union of the ledgers, not one service's.
+
+    ``StateStore.peers`` answers per service by construction, so a commenter
+    with no stories had a standing the roster could not see and was missing
+    from the list of everybody -- which is the one thing that list is for.
+    """
+    bot, talker = _arc_bot(tmp_path), 7002
+    bot.reactions.ledger.add_take(talker, (1, 2, 3), _CTRL, NOW)
+    bot.reactions.ledger.bump_recip(talker, 1, NOW)
+    bot.database('stories').note_actor(
+        Actor(talker, 'user', username='talker')
+    )
+
+    got = bot.report.people()
+
+    assert '@talker' in got
+    assert 'sticker' in got  # in the comment ladder's words, not a story's
 
 
 def test_the_doing_word_follows_the_config_not_the_leg_name(
@@ -802,7 +909,7 @@ def test_the_doing_word_follows_the_config_not_the_leg_name(
         arc=replace(bot.stories.params.arc, legs=(quiet,)),
     )
 
-    assert bot.report.doing(PEER_A) == 'seen'
+    assert bot.report._doing('stories', PEER_A) == 'seen'
 
 
 def test_people_lists_everyone_with_what_we_do_and_where_they_are(

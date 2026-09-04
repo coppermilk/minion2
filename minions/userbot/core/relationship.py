@@ -69,18 +69,29 @@ def steer(current: float, target: float, gain: float) -> float:
     return _clip(target + gain * (target - current))
 
 
-NEW = 'new'
-"""Readout word: nobody has offered us anything yet, so nothing has happened.
+NEW = -2
+"""State: nobody has offered us anything yet, so nothing has happened.
 
-Deliberately NOT a rung of ``state.ACTS``. That ladder is lined up with
+The two states below the ladder, and the reason they are NUMBERS rather than
+words. ``Control.doing`` answers with a position, not a vocabulary: the same
+person is a rung of ``ACTS['stories']`` to the story engine and a rung of
+``ACTS['reactions']`` to the like engine, and one model that returned story
+words made the second service unsayable.
+
+Numbering them below zero also orders the whole readout by strength --
+``NEW < MISSED < passed < taken < recip`` -- so "the strongest thing we do
+with this person anywhere" is ``max()`` over the services rather than a
+table of cases.
+
+Deliberately NOT rungs of ``state.ACTS``: that ladder is lined up with
 ``state.RUNGS`` position by position and generates the CHECK on
 ``contact.act``, so a fourth entry there would be a fourth counter nobody
-keeps. These two are words for a READER, derived at render time exactly like
+keeps. These two are for a READER, derived at render time exactly like
 ``Control.leg_name`` -- the log's own vocabulary is untouched.
 """
 
-MISSED = 'missed'
-"""Readout word: chances came and none landed, but too few to mean anything.
+MISSED = -1
+"""State: chances came and none landed, but too few to mean anything.
 
 The bottom rung of the ladder is an ABSENCE, and an absence is evidence only
 when there was enough to be absent from. One story passed over at a 67% aim
@@ -342,27 +353,28 @@ class Control:
         peak = attachment.exposure_peak(self.wundt)
         return peak if leg is None else peak * _clip(leg.exposure)
 
-    def stance(self, leg: Leg | None = None) -> str:
-        """Return what we are DOING with somebody, as a rung of ``ACTS``.
+    def stance(self, leg: Leg | None = None) -> int:
+        """Return which RUNG this leg aims at: 0 pass, 1 engage, 2 answer.
 
-        The readout's answer to "what is happening with this person", in one
-        word, derived from what the controller is aimed at rather than from
-        the leg's name -- so retuning a leg in the JSON moves the word with
-        it instead of leaving a label that used to be true.
+        The readout's answer to "what is this phase FOR", derived from what
+        the controller is aimed at rather than from the leg's name -- so
+        retuning a leg in the JSON moves the word with it instead of leaving
+        a label that used to be true.
 
-        Reading down the ladder: a leg that answers nothing is ``ignore``
-        however much it watches; one that watches but never answers is
-        ``seen``; one doing both is ``like``. The words are ``ACTS`` rungs
-        because they are the same three acts the history is written in --
-        the reader learns one vocabulary, not two.
+        Reading down the ladder: a leg that answers nothing is the bottom
+        rung however much it watches; one that watches but never answers is
+        the middle; one doing both is the top. A position rather than a word
+        because the arc is one PERSON's, and the two services that walk it
+        call the same three rungs by different names -- a story we opened is
+        ``seen``, a comment we touched is ``like``, and ``like`` is the top
+        of one ladder and the middle of the other.
         """
-        passed, took, back = state.ACTS['stories']
         if self.take_target(leg) < self.wundt.c1:
-            return passed
-        return back if self.recip_goal(leg) > 0 else took
+            return 0
+        return 2 if self.recip_goal(leg) > 0 else 1
 
-    def doing(self, leg: Leg | None, row: state.PeerRow) -> str:
-        """Return what we are doing with ONE person, in one word.
+    def doing(self, leg: Leg | None, row: state.PeerRow) -> int:
+        """Return where ONE person stands with ONE service: a rung, or below.
 
         The lesser of what this leg INTENDS and what has actually happened,
         because a readout claiming "liking" beside a 0% like column is not
@@ -384,17 +396,21 @@ class Control:
         opposite words in the vocabulary either side of a single coin flip:
         nothing offered read "liking", one story passed over read "ignoring",
         and both meant "we have not started".
+
+        ``row`` is that person's standing WITH ONE SERVICE, so this answers
+        per service and the caller folds the answers. Which is why it counts
+        rungs rather than naming them: ``max()`` over a person's services is
+        then "the strongest thing we do with them anywhere".
         """
         if not row.offered:
             return NEW  # there was nothing to notice
-        ladder = state.ACTS['stories']
-        intend = ladder.index(self.stance(leg))
+        intend = self.stance(leg)
         done = len([n for n in (row.taken, row.recip) if n])
         if done:
-            return ladder[min(intend, done)]
+            return min(intend, done)
         if intend and not self._enough_chances(leg, row):
             return MISSED
-        return ladder[0]  # passing them over: by policy, or for real
+        return 0  # passing them over: by policy, or for real
 
     def _enough_chances(self, leg: Leg | None, row: state.PeerRow) -> bool:
         """Say whether an EMPTY record is long enough to mean we are passing.
@@ -413,7 +429,7 @@ class Control:
         """
         return row.offered * self.take_target(leg) >= 1.0
 
-    def leg_name(self, leg: Leg | None = None) -> str:
+    def leg_name(self, service: str, leg: Leg | None = None) -> str:
         """Return the leg's name for a READER, not its name in the config.
 
         The two differ for exactly one leg. The fixed legs are phases the
@@ -425,6 +441,12 @@ class Control:
         reading "ignoring" is one vocabulary; ``swing:cold`` beside it was
         two words for one fact, and the reader had to learn the mapping.
 
+        ``service`` picks the ladder that face is named in: the aim is the
+        same rung for everybody (``stance`` reads only the leg), but a day
+        aimed at the middle rung is ``swing:seen`` of somebody's stories and
+        ``swing:like`` of their comments, and the caller knows which of the
+        two it is showing.
+
         Derived here rather than baked in by ``Arc``, which knows nothing
         about the attachment curve the stance is measured against -- and
         because a name for a reader is a rendering, not a stored field.
@@ -432,7 +454,9 @@ class Control:
         if leg is None:
             return ''
         head, mark, _ = leg.name.partition(':')
-        return f'{head}:{self.stance(leg)}' if mark else leg.name
+        if not mark:
+            return leg.name
+        return f'{head}:{state.ACTS[service][self.stance(leg)]}'
 
     def recip_goal(self, leg: Leg | None = None) -> float:
         """Return the reciprocity fraction to steer toward (same rule)."""
