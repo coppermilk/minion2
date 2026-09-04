@@ -863,7 +863,6 @@ class ReactionBrain:
     def _load(self) -> ReactionState:
         """Reload the state block, or start fresh when there is none."""
         raw = self.store.read()
-        self.ledger.restore(raw)
         return ReactionState(
             mood=codec.num(raw.get('mood')),
             mood_day=codec.text(raw.get('mood_day')),
@@ -900,7 +899,6 @@ class ReactionBrain:
                 'next_at': self.state.next_session_at,
                 'start_at': self.state.session_start_at,
                 'last_at': self.state.session_last_at,
-                **self.ledger.counters(),
             },
         )
 

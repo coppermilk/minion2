@@ -60,6 +60,18 @@ BLOCK_BYTES = 400
 """A state block is cursors and counters; anything larger is a smell."""
 
 
+def _kept(store: StateStore, **want: object) -> bool:
+    """Whether a cursor row carries these values.
+
+    ``read`` answers with every declared column now, defaults included, so a
+    test says which ones it wrote rather than spelling out the eight it did
+    not. That the rest come back as their declared zero is the point of
+    columns, not something each test has to restate.
+    """
+    got = store.read()
+    return all(got.get(name) == value for name, value in want.items())
+
+
 def _store(tmp_path: Path, service: str = 'reactions') -> StateStore:
     """Return one service's view of the state database in a temp dir."""
     return Database(tmp_path / DB_NAME).store(service)
@@ -150,12 +162,12 @@ def test_two_services_share_a_file_and_nothing_else(tmp_path: Path) -> None:
     likes.write({'mood': MOOD})
     views.bump(77, {'taken': 1})
     views.mark('shared-key')
-    views.write({'total_views': 1})
+    views.write({'mood': 1.0})
 
     assert likes.peer(77).taken == TOP_N
     assert views.peer(77).taken == 1
-    assert likes.read() == {'mood': MOOD}
-    assert views.read() == {'total_views': 1}
+    assert likes.read()['mood'] == MOOD
+    assert views.read()['mood'] == 1.0
 
     views.keep_marks(())  # clears the STORY marks
     assert views.marked('shared-key') is False
@@ -230,32 +242,33 @@ def test_the_state_block_round_trips_through_the_file(tmp_path: Path) -> None:
     """A reopened store reads back what the previous one wrote."""
     store = _store(tmp_path)
     store.write({'mood': MOOD, 'mood_day': '2026-08-28'})
-    assert _store(tmp_path).read() == {'mood': MOOD, 'mood_day': '2026-08-28'}
+    assert _kept(_store(tmp_path), mood=MOOD, mood_day='2026-08-28')
 
 
 def test_read_is_a_copy_not_the_live_block(tmp_path: Path) -> None:
     """Mutating what read() returned must not change stored state."""
     store = _store(tmp_path)
-    store.write({'total_views': 1})
-    store.read()['total_views'] = 999
-    assert store.read()['total_views'] == 1
+    store.write({'mood': MOOD})
+    store.read()['mood'] = 999
+    assert store.read()['mood'] == MOOD
 
 
-def test_an_unreadable_block_starts_fresh(tmp_path: Path) -> None:
-    """A block that will not parse means "use your defaults", not a crash.
+def test_an_undeclared_cursor_is_an_error_not_a_silent_write(
+    tmp_path: Path,
+) -> None:
+    """The last thing leaving JSON behind buys: a name the database knows.
 
-    Everything still kept in a block is cheaply re-earned -- a mood, a
-    cursor, a daily counter. What was NOT cheap to lose has left: the
-    poster's published log is rows now, so an unparseable block can no
-    longer read as "nothing was ever posted" and republish the backlog.
+    A blob took any key, so a typo stored a value nothing ever read back and
+    nothing ever complained. These are columns, so the same typo stops the
+    call.
     """
     store = _store(tmp_path)
-    store.conn.execute(
-        "INSERT INTO state (service, blob) VALUES ('reactions', 'not json')"
-    )
-    store.conn.commit()
+    store.write({'mood': MOOD})  # a declared one round-trips
 
-    assert store.read() == {}
+    with pytest.raises(KeyError, match='no such cursor'):
+        store.write({'moood': MOOD})
+
+    assert store.read()['mood'] == MOOD
 
 
 def test_the_block_survives_a_kill_with_nothing_flushed(
@@ -272,9 +285,9 @@ def test_the_block_survives_a_kill_with_nothing_flushed(
     _store(tmp_path).write({'mood': MOOD})
 
     alone = sqlite3.connect(f'file:{tmp_path / DB_NAME}?mode=ro', uri=True)
-    got = alone.execute('SELECT blob FROM state').fetchone()
+    got = alone.execute('SELECT mood FROM cursor').fetchone()
 
-    assert json.loads(got[0]) == {'mood': MOOD}
+    assert got[0] == MOOD
 
 
 # ----------------------------------------------------------------- scale
@@ -290,7 +303,7 @@ def test_a_thousand_peers_still_write_one_row_each(tmp_path: Path) -> None:
     it.
     """
     store = _store(tmp_path)
-    store.write({'mood': MOOD, 'alive': {'12': 5.0}})
+    store.write({'mood': MOOD})
     for i in range(CROWD):
         peer = -1000000000 - i
         store.bump(peer, {'offered': 3, 'taken': 2})
@@ -531,15 +544,17 @@ def test_adopt_folds_every_older_shape_into_the_one_file(
         LEGACY_RECIP,
     )
     assert (row.gap_n, row.gap_sum, row.burst) == (0, 0.0, 0)
-    assert likes.read() == {'mood': MOOD}  # shape 1, from cursors.json
+    assert _kept(likes, mood=MOOD)  # shape 1, from cursors.json
 
     views = db.store('stories')  # shape 2a, by its filename
     assert db.actor(360724480).username == 'eliza'
     assert views.marked('360724480:397') is True
     assert views.marked('77:1') is True  # and shape 1's mark, same service
-    assert views.read() == {'total_views': 38}
+    # The stories block held only collections, so it leaves no cursor row
+    # at all -- its odometer is counted off ``contact`` now.
+    assert views.read() == {}
 
-    assert db.store('greeter').read() == {'last_event_id': 41}  # shape 2b
+    assert _kept(db.store('greeter'), last_event_id=41)  # shape 2b
     # The poster's registers are tables now, so an adopted file arrives with
     # its published log in ``posted`` rather than inside the JSON block.
     poster = db.store('aggregator')
@@ -566,7 +581,7 @@ def test_adopt_does_not_cross_the_services(tmp_path: Path) -> None:
     db = Database(tmp_path / DB_NAME)
     assert db.store('stories').peer(OLD_PEER) == PeerRow(OLD_PEER)
     assert db.store('reactions').marked('77:1') is False
-    assert db.store('reactions').read() == {'mood': MOOD}
+    assert _kept(db.store('reactions'), mood=MOOD)
 
 
 def test_adopt_runs_once_and_the_old_files_are_gone(tmp_path: Path) -> None:
@@ -601,7 +616,7 @@ def test_a_resumed_import_never_undoes_live_state(tmp_path: Path) -> None:
 
     reopened = _store(tmp_path)
     assert reopened.peer(OLD_PEER).taken == LEGACY_TAKEN + 1
-    assert reopened.read() == {'mood': 0.9}
+    assert _kept(reopened, mood=0.9)
 
 
 def test_an_unreadable_file_keeps_its_name(tmp_path: Path) -> None:
@@ -619,9 +634,9 @@ def test_an_unreadable_file_keeps_its_name(tmp_path: Path) -> None:
 
     assert (tmp_path / 'broken.db').exists()
     assert not (tmp_path / 'broken.db.bak').exists()
-    assert Database(tmp_path / DB_NAME).store('greeter').read() == {
-        'last_event_id': 41
-    }
+    assert _kept(
+        Database(tmp_path / DB_NAME).store('greeter'), last_event_id=41
+    )
 
 
 _KILLED_WAL_WRITER = """
@@ -691,17 +706,17 @@ def test_a_write_cut_short_keeps_the_old_block_whole(tmp_path: Path) -> None:
     transaction, and an uncommitted transaction IS what a killed process
     leaves. Written here without a commit, exactly as that kill would.
     """
-    _store(tmp_path).write({'n': 1})
+    _store(tmp_path).write({'mood': 1.0})
 
     dying = sqlite3.connect(str(tmp_path / DB_NAME))
     dying.execute(
-        "INSERT INTO state (service, blob) VALUES ('reactions', ?) "
-        'ON CONFLICT (service) DO UPDATE SET blob = excluded.blob',
-        (json.dumps({'n': 2}),),
+        "INSERT INTO cursor (service, mood) VALUES ('reactions', ?) "
+        'ON CONFLICT (service) DO UPDATE SET mood = excluded.mood',
+        (2.0,),
     )
     dying.close()  # no commit: the process died holding the transaction
 
-    assert _store(tmp_path).read() == {'n': 1}
+    assert _kept(_store(tmp_path), mood=1.0)
 
 
 def test_the_hand_rolled_json_files_are_adopted_too(tmp_path: Path) -> None:
@@ -722,8 +737,12 @@ def test_the_hand_rolled_json_files_are_adopted_too(tmp_path: Path) -> None:
     adopt(tmp_path)
 
     db = Database(tmp_path / DB_NAME)
-    assert db.store('greeter').read() == {'last_event_id': 41}
-    assert db.store('comod').read()['nick'] == {'at': 1.0, 'amount': '50'}
+    assert _kept(db.store('greeter'), last_event_id=41)
+    # The cabinet is its own table now, so a hand-rolled roster lands there
+    # rather than in a block that would have to be parsed to be read.
+    assert [str(r['nick']) for r in db.store('comod').residents(0.0)] == [
+        'nick'
+    ]
     assert sorted(p.name for p in tmp_path.glob('*.json')) == []
 
 
@@ -744,9 +763,9 @@ def test_a_json_file_never_overwrites_a_database_that_has_the_row(
 
     adopt(tmp_path)
 
-    assert Database(tmp_path / DB_NAME).store('greeter').read() == {
-        'last_event_id': 99
-    }
+    assert _kept(
+        Database(tmp_path / DB_NAME).store('greeter'), last_event_id=99
+    )
 
 
 def test_retiring_a_file_takes_its_stale_journal_with_it(
@@ -789,7 +808,8 @@ def test_a_copy_of_the_database_beside_it_is_not_re_imported(
 
     db = Database(tmp_path / DB_NAME)
     named = {
-        str(r['service']) for r in db.conn.execute('SELECT service FROM state')
+        str(r['service'])
+        for r in db.conn.execute('SELECT service FROM cursor')
     }
     assert named == {'greeter'}
 
@@ -1114,7 +1134,7 @@ def test_the_heartbeat_costs_one_row(tmp_path: Path) -> None:
     cost = store.conn.total_changes - before
 
     assert cost == 1
-    assert store.read() == {'mood': MOOD}
+    assert _kept(store, mood=MOOD)
 
 
 def test_the_uptime_curve_decays_from_each_bucket_s_own_last_touch(
@@ -1134,32 +1154,6 @@ def test_the_uptime_curve_decays_from_each_bucket_s_own_last_touch(
     assert store.hours(HALF_LIFE, TAKE_AT + HALF_LIFE)[HOUR] == 1.5  # noqa: PLR2004
     faded = store.hours(HALF_LIFE, TAKE_AT + 2 * HALF_LIFE)[HOUR]
     assert faded == 0.75  # noqa: PLR2004 -- 1.5 left alone for a half-life
-
-
-def test_no_state_block_holds_a_list_or_a_dict(tmp_path: Path) -> None:
-    """The rule, as a property of the file rather than of good intentions.
-
-    Walks every service's block in a database the real engines have filled
-    and fails on any value that is a collection. Without this the rule lasts
-    exactly as long as whoever next edits a ``_save`` remembers it -- and the
-    cost of forgetting is invisible until something profiles the disk.
-    """
-    db = Database(tmp_path / DB_NAME)
-    _fill(db)
-
-    blocks = {
-        str(r['service']): json.loads(str(r['blob']))
-        for r in db.conn.execute('SELECT service, blob FROM state')
-    }
-
-    assert blocks, 'the engines wrote no state at all'
-    fat = {
-        f'{service}.{key}'
-        for service, block in blocks.items()
-        for key, value in block.items()
-        if isinstance(value, (list, dict))
-    }
-    assert fat == set()
 
 
 def _fill(db: Database) -> None:
@@ -1260,9 +1254,7 @@ def test_a_service_that_does_not_exist_cannot_own_rows(
     """
     store = _store(tmp_path)
     with pytest.raises(sqlite3.IntegrityError):
-        store.conn.execute(
-            "INSERT INTO state (service, blob) VALUES ('storys', '{}')"
-        )
+        store.conn.execute("INSERT INTO cursor (service) VALUES ('storys')")
 
 
 def test_an_older_file_gets_an_actor_for_every_peer_it_mentions(
@@ -1332,9 +1324,20 @@ def test_an_adopted_post_keeps_the_moment_it_was_published(
     side effect of an upgrade.
     """
     path = tmp_path / DB_NAME
-    Database(path).store('aggregator').write(
-        {'posted': [{'title': 'Posted one', 'at': '2026-08-01T10:00:00Z'}]}
+    Database(path).conn.close()
+    old = sqlite3.connect(path)
+    old.execute('CREATE TABLE IF NOT EXISTS state (service TEXT, blob TEXT)')
+    old.execute(
+        'INSERT INTO state (service, blob) VALUES (?, ?)',
+        (
+            'aggregator',
+            json.dumps(
+                {'posted': [{'title': 'A', 'at': '2026-08-01T10:00:00Z'}]}
+            ),
+        ),
     )
+    old.commit()
+    old.close()
 
     row = Database(path).store('aggregator').rows_of('posted')[0]
 
@@ -1416,27 +1419,33 @@ def test_no_time_column_is_left_without_a_readable_view(
     assert {t: c for t, c in missed.items() if c} == {}
 
 
-def test_the_state_block_is_scalars_and_nothing_larger(
+def test_a_service_keeps_its_scalars_in_columns_not_in_json(
     tmp_path: Path,
 ) -> None:
-    """What ``state`` is FOR, now that every collection has left it.
+    """The last of the blob is gone: cursors are columns with names.
 
-    Per-service cursors and daily counters: a mood, a session mark, a date
-    and a count against a cap. Small enough that rewriting one whole is
-    free, which is what makes a JSON blob the right shape for it -- the
-    15 MB/day that argued against blobs was a collection inside one, and
-    there are none left.
+    A blob took any key, so a typo stored a value nothing ever read back and
+    nothing complained; and it could take a list, which is how a collection
+    got in there and stayed until something profiled the disk. Columns give
+    both back: a type, and a name the database itself knows.
+
+    The four JSON columns still in the file are declared and deliberate --
+    a platform->url map, a platform->item map, and two id lists, each a
+    composite value of ONE row rather than a collection of entities.
     """
     db = Database(tmp_path / DB_NAME)
     _fill(db)
 
-    blocks = [
-        json.loads(str(r['blob']))
-        for r in db.conn.execute('SELECT blob FROM state')
-    ]
+    tables = {
+        str(r['name'])
+        for r in db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert 'state' not in tables  # the blob table is not even created
 
-    assert blocks
-    for block in blocks:
-        assert len(str(block)) < BLOCK_BYTES
-        for value in block.values():
-            assert isinstance(value, (int, float, str, bool))
+    rows = list(db.conn.execute('SELECT * FROM cursor'))
+    assert rows
+    for row in rows:
+        for name in row.keys():  # noqa: SIM118 -- sqlite3.Row needs keys()
+            assert isinstance(row[name], (int, float, str))

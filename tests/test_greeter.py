@@ -12,6 +12,8 @@ a FloodWait into a widened gate.
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
 import types
 from datetime import UTC
 from datetime import datetime
@@ -22,6 +24,8 @@ from minion_core.adapters import userchat
 from minion_core.pace import Gate
 from minion_core.pace import Pace
 from minions.userbot.core import state
+from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Database
 from minions.userbot.engines import greeter
 
 _CAP_PER_CYCLE = 2
@@ -235,7 +239,9 @@ def test_over_cap_events_wait_for_the_next_day(tmp_path: Path) -> None:
     assert (
         g.state.last_event_id == _EVENT_2
     )  # cursor advanced only past the greeted
-    g.state.dm_today = 0  # a new day resets the counter
+    # A new day is a new row, so the budget starts empty without a reset.
+    g.store.conn.execute('DELETE FROM daily')
+    g.store.conn.commit()
     asyncio.run(g.sync())
     assert len(client.dms) == _TWO_DMS  # the deferred event is greeted now
     assert g.state.last_event_id == _EVENT_3
@@ -326,14 +332,17 @@ def test_state_persists_cursor_and_counter(tmp_path: Path) -> None:
         _account(client), _params(), greeter.GreeterIO(_store(tmp_path))
     )
     asyncio.run(g.sync())
-    g.state.dm_today = 3
+    for _ in range(_DM_TODAY):
+        g.store.spend('dm', g._today(), 0)
     g._save()
     fresh = greeter.Greeter(
         _account(client), _params(), greeter.GreeterIO(_store(tmp_path))
     )
     assert fresh.state.started
     assert fresh.state.last_event_id == 1
-    assert fresh.state.dm_today == _DM_TODAY
+    # The DM budget is a row per day now, so a restart reads it back from
+    # the table rather than from a field that had to be saved in time.
+    assert fresh.dms_today() == _DM_TODAY
 
 
 def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
@@ -356,16 +365,38 @@ def test_channel_switch_resets_the_baseline(tmp_path: Path) -> None:
 
 
 def test_old_member_state_migrates_and_rebaselines(tmp_path: Path) -> None:
-    """Check old member state migrates and rebaselines."""
-    # An old member-diff state (has 'members', no 'last_event_id').
-    _store(tmp_path).write(
-        {
-            'channel': -100,
-            'members': [1, 2, 3],
-            'left': [9],
-            'started': True,
-        },
+    """A pre-admin-log file re-baselines instead of mass-DMing the channel.
+
+    It recorded that a baseline had been taken but not WHERE, so adopting
+    the flag without a position would start reading the admin log from zero
+    and DM everyone. The migration drops the flag; the greeter takes a fresh
+    baseline silently.
+
+    Written as a real legacy file -- raw JSON in a ``state`` table -- because
+    ``write`` is columns now and would refuse these keys, which is the whole
+    point of it.
+    """
+    path = tmp_path / DB_NAME
+    Database(path).conn.close()
+    old = sqlite3.connect(path)
+    old.execute('CREATE TABLE IF NOT EXISTS state (service TEXT, blob TEXT)')
+    old.execute(
+        'INSERT INTO state (service, blob) VALUES (?, ?)',
+        (
+            'greeter',
+            json.dumps(
+                {
+                    'channel': -100,
+                    'members': [1, 2, 3],
+                    'left': [9],
+                    'started': True,
+                }
+            ),
+        ),
     )
+    old.commit()
+    old.close()
+
     g = greeter.Greeter(
         _FakeClient(),
         _params(channel=-100),

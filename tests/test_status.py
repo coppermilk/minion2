@@ -273,7 +273,8 @@ def _bot(tmp_path: Path) -> main.Userbot:
     grt = greeter.Greeter(
         SimpleNamespace(), gparams, greeter.GreeterIO(db.store('greeter'))
     )
-    grt.state.dm_today = 2
+    for _ in range(2):
+        grt.store.spend('dm', grt._today(), 0)
     grt.state.last_event_id = 41
     grt.next_sync = NOW + 60
     grt.deferred = 0

@@ -359,7 +359,7 @@ class StatusReport:
             'greeter',
             'Greeter',
             f'{self._dot(on=gp.enabled)} {state}',
-            f'DMs {gs.dm_today}/{gp.max_dm_per_day}',
+            f'DMs {self.bot.greeter.dms_today()}/{gp.max_dm_per_day}',
             f'last event {gs.last_event_id}',
         )
         if not gp.enabled:

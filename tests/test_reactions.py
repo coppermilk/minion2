@@ -569,14 +569,16 @@ def test_state_round_trips_through_the_store(tmp_path: Path) -> None:
     assert fresh.store.marked('x') is True
 
 
-def test_corrupt_cursors_start_fresh(tmp_path: Path) -> None:
-    """An unreadable cursor block degrades to defaults, never to a crash."""
-    store = _store(tmp_path)
-    store.conn.execute(
-        "INSERT INTO state (service, blob) VALUES ('reactions', '{ not json')"
+def test_a_service_with_no_cursor_row_starts_fresh(tmp_path: Path) -> None:
+    """A first start reads its declared defaults, never a crash.
+
+    This used to be "an unreadable BLOCK degrades to defaults" -- a JSON
+    string could be half-written and had to be caught. A cursor is columns:
+    the row is there or it is not, so the only case left is not being there.
+    """
+    brain = reactions.ReactionBrain(
+        _params(), _store(tmp_path), random.Random(0)
     )
-    store.conn.commit()
-    brain = reactions.ReactionBrain(_params(), store, random.Random(0))
     assert brain.state.mood == 0.0
     assert brain.answered() == 0
 

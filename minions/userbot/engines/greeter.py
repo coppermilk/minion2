@@ -83,8 +83,6 @@ class GreeterState:
 
     started: bool = False  # the silent baseline has been established
     last_event_id: int = 0  # highest admin-log event id already handled
-    dm_day: str = ''  # UTC date of dm_today
-    dm_today: int = 0  # DMs already sent today (against max_dm_per_day)
 
 
 # Departed subscribers remembered for a welcome_back, newest kept. Unbounded
@@ -96,6 +94,14 @@ class GreeterState:
 # whole length was rewritten on every greeter save.
 LEFT_CAP = 500
 _LEFT_PREFIX = 'left:'
+
+DM = 'dm'
+"""How the greeter's daily budget is keyed in ``daily``.
+
+The same table the two engines spend their caps from -- one concept, one
+place. All three used to be a date and a count wearing three different
+field names, each reset by its own hand-rolled comparison.
+"""
 
 
 def _left_key(uid: int) -> str:
@@ -210,7 +216,7 @@ class Greeter:
         """Force a poll right now; return a one-line summary for /greetnow."""
         if not self.params.enabled or not self.params.channel:
             return 'greeter: disabled'
-        before = self.state.dm_today
+        before = self.dms_today()
         started_before = self.state.started
         await self.sync()
         return self._sync_summary(before, started_before=started_before)
@@ -228,7 +234,7 @@ class Greeter:
                 f'{self.params.wake_end_hour:g}h); '
                 f'{self.deferred} event(s) deferred'
             )
-        sent = self.state.dm_today - before
+        sent = self.dms_today() - before
         return f'greeter: {sent} DM(s) sent (up to event {cursor})'
 
     async def loop(self) -> None:
@@ -356,12 +362,11 @@ class Greeter:
                 # now is what turns a flood wait into a spam ban.
                 raise _FloodStopError
             return False
-        self.state.dm_today += 1
-        self._save()
+        self.store.spend(DM, self._today(), 0)  # checked above, so uncapped
         log.info(
             'greeter: DM sent to %s (%d/%d today)',
             uid,
-            self.state.dm_today,
+            self.dms_today(),
             self.params.max_dm_per_day,
         )
         return True
@@ -393,13 +398,22 @@ class Greeter:
         raw = peer.first_name.strip() if peer is not None else ''
         return html.escape(raw or self.params.fallback_name)
 
+    def _today(self) -> str:
+        """Return the UTC date the DM budget is keyed on."""
+        return time.strftime('%Y-%m-%d', time.gmtime())
+
+    def dms_today(self) -> int:
+        """Return how many DMs have gone out today (for /status)."""
+        return self.store.used(DM, self._today())
+
     def _daily_budget_left(self) -> bool:
-        """Whether we may still DM today (resets the counter on a new date)."""
-        today = time.strftime('%Y-%m-%d', time.gmtime())
-        if today != self.state.dm_day:
-            self.state.dm_day = today
-            self.state.dm_today = 0
-        return self.state.dm_today < self.params.max_dm_per_day
+        """Whether we may still DM today.
+
+        A day is a ROW now, so nothing is reset: crossing midnight simply
+        starts writing to a different key, and what the greeter did
+        yesterday stays where it can be read.
+        """
+        return self.store.used(DM, self._today()) < self.params.max_dm_per_day
 
     async def _rate_limit(self) -> None:
         """Wait a human-like gap since the last DM (anti-flood pacing)."""
@@ -416,11 +430,14 @@ class Greeter:
 
         The file records the channel it belongs to; a mismatch means the
         cursor is for a DIFFERENT channel, so we drop it and re-baseline.
-        A pre-admin-log file (member-diff format: has 'members', no
-        'last_event_id') is also re-baselined -- keeping its cursor at 0 would
-        re-read the whole admin log and mass-DM. The welcome_back memory
-        survives all of it: it lives in ``marks`` now, not in this block, so
-        re-baselining the cursor no longer forgets who left.
+        A pre-admin-log file is re-baselined too, but that is decided in
+        the MIGRATION now rather than here: the cursor is a column, so
+        ``last_event_id`` is always present and its absence can no longer be
+        the signal. ``_adopt_cursor`` drops the ``started`` flag off a block
+        that carried no position, which lands here as a fresh baseline.
+
+        The welcome_back memory survives all of it: it lives in ``marks``,
+        not in the cursor, so re-baselining no longer forgets who left.
         """
         raw = self.store.read()
         if not raw:  # before the 'last_event_id' probe: nothing is not legacy
@@ -433,14 +450,9 @@ class Greeter:
                 self.params.channel,
             )
             return GreeterState()
-        if 'last_event_id' not in raw:
-            log.info('greeter: migrating to admin-log, re-baselining')
-            return GreeterState()
         return GreeterState(
             started=bool(raw.get('started', False)),
             last_event_id=codec.whole(raw.get('last_event_id')),
-            dm_day=codec.text(raw.get('dm_day')),
-            dm_today=codec.whole(raw.get('dm_today')),
         )
 
     def _save(self) -> None:
@@ -450,7 +462,5 @@ class Greeter:
             # Insertion order, NOT sorted: the cap keeps the newest.
             'started': self.state.started,
             'last_event_id': self.state.last_event_id,
-            'dm_day': self.state.dm_day,
-            'dm_today': self.state.dm_today,
         }
         self.store.write(data)

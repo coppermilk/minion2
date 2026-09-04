@@ -226,9 +226,24 @@ CREATE TABLE IF NOT EXISTS cabinet (
     at     REAL NOT NULL DEFAULT 0,
     amount TEXT NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS state (
-    service TEXT PRIMARY KEY,
-    blob    TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS daily (
+    service TEXT    NOT NULL,
+    day     TEXT    NOT NULL,
+    kind    TEXT    NOT NULL,
+    n       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (service, day, kind),
+    CHECK ({_SERVICE_CHECK})
+);
+CREATE TABLE IF NOT EXISTS cursor (
+    service       TEXT    PRIMARY KEY,
+    next_at       REAL    NOT NULL DEFAULT 0,
+    start_at      REAL    NOT NULL DEFAULT 0,
+    last_at       REAL    NOT NULL DEFAULT 0,
+    mood          REAL    NOT NULL DEFAULT 0,
+    mood_day      TEXT    NOT NULL DEFAULT '',
+    started       INTEGER NOT NULL DEFAULT 0,
+    channel       INTEGER NOT NULL DEFAULT 0,
+    last_event_id INTEGER NOT NULL DEFAULT 0,
     CHECK ({_SERVICE_CHECK})
 );
 CREATE TABLE IF NOT EXISTS membership_events (
@@ -306,6 +321,7 @@ _MOMENTS = {
     'posted': ('at',),
     'pending': ('since',),
     'cabinet': ('at',),
+    'cursor': ('next_at', 'start_at', 'last_at'),
     'membership_events': ('ts',),
     'messages': ('ts',),
 }
@@ -385,6 +401,26 @@ All of them are ADDITIVE, which is the whole reason the timing statistics fit
 here: a running mean would need read-modify-write, but a sum does not, so the
 one ``INSERT ... ON CONFLICT DO UPDATE`` below still writes a single row per
 event whatever the audience size.
+"""
+
+CURSORS = (
+    'next_at',
+    'start_at',
+    'last_at',
+    'mood',
+    'mood_day',
+    'started',
+    'channel',
+    'last_event_id',
+)
+"""Every scalar a service may keep, and the only names ``write`` accepts.
+
+The last of the JSON. A blob took any key, so a typo stored a value nothing
+ever read back and nothing ever complained; these are columns, so the same
+typo is a KeyError at the call. What is left is genuinely small -- three
+session marks shared by two engines, a mood, and the greeter's admin-log
+position -- because everything that grew or repeated has a table of its own
+now.
 """
 
 _REGISTERS = {
@@ -657,29 +693,6 @@ def _adopt_orphans(conn: sqlite3.Connection) -> None:
         log.info('state: adopted %d peer(s) that had rows but no actor', made)
 
 
-_BLOB_KEYS = (
-    'alive',
-    'queue',
-    'posts',
-    'emoji_last',
-    'log',
-    'session',
-    'left',
-    'posted',
-    'pending',
-    'rejected',
-    'groups',
-    'processed_ids',
-)
-"""The collections that used to live inside ``state.blob``.
-
-Their presence in a block is what says this file predates the tier that gave
-each of them a table. Draining is keyed on them rather than on a version
-number, so it is idempotent by construction: the keys are removed as they
-are read, and a file that has none is already current.
-"""
-
-
 def _drain_blobs(conn: sqlite3.Connection) -> None:
     """Move the collections out of every state blob into their tables, once.
 
@@ -690,30 +703,64 @@ def _drain_blobs(conn: sqlite3.Connection) -> None:
     that the whole thing should already have faded by however long the host
     was down before this upgrade. It re-earns that within a half-life.
 
-    Everything else moves whole. ``log`` is DROPPED rather than moved: it was
-    a capped second copy of acts ``contact`` already holds, and /status reads
-    the sittings back out of that now.
+    Everything else moves whole, and then ``state`` is DROPPED -- not
+    emptied. A column no code reads sits there looking meaningful; a table
+    that is gone asks no questions. ``log`` goes with it rather than moving:
+    it was a capped second copy of acts ``contact`` already holds, and
+    /status reads the sittings back out of that now.
     """
+    if not conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'state'"
+    ).fetchone():
+        return  # a file made since the blob left; there is nothing to move
     blocks = {
         str(r['service']): json.loads(str(r['blob']))
         for r in conn.execute('SELECT service, blob FROM state')
     }
-    stale = {
-        name: block
-        for name, block in blocks.items()
-        if isinstance(block, dict) and any(key in block for key in _BLOB_KEYS)
-    }
-    if not stale:
-        return
     now = time.time()
     with conn:
-        for name, block in stale.items():
+        for name, block in blocks.items():
+            if not isinstance(block, dict):
+                continue
             _Drain(conn, name, now).run(block)
-            conn.execute(
-                'UPDATE state SET blob = ? WHERE service = ?',
-                (json.dumps(block), name),
-            )
-    log.info('state: drained collections out of %s', ', '.join(sorted(stale)))
+            _adopt_cursor(conn, name, block)
+        conn.execute('DROP TABLE state')
+    log.info(
+        'state: moved %s into cursor and its own tables',
+        ', '.join(sorted(blocks)) or 'nothing',
+    )
+
+
+def _adopt_cursor(
+    conn: sqlite3.Connection, service: str, block: dict[str, object]
+) -> None:
+    """Move what is left of one JSON block into its ``cursor`` row.
+
+    Whatever the block still holds that ``CURSORS`` names. Anything else is
+    a key from a shape that no longer exists, and it goes with the table --
+    which is the point of dropping ``state`` rather than emptying it: a
+    column that no code reads cannot sit there looking meaningful.
+    """
+    if 'started' in block and 'last_event_id' not in block:
+        # A pre-admin-log greeter block: it recorded that a baseline was
+        # taken but not WHERE, and adopting the flag without the position
+        # would start reading the admin log from zero and mass-DM the whole
+        # channel. Drop the flag; the greeter re-baselines silently.
+        block.pop('started')
+    kept = [name for name in CURSORS if name in block]
+    if not kept:
+        return
+    marks = ', ?' * len(kept)
+    # OR IGNORE, never an upsert: an import must not overwrite state this
+    # install is already running on. A file being adopted is OLDER by
+    # definition, and letting it win would walk a live cursor backwards --
+    # for the greeter, back down the admin log it has already answered.
+    conn.execute(
+        f'INSERT OR IGNORE INTO cursor (service, {", ".join(kept)}) '  # noqa: S608
+        f'VALUES (?{marks})',
+        (service, *(block[name] for name in kept)),
+    )
 
 
 @dataclass
@@ -740,6 +787,9 @@ class _Drain:
         self.register('pending', block.pop('pending', None))
         self.rejected(block.pop('rejected', None))
         self.roster(block)
+        self.budget('take', block)
+        self.budget('recip', block)
+        self.budget('dm', block)
         block.pop('log', None)  # a second copy of contact; contact wins
         block.pop('groups', None)  # the pending key's older name
         block.pop('processed_ids', None)  # rebuilt from posted.msg_ids now
@@ -843,6 +893,24 @@ class _Drain:
                     str(entry.get('amount', '')),
                 ),
             )
+
+    def budget(self, kind: str, block: dict[str, object]) -> None:
+        """Adopt one daily budget: a date and a count become a row.
+
+        The pair used to be two fields reset by hand when the date changed,
+        so only TODAY ever existed. Adopting them keeps the day the file was
+        last written -- which is the only day it had -- and every day after
+        this is a row of its own.
+        """
+        day = block.pop(f'{kind}_day', None)
+        spent = _as_int(block.pop(f'{kind}_today', None))
+        if not isinstance(day, str) or not day or spent <= 0:
+            return
+        self.conn.execute(
+            'INSERT OR REPLACE INTO daily (service, day, kind, n) '
+            'VALUES (?, ?, ?, ?)',
+            (self.service, day, kind, spent),
+        )
 
     def emoji(self, raw: object) -> None:
         """Adopt when each emoji was last used."""
@@ -1557,6 +1625,58 @@ class StateStore:
         self.conn.execute('DELETE FROM cabinet WHERE at < ?', (since,))
         self.conn.commit()
 
+    # --- the daily budgets, as a series ----------------------------------
+
+    def spend(self, kind: str, day: str, cap: int) -> bool:
+        """Take one slot from ``day``'s budget; False when the cap is met.
+
+        The whole counter, in the database, in one statement. It used to be
+        a pair of fields on the Ledger -- a date and a count -- incremented
+        IN MEMORY and persisted only if the engine remembered to save
+        afterwards. A kill between the two forgot the spend, and these caps
+        are the ban surface: forgetting one lets the next start exceed it.
+
+        A day is a ROW, so nothing is ever reset. Yesterday simply stays,
+        which is the difference between a counter and a series: a changed
+        target has something to converge from, and "how many did we place
+        last Tuesday" has an answer at all.
+        """
+        used = self.used(kind, day)
+        if cap > 0 and used >= cap:
+            return False
+        self.conn.execute(
+            'INSERT INTO daily (service, day, kind, n) VALUES (?, ?, ?, 1) '
+            'ON CONFLICT (service, day, kind) DO UPDATE SET n = n + 1',
+            (self.service, day, kind),
+        )
+        self.conn.commit()
+        return True
+
+    def used(self, kind: str, day: str) -> int:
+        """Return how many of ``kind`` were spent on ``day`` (0 if none)."""
+        got = self.conn.execute(
+            'SELECT n FROM daily WHERE service = ? AND day = ? AND kind = ?',
+            (self.service, day, kind),
+        ).fetchone()
+        return int(got['n']) if got is not None else 0
+
+    def per_day(self, kind: str, days: int) -> list[int]:
+        """Return the last ``days`` daily totals of ``kind``, newest first.
+
+        The reason the counter became a series. A cap or a target changed in
+        the JSON tells you what the account is aimed at from now on; this
+        tells you what it has actually been doing, so a change can be eased
+        in against the real curve rather than applied blind.
+        """
+        return [
+            int(r['n'])
+            for r in self.conn.execute(
+                'SELECT n FROM daily WHERE service = ? AND kind = ? '
+                'ORDER BY day DESC LIMIT ?',
+                (self.service, kind, days),
+            )
+        ]
+
     # --- dedup marks -----------------------------------------------------
 
     def mark(self, key: str) -> bool:
@@ -1634,45 +1754,50 @@ class StateStore:
     # --- the scalar state block ------------------------------------------
 
     def read(self) -> dict[str, object]:
-        """Return this service's state block, or ``{}`` if it has none.
+        """Return this service's cursors, or the declared defaults.
 
-        Missing and unreadable both mean "start from your defaults", which
-        is safe for everything still kept here: a mood, a cursor, a daily
-        counter, each cheaply re-earned.
+        Named COLUMNS now, not a JSON blob. What is left here after four
+        tiers is a handful of scalars per service -- a mood, three session
+        marks, an admin-log position -- and once the collections and the
+        daily counters had gone, JSON was buying nothing and costing the
+        two things a column gives free: a type, and a name the database
+        knows. A key nobody declared is an error at the write instead of a
+        value nothing ever reads back.
 
-        There used to be a ``read_strict`` beside this, for the one caller
-        whose empty result would have been a LIE -- the poster reading
-        "nothing was ever posted", disarming its re-post guard and
-        republishing the backlog. Its log is ``posted`` now, and rows do not
-        half-parse: they are there or the database is, so the failure it
-        guarded against cannot be reached from here any more.
+        Sparse on purpose: nine columns over three rows, and no service uses
+        them all. Three rows of nulls is a cheaper price than a table per
+        service or a key-value table, which is JSON again with more steps.
         """
         got = self.conn.execute(
-            'SELECT blob FROM state WHERE service = ?', (self.service,)
+            f'SELECT {", ".join(CURSORS)} FROM cursor '  # noqa: S608
+            'WHERE service = ?',
+            (self.service,),
         ).fetchone()
-        if got is None:
-            return {}
-        try:
-            raw = json.loads(got[0])
-        except ValueError:
-            log.warning('state: %s has an unreadable block', self.service)
-            return {}
-        return dict(raw) if isinstance(raw, dict) else {}
+        return dict(got) if got is not None else {}
 
     def write(self, data: Mapping[str, object]) -> None:
-        """Replace this service's state block; the transaction is atomicity.
+        """Replace this service's cursors; the transaction is atomicity.
 
-        A kill mid-write leaves the previous row whole, which is what the old
-        write-a-temp-file-and-rename dance bought by hand. Written through on
-        every call rather than coalesced into a periodic rebuild: one small
-        row costs what a bump costs, and the watchdog's ``os._exit`` leaves
-        nothing waiting to be flushed. The JSON file this replaces had to be
-        rewritten whole, which is why it could not be.
+        A kill mid-write leaves the previous row whole, which is what the
+        old write-a-temp-file-and-rename dance bought by hand. Written
+        through on every call rather than coalesced into a periodic rebuild:
+        one small row costs what a bump costs, and the watchdog's
+        ``os._exit`` leaves nothing waiting to be flushed.
+
+        A name outside ``CURSORS`` raises rather than being stored and
+        forgotten -- the whole point of leaving JSON behind.
         """
+        unknown = set(data) - set(CURSORS)
+        if unknown:
+            msg = f'{self.service}: no such cursor {sorted(unknown)}'
+            raise KeyError(msg)
+        cols = [name for name in CURSORS if name in data]
+        sets = ', '.join(f'{name} = excluded.{name}' for name in cols)
         self.conn.execute(
-            'INSERT INTO state (service, blob) VALUES (?, ?) '
-            'ON CONFLICT (service) DO UPDATE SET blob = excluded.blob',
-            (self.service, json.dumps(data, ensure_ascii=False)),
+            f'INSERT INTO cursor (service, {", ".join(cols)}) '  # noqa: S608
+            f'VALUES (?{", ?" * len(cols)}) '
+            f'ON CONFLICT (service) DO UPDATE SET {sets}',
+            (self.service, *(data[name] for name in cols)),
         )
         self.conn.commit()
 
@@ -1777,11 +1902,21 @@ CREATE TABLE IF NOT EXISTS users (
     subscribed INTEGER NOT NULL DEFAULT 0,
     updated_at REAL
 );
+CREATE TABLE IF NOT EXISTS state (
+    service TEXT PRIMARY KEY,
+    blob    TEXT NOT NULL
+);
 """
-"""The two tables an older file's rows land in before ``_migrate`` folds them.
+"""The three tables an older file's rows land in before the fold.
 
 Created only when there is something to put in them, and dropped by the fold,
-so a fresh install never sees either. Every legacy ledger shape normalises
+so a fresh install never sees any of them. ``state`` is here rather than in
+the schema for exactly that reason: the JSON block is a shape the bot no
+longer writes, so the only file that should ever have the table is one being
+imported FROM, and ``_drain_blobs`` empties it into ``cursor`` and
+drops it.
+
+Every legacy ledger shape normalises
 into this one -- the shared file's ``engine`` column and the per-service
 file's filename both become ``service`` -- which is what leaves the fold with
 a single input to understand.
@@ -1914,9 +2049,10 @@ def _absorb_block(conn: sqlite3.Connection, service: str) -> bool:
     """Copy the attached database's one JSON block under the file's name.
 
     Two table names carried the same single row -- ``cursor`` in a ledger
-    file, ``state`` in a blob file -- and both become a ``state`` row here. A
-    ``state`` table that already has a ``service`` column is this schema, not
-    an older one, and is left alone.
+    file, ``state`` in a blob file -- and both land in the staging ``state``
+    table here, which ``_drain_blobs`` then empties into this schema's
+    ``cursor`` and drops. A ``state`` table that already has a ``service``
+    column is a file of THIS lineage, not an older one, and is left alone.
     """
     for table in ('state', 'cursor'):
         have = _columns(conn, table)
@@ -1925,6 +2061,7 @@ def _absorb_block(conn: sqlite3.Connection, service: str) -> bool:
         got = conn.execute(f'SELECT blob FROM old.{table}').fetchone()  # noqa: S608 -- a literal, not input
         if got is None:
             continue
+        conn.executescript(_STAGING)  # the landing zone, made on demand
         conn.execute(
             'INSERT OR IGNORE INTO state (service, blob) VALUES (?, ?)',
             (service, got[0]),
@@ -1989,6 +2126,7 @@ def _absorb_json(conn: sqlite3.Connection, path: Path, service: str) -> bool:
         return False
     if not isinstance(raw, dict):
         return False
+    conn.executescript(_STAGING)  # the landing zone, made on demand
     conn.execute(
         'INSERT OR IGNORE INTO state (service, blob) VALUES (?, ?)',
         (service, json.dumps(raw, ensure_ascii=False)),

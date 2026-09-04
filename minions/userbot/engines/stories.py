@@ -266,12 +266,9 @@ class StoryState:
     away.
     """
 
-    last_view: float = 0.0
     next_session_at: float = 0.0
     session_start_at: float = 0.0
     session_last_at: float = 0.0
-    total_views: int = 0  # stories viewed all-time (a simple odometer)
-    last_react: float = 0.0  # ts of the last reaction, for the min-gap pacing
 
 
 class StoryBrain:
@@ -677,8 +674,6 @@ class StoryBrain:
         self.ledger.add_take(peer_id, tuple(fresh), self._control(), now)
         self.store.trim_marks(f'{peer_id}:', self.params.seen_per_peer)
         self._trim_peers()
-        self.state.last_view = now
-        self.state.total_views += len(fresh)
         self._save()
 
     def mark_reacted(
@@ -695,7 +690,6 @@ class StoryBrain:
         if not story_ids:
             return
         self.ledger.add_recip(peer_id, story_ids, now, self._tz())
-        self.state.last_react = now
         self._save()
 
     def _trim_peers(self) -> None:
@@ -726,8 +720,14 @@ class StoryBrain:
         ]
 
     def seen_count(self) -> int:
-        """Return how many stories have been viewed all-time (the odometer)."""
-        return self.state.total_views
+        """Return how many stories have been viewed all-time.
+
+        Counted from the contact log rather than carried as an odometer. It
+        was a third cached aggregate of acts already recorded -- and beside
+        it sat ``last_view`` and ``last_react``, both written on every view
+        and read by nothing at all.
+        """
+        return len(self.store.acts_since(state_store.ACTS['stories'][1], 0.0))
 
     def reacts_today(self, now: float, tz: float) -> int:
         """Return reactions sent on the local date of ``now`` (0 past it)."""
@@ -757,14 +757,10 @@ class StoryBrain:
     def _load(self) -> StoryState:
         """Reload the state block, or start fresh when there is none."""
         raw = self.store.read()
-        self.ledger.restore(raw)
         return StoryState(
-            last_view=codec.num(raw.get('last_view')),
             next_session_at=codec.num(raw.get('next_at')),
             session_start_at=codec.num(raw.get('start_at')),
             session_last_at=codec.num(raw.get('last_at')),
-            total_views=codec.whole(raw.get('total_views')),
-            last_react=codec.num(raw.get('last_react')),
         )
 
     def _save(self) -> None:
@@ -776,13 +772,9 @@ class StoryBrain:
         """
         self.store.write(
             {
-                'last_view': self.state.last_view,
                 'next_at': self.state.next_session_at,
                 'start_at': self.state.session_start_at,
                 'last_at': self.state.session_last_at,
-                'total_views': self.state.total_views,
-                'last_react': self.state.last_react,
-                **self.ledger.counters(),
             },
         )
 

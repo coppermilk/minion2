@@ -345,14 +345,24 @@ def test_react_disabled_plans_no_reactions(tmp_path: Path) -> None:
     assert r_ids == ()
 
 
-def test_react_counter_rolls_over_daily(tmp_path: Path) -> None:
-    """The daily counter resets at local midnight; the per-peer tally stays."""
+def test_the_daily_budget_is_a_series_not_a_counter(tmp_path: Path) -> None:
+    """A new day is a new ROW, so yesterday survives instead of resetting.
+
+    The budget used to be a date and a count on the Ledger: crossing local
+    midnight overwrote both, and what the account did yesterday was gone.
+    Kept per day it is a curve -- which is what a changed cap or target has
+    to be eased in against, and what "how many last Tuesday" needs to have
+    an answer at all.
+    """
+    tz = 0.0
     brain = _brain(tmp_path)
     brain.mark_reacted(7, _ids(_FIVE), _NOON)
-    assert brain.ledger.recip_today == _FIVE
     brain.mark_reacted(7, _ids(_TWO), _NOON + 86400.0)  # the next day
-    assert brain.ledger.recip_today == _TWO  # reset, then +2
-    assert brain.ledger.row('7').recip == _FIVE + _TWO  # cumulative per peer
+
+    assert brain.ledger.recips_today(_NOON + 86400.0, tz) == _TWO
+    assert brain.ledger.recips_today(_NOON, tz) == _FIVE  # yesterday, still
+    assert brain.ledger.per_day('recip', 7) == [_TWO, _FIVE]
+    assert brain.ledger.row(7).recip == _FIVE + _TWO  # cumulative per peer
 
 
 def test_plan_attaches_reactions(tmp_path: Path) -> None:
@@ -673,7 +683,7 @@ def test_a_story_that_expired_is_left_unseen(tmp_path: Path) -> None:
 
     assert account.viewed == [_STORY_B]
     assert _seen(brain, 7) == {_STORY_B}  # the refused one stays open
-    assert brain.state.total_views == 1
+    assert brain.seen_count() == 1
 
 
 def test_a_story_refused_gets_no_reaction(tmp_path: Path) -> None:
@@ -702,7 +712,7 @@ def test_a_wholly_refused_view_records_nothing(tmp_path: Path) -> None:
 
     assert account.viewed == []
     assert _seen(brain, 7) == set()
-    assert brain.state.total_views == 0
+    assert brain.seen_count() == 0
     assert names.asked == 0  # no round trip for a view that recorded nothing
 
 

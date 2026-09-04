@@ -93,6 +93,20 @@ class Warmth:
 DAY = 86400.0
 """Seconds in a day -- an arc leg is configured in days, not seconds."""
 
+TAKE = 'take'
+RECIP = 'recip'
+"""The two daily budgets, as they are keyed in ``daily``.
+
+Named because both engines and the readout spend and read them, and a
+string typed in four places is a typo waiting to become a second, empty
+budget that nothing ever caps.
+"""
+
+
+def _day(now: float, tz: float) -> str:
+    """Return the local date of ``now`` -- the key a daily budget rolls on."""
+    return humanize.local(now, tz).date().isoformat()
+
 
 @dataclass(frozen=True)
 class Leg:
@@ -376,11 +390,6 @@ class Control:
         return self.recip_target * _clip(leg.recip)
 
 
-def _rolled(day: str, today: int, stamp: str) -> tuple[str, int]:
-    """Return the daily counter reset to 0 when the local date changed."""
-    return (stamp, 0) if day != stamp else (day, today)
-
-
 @dataclass
 class Ledger:
     """Per-peer relationship memory, kept in the engine's state store.
@@ -398,10 +407,6 @@ class Ledger:
     """
 
     store: state.StateStore
-    take_day: str = ''
-    take_today: int = 0
-    recip_day: str = ''
-    recip_today: int = 0
 
     def row(self, peer: int) -> state.PeerRow:
         """Return a peer's standing (all zeroes if we have not met them)."""
@@ -516,35 +521,25 @@ class Ledger:
     def add_recip(  # noqa: PLR0913 -- peer + what + (now, tz) read best flat
         self, peer: int, subjects: tuple[int, ...], now: float, tz: float
     ) -> None:
-        """Record the reciprocations to ``peer`` and the daily counter."""
-        stamp = humanize.local(now, tz).date().isoformat()
-        self.recip_day, self.recip_today = _rolled(
-            self.recip_day, self.recip_today, stamp
-        )
-        self.recip_today += len(subjects)
+        """Record the reciprocations to ``peer`` and the daily counter.
+
+        The story engine plans a batch against ``recip_left`` and commits
+        here, so the budget is charged for the whole batch at once rather
+        than one slot at a time -- which is why this counts rather than
+        calling ``spend_recip`` per subject.
+        """
+        day = _day(now, tz)
+        for _ in subjects:
+            self.store.spend(RECIP, day, 0)  # already checked against the cap
         self.store.bump(peer, {'recip': len(subjects)}, now, subjects)
 
     def spend_take(self, control: Control, now: float, tz: float) -> bool:
         """Consume one take slot from today's budget; False when capped."""
-        stamp = humanize.local(now, tz).date().isoformat()
-        self.take_day, self.take_today = _rolled(
-            self.take_day, self.take_today, stamp
-        )
-        if control.take_cap > 0 and self.take_today >= control.take_cap:
-            return False
-        self.take_today += 1
-        return True
+        return self.store.spend(TAKE, _day(now, tz), control.take_cap)
 
     def spend_recip(self, control: Control, now: float, tz: float) -> bool:
         """Consume one recip slot from today's budget; False when capped."""
-        stamp = humanize.local(now, tz).date().isoformat()
-        self.recip_day, self.recip_today = _rolled(
-            self.recip_day, self.recip_today, stamp
-        )
-        if control.recip_cap > 0 and self.recip_today >= control.recip_cap:
-            return False
-        self.recip_today += 1
-        return True
+        return self.store.spend(RECIP, _day(now, tz), control.recip_cap)
 
     def recip_left(self, control: Control, now: float, tz: float) -> int:
         """Return how many reciprocations are still allowed today.
@@ -555,39 +550,24 @@ class Ledger:
         """
         if control.recip_cap <= 0:
             return 0
-        stamp = humanize.local(now, tz).date().isoformat()
-        used = self.recip_today if self.recip_day == stamp else 0
+        used = self.store.used(RECIP, _day(now, tz))
         return max(0, control.recip_cap - used)
 
     def takes_today(self, now: float, tz: float) -> int:
         """Exposures taken on the local date of ``now`` (else 0)."""
-        stamp = humanize.local(now, tz).date().isoformat()
-        return self.take_today if self.take_day == stamp else 0
+        return self.store.used(TAKE, _day(now, tz))
 
     def recips_today(self, now: float, tz: float) -> int:
         """Reciprocations made on the local date of ``now`` (else 0)."""
-        stamp = humanize.local(now, tz).date().isoformat()
-        return self.recip_today if self.recip_day == stamp else 0
+        return self.store.used(RECIP, _day(now, tz))
+
+    def per_day(self, kind: str, days: int) -> list[int]:
+        """Return the last ``days`` daily totals, newest first."""
+        return self.store.per_day(kind, days)
 
     def evict(self, peer: int) -> None:
         """Drop a peer's counters with this engine (rolled off the set)."""
         self.store.forget(peer)
-
-    def counters(self) -> dict[str, object]:
-        """Return the daily counters for the engine's cursor block."""
-        return {
-            'take_day': self.take_day,
-            'take_today': self.take_today,
-            'recip_day': self.recip_day,
-            'recip_today': self.recip_today,
-        }
-
-    def restore(self, cursor: Mapping[str, object]) -> None:
-        """Reload the daily counters from the engine's cursor block."""
-        self.take_day = codec.text(cursor.get('take_day'))
-        self.take_today = codec.whole(cursor.get('take_today'))
-        self.recip_day = codec.text(cursor.get('recip_day'))
-        self.recip_today = codec.whole(cursor.get('recip_today'))
 
 
 _MIN_GAPS = 2
