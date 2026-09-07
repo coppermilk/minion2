@@ -140,6 +140,7 @@ class CommentWatch:
             msg_id=msg.id,
             text=trim(msg.text),
             mine_reacted=msg.mine_reacted,
+            at=userchat.epoch(msg.date),
         )
         self._schedule_comment(ref, msg.sender_id, engaged=engaged)
 
@@ -154,14 +155,14 @@ class CommentWatch:
         but the same person on another post is eligible again. The engine may
         return nothing (skipped, silent day, already reacted here).
 
-        The reaction(s) are CHOSEN here, at schedule time, and stored on the
-        pending
-        entry -- so /status and /requeue can show exactly which reaction will
-        land
-        on which comment, and the send places that same reaction rather than a
-        fresh
-        random one.
+        Nothing older than ``max_comment_age_sec`` is picked up at all, and
+        that is decided FIRST: before the dedup key is spent, so a stale
+        comment does not book a slot it will never use, and before the
+        exposure control, so it never lands in the log as one we ignored.
+        We did not ignore them -- it was not a chance we had.
         """
+        if self._too_old(comment.at):
+            return
         when = self.deps.brain.schedule(
             self._dedup_key(comment, person), engaged=engaged
         )
@@ -178,8 +179,19 @@ class CommentWatch:
             person, comment.msg_id
         ):
             return
-        # Choose the like reaction vs. the rarer thread sticker (deterministic
-        # in the comment id), then place it.
+        self._queue_reaction(comment, person, when)
+
+    def _queue_reaction(
+        self, comment: Comment, person: int, when: float
+    ) -> None:
+        """Pick this comment's reaction and put it in the queue for ``when``.
+
+        The reaction is CHOSEN here, at schedule time, and stored on the
+        pending entry -- so /status and /requeue can show exactly which one
+        will land on which comment, and the send places that same reaction
+        rather than a fresh random one. The like versus the rarer thread
+        sticker is decided deterministically in the comment id.
+        """
         chosen = self._choose_reaction(person, comment)
         if chosen is None:  # empty pool -> nothing to place
             return
@@ -195,6 +207,47 @@ class CommentWatch:
         )
         self.deps.brain.add_pending(reaction)
         self._arm_reaction(reaction)
+
+    async def _went_stale(self, chat: int, comment_id: int) -> bool:
+        """Whether the comment aged past answering while it sat in the queue.
+
+        The check is here as well as at schedule time because the queue is a
+        wait: something written ten minutes short of a day can be placed half
+        an hour out and land at a day and twenty. Reading the comment costs a
+        call, which is why the branch above folds it into the read it was
+        making anyway; this is the path where nothing else needs it.
+        """
+        comment = await self.deps.account.message(chat, comment_id)
+        stale = comment is not None and self._too_old(
+            userchat.epoch(comment.date)
+        )
+        if stale:
+            log.info('reaction: %s aged out of the queue', comment_id)
+        return stale
+
+    def _too_old(self, at: float) -> bool:
+        """Whether a comment written at ``at`` is past answering.
+
+        Measured from when it was WRITTEN, which is the thing the scheduling
+        horizon beside it does NOT measure: that one asks how long we would
+        wait for an awake moment, counting from now, and answers "half an
+        hour" just as happily for something the rescan dug out of last week.
+        Every path into the queue walks a thread's history -- the periodic
+        rescan, /requeue, the refresh before each send -- so without this the
+        age of a comment never entered the decision at all.
+
+        An unreadable date reads as fresh, the same way an unreadable thread
+        or comment does elsewhere here: not knowing must not wedge the queue,
+        and in practice only the live path can lack one, where the message
+        just arrived.
+
+        "Now" is the ENGINE's clock, not the wall's. Everything else that
+        places a reaction reads that one, so a glue reading its own would
+        measure this age across two clocks -- the same in production, wrong
+        under a fixed clock, which is the shape of bug a test suite survives.
+        """
+        limit = self.deps.brain.params.max_comment_age_sec
+        return bool(at) and limit > 0 and self.deps.brain.clock() - at > limit
 
     def _dedup_key(self, comment: Comment, person: int) -> str:
         """Return the key that decides this comment once, and only once.
@@ -374,6 +427,7 @@ class CommentWatch:
             msg_id=message.id,
             text=trim(message.text),
             mine_reacted=message.mine_reacted,
+            at=userchat.epoch(message.date),
         )
         self._schedule_comment(ref, message.sender_id, engaged=False)
 
@@ -509,14 +563,17 @@ class CommentWatch:
         skipped without being recorded, never recorded against the wrong
         person.
         """
-        if not self.deps.brain.params.skip_if_manually_replied:
-            return False
         chat, comment_id = reaction.chat, reaction.reply_to
+        if not self.deps.brain.params.skip_if_manually_replied:
+            return await self._went_stale(chat, comment_id)
         history = await self.deps.account.history(
             chat, userchat.Slice(limit=MANUAL_REPLY_SCAN)
         )
         replied = any(m.out and m.reply_to == comment_id for m in history)
         comment = await self.deps.account.message(chat, comment_id)
+        if comment is not None and self._too_old(userchat.epoch(comment.date)):
+            log.info('reaction: %s aged out of the queue', comment_id)
+            return True
         if not replied and not (comment is not None and comment.mine_reacted):
             return False
         if replied and comment is not None and comment.sender_id:

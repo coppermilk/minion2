@@ -231,6 +231,12 @@ class ReactionParams:
     session_idle_sec: float = 900.0  # a longer silence ends the session
     session_max_sec: float = 1200.0  # hard cap on one session's span
     max_reply_delay_sec: float = 21600.0  # older than this -> too stale
+    # How old a comment may be and still deserve an answer, measured from
+    # when it was WRITTEN. Deliberately not the same knob as the delay above:
+    # that one bounds how long we will wait for an awake moment (from now),
+    # this one bounds what we will pick up at all. Both are a day today, and
+    # that coincidence is exactly why one must not stand in for the other.
+    max_comment_age_sec: float = 86400.0
     pool: tuple[Emoji, ...] = ()
     # The LIKE pool: the emoji placed as the default reaction. Chosen
     # pseudo-randomly but DETERMINISTICALLY -- seeded by the target id, so the

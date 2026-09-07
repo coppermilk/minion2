@@ -747,7 +747,7 @@ def _peer_stories(raw: object) -> PeerStories | None:
     peer = getattr(raw, 'peer', None)
     items = getattr(raw, 'stories', None) or []
     stories = tuple(
-        Story(id=sid, date=_epoch(getattr(item, 'date', None)))
+        Story(id=sid, date=epoch(getattr(item, 'date', None)))
         for item in items
         if (sid := int(getattr(item, 'id', 0) or 0)) > 0
     )
@@ -756,8 +756,13 @@ def _peer_stories(raw: object) -> PeerStories | None:
     return PeerStories(int(utils.get_peer_id(peer)), stories)
 
 
-def _epoch(value: object) -> float:
-    """Return a story's date as a unix timestamp, 0 when unreadable."""
+def epoch(value: object) -> float:
+    """Return a Telethon date as a unix timestamp, 0 when unreadable.
+
+    One converter for every date this adapter hands out -- a story's and a
+    message's alike -- so a caller comparing two of them is comparing the
+    same kind of number.
+    """
     stamp = getattr(value, 'timestamp', None)
     if callable(stamp):
         return float(stamp())

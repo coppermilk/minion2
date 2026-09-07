@@ -1089,3 +1089,150 @@ def test_an_unanswered_comment_still_gets_its_reaction(tmp_path: Path) -> None:
     watch = _watch(brain, _Account(comment=comment))
 
     assert asyncio.run(_skipped(watch, _CHAT, 505)) is False
+
+
+# --- a comment older than a day is not ours to answer ----------------------
+
+
+_DAY = 86400.0
+
+
+def _aged(msg_id: int, person: int, hours: float) -> userchat.Msg:
+    """Return a comment under the watched post, written ``hours`` ago."""
+    return userchat.Msg(
+        id=msg_id,
+        chat_id=_CHAT,
+        sender_id=person,
+        text='hi',
+        root=_THREAD_ROOT,
+        reply_to=_THREAD_ROOT,
+        date=datetime.fromtimestamp(_ts() - hours * 3600, tz=UTC),
+    )
+
+
+def _feed(watch: object, *msgs: userchat.Msg) -> None:
+    """Deliver comments through the live path, with a loop for the timers.
+
+    Scheduling a reaction arms an asyncio timer, so the call needs a running
+    loop; the queue is already recorded by the time it is cancelled.
+    """
+
+    async def go() -> None:
+        for msg in msgs:
+            watch.on_message(msg)
+        watch.cancel()
+
+    asyncio.run(go())
+
+
+def _watching(tmp_path: Path, **over: object) -> tuple[object, object]:
+    """Return a brain watching one post, and a watcher over it."""
+    brain = _brain(tmp_path, **over)
+    brain.note_post(_CHAT, _THREAD_ROOT)
+    return brain, _watch(brain, _Account())
+
+
+def test_a_comment_older_than_a_day_is_never_picked_up(
+    tmp_path: Path,
+) -> None:
+    """Measured from when it was WRITTEN, which nothing used to measure.
+
+    The scheduling horizon beside this one asks how long we would wait for
+    an awake moment, counting from NOW, and answers "half an hour" just as
+    happily for something the rescan dug out of last week.
+    """
+    brain, watch = _watching(tmp_path)
+
+    _feed(watch, _aged(601, 71, hours=23), _aged(602, 72, hours=25))
+
+    assert [r.reply_to for r in brain.state.pending] == [601]
+
+
+def test_a_comment_too_old_is_not_logged_as_one_we_ignored(
+    tmp_path: Path,
+) -> None:
+    """We did not ignore them -- it was not a chance we had.
+
+    The gate runs before the exposure control for exactly this: a refusal
+    there writes ``ignore`` against the person, and the curve would learn we
+    were neglecting somebody whose comment we never even considered.
+    """
+    brain, watch = _watching(tmp_path)
+
+    _feed(watch, _aged(603, 73, hours=30))
+
+    assert brain.ledger.row(73).offered == 0
+    assert brain.store.acts(73) == {}
+
+
+def test_a_comment_too_old_does_not_spend_its_dedup_key(
+    tmp_path: Path,
+) -> None:
+    """The gate is before the key, so nothing books a slot it cannot use."""
+    brain, watch = _watching(tmp_path)
+
+    _feed(watch, _aged(604, 74, hours=30))
+    _feed(watch, _aged(604, 74, hours=1))  # the same comment, dated fresh
+
+    assert [r.reply_to for r in brain.state.pending] == [604]
+
+
+def test_both_ways_a_comment_reaches_us_carry_its_date(
+    tmp_path: Path,
+) -> None:
+    """Live and backfill each build their own Comment; one used to drop it."""
+    brain, watch = _watching(tmp_path)
+
+    watch._schedule_from_message(_CHAT, _THREAD_ROOT, _aged(605, 75, 30))
+    _feed(watch, _aged(606, 76, hours=30))
+
+    assert not brain.state.pending
+
+
+def test_an_undated_comment_is_answered(tmp_path: Path) -> None:
+    """Not knowing must not wedge the queue -- the same fail-open as ever."""
+    brain, watch = _watching(tmp_path)
+    undated = replace(_aged(607, 77, hours=1), date=None)
+
+    _feed(watch, undated)
+
+    assert [r.reply_to for r in brain.state.pending] == [607]
+
+
+def test_a_reaction_that_aged_out_in_the_queue_is_dropped(
+    tmp_path: Path,
+) -> None:
+    """The queue is a wait, and something fresh at plan time can go stale.
+
+    A comment written ten minutes short of a day can be placed half an hour
+    out and land at a day and twenty.
+    """
+    brain = _brain(tmp_path)
+    watch = _watch(brain, _Account(comment=_aged(608, 78, hours=30)))
+
+    assert asyncio.run(_skipped(watch, _CHAT, 608)) is True
+
+
+def test_a_fresh_reaction_still_fires_from_the_queue(tmp_path: Path) -> None:
+    """The gate only closes on age; a young comment is untouched by it."""
+    brain = _brain(tmp_path)
+    watch = _watch(brain, _Account(comment=_aged(609, 79, hours=2)))
+
+    assert asyncio.run(_skipped(watch, _CHAT, 609)) is False
+
+
+def test_the_age_gate_holds_with_the_manual_check_off(tmp_path: Path) -> None:
+    """Two knobs, two jobs: piling on is not the same as answering the old."""
+    brain = _brain(tmp_path, skip_if_manually_replied=False)
+    watch = _watch(brain, _Account(comment=_aged(610, 80, hours=30)))
+
+    assert asyncio.run(_skipped(watch, _CHAT, 610)) is True
+
+
+def test_no_age_limit_answers_whatever_is_offered(tmp_path: Path) -> None:
+    """Zero turns it off, the way every other bound here reads zero."""
+    brain, watch = _watching(tmp_path, max_comment_age_sec=0.0)
+
+    _feed(watch, _aged(611, 81, hours=30 * 24))
+
+    assert [r.reply_to for r in brain.state.pending] == [611]

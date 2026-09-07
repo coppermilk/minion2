@@ -129,6 +129,12 @@ class Comment:
     # it), so knowing costs nothing; dropping it here is what made a
     # hand-placed like invisible to the ledger.
     mine_reacted: bool = False
+    # When it was WRITTEN, as an epoch. Rides along from the same scan, and
+    # is how "we do not answer anything older than a day" is decided: the
+    # scheduling horizon next to it measures from NOW, which says nothing
+    # about a comment the rescan dug up from last week. 0 means the date was
+    # unreadable, which reads as fresh.
+    at: float = 0.0
 
 
 @dataclass(frozen=True)
