@@ -163,6 +163,27 @@ class LinkAggregator:
             return None
         return item
 
+    def drop_pending(self) -> list[str]:
+        """Empty the queue of videos still collecting links; return which.
+
+        Every waiting group holds an ARMED timer that posts what it has when
+        the timeout runs out, so forgetting the list is not enough: a queue
+        that looks empty and still publishes would be worse than no command
+        at all. The timers go with it, and the registers are saved, so a
+        restart does not restore what was just dropped.
+
+        Only the in-flight queue. The dedup set is rebuilt from what was
+        POSTED, so a video dropped here was never in it and nothing is
+        blacklisted -- which is why the source message has to go too, or the
+        startup backfill collects it again.
+        """
+        titles = [group.title for group in self.groups]
+        for group in self.groups:
+            cancel(group.task)
+        self.groups.clear()
+        self._save()
+        return titles
+
     def _reject(self, title: str) -> None:
         """Remember a non-Short video and drop any group open for it.
 

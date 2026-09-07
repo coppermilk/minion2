@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from minions.userbot.core.render import compose
 from minions.userbot.core.render import render_constants
 from minions.userbot.core.render import sample_groups
+from minions.userbot.core.render import trim
 
 if TYPE_CHECKING:
     from minion_core.adapters import userchat
@@ -37,6 +38,12 @@ COMMAND_START = '/start'
 COMMAND_EMOJIS = '/emojis'
 COMMAND_PREVIEW = '/preview'
 COMMAND_STATUS = '/status'
+# /dropvideos empties the pending-video queue: every group still collecting
+# platform links is dropped and its posting timer with it. An emergency
+# override for "do not publish what has piled up". It clears the QUEUE and
+# nothing else -- a dropped video is not blacklisted, so the source message
+# has to be deleted too or the startup backfill collects it again.
+COMMAND_DROPVIDEOS = '/dropvideos'
 # /requeue safely refreshes the pending-reaction queue: cancel the in-flight
 # timers
 # and re-arm from the persisted queue (renewing any that are due).
@@ -161,6 +168,7 @@ class CommandRouter:
             COMMAND_START: self.help_report,
             COMMAND_EMOJIS: self.show_constants,
             COMMAND_PREVIEW: self.preview_posts,
+            COMMAND_DROPVIDEOS: self.drop_videos,
             COMMAND_STATUS: self.bot.status_report,
             COMMAND_REQUEUE: self.bot.comment_watch.requeue,
             COMMAND_REACTNOW: self.bot.comment_watch.answer_now,
@@ -240,6 +248,37 @@ class CommandRouter:
     async def enter_live(self) -> None:
         """Switch the whole bot to the LIVE profile (the /live command)."""
         await self.bot.modes.switch_all('live')
+
+    async def drop_videos(self) -> None:
+        """Empty the pending-video queue (the /dropvideos command).
+
+        Names what it dropped rather than counting it: the queue is what the
+        operator is about to lose, and a number is not something you can
+        check against what you meant to remove.
+
+        The reply also says what the command does NOT do. A dropped video is
+        not remembered as handled -- the dedup set is rebuilt from what was
+        posted -- and the startup backfill re-reads the source, so the JSON
+        message has to go as well. Without that sentence the command reads
+        as more final than it is, and the one time that matters is the one
+        time it is used.
+        """
+        dropped = self.bot.aggregator.drop_pending()
+        if not dropped:
+            await self.bot.say('Nothing queued.')
+            return
+        rows = [f'. "{trim(title)}"' for title in dropped]
+        await self.bot.say(
+            '\n'.join(
+                [
+                    f'Dropped {len(dropped)} queued video(s):',
+                    *rows,
+                    '. delete the source message(s) too, or the backfill '
+                    'collects them again',
+                ]
+            )
+        )
+        log.info('dropvideos: dropped %d pending group(s)', len(dropped))
 
     async def greet_now(self) -> None:
         """Force the greeter to poll+process now (the /greetnow command)."""

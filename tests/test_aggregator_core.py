@@ -374,7 +374,7 @@ def test_reaction_alias_maps_persona_label_to_canonical() -> None:
     assert _router_with_label('')._reaction_alias('/catnow') == '/catnow'
 
 
-# --- the timeout that used to kill itself on the way to the send ----------
+# --- the emergency drain, and the timeout that used to kill itself ---------
 
 
 class _Sender:
@@ -446,6 +446,72 @@ def _waiting(agg: object, title: str) -> Group:
     agg._arm(group)
     agg._save()
     return group
+
+
+def test_dropping_the_queue_empties_it_on_disk_too(tmp_path: Path) -> None:
+    """A queue that came back after a restart would not be an emergency stop.
+
+    The command reports the titles rather than a count: what is about to be
+    lost is not something a number lets you check against what you meant.
+    """
+
+    async def go() -> list[str]:
+        agg = _wired(tmp_path)
+        _waiting(agg, 'one')
+        _waiting(agg, 'two')
+        dropped = agg.drop_pending()
+
+        assert not agg.groups
+        assert not list(agg.deps.store.rows_of('pending'))
+        return dropped
+
+    assert asyncio.run(go()) == ['one', 'two']
+
+
+def test_a_dropped_video_never_posts(tmp_path: Path) -> None:
+    """The point of the command: the timers go with the list.
+
+    Forgetting the queue while its armed timeouts still ran would give a
+    readout that says nothing is pending and a channel that publishes
+    anyway -- worse than having no command at all.
+    """
+
+    async def go() -> _Sender:
+        sender = _Sender()
+        agg = _wired(tmp_path, sender)
+        group = _waiting(agg, 'one')
+        agg.drop_pending()
+        await asyncio.sleep(0.05)  # well past the 10ms timeout
+        assert group.task.cancelled()
+        return sender
+
+    assert not asyncio.run(go()).sent
+
+
+def test_dropping_an_empty_queue_says_so(tmp_path: Path) -> None:
+    """Nothing to drop is an answer, not a silence."""
+
+    async def go() -> list[str]:
+        return _wired(tmp_path).drop_pending()
+
+    assert asyncio.run(go()) == []
+
+
+def test_dropping_does_not_blacklist_the_video(tmp_path: Path) -> None:
+    """It clears the QUEUE. Not taking it again is the operator's step.
+
+    The dedup set is rebuilt from what was POSTED, so a dropped video was
+    never in it -- which is why the reply says to delete the source message
+    as well.
+    """
+
+    async def go() -> set[int]:
+        agg = _wired(tmp_path)
+        _waiting(agg, 'one')
+        agg.drop_pending()
+        return agg.processed_ids
+
+    assert asyncio.run(go()) == set()
 
 
 def test_a_group_that_times_out_actually_posts(tmp_path: Path) -> None:
