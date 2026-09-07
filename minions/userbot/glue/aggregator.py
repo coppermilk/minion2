@@ -265,7 +265,15 @@ class LinkAggregator:
         if group not in self.groups:
             return
         self.groups.remove(group)
-        if group.task is not None:
+        # Only when we are not it. On the timeout path this method IS the
+        # task -- _expire called it -- and a task cancelling itself raises
+        # CancelledError at its next await, which is the send below. The post
+        # never went out, the "did not go out, re-queue" branch was never
+        # reached, and _save() never ran: the row stayed in `pending`, a
+        # restart re-armed it, and the video timed out into the same death
+        # forever. From on_message it is a different task and the cancel is
+        # exactly right -- the timeout is no longer needed.
+        if group.task is not None and group.task is not asyncio.current_task():
             group.task.cancel()
         log.info(
             'posting %r with %d platform(s): %s',

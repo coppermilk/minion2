@@ -10,6 +10,7 @@ attributes the method under test touches -- no live client.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from types import SimpleNamespace
@@ -21,10 +22,13 @@ from minions.userbot.core import config
 from minions.userbot.core import matching
 from minions.userbot.core import poststate
 from minions.userbot.core import render
+from minions.userbot.core.humanize import Variety
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.core.models import Posted
+from minions.userbot.core.state import DB_NAME
+from minions.userbot.core.state import Database
 from minions.userbot.glue import aggregator
 from minions.userbot.glue.commands import CommandRouter
 from minions.userbot.glue.profiles import ServiceModes
@@ -368,3 +372,114 @@ def test_reaction_alias_maps_persona_label_to_canonical() -> None:
     assert router._reaction_alias('/status') == '/status'
     # no label configured -> friendly names are not recognised, text is as-is
     assert _router_with_label('')._reaction_alias('/catnow') == '/catnow'
+
+
+# --- the timeout that used to kill itself on the way to the send ----------
+
+
+class _Sender:
+    """The one call the post path makes, and a record of what went out.
+
+    Both methods yield to the loop before answering, because a real send is
+    network I/O and that is the whole difference here: a coroutine that never
+    suspends never receives a pending cancellation, so a stub without the
+    yield would let a self-cancelling flush "deliver" and hide the bug these
+    tests exist for.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[int] = []
+
+    async def send(self, target: int, text: object) -> int:
+        """Deliver the post; the id is what the caller records."""
+        del text
+        await asyncio.sleep(0)
+        self.sent.append(target)
+        return 900 + len(self.sent)
+
+    async def send_photo(self, target: int, thumb: str, text: object) -> int:
+        """No thumbnail in these fixtures -- fall through to send()."""
+        del target, thumb, text
+        await asyncio.sleep(0)
+        return 0
+
+
+def _wired(tmp_path: Path, sender: _Sender | None = None) -> object:
+    """Return a poster with a REAL store and REAL timers.
+
+    The core-flow fixture stubs both out, which is exactly what the queue
+    behaviour is about: whether a dropped group leaves the table, and
+    whether its armed timer still fires.
+    """
+    return aggregator.LinkAggregator(
+        aggregator.AggregatorDeps(
+            account=sender or _Sender(),
+            config=_config(timeout=0.01),
+            consts=CONSTS,
+            store=Database(tmp_path / DB_NAME).store('aggregator'),
+            targets=lambda: (-1002,),
+            on_posted=_noop_posted,
+            field_keys=tuple(CONSTS.fields.values()),
+            variety=Variety(),
+        )
+    )
+
+
+async def _noop_posted(target: int, post_id: int) -> None:
+    """Post hand-off these tests never look at."""
+
+
+def _waiting(agg: object, title: str) -> Group:
+    """Put one video in the queue, armed exactly as the flow arms it.
+
+    With one platform in hand and another still missing, which is what a
+    group in the queue always is -- a complete one would have flushed.
+    """
+    item = Item('tiktok', 'tiktok', title, 'u', '', '30', 9)
+    group = Group(
+        title=title,
+        items={'tiktok': item},
+        msg_ids={9},
+        created_at=time.time(),
+    )
+    agg.groups.append(group)
+    agg._arm(group)
+    agg._save()
+    return group
+
+
+def test_a_group_that_times_out_actually_posts(tmp_path: Path) -> None:
+    """It used to cancel itself on the way to the send, and post nothing.
+
+    _flush cancelled group.task, and on the timeout path that task IS the
+    caller: the CancelledError landed on the send. The post never went out,
+    the re-queue branch was never reached, and _save() never ran -- so the
+    row stayed in `pending`, a restart re-armed it, and the video died the
+    same death every timeout, forever.
+    """
+
+    async def go() -> tuple[_Sender, object]:
+        sender = _Sender()
+        agg = _wired(tmp_path, sender)
+        _waiting(agg, 'one')
+        await asyncio.sleep(0.05)  # let the timeout fire
+        return sender, agg
+
+    sender, agg = asyncio.run(go())
+
+    assert sender.sent == [-1002]
+    assert not agg.groups
+    assert not list(agg.deps.store.rows_of('pending'))
+    assert [p.title for p in agg.posted] == ['one']
+
+
+def test_a_complete_group_still_cancels_its_timeout(tmp_path: Path) -> None:
+    """From on_message the task is somebody else's, and killing it is right."""
+
+    async def go() -> object:
+        agg = _wired(tmp_path, _Sender())
+        group = _waiting(agg, 'one')
+        await agg._flush(group)  # the "all platforms arrived" path
+        return group
+
+    assert asyncio.run(go()).task.cancelled()
