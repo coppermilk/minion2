@@ -127,6 +127,7 @@ class Userbot:
         self.greeter_task: asyncio.Task[None] | None = None
         self.rescan_task: asyncio.Task[None] | None = None
         self.stories_task: asyncio.Task[None] | None = None
+        self.startup_task: asyncio.Task[None] | None = None
         rt = codec.section(self.settings, 'runtime')
         # One door to Telegram, one gate in front of it: every service this
         # host builds is handed the same account, so there is no second way

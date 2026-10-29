@@ -138,17 +138,40 @@ class ServiceModes:
         bot.aggregator.restore()
         try:
             bot.comment_watch.rearm()
-            await bot.comment_watch.seed_posts()
-            await bot.comment_watch.seed_comments()
             if bot.reactions.params.enabled:
                 bot.reactions.mark_alive(time.time())
         except Exception:
             log.exception('reactions: startup step failed; listening anyway')
-        if source_backfill:
-            await bot.aggregator.backfill()
+        # Bring the loops up IMMEDIATELY so the greeter, stories and comment
+        # rescan are live at once. The heavy catch-up (comment history and, at
+        # boot, missed videos) runs concurrently in its own task instead of
+        # blocking startup, so the bot does not sit silent through a long
+        # backfill.
         bot.greeter_task = asyncio.create_task(bot.greeter.loop())
         bot.rescan_task = asyncio.create_task(bot.comment_watch.rescan_loop())
         bot.stories_task = asyncio.create_task(bot.story_watch.loop())
+        bot.startup_task = asyncio.create_task(
+            self._startup_backfill(source_backfill=source_backfill)
+        )
+
+    async def _startup_backfill(self, *, source_backfill: bool) -> None:
+        """Catch up on existing comments and missed videos in the background.
+
+        Run off the startup path so the loops and the live event handler are
+        already serving while this scans comment history and (at boot) the
+        source for missed videos.
+        """
+        bot = self.bot
+        try:
+            await bot.comment_watch.seed_posts()
+            await bot.comment_watch.seed_comments()
+        except Exception:
+            log.exception('reactions: startup backfill failed; listening on')
+        if source_backfill:
+            try:
+                await bot.aggregator.backfill()
+            except Exception:
+                log.exception('video backfill failed; listening anyway')
 
     async def stop_profile(self) -> None:
         """Cancel the active profile's timers and loops (before a switch)."""
@@ -157,8 +180,14 @@ class ServiceModes:
         bot.story_watch.cancel()
         bot.audience.close()
         bot.aggregator.cancel()
-        for task in (bot.greeter_task, bot.rescan_task, bot.stories_task):
+        for task in (
+            bot.startup_task,
+            bot.greeter_task,
+            bot.rescan_task,
+            bot.stories_task,
+        ):
             cancel(task)
+        bot.startup_task = None
         bot.greeter_task = None
         bot.rescan_task = None
         bot.stories_task = None
