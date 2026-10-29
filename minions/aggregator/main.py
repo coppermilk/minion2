@@ -374,17 +374,38 @@ class Aggregator(
         self.restore()
         try:
             self.rearm_cats()
-            await self.backfill_cat_posts()
-            await self.backfill_cat_comments()
             if self.cats.params.enabled:
                 self.cats.mark_alive(time.time())
         except Exception:
             log.exception('cats: startup step failed; listening anyway')
-        if source_backfill:
-            await self.backfill()
+        # Bring the background loops up IMMEDIATELY so the greeter, stories and
+        # cat rescan are live at once. The heavy catch-up (comment history and
+        # missed videos) runs concurrently in its own task instead of blocking
+        # startup, so the bot does not sit silent through a long backfill.
         self._greeter_task = asyncio.create_task(self.greeter.loop())
         self._cat_rescan_task = asyncio.create_task(self.cat_rescan_loop())
         self._stories_task = asyncio.create_task(self.stories_loop())
+        self._startup_task = asyncio.create_task(
+            self._startup_backfill(source_backfill=source_backfill)
+        )
+
+    async def _startup_backfill(self, *, source_backfill: bool) -> None:
+        """Catch up on existing comments and missed videos in the background.
+
+        Run off the startup path so the loops and the live event handler are
+        already serving while this scans comment history and (at boot) the
+        source for missed videos.
+        """
+        try:
+            await self.backfill_cat_posts()
+            await self.backfill_cat_comments()
+        except Exception:
+            log.exception('cats: startup backfill failed; listening anyway')
+        if source_backfill:
+            try:
+                await self.backfill()
+            except Exception:
+                log.exception('video backfill failed; listening anyway')
 
     async def stop_profile(self) -> None:
         """Cancel the active profile's timers and loops (before a switch)."""
@@ -393,9 +414,11 @@ class Aggregator(
         self._cancel_enrich_tasks()
         for group in self.groups:
             _cancel(getattr(group, 'task', None))
+        _cancel(getattr(self, '_startup_task', None))
         _cancel(self._greeter_task)
         _cancel(self._cat_rescan_task)
         _cancel(self._stories_task)
+        self._startup_task = None
         self._greeter_task = None
         self._cat_rescan_task = None
         self._stories_task = None
