@@ -417,11 +417,13 @@ class StatusReport:
         leg = control.arc.leg(since, now, peer_id)
         met = _when(since) if since > 0 else 'just now'
         return [
-            f'{b} {control.leg_name(service, leg)}, '
-            f'round {control.arc.rounds(since, now)} '
-            f'{b} met {met} {b} '
-            f'aiming {control.take_target(leg):.0%} seen, '
-            f'{control.recip_goal(leg):.0%} back'
+            (
+                f'{b} {control.leg_name(service, leg)}, '
+                f'round {control.arc.rounds(since, now)} '
+                f'{b} met {met} {b} '
+                f'aiming {control.take_target(leg):.0%} seen, '
+                f'{control.recip_goal(leg):.0%} back'
+            )
         ]
 
     def _who_lines(self, peer_id: int) -> list[str]:
@@ -722,10 +724,12 @@ class StatusReport:
         return [
             (
                 view.when,
-                f'    {tag} {b} {len(view.story_ids)} stories '
-                f'{_name(known, view.peer_id) or view.peer_id}'
-                f'{f" + {view.react_emoji}" if view.react_ids else ""}'
-                f' {b} {self._due_in(view.when - now)}',
+                (
+                    f'    {tag} {b} {len(view.story_ids)} stories '
+                    f'{_name(known, view.peer_id) or view.peer_id}'
+                    f'{f" + {view.react_emoji}" if view.react_ids else ""}'
+                    f' {b} {self._due_in(view.when - now)}'
+                ),
             )
             for view in self.bot.story_watch.pending
         ]

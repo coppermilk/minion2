@@ -1335,7 +1335,7 @@ class StateStore:
             sql, args = sql + ' LIMIT ?', (self.service, limit)
         return [_row(r) for r in self.conn.execute(sql, args)]
 
-    def bump(  # noqa: PLR0913 -- peer + counts + moment + what it was about
+    def bump(  # noqa: PLR0913, PLR0917 -- peer + counts + moment + what it was about
         self,
         peer_id: int,
         counts: Mapping[str, float],

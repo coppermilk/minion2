@@ -564,7 +564,7 @@ class Ledger:
         """
         self.store.bump(peer, {'offered': len(subjects)}, now, subjects)
 
-    def add_take(  # noqa: PLR0913 -- peer + what + (control, now) read best flat
+    def add_take(  # noqa: PLR0913, PLR0917 -- peer + what + (control, now) read best flat
         self,
         peer: int,
         subjects: tuple[int, ...],
@@ -593,7 +593,7 @@ class Ledger:
         """Count one reciprocation whose daily slot is already spent."""
         self.store.bump(peer, {'recip': 1}, now, (subject,))
 
-    def add_recip(  # noqa: PLR0913 -- peer + what + (now, tz) read best flat
+    def add_recip(  # noqa: PLR0913, PLR0917 -- peer + what + (now, tz) read best flat
         self, peer: int, subjects: tuple[int, ...], now: float, tz: float
     ) -> None:
         """Record the reciprocations to ``peer`` and the daily counter.

@@ -449,8 +449,10 @@ def _shared(where: Path) -> None:
         where / 'peers.db',
         _SHARED_SCHEMA,
         (
-            'INSERT INTO peers (engine, peer_id, offered, taken, recip, '
-            'last_at) VALUES (?, ?, ?, ?, ?, ?)',
+            (
+                'INSERT INTO peers (engine, peer_id, offered, taken, recip, '
+                'last_at) VALUES (?, ?, ?, ?, ?, ?)'
+            ),
             (
                 'reactions',
                 str(OLD_PEER),
@@ -477,8 +479,10 @@ def _per_service(where: Path) -> None:
         where / 'stories.db',
         _LEDGER_SCHEMA,
         (
-            'INSERT INTO peers (peer_id, label, offered, taken) '
-            'VALUES (?, ?, ?, ?)',
+            (
+                'INSERT INTO peers (peer_id, label, offered, taken) '
+                'VALUES (?, ?, ?, ?)'
+            ),
             ('360724480', '@eliza (360724480)', LEGACY_OFFERED, LEGACY_TAKEN),
         ),
         ('INSERT INTO marks (key, at) VALUES (?, ?)', ('360724480:397', 1.0)),
@@ -508,13 +512,17 @@ def _audience(where: Path) -> None:
         where / 'users.db',
         _USERS_SCHEMA,
         (
-            'INSERT INTO users (user_id, username, msg_count) '
-            'VALUES (?, ?, ?)',
+            (
+                'INSERT INTO users (user_id, username, msg_count) '
+                'VALUES (?, ?, ?)'
+            ),
             (LEGACY_USER, 'alice', 1),
         ),
         (
-            'INSERT INTO messages (user_id, chat_id, msg_id, text, ts) '
-            'VALUES (?, ?, ?, ?, ?)',
+            (
+                'INSERT INTO messages (user_id, chat_id, msg_id, text, ts) '
+                'VALUES (?, ?, ?, ?, ?)'
+            ),
             (LEGACY_USER, -100, 7, 'hi', 1.0),
         ),
     )
@@ -878,8 +886,10 @@ def _old_self(path: Path) -> None:
         path,
         _OLD_SELF,
         (
-            'INSERT INTO peers (service, peer_id, label, offered, taken) '
-            'VALUES (?, ?, ?, ?, ?)',
+            (
+                'INSERT INTO peers (service, peer_id, label, offered, taken) '
+                'VALUES (?, ?, ?, ?, ?)'
+            ),
             ('stories', '360724480', '@eliza (360724480)', 7, 5),
         ),
         (
@@ -887,13 +897,17 @@ def _old_self(path: Path) -> None:
             ('stories', str(CHANNEL), f'"Kanal" ({CHANNEL})'),
         ),
         (
-            'INSERT INTO users (user_id, username, subscribed) '
-            'VALUES (?, ?, ?)',
+            (
+                'INSERT INTO users (user_id, username, subscribed) '
+                'VALUES (?, ?, ?)'
+            ),
             (LEGACY_USER, 'alice', 1),
         ),
         (
-            'INSERT INTO membership_events (user_id, event, ts) '
-            'VALUES (?, ?, ?)',
+            (
+                'INSERT INTO membership_events (user_id, event, ts) '
+                'VALUES (?, ?, ?)'
+            ),
             (LEGACY_USER, 'join', 1.0),
         ),
     )

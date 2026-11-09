@@ -273,8 +273,10 @@ class CommandRouter:
                 [
                     f'Dropped {len(dropped)} queued video(s):',
                     *rows,
-                    '. delete the source message(s) too, or the backfill '
-                    'collects them again',
+                    (
+                        '. delete the source message(s) too, or the backfill '
+                        'collects them again'
+                    ),
                 ]
             )
         )

@@ -180,8 +180,10 @@ class Userbot:
         """Return the Drive backup dir mirroring live profile dir ``where``."""
         if self._backup_base is None:
             return None
-        return self._backup_base / where.name if where.name == 'test' else (
-            self._backup_base
+        return (
+            self._backup_base / where.name
+            if where.name == 'test'
+            else (self._backup_base)
         )
 
     def _restore_profile(self, where: Path) -> None:
@@ -694,7 +696,7 @@ async def main() -> None:
     await _shutdown(bot, status_task, backup_task, session_path)
 
 
-async def _shutdown(  # noqa: PLR0913 -- the two tasks + bot + path read flat
+async def _shutdown(  # noqa: PLR0913, PLR0917 -- the two tasks + bot + path read flat
     bot: Userbot,
     status_task: asyncio.Task[None],
     backup_task: asyncio.Task[None] | None,

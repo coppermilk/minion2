@@ -565,7 +565,7 @@ class StoryBrain:
             return 0
         return self.ledger.recip_left(self._control(), now, self._tz())
 
-    def _plan_reacts(  # noqa: PLR0913 -- peer + what + (budget, now) read flat
+    def _plan_reacts(  # noqa: PLR0913, PLR0917 -- peer + what + (budget, now) read flat
         self,
         peer_id: int,
         view_ids: tuple[int, ...],

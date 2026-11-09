@@ -90,7 +90,7 @@ than hanging on.
 """
 
 
-def next_awake(  # noqa: PLR0913 -- a moment plus the three gates
+def next_awake(  # noqa: PLR0913, PLR0917 -- a moment plus the three gates
     ts: float,
     tz_offset_hours: float,
     quiet_hours: frozenset[int],

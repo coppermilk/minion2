@@ -173,7 +173,7 @@ def _quiet_hours(persona: dict[str, object]) -> object:
     return [h for h in range(24) if not (low <= h < high)]
 
 
-def _fan_key(  # noqa: PLR0913 -- data + the (names, key, value) fan read flat
+def _fan_key(  # noqa: PLR0913, PLR0917 -- data + the (names, key, value) fan read flat
     data: dict[str, object],
     names: tuple[str, ...],
     key: str,
