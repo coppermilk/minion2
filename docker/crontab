@@ -3,8 +3,13 @@
 # the moderator: week_clean_cron, wishlist_cron). An off-schedule minute
 # is a cheap no-op. sort is NOT here: it runs as a watch daemon
 # (SORT_WATCH=1, the `sort` compose service) so new images sort instantly.
-* * * * * root . /etc/minions.env && python -m minions.bots.week_clean.main >> /data/bots/_data/logs/week-clean.cron.log 2>&1
+#
+# Each job's output is redirected to /proc/1/fd/1 -- PID 1's stdout, i.e.
+# cron -f's own stdout, which is the `batch` container's stdout. That puts
+# the run's lines in Synology Container Manager's Log tab (cron would
+# otherwise mail job output instead of sending it there). No on-disk log.
+* * * * * root . /etc/minions.env && python -m minions.bots.week_clean.main >> /proc/1/fd/1 2>&1
 # wishlist: TG_TOKEN is mapped from TG_TOKEN_WISHLIST; WISHLIST_URL and
 # WISHLIST_CHAT ride in via /etc/minions.env (the batch service greps
 # WISHLIST). Unset URL/chat -> a clean no-op run.
-* * * * * root . /etc/minions.env && TG_TOKEN="$TG_TOKEN_WISHLIST" python -m minions.bots.wishlist.main >> /data/bots/_data/logs/wishlist.cron.log 2>&1
+* * * * * root . /etc/minions.env && TG_TOKEN="$TG_TOKEN_WISHLIST" python -m minions.bots.wishlist.main >> /proc/1/fd/1 2>&1

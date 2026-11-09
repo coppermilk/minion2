@@ -578,24 +578,19 @@ _LOG_FMT = logging.Formatter('%(asctime)s %(name)s %(message)s')
 """Every line carries the time and the bot name (REQ-OBS-001)."""
 
 
-def bot_logger(name: str, logs: Path | None) -> logging.Logger:
-    """Mirror every log line to container stdout AND logs/<name>.log.
+def bot_logger(name: str) -> logging.Logger:
+    """Mirror every log line to container stdout (Container Manager's Log).
 
-    BOTH handlers sit on the ROOT logger, so the two sinks are true
-    mirrors and each carries the COMPLETE process view -- this bot's
-    records, the kernel's per-class crash guards (logged under
-    ``type(self).__name__``), and the vendor adapters' (the Gemini
-    request/response under ``llm``) alike. That is what makes the file a
-    real duplicate of ``docker logs`` (Container Manager's Log tab), not a
-    subset. One file per process: the first call names it (a single-bot
-    container -> its name; the telegram container -> ``telegram``), later
-    calls reuse it. Idempotent; every line is time-stamped.
+    The stdout handler sits on the ROOT logger, so it carries the COMPLETE
+    process view -- this bot's records, the kernel's per-class crash guards
+    (logged under ``type(self).__name__``), and the vendor adapters' (the
+    Gemini request/response under ``llm``) alike. Synology Container
+    Manager's Log tab reads that stdout through its built-in log driver, so
+    no on-disk copy is kept. Idempotent; every line is time-stamped.
     """
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     _ensure_stream(root)
-    if logs is not None:
-        _ensure_file(root, logs, name)
     return logging.getLogger(name)
 
 
@@ -612,23 +607,13 @@ def _ensure_stream(root: logging.Logger) -> None:
     root.addHandler(stream)
 
 
-def _ensure_file(root: logging.Logger, logs: Path, name: str) -> None:
-    """Install the one per-process file mirror on root (first name wins)."""
-    if any(isinstance(h, logging.FileHandler) for h in root.handlers):
-        return
-    logs.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(logs / f'{name}.log')
-    handler.setFormatter(_LOG_FMT)
-    root.addHandler(handler)
-
-
-def run(name: str, graph: Stage, logs: Path | None = None) -> int:
+def run(name: str, graph: Stage) -> int:
     """Drain the graph -- the single sanctioned unbounded loop.
 
     A daemon source never ends (drain forever); a batch source ends
     (drain once, exit). Clean stop -> 0; fatal init -> non-zero.
     """
-    log = bot_logger(name, logs)
+    log = bot_logger(name)
     log.info('started')  # a fresh container shows life even while idle
     try:
         stream = graph(iter(()))

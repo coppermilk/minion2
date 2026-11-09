@@ -212,7 +212,7 @@ def build(cfg: Settings, env: Mapping[str, str]) -> Stage:
         chats=chats_from(env),
         parse_mode='HTML',
     )
-    log = bot_logger(BOT, cfg.logs)
+    log = bot_logger(BOT)
     handle = _Moderator(cfg, BackendToggle(cfg), api, log)
     return TgCommands(api, spec, handle)
 
@@ -221,7 +221,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     """Build Settings once, service commands forever (tokenless: idle)."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
-    return run(BOT, build(cfg, mapping), cfg.logs)
+    return run(BOT, build(cfg, mapping))
 
 
 if __name__ == '__main__':

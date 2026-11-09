@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 import sys
@@ -215,48 +216,46 @@ def _non_file_streams(logger: logging.Logger) -> list[logging.Handler]:
     ]
 
 
-def _file_handlers(logger: logging.Logger) -> list[logging.Handler]:
-    return [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+def test_bot_logger_mirrors_everything_to_stdout() -> None:
+    """One stdout handler on root mirrors the WHOLE process, no on-disk copy.
 
-
-def test_bot_logger_mirrors_everything_to_stdout_and_one_file(
-    tmp_path: Path,
-) -> None:
-    """Both sinks mirror the WHOLE process: docker logs and logs/<name>.log.
-
-    Both handlers live on root, so a sibling logger (the Gemini
-    request/response under 'llm', the kernel's crash guards) lands in the
-    file too -- not just the bot's own records. One file per process: the
-    first name wins, later bots reuse it. Root's handler state is
-    saved/restored so the assertions are isolated from pytest's capture.
+    The handler lives on root, so a sibling logger (the Gemini
+    request/response under 'llm', the kernel's crash guards) reaches it too --
+    not just the bot's own records. Synology Container Manager reads that
+    stdout; there is deliberately no file sink. Idempotent: a later bot reuses
+    the one handler. Root's handler state is saved/restored so the assertions
+    are isolated from pytest's capture.
     """
     root = logging.getLogger()
     saved, saved_level = root.handlers[:], root.level
     root.handlers.clear()
     try:
-        logs = tmp_path / 'logs'
-        bot_logger('sort', logs)
+        bot_logger('sort')
 
-        # Root carries both mirrors: one stdout stream and one file.
+        # Exactly one stdout stream, aimed at sys.stdout, and NO file sink.
         assert len(_non_file_streams(root)) == 1
-        assert _non_file_streams(root)[0].stream is sys.stdout
-        assert len(_file_handlers(root)) == 1
+        stream = _non_file_streams(root)[0]
+        assert stream.stream is sys.stdout
+        assert not any(
+            isinstance(h, logging.FileHandler) for h in root.handlers
+        )
 
-        # A SIBLING logger (Gemini's 'llm') lands in the file -- the point:
-        # the file is a complete mirror, not just the bot's own records.
+        # A SIBLING logger (Gemini's 'llm') reaches that one handler -- the
+        # point: the stream is a complete process mirror. Capture it by
+        # swapping the handler's stream for a buffer.
+        buffer = io.StringIO()
+        stream.stream = buffer
         logging.getLogger('llm').info('gemini response probe')
-        for handler in root.handlers:
-            handler.flush()
-        text = (logs / 'sort.log').read_text(encoding='ascii')
+        stream.flush()
+        text = buffer.getvalue()
         assert 'gemini response probe' in text
         assert re.search(
             r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.*gemini response probe', text
         )
 
-        # One file per process: a later bot reuses it, adds no second file.
-        bot_logger('week-clean', logs)
-        assert len(_file_handlers(root)) == 1
-        assert not (logs / 'week-clean.log').exists()
+        # One handler per process: a later bot reuses it, adds no second.
+        bot_logger('week-clean')
+        assert len(_non_file_streams(root)) == 1
     finally:
         for handler in list(root.handlers):
             handler.close()

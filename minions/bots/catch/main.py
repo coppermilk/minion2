@@ -143,10 +143,10 @@ def main(env: Mapping[str, str] | None = None) -> int:
     mapping = os.environ if env is None else env
     cfg = load(mapping)
     if cfg.catch_dir is None:
-        log = bot_logger(BOT, cfg.logs)
+        log = bot_logger(BOT)
         log.warning('skipped reason=bad_config catch_dir unset')
         return 0
-    return run(BOT, build(cfg, real_deps(cfg, mapping)), cfg.logs)
+    return run(BOT, build(cfg, real_deps(cfg, mapping)))
 
 
 if __name__ == '__main__':

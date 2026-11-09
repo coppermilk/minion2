@@ -52,9 +52,11 @@ foreach ($line in Get-Content $EnvFile) {
     }
 }
 
-# TELEMETRY: pre-logging crashes (a bad_config from settings.load, a
-# missing python) would vanish into the task's void otherwise, so
-# each bot's launcher streams land next to its <bot>.log.
+# TELEMETRY: the bots log to stdout (no on-disk log module any more), so
+# on Windows -- where there is no Container Manager to read it -- we
+# redirect each bot's stdout/stderr to <bot>.launcher.log here. That also
+# captures pre-logging crashes (a bad_config from settings.load, a missing
+# python) that would otherwise vanish into the task's void.
 $logDir = Join-Path $env:DRIVE 'bots\_data\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 

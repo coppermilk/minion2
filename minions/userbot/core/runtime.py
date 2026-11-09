@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import time
-from logging.handlers import RotatingFileHandler
 from typing import TYPE_CHECKING
 
 from minions.userbot.core import config
@@ -34,14 +33,13 @@ _WATCHDOG_POLL_SEC = 30.0
 def _state_base() -> Path | None:
     """Return the base state dir, created; None when there is none to use.
 
-    Process-level (not per-profile): the log and the watchdog heartbeat live
-    here. WHERE it is, is ``config.live_base`` -- the LIVE dir (LOCAL_STATE_DIR
-    when set, else the shared base), so these churny files (the heartbeat's
-    mtime moves every tick) never touch a synced Google Drive; they are
-    process-local and worthless to back up. What is local to this module is
-    the tolerance: a log we cannot write is worth degrading over, so a
-    directory that will not create reads as "no file here" and the console
-    handler carries on alone.
+    Process-level (not per-profile): the watchdog heartbeat lives here. WHERE
+    it is, is ``config.live_base`` -- the LIVE dir (LOCAL_STATE_DIR when set,
+    else the shared base), so this churny file (the heartbeat's mtime moves
+    every tick) never touches a synced Google Drive; it is process-local and
+    worthless to back up. What is local to this module is the tolerance: a
+    directory that will not create reads as "no base here", so the watchdog
+    simply does not stamp rather than crashing.
     """
     base = config.live_base()
     if base is None:
@@ -51,12 +49,6 @@ def _state_base() -> Path | None:
     except OSError:
         return None
     return base
-
-
-def _log_file() -> Path | None:
-    """Return the on-disk log path under the state dir, or None if gone."""
-    base = _state_base()
-    return base / 'aggregator.log' if base is not None else None
 
 
 def _health_file() -> Path | None:
@@ -106,33 +98,20 @@ def watchdog(timeout: float) -> None:
             os._exit(1)  # deliberate hard exit so restart: always recreates us
 
 
-def _log_handlers() -> list[logging.Handler]:
-    """Console (for `docker logs`) plus a rotating file (always on disk)."""
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-    path = _log_file()
-    if path is not None:
-        handlers.append(
-            RotatingFileHandler(
-                path, maxBytes=5_000_000, backupCount=2, encoding='utf-8'
-            )
-        )
-    return handlers
-
-
 def configure_logging() -> None:
-    """Install console + rotating-file log handlers for the aggregator.
+    """Install the console (stdout) log handler for the aggregator.
 
     Called once from ``main()`` -- NOT at import time -- so importing the
     package (e.g. in tests) never reconfigures the root logger. ``force=True``
     reconfigures even if an imported library already installed a root handler
     (which would make a plain basicConfig a no-op and silently drop our INFO
-    level). The file handler keeps the log on disk regardless of the container
-    log tab.
+    level). stdout is what Synology Container Manager's Log tab reads; there is
+    no on-disk copy.
     """
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
-        handlers=_log_handlers(),
+        handlers=[logging.StreamHandler(sys.stdout)],
         force=True,
     )
 

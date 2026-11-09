@@ -57,7 +57,6 @@ def test_derived_paths_hang_off_drive(tmp_path: Path) -> None:
     assert cfg.pictures == tmp_path / 'pictures'
     assert cfg.state == tmp_path / 'bots' / '_data' / 'state'
     assert cfg.regen == tmp_path / 'bots' / '_data' / 'regen'
-    assert cfg.logs == tmp_path / 'bots' / '_data' / 'logs'
     assert cfg.print_done == tmp_path / 'print' / '_done'
     assert cfg.bot_done('fetch') == tmp_path / 'bots' / 'fetch' / 'done'
 

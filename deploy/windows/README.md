@@ -41,12 +41,15 @@ Three steps:
    bots. Nothing else to register.
 
 Verify in `DRIVE\bots\_data\logs\`:
-- `<bot>.log` -- runtime events (every disposition with its reason
-  code);
-- `<bot>.launcher.log` / `.err` -- startup problems that happen
-  before the bot's own logger exists (a `bad_config` refusal, a
-  missing python). If a bot "silently does nothing", the answer is
-  here.
+- `<bot>.launcher.log` / `.err` -- everything the bot writes. `run.ps1`
+  redirects each bot's stdout/stderr here, so it carries both the runtime
+  events (every disposition with its reason code) and the startup problems
+  that happen before the bot's own logger exists (a `bad_config` refusal, a
+  missing python). If a bot "silently does nothing", the answer is here.
+
+  (The bots no longer keep a separate on-disk `<bot>.log`: they log to
+  stdout, which on the NAS Synology Container Manager's Log tab reads, and
+  on Windows `run.ps1` captures into `<bot>.launcher.log`.)
 
 Idle cost is near zero by design: both bots sleep in folder waits and
 the write-stability guard keeps half-downloaded files untouched.

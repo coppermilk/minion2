@@ -143,7 +143,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     cfg = load(mapping)
     if mapping.get('TG_TOKEN'):
         warm_embedder()  # resources at init, never mid-flight
-    return run(BOT, build(cfg, mapping), cfg.logs)
+    return run(BOT, build(cfg, mapping))
 
 
 if __name__ == '__main__':

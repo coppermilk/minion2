@@ -61,7 +61,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     """Build Settings once and drain the belt."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
-    return run(BOT, build(cfg, mapping), cfg.logs)
+    return run(BOT, build(cfg, mapping))
 
 
 if __name__ == '__main__':

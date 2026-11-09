@@ -80,7 +80,7 @@ def _run_once(bot: _Bot, log: logging.Logger) -> None:
     """Build and drain one belt; a crash is logged, never raised."""
     (bot.cfg.bot_dir(bot.name) / '_spool').mkdir(parents=True, exist_ok=True)
     try:
-        run(bot.name, build(bot.cfg, bot.env), bot.cfg.logs)
+        run(bot.name, build(bot.cfg, bot.env))
     except Exception:
         log.exception('belt_crashed')
 
@@ -112,7 +112,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     cfg = load(base)
     # Name the container's one log file 'telegram' up front (first call
     # wins), so every belt's records mirror to telegram.log + stdout.
-    bot_logger('telegram', cfg.logs).info('started bots=%s', _names(base))
+    bot_logger('telegram').info('started bots=%s', _names(base))
     stop = threading.Event()
     bots = [_Bot(cfg, name, _bot_env(base, name)) for name in _names(base)]
     threads = [

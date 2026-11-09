@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 
 def _handler(cfg: object) -> object:
-    log = bot_logger('moderator', cfg.logs)
+    log = bot_logger('moderator')
     return _Moderator(cfg, BackendToggle(cfg), TgApi(''), log)
 
 

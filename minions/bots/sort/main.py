@@ -117,8 +117,8 @@ def main(env: Mapping[str, str] | None = None) -> int:
         # (recreated) container left under a foreign hostname, which
         # would otherwise wedge every trigger as batch_locked.
         BatchLock(cfg.state / f'{BOT}.lock').break_orphan()
-        return run(BOT, build_watch(cfg, real_deps(cfg, mapping)), cfg.logs)
-    log = bot_logger(BOT, cfg.logs)
+        return run(BOT, build_watch(cfg, real_deps(cfg, mapping)))
+    log = bot_logger(BOT)
     lock = BatchLock(cfg.state / f'{BOT}.lock')
     if not lock.acquire():
         log.warning('skipped reason=batch_locked')

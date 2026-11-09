@@ -82,7 +82,6 @@ def make_cfg(drive: Path, **extra: str) -> Settings:
         cfg.pictures,
         cfg.state,
         cfg.regen,
-        cfg.logs,
         cfg.print_queue,
         cfg.print_done,
         cfg.scripts,

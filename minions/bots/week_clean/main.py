@@ -38,7 +38,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     """One scan-act-exit run when the cron is due; else a clean no-op."""
     mapping = os.environ if env is None else env
     cfg = load(mapping)
-    log = bot_logger(BOT, cfg.logs)
+    log = bot_logger(BOT)
     admin = admin_config(cfg.state)
     if admin.get('week_clean_enabled') == '0':
         log.info('skipped reason=disabled_by_admin')

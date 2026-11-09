@@ -366,7 +366,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     mapping = os.environ if env is None else env
     cfg = load(mapping)
     (cfg.bot_dir(_name(mapping)) / '_spool').mkdir(parents=True, exist_ok=True)
-    return run(_name(mapping), build(cfg, mapping), cfg.logs)
+    return run(_name(mapping), build(cfg, mapping))
 
 
 if __name__ == '__main__':

@@ -125,11 +125,6 @@ class Settings:
         return self.drive / 'bots' / '_data' / 'regen'
 
     @property
-    def logs(self) -> Path:
-        """Append-only evidence [TELEMETRY]."""
-        return self.drive / 'bots' / '_data' / 'logs'
-
-    @property
     def print_queue(self) -> Path:
         """Print queue [MEDIA]."""
         return self.drive / 'print'

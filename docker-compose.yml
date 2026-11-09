@@ -59,19 +59,14 @@ x-service: &svc
     # Bind all interfaces inside the container so the host can map the port;
     # serve.py defaults to 127.0.0.1 when this is unset (local dev).
     SERVICE_HOST: 0.0.0.0
-  # A small logs-only volume (NOT /data): each service writes
-  # /logs/<step>.log, so svc logs are readable as files, not just via
-  # docker logs. Independent of DRIVE_NAS, so a missing media mount never
-  # takes a stateless service down.
-  volumes:
-    - svc-logs:/logs
+  # No volumes: a service is stateless (bytes in / bytes out) and logs only
+  # to stdout, which Synology Container Manager's Log tab reads.
   restart: unless-stopped
   init: true
   security_opt:
     - no-new-privileges:true
   # NO `logging:` override -- see the note on the bot anchor above (an
-  # override blanks Synology Container Manager's Log tab). The svc-* services
-  # also keep a /logs/<step>.log file copy via the svc-logs volume.
+  # override blanks Synology Container Manager's Log tab).
 
 services:
   # --- Atomic services (svc-*): the processing IP, pure web, no Telegram
@@ -298,10 +293,7 @@ services:
   #   # one-time login uses `docker compose run --rm donate ...`, its own TTY.
   #   mem_limit: 256m
 
-# A small logs-only named volume for the svc-* services (Docker auto-creates
-# it), so their /logs/<step>.log survive without a host bind.
 volumes:
-  svc-logs:
   # userbot live state, OFF the Cloud-Synced /data mount (see LOCAL_STATE_DIR
   # in the userbot service). A named volume lives under Synology's
   # /volume1/@docker/volumes, which Cloud Sync does not touch, and survives
