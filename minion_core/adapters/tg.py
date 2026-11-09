@@ -16,11 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
-from uuid import uuid4
 
 from minion_core.adapters.files import BudgetWriter
 from minion_core.adapters.files import next_free_path
 from minion_core.adapters.files import sanitize
+from minion_core.adapters.multipart import FilePart
+from minion_core.adapters.multipart import StreamMultipart
 from minion_core.kernel import Envelope
 from minion_core.kernel import Job
 from minion_core.kernel import Origin
@@ -178,52 +179,6 @@ class OffsetStore:
         atomic_write(self._path, str(offset).encode('ascii'))
 
 
-class _DocumentUpload:
-    """A sendDocument multipart body streamed from disk, never read whole.
-
-    requests' ``files=`` encoder calls ``fp.read()`` and assembles the
-    entire multipart body in memory, which OOMs on a large video
-    (``Cannot allocate memory`` during sendDocument). This yields the
-    envelope and the file in ``CHUNK``-sized pieces instead, and reports
-    its total length via ``__len__`` so requests sets ``Content-Length``
-    and streams the iterable rather than buffering it or falling back to
-    chunked transfer encoding. The spooled file is immutable between the
-    length read and the send, so the declared length always matches.
-    """
-
-    def __init__(self, chat_id: str, path: Path) -> None:
-        """Precompute the multipart envelope around one file field."""
-        self._path = path
-        self._boundary = uuid4().hex
-        name = path.name.translate({0x22: None, 0x0D: None, 0x0A: None})
-        dash = f'--{self._boundary}\r\n'
-        self._head = (
-            f'{dash}Content-Disposition: form-data; name="chat_id"\r\n\r\n'
-            f'{chat_id}\r\n'
-            f'{dash}Content-Disposition: form-data; name="document"; '
-            f'filename="{name}"\r\n'
-            f'Content-Type: application/octet-stream\r\n\r\n'
-        ).encode()
-        self._tail = f'\r\n--{self._boundary}--\r\n'.encode('ascii')
-
-    @property
-    def content_type(self) -> str:
-        """The multipart Content-Type header naming this body's boundary."""
-        return f'multipart/form-data; boundary={self._boundary}'
-
-    def __len__(self) -> int:
-        """Total body length, so requests sends Content-Length, not chunked."""
-        return len(self._head) + self._path.stat().st_size + len(self._tail)
-
-    def __iter__(self) -> Iterator[bytes]:
-        """Yield the envelope and the file in CHUNK pieces (bounded memory)."""
-        yield self._head
-        with self._path.open('rb') as fh:
-            while chunk := fh.read(CHUNK):
-                yield chunk
-        yield self._tail
-
-
 class TgChannel:
     """A bot's Telegram identity; a no-op without a token.
 
@@ -267,7 +222,10 @@ class TgChannel:
         import requests
 
         url = f'{self._api.base}/bot{self._api.token}/sendDocument'
-        body = _DocumentUpload(_chat(origin), path)
+        body = StreamMultipart(
+            {'chat_id': _chat(origin)},
+            FilePart('document', path.name, path),
+        )
         try:
             resp = requests.post(
                 url,

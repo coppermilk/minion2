@@ -562,13 +562,16 @@ def test_document_upload_streams_in_chunks(tmp_path: Path) -> None:
     file is cut into CHUNK-sized pieces (bounded memory, not one fp.read
     that OOMs), and the multipart envelope carries chat_id and filename.
     """
-    from minion_core.adapters.tg import CHUNK
-    from minion_core.adapters.tg import _DocumentUpload
+    from minion_core.adapters.multipart import CHUNK
+    from minion_core.adapters.multipart import FilePart
+    from minion_core.adapters.multipart import StreamMultipart
 
     payload = b'A' * (CHUNK * 2 + 7)  # spans three reads
     big = tmp_path / 'big.mp4'
     big.write_bytes(payload)
-    upload = _DocumentUpload('42', big)
+    upload = StreamMultipart(
+        {'chat_id': '42'}, FilePart('document', big.name, big)
+    )
 
     parts = list(upload)
     assert len(upload) == sum(len(p) for p in parts)  # declared == streamed
@@ -605,7 +608,7 @@ def test_send_file_streams_the_body_not_files(
     """send_file posts a streamed body, never the buffering files= encoder."""
     import requests
 
-    from minion_core.adapters.tg import _DocumentUpload
+    from minion_core.adapters.multipart import StreamMultipart
 
     clip = tmp_path / 'clip.mp4'
     clip.write_bytes(b'z' * 10)
@@ -621,7 +624,7 @@ def test_send_file_streams_the_body_not_files(
 
     kw = captured['kw']
     assert 'files' not in kw  # not the in-memory multipart encoder
-    assert isinstance(kw['data'], _DocumentUpload)  # a streamed body
+    assert isinstance(kw['data'], StreamMultipart)  # a streamed body
     assert len(kw['data']) > 0  # a length -> Content-Length, not chunked
     content_type = kw['headers']['Content-Type']
     assert content_type.startswith('multipart/form-data; boundary=')

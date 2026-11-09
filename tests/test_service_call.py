@@ -93,6 +93,24 @@ def test_delivers_and_writes_the_result(tmp_path: Path) -> None:
     assert verdict.result.read_bytes() == b'PROCESSED'
 
 
+def test_large_result_streams_to_disk(tmp_path: Path) -> None:
+    """A result bigger than one CHUNK is written whole, streamed not buffered.
+
+    Exercises the multi-chunk iter_content -> temp .part -> move_atomic path
+    that replaced loading resp.content into RAM (the OOM fix).
+    """
+    from minion_core.adapters.multipart import CHUNK
+
+    big = b'X' * (CHUNK * 2 + 5)  # spans three iter_content chunks
+    _REPLY.update(
+        status=200, body=big, ctype='application/octet-stream', disposition=''
+    )
+    with _service() as url:
+        verdict = CallService(ServiceCall(url)).process(_job(tmp_path))
+    assert verdict.result is not None
+    assert verdict.result.read_bytes() == big
+
+
 def test_result_is_named_by_content_disposition(tmp_path: Path) -> None:
     # The relay uploads `in.url`, but the service returns a real video name.
     # The bytes must be written under that name, not the `.url` request name,

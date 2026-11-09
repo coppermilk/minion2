@@ -21,10 +21,13 @@ from typing import Any
 
 from minion_core import progress
 from minion_core.adapters.files import sanitize
+from minion_core.adapters.multipart import CHUNK
+from minion_core.adapters.multipart import FilePart
+from minion_core.adapters.multipart import StreamMultipart
 from minion_core.kernel import Disposition
 from minion_core.kernel import Step
 from minion_core.kernel import Verdict
-from minion_core.kernel import atomic_write
+from minion_core.kernel import move_atomic
 from minion_core.kernel import next_free_path
 
 if TYPE_CHECKING:
@@ -72,24 +75,31 @@ class CallService(Step):
         self._spec = spec
 
     def process(self, job: Job) -> Verdict:
-        """Call the service; map its HTTP outcome to a Verdict."""
+        """Call the service; map its HTTP outcome to a Verdict.
+
+        The upload streams from disk and the result streams to disk
+        (``stream=True`` + ``iter_content``), so a large file (a fetched
+        video, a frames zip) never sits whole in RAM -- which OOM-killed the
+        1g relay container.
+        """
         import requests
 
+        body = StreamMultipart({}, FilePart('file', job.src.name, job.src))
         try:
-            with job.src.open('rb') as fh:
-                resp = requests.post(
-                    f'{self._spec.url}/run-file',
-                    files={'file': (job.src.name, fh)},
-                    timeout=self._spec.timeout,
-                )
+            with requests.post(
+                f'{self._spec.url}/run-file',
+                data=body,
+                headers={'Content-Type': body.content_type},
+                timeout=self._spec.timeout,
+                stream=True,
+            ) as resp:
+                return _verdict(job, resp)
         except requests.RequestException:
             return Verdict(
                 Disposition.FAILED,
                 reason='service_unreachable',
-                reply='Sorry, the service is offline right now. '
-                'Try again shortly.',
+                reply=_OFFLINE,
             )
-        return _verdict(job, resp)
 
 
 def _verdict(job: Job, resp: requests.Response) -> Verdict:
@@ -99,8 +109,7 @@ def _verdict(job: Job, resp: requests.Response) -> Verdict:
     what happened instead of leaving them in silence.
     """
     if resp.status_code == HTTP_OK:
-        out = next_free_path(job.dest / _result_name(resp, job.src.name))
-        atomic_write(out, resp.content)
+        out = _stream_to_disk(resp, job.dest, _result_name(resp, job.src.name))
         return Verdict(Disposition.DELIVERED, result=out)
     if resp.status_code == HTTP_UNPROCESSABLE:
         reason = _skip_reason(resp)
@@ -112,8 +121,28 @@ def _verdict(job: Job, resp: requests.Response) -> Verdict:
     return Verdict(
         Disposition.FAILED,
         reason=f'service_http_{resp.status_code}',
-        reply='Sorry, that one failed. Give it another try in a bit.',
+        reply=_FAILED,
     )
+
+
+def _stream_to_disk(resp: requests.Response, dest: Path, name: str) -> Path:
+    """Write a streamed response body to ``dest/name`` without buffering it.
+
+    ``iter_content`` is read in CHUNK pieces into a temp ``.part`` file, then
+    atomically moved into place, so a multi-GB result never sits whole in RAM.
+    A partial write is cleaned up on any failure.
+    """
+    out = next_free_path(dest / name)
+    tmp = out.with_name(out.name + '.part')
+    try:
+        with tmp.open('wb') as fh:
+            for chunk in resp.iter_content(CHUNK):
+                if chunk:
+                    fh.write(chunk)
+        return move_atomic(tmp, out)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _result_name(resp: requests.Response, fallback: str) -> str:
@@ -182,12 +211,13 @@ class JobClient:
     def _submit(self, src: Path) -> str:
         import requests
 
-        with src.open('rb') as fh:
-            resp = requests.post(
-                f'{self._spec.url}/jobs/file',
-                files={'file': (src.name, fh)},
-                timeout=self._spec.timeout,
-            )
+        body = StreamMultipart({}, FilePart('file', src.name, src))
+        resp = requests.post(
+            f'{self._spec.url}/jobs/file',
+            data=body,
+            headers={'Content-Type': body.content_type},
+            timeout=self._spec.timeout,
+        )
         resp.raise_for_status()
         return str(resp.json()['job_id'])
 
@@ -214,13 +244,15 @@ class JobClient:
         if done.get('status') == 'failed' or done.get('output_ref') is None:
             reason = str(done.get('reason') or 'service_error')
             return Verdict(Disposition.FAILED, reason=reason, reply=_FAILED)
-        resp = requests.get(
+        with requests.get(
             f'{self._spec.url}/jobs/{job_id}/result',
             timeout=self._spec.timeout,
-        )
-        resp.raise_for_status()
-        out = next_free_path(dest / _result_name(resp, _FALLBACK_NAME))
-        atomic_write(out, resp.content)
+            stream=True,
+        ) as resp:
+            resp.raise_for_status()
+            out = _stream_to_disk(
+                resp, dest, _result_name(resp, _FALLBACK_NAME)
+            )
         return Verdict(Disposition.DELIVERED, result=out)
 
 
