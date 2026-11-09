@@ -37,11 +37,15 @@ x-minion: &minion
   init: true
   security_opt:
     - no-new-privileges:true
-  logging:
-    driver: json-file
-    options:
-      max-size: 10m
-      max-file: '3'
+  # NO `logging:` override on purpose. Synology Container Manager's Log tab
+  # reads ONLY its built-in `db` logging driver; ANY override here (e.g.
+  # json-file) leaves that tab blank even though `docker logs` over SSH still
+  # works -- that is why container logs never showed in the GUI. Omitting it
+  # lets each container use the daemon's default driver (db on the NAS), so
+  # the Log tab works, same as Immich. Log retention is the db driver's job on
+  # the NAS (managed by DSM); a plain dev Docker falls back to its json-file
+  # default. The bots ALSO mirror every line to a <name>.log file
+  # (kernel.bot_logger), so a file copy survives regardless of the driver.
 
 # Atomic service: one Step, one container, bytes in / bytes out. Stateless
 # (a fresh temp store per request), so no /data mount. The command picks the
@@ -65,11 +69,9 @@ x-service: &svc
   init: true
   security_opt:
     - no-new-privileges:true
-  logging:
-    driver: json-file
-    options:
-      max-size: 10m
-      max-file: '3'
+  # NO `logging:` override -- see the note on the bot anchor above (an
+  # override blanks Synology Container Manager's Log tab). The svc-* services
+  # also keep a /logs/<step>.log file copy via the svc-logs volume.
 
 services:
   # --- Atomic services (svc-*): the processing IP, pure web, no Telegram
