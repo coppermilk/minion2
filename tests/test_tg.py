@@ -256,6 +256,99 @@ def test_malformed_update_never_wedges_the_dock(
     )  # past poison
 
 
+class _FlakyApi(TgApi):
+    """getUpdates fails a fixed number of times, then returns empty."""
+
+    def __init__(self, fails: int) -> None:
+        super().__init__(token='t')
+        self._fails = fails
+        self.attempts = 0
+
+    def call(self, method: str, params: dict[str, object]) -> object:
+        assert method == 'getUpdates'
+        self.attempts += 1
+        if self.attempts <= self._fails:
+            msg = 'getUpdates: Connection reset by peer'
+            raise TgError(msg)
+        return []
+
+
+_BACKOFFS = 3
+
+
+def test_transient_getupdates_retries_with_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network hiccup on the long-poll is a pause, never a crash.
+
+    getUpdates failing used to escape as source_crashed and exit the
+    container, so Docker restarted the dock on every reset/DNS blip.
+    Now a TgError is retried with capped exponential backoff and the
+    dock lives on.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    api = _FlakyApi(fails=_BACKOFFS)
+    source = TgLinks(api, _spec(cfg, ('1',)))
+    waited: list[float] = []
+
+    def fake_wait(sec: float) -> None:
+        waited.append(sec)
+        if len(waited) >= _BACKOFFS:  # stop the loop after a few retries
+            source.stop()
+
+    monkeypatch.setattr(source, 'wait', fake_wait)
+    out = list(source(iter(())))
+    assert out == []  # a flaky transport emits nothing, but never crashes
+    assert api.attempts == _BACKOFFS  # it retried, it did not die on the first
+    assert waited == [1.0, 2.0, 4.0]  # capped exponential backoff
+
+
+class _DownloadFailsApi(TgApi):
+    """getUpdates yields one media update; its download is refused."""
+
+    def __init__(self, updates: list[dict[str, Any]]) -> None:
+        super().__init__(token='t')
+        self._updates = updates
+        self.owner: TgMedia | None = None
+
+    def call(self, method: str, params: dict[str, object]) -> object:
+        assert method == 'getUpdates'
+        if self.owner is not None:
+            self.owner.stop()
+        batch, self._updates = self._updates, []
+        return batch
+
+    def download(
+        self, file_id: str, spool: SpoolSpec, name: str | None = None
+    ) -> Path:
+        msg = 'getFile: file is too big'
+        raise TgError(msg)
+
+
+def test_tg_error_in_consume_advances_offset(tmp_path: Path) -> None:
+    """A refused download logs, advances the offset, never crashes.
+
+    A too-big file (or a failed reply) raised TgError mid-update and
+    killed the dock. Now it is treated like a bad_update: the offset
+    moves past it so it cannot wedge the dock in a replay loop.
+    """
+    cfg = make_cfg(tmp_path / 'drive')
+    doc_upd = {
+        'update_id': 7,
+        'message': {
+            'chat': {'id': 1},
+            'message_id': 9,
+            'document': {'file_id': 'BIG', 'file_name': 'huge.mp4'},
+        },
+    }
+    api = _DownloadFailsApi([doc_upd])
+    source = TgMedia(api, _spec(cfg, ('1',)))
+    api.owner = source
+    out = list(source(iter(())))
+    assert out == []  # nothing emitted, but the dock survived
+    assert OffsetStore(cfg.state / 't.offset').read() == _OFFSET_8  # past it
+
+
 def test_scrub_redacts_the_token() -> None:
     """A leaked token is replaced; an empty token is a no-op."""
     tk = 'AAA-sensitive-BBB'

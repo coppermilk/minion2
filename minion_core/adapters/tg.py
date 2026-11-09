@@ -41,6 +41,12 @@ POLL_TIMEOUT_SEC = 25
 API_TIMEOUT_SEC = 90
 """Wall-time bound on every HTTP call (bounded, BLUEPRINT 10)."""
 
+POLL_BACKOFF_BASE_SEC = 1.0
+"""First wait after a long-poll transport failure; doubles each retry."""
+
+POLL_BACKOFF_MAX_SEC = 60.0
+"""Cap on the long-poll retry backoff, so a long outage retries ~minutely."""
+
 CHUNK = 64 * 1024
 """Streaming download chunk size."""
 
@@ -344,13 +350,33 @@ class _TgSource(Source):
             offset = self._poll(offset, emit)
 
     def _poll(self, offset: int, emit: Emit) -> int:
-        updates = self.api.call(
-            'getUpdates',
-            {'offset': offset, 'timeout': POLL_TIMEOUT_SEC},
-        )
-        for upd in updates:
+        for upd in self._get_updates(offset):
             offset = max(offset, self._consume(upd, emit))
         return offset
+
+    def _get_updates(self, offset: int) -> Any:  # noqa: ANN401 -- Bot API returns free-form JSON
+        """Long-poll, retrying transient transport failures with backoff.
+
+        A 25s long-poll against api.telegram.org meets connection resets,
+        DNS blips and gateway errors as a matter of course. Each used to
+        escape as ``source_crashed`` and exit the container, so Docker
+        restarted the whole dock on every network hiccup. Here a ``TgError``
+        is logged and retried with capped exponential backoff: a hiccup is
+        a pause, not a restart. ``wait`` wakes at once on stop, and an empty
+        list on stop lets ``produce`` fall out of its loop cleanly.
+        """
+        backoff = POLL_BACKOFF_BASE_SEC
+        while not self.stopped:
+            try:
+                return self.api.call(
+                    'getUpdates',
+                    {'offset': offset, 'timeout': POLL_TIMEOUT_SEC},
+                )
+            except TgError as exc:
+                _LOG.warning('getUpdates retry in %.0fs: %s', backoff, exc)
+                self.wait(backoff)
+                backoff = min(backoff * 2, POLL_BACKOFF_MAX_SEC)
+        return []
 
     def _consume(self, upd: dict[str, Any], emit: Emit) -> int:
         """Validate one untrusted update explicitly (BLUEPRINT 4).
@@ -367,6 +393,12 @@ class _TgSource(Source):
             self._route(upd, emit)
         except (KeyError, TypeError, ValueError) as exc:
             _LOG.warning('rejected reason=bad_update id=%s err=%s', uid, exc)
+        except TgError as exc:
+            # A reply/download that the Bot API refused (a too-big file, a
+            # send that failed): log and advance past it. Letting it escape
+            # would crash the dock; not advancing would replay the poison
+            # update forever. Same contract as a bad_update.
+            _LOG.warning('rejected reason=tg_error id=%s err=%s', uid, exc)
         self._offsets.write(uid + 1)  # REQ-DATA-003
         return uid + 1
 
