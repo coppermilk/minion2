@@ -151,7 +151,7 @@ class Userbot:
         # coalesce their commits and a loop mirrors them to Drive this often.
         self._backup_base = backup_base()
         self._backup_interval = codec.num(
-            rt.get('drive_backup_interval_sec'), 900.0
+            rt.get('drive_backup_interval_sec'), 14400.0
         )
         # The one loop that did not publish its next run; /status shows it
         # beside the others so a stalled tick is visible, not inferred.
