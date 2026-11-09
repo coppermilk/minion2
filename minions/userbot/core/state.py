@@ -41,13 +41,13 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import TypeGuard
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from collections.abc import Mapping
-    from pathlib import Path
 
 log = logging.getLogger('userbot')
 
@@ -601,13 +601,54 @@ class PeerRow:
     burst: int = 0  # touches that joined an already-open session
 
 
-def connect(path: Path | str) -> sqlite3.Connection:
+class _Conn(sqlite3.Connection):
+    """A state connection that can hold its commits briefly.
+
+    This spares a *synced* backup (Google Drive) from a write on every event.
+    Immediate by default, so nothing changes for the NAS or the tests:
+    ``commit`` writes through at once. ``set_coalesce(on=True)`` (the bot sets
+    it when a Drive backup is configured) turns each per-event ``commit`` into
+    a dirty flag instead; ``flush`` -- a short periodic tick, every backup, and
+    ``close`` -- turns the accumulated writes into one real commit. The live
+    file still lives on a local disk, so a crash loses at most the few seconds
+    since the last flush.
+    """
+
+    _coalesce: bool = False
+    _dirty: bool = False
+
+    def commit(self) -> None:
+        """Commit now, or (when coalescing) mark dirty for the next flush."""
+        if self._coalesce:
+            self._dirty = True
+            return
+        super().commit()
+
+    def flush(self) -> None:
+        """Write out any commit held back by coalescing (else a no-op)."""
+        if self._dirty:
+            super().commit()
+            self._dirty = False
+
+    def set_coalesce(self, *, on: bool) -> None:
+        """Hold commits (True) or write each through (False).
+
+        Leaving coalescing flushes first, so nothing is left pending.
+        """
+        if not on:
+            self.flush()
+        self._coalesce = on
+
+
+def connect(path: Path | str) -> _Conn:
     """Open a state database, applying the schema and the journal mode.
 
     Public because ``engines/users.py`` opens the same file for its own
-    tables in tests; in the running bot everyone shares ``Database``'s.
+    tables in tests; in the running bot everyone shares ``Database``'s. The
+    connection is a ``_Conn`` so the bot can coalesce its commits for a gentle
+    Drive backup; it behaves as an ordinary connection until asked otherwise.
     """
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), factory=_Conn)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     conn.execute(f'PRAGMA journal_mode={JOURNAL}')
@@ -1207,8 +1248,38 @@ class Database:
         self.conn.execute(ACTOR_SQL, (actor.peer_id, *known, now, now, now))
         self.conn.commit()
 
+    def flush(self) -> None:
+        """Commit any writes held back by coalescing (a no-op when immediate).
+
+        The bot's periodic tick calls this so a coalesced connection still
+        reaches disk within seconds, not only at the next backup.
+        """
+        self.conn.flush()
+
+    def set_coalesce(self, *, on: bool) -> None:
+        """Hold commits (True) for a gentle backup, or write each through."""
+        self.conn.set_coalesce(on=on)
+
+    def backup_to(self, dst: Path | str) -> None:
+        """Write a consistent snapshot of this database to ``dst``.
+
+        A hot copy: flushes first, then uses SQLite's online backup -- safe
+        while the bot keeps writing, unlike copying the open file, which can
+        catch a torn mid-transaction state. This is how the live local
+        database is mirrored to Google Drive.
+        """
+        self.conn.flush()
+        dest = Path(dst)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        target = sqlite3.connect(str(dest))
+        try:
+            self.conn.backup(target)
+        finally:
+            target.close()
+
     def close(self) -> None:
-        """Release the database handle."""
+        """Flush held commits, then release the database handle."""
+        self.conn.flush()
         self.conn.close()
 
 

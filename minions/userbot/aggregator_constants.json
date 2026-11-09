@@ -35,7 +35,9 @@
     "probe_timeout_sec": 30,
     "probe_interval_sec": 300,
     "thread_gap_sec": 2.0,
-    "flood_sleep_threshold_sec": 3600
+    "flood_sleep_threshold_sec": 3600,
+    "_note_drive_backup": "ЩАДЯЩИЙ РЕЖИМ К GOOGLE DRIVE. Если задан env LOCAL_STATE_DIR (локальная папка ВНЕ Google Drive), бот ведёт живые файлы (userbot.db, telethon.session, лог, heartbeat) там -- быстрый диск, который ничто не синкает, -- а на DRIVE уходит снимок состояния раз в drive_backup_interval_sec секунд (дефолт 900 = ~15 мин) через SQLite backup API. При холодном старте (пустой локальный диск) состояние восстанавливается с DRIVE. Плюс коммиты userbot.db коалесцируются (пишутся пачкой, не на каждое событие). Без LOCAL_STATE_DIR всё как раньше: живём на DRIVE/data, бэкап-луп не стартует (NAS не меняется). При жёстком крахе теряется до drive_backup_interval_sec состояния.",
+    "drive_backup_interval_sec": 900
   },
   "engines": {
     "aggregator": {

@@ -35,12 +35,15 @@ def _state_base() -> Path | None:
     """Return the base state dir, created; None when there is none to use.
 
     Process-level (not per-profile): the log and the watchdog heartbeat live
-    here. WHERE it is, is ``config.state_base`` -- one rule, one place. What
-    is local to this module is the tolerance: a log we cannot write is worth
-    degrading over, so a directory that will not create reads as "no file
-    here" and the console handler carries on alone.
+    here. WHERE it is, is ``config.live_base`` -- the LIVE dir (LOCAL_STATE_DIR
+    when set, else the shared base), so these churny files (the heartbeat's
+    mtime moves every tick) never touch a synced Google Drive; they are
+    process-local and worthless to back up. What is local to this module is
+    the tolerance: a log we cannot write is worth degrading over, so a
+    directory that will not create reads as "no file here" and the console
+    handler carries on alone.
     """
-    base = config.state_base()
+    base = config.live_base()
     if base is None:
         return None
     try:

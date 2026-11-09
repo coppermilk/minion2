@@ -332,20 +332,67 @@ def _drive_dir() -> Path | None:
     return Path(drive).expanduser() / 'bots' / 'aggregator'
 
 
+def local_state_dir() -> Path | None:
+    """Return the local (off-Drive) live state dir, or None if unset.
+
+    From LOCAL_STATE_DIR. Set this on a host where <DRIVE> is a *synced*
+    folder (Google Drive on
+    Windows): the bot then WRITES its hot files (userbot.db, telethon.session,
+    the heartbeat/log) here -- a fast local disk that nothing syncs -- and only
+    a periodic snapshot goes to <DRIVE>. Point it OUTSIDE the Google Drive
+    folder, or the snapshot buys nothing. Unset (e.g. the NAS, where <DRIVE> is
+    the /data mount), nothing changes: live state stays on <DRIVE>.
+    """
+    local = os.environ.get('LOCAL_STATE_DIR')
+    return Path(local).expanduser() if local else None
+
+
+def live_base() -> Path | None:
+    """Return where the bot writes state live.
+
+    LOCAL_STATE_DIR when set, else the shared base (``state_base`` -- <DRIVE>
+    or AGGREGATOR_STATE_DIR).
+    """
+    return local_state_dir() or state_base()
+
+
+def backup_base() -> Path | None:
+    """Where live state is MIRRORED periodically, or None for no backup.
+
+    A separate backup exists only when the live dir was redirected off Drive
+    (LOCAL_STATE_DIR set): then the shared/Drive base is the backup target.
+    Unset, live already IS the shared base, so there is nothing to mirror.
+    """
+    return state_base() if local_state_dir() is not None else None
+
+
 def resolve_session_path() -> Path:
-    """Return the file-session base (override, else <DRIVE>, else package).
+    """Return the file-session base (override, else live base, else package).
 
     A trailing '.session' is stripped so an override works whether you point at
-    the file or its base name. With no TELEGRAM_SESSION_FILE, the session lives
-    at <DRIVE>/bots/aggregator/telethon.session (DRIVE set), else next to the
-    package.
+    the file or its base name. With no TELEGRAM_SESSION_FILE the session lives
+    under the live base -- LOCAL_STATE_DIR when set, else
+    <DRIVE>/bots/aggregator -- else next to the package.
     """
     override = os.environ.get('TELEGRAM_SESSION_FILE')
     if override:
         path = Path(override).expanduser()
         return path.with_suffix('') if path.suffix == '.session' else path
+    base = local_state_dir() or _drive_dir()
+    return base / 'telethon' if base is not None else DEFAULT_SESSION_PATH
+
+
+def resolve_session_backup() -> Path | None:
+    """Return the session's backup base, or None when there is none.
+
+    The base is <DRIVE>/bots/aggregator/telethon, and only when the live
+    session was redirected off Drive (LOCAL_STATE_DIR set) and a Drive dir
+    exists; else there is nothing to mirror.
+    """
+    if local_state_dir() is None:
+        return None
     drive = _drive_dir()
-    return drive / 'telethon' if drive is not None else DEFAULT_SESSION_PATH
+    return drive / 'telethon' if drive is not None else None
 
 
 def state_base() -> Path | None:
@@ -379,8 +426,11 @@ def resolve_state_dir(default: Path) -> Path:
     the state directory was named after the one file that happened to sit in
     it. There is one file now and it is not this one, so the directory says
     so itself.
+
+    Resolves against the LIVE base (``live_base``): LOCAL_STATE_DIR when set so
+    the bot writes off a synced Drive, else the shared base as before.
     """
-    directory = state_base()
+    directory = live_base()
     if directory is None:
         return default
     directory.mkdir(parents=True, exist_ok=True)

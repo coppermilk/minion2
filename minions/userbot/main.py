@@ -37,8 +37,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
+import sqlite3
 import threading
 import time
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 
@@ -48,11 +51,13 @@ from minions.userbot.core import render
 from minions.userbot.core import state
 from minions.userbot.core.config import CONSTANTS_FILE
 from minions.userbot.core.config import apply_persona
+from minions.userbot.core.config import backup_base
 from minions.userbot.core.config import load_config
 from minions.userbot.core.config import load_constants
 from minions.userbot.core.config import load_env
 from minions.userbot.core.config import load_runtime
 from minions.userbot.core.config import read_json
+from minions.userbot.core.config import resolve_session_backup
 from minions.userbot.core.config import resolve_session_path
 from minions.userbot.core.config import resolve_state_dir
 from minions.userbot.core.humanize import Variety
@@ -141,6 +146,13 @@ class Userbot:
         # (uptime learning, pending log) at full resolution.
         self._probe_interval = codec.num(rt.get('probe_interval_sec'), 300.0)
         self._last_probe = 0.0
+        # Gentle-to-Drive backup: when a backup target exists (live state was
+        # redirected off a synced Drive via LOCAL_STATE_DIR), the live DBs
+        # coalesce their commits and a loop mirrors them to Drive this often.
+        self._backup_base = backup_base()
+        self._backup_interval = codec.num(
+            rt.get('drive_backup_interval_sec'), 900.0
+        )
         # The one loop that did not publish its next run; /status shows it
         # beside the others so a stalled tick is visible, not inferred.
         self.next_tick = 0.0
@@ -156,10 +168,75 @@ class Userbot:
         """
         db = self._dbs.get(where)
         if db is None:
+            self._restore_profile(where)  # from Drive if local is empty
             state.adopt(where)  # fold any older shape in, once
             db = Database(where / state.DB_NAME)
+            if self._backup_base is not None:
+                db.set_coalesce(on=True)  # spare Drive: commit on a timer
             self._dbs[where] = db
         return db
+
+    def _backup_dir(self, where: Path) -> Path | None:
+        """Return the Drive backup dir mirroring live profile dir ``where``."""
+        if self._backup_base is None:
+            return None
+        return self._backup_base / where.name if where.name == 'test' else (
+            self._backup_base
+        )
+
+    def _restore_profile(self, where: Path) -> None:
+        """Seed a cold local profile from its Drive backup, if any.
+
+        Only when the live DB is absent (a fresh machine) and the Drive copy
+        exists: the live disk always wins once it has a file, so a restore
+        never overwrites newer local state.
+        """
+        bdir = self._backup_dir(where)
+        if bdir is None:
+            return
+        live_db = where / state.DB_NAME
+        backup_db = bdir / state.DB_NAME
+        if live_db.exists() or not backup_db.exists():
+            return
+        where.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup_db, live_db)
+        for extra in bdir.glob('*.json'):  # service modes etc.
+            shutil.copy2(extra, where / extra.name)
+
+    def backup_state(self, session_path: Path) -> None:
+        """Mirror the live state (DBs, sidecar JSON, session) to Drive.
+
+        Best-effort and consistent: each DB via SQLite's online backup, the
+        small JSON sidecars by copy, the telethon session by a hot SQLite
+        copy. A failure on one file is logged and skipped, never fatal.
+        """
+        if self._backup_base is None:
+            return
+        for where, db in list(self._dbs.items()):
+            self._mirror_profile(where, db)
+        sbackup = resolve_session_backup()
+        if sbackup is not None:
+            _backup_sqlite(
+                Path(f'{session_path}.session'),
+                Path(f'{sbackup}.session'),
+            )
+
+    def _mirror_profile(self, where: Path, db: Database) -> None:
+        """Mirror one profile's DB + sidecar JSON to its Drive backup dir."""
+        bdir = self._backup_dir(where)
+        if bdir is None:
+            return
+        try:
+            db.backup_to(bdir / state.DB_NAME)
+            for extra in where.glob('*.json'):
+                shutil.copy2(extra, bdir / extra.name)
+        except (OSError, sqlite3.Error):
+            log.warning('backup: state mirror failed for %s', where)
+
+    def flush_state(self) -> None:
+        """Commit any coalesced writes across every open profile DB."""
+        for db in list(self._dbs.values()):
+            db.flush()
 
     def database(self, service: str) -> Database:
         """Return the state database of one service's profile directory.
@@ -499,6 +576,61 @@ def _login(session: Path, api_id: str, api_hash: str) -> userchat.Login:
     return userchat.Login(session, int(api_id), api_hash, threshold)
 
 
+def _backup_sqlite(src: Path, dst: Path) -> None:
+    """Hot-copy a SQLite file ``src`` to ``dst`` (best-effort).
+
+    Used for the telethon session, which telethon owns and writes live: a
+    read-only connection plus the online backup API gives a consistent copy
+    without locking the writer. Any failure is logged and skipped.
+    """
+    if not src.exists():
+        return
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        source = sqlite3.connect(f'file:{src}?mode=ro', uri=True)
+        target = sqlite3.connect(str(dst))
+        try:
+            source.backup(target)
+        finally:
+            source.close()
+            target.close()
+    except (OSError, sqlite3.Error):
+        log.warning('backup: session mirror failed')
+
+
+def _restore_session(session_path: Path) -> None:
+    """Seed a cold local session from its Drive backup, if any.
+
+    Only when the live session is absent and the Drive copy exists, so a
+    restore never clobbers a newer local session.
+    """
+    sbackup = resolve_session_backup()
+    if sbackup is None:
+        return
+    live = Path(f'{session_path}.session')
+    backup = Path(f'{sbackup}.session')
+    if live.exists() or not backup.exists():
+        return
+    _backup_sqlite(backup, live)
+
+
+async def backup_loop(bot: Userbot, session_path: Path) -> None:
+    """Flush coalesced writes often, mirror state to Drive every interval.
+
+    The flush tick keeps the local DB current within seconds; the slower
+    interval is the only thing that actually touches the synced Drive.
+    """
+    interval = bot._backup_interval  # noqa: SLF001 -- same module, run() helper
+    tick = min(5.0, interval)
+    last = time.monotonic()
+    while True:
+        await asyncio.sleep(tick)
+        bot.flush_state()
+        if time.monotonic() - last >= interval:
+            bot.backup_state(session_path)
+            last = time.monotonic()
+
+
 async def main() -> None:
     """Listen to the source chat and aggregate videos across platforms."""
     configure_logging()
@@ -513,6 +645,7 @@ async def main() -> None:
 
     session_path = resolve_session_path()
     session_path.parent.mkdir(parents=True, exist_ok=True)
+    _restore_session(session_path)  # from Drive if the local session is cold
     client = userchat.connect(_login(session_path, api_id, api_hash))
     account = userchat.Account(client, userchat.paces(load_runtime()))
     bot = Userbot(account, config)
@@ -542,6 +675,12 @@ async def main() -> None:
         ','.join(config.platforms),
     )
     status_task = asyncio.create_task(bot.status_loop())
+    # Gentle-to-Drive mirror: only when LOCAL_STATE_DIR redirected live state
+    # off the synced folder. Otherwise live already IS the shared dir and
+    # there is nothing to back up.
+    backup_task: asyncio.Task[None] | None = None
+    if backup_base() is not None:
+        backup_task = asyncio.create_task(backup_loop(bot, session_path))
     # Self-healing watchdog: seed the heartbeat now (so a cold start is not
     # instantly "stale"), then a daemon thread exits the process if the
     # heartbeat later goes stale -- a hang no restart: policy could catch --
@@ -552,7 +691,27 @@ async def main() -> None:
         target=watchdog, args=(watchdog_sec,), daemon=True
     ).start()
     await client.run_until_disconnected()
+    await _shutdown(bot, status_task, backup_task, session_path)
+
+
+async def _shutdown(  # noqa: PLR0913 -- the two tasks + bot + path read flat
+    bot: Userbot,
+    status_task: asyncio.Task[None],
+    backup_task: asyncio.Task[None] | None,
+    session_path: Path,
+) -> None:
+    """Stop the loops and take a final Drive snapshot before exit.
+
+    Flush first so the window since the last periodic backup is committed,
+    then mirror once more; a clean shutdown loses nothing.
+    """
     status_task.cancel()
+    if backup_task is not None:
+        backup_task.cancel()
+    bot.flush_state()
+    if backup_base() is not None:
+        with suppress(OSError, sqlite3.Error):
+            bot.backup_state(session_path)
     await bot.modes.stop_profile()
 
 
