@@ -550,3 +550,92 @@ def test_edit_text_noop_without_ack_id() -> None:
     api = _CallApi()
     TgChannel(api).edit_text(Origin('tg', '5:6::/spool/x'), 'hi')
     assert api.calls == []
+
+
+_MIN_FILE_CHUNKS = 3
+
+
+def test_document_upload_streams_in_chunks(tmp_path: Path) -> None:
+    """A large upload is yielded in CHUNK pieces, never read whole.
+
+    The declared length (Content-Length) matches the streamed bytes, the
+    file is cut into CHUNK-sized pieces (bounded memory, not one fp.read
+    that OOMs), and the multipart envelope carries chat_id and filename.
+    """
+    from minion_core.adapters.tg import CHUNK
+    from minion_core.adapters.tg import _DocumentUpload
+
+    payload = b'A' * (CHUNK * 2 + 7)  # spans three reads
+    big = tmp_path / 'big.mp4'
+    big.write_bytes(payload)
+    upload = _DocumentUpload('42', big)
+
+    parts = list(upload)
+    assert len(upload) == sum(len(p) for p in parts)  # declared == streamed
+    file_parts = [p for p in parts if p[:1] == b'A']
+    assert len(file_parts) >= _MIN_FILE_CHUNKS  # 2 full + a remainder
+    assert all(len(p) <= CHUNK for p in file_parts)  # none bigger than a chunk
+
+    body = b''.join(parts)
+    assert payload in body  # file bytes intact
+    assert body.rstrip().endswith(b'--')  # closing boundary
+    head = parts[0].decode()
+    assert 'name="chat_id"' in head
+    assert '42' in head
+    assert 'filename="big.mp4"' in head
+    assert upload.content_type.startswith('multipart/form-data; boundary=')
+    boundary = upload.content_type.split('boundary=')[1]
+    assert boundary in head  # the header names the body's boundary
+
+
+class _OkResp:
+    """A sendDocument response double reporting a fixed ok flag."""
+
+    def __init__(self, *, ok: bool) -> None:
+        self._ok = ok
+
+    def json(self) -> dict[str, bool]:
+        """Return the minimal Bot API envelope send_file inspects."""
+        return {'ok': self._ok}
+
+
+def test_send_file_streams_the_body_not_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """send_file posts a streamed body, never the buffering files= encoder."""
+    import requests
+
+    from minion_core.adapters.tg import _DocumentUpload
+
+    clip = tmp_path / 'clip.mp4'
+    clip.write_bytes(b'z' * 10)
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kw: object) -> _OkResp:
+        captured['url'] = url
+        captured['kw'] = kw
+        return _OkResp(ok=True)
+
+    monkeypatch.setattr(requests, 'post', fake_post)
+    TgChannel(TgApi('tok')).send_file(Origin('tg', '5:6::/spool/x'), clip)
+
+    kw = captured['kw']
+    assert 'files' not in kw  # not the in-memory multipart encoder
+    assert isinstance(kw['data'], _DocumentUpload)  # a streamed body
+    assert len(kw['data']) > 0  # a length -> Content-Length, not chunked
+    content_type = kw['headers']['Content-Type']
+    assert content_type.startswith('multipart/form-data; boundary=')
+    assert captured['url'].endswith('/sendDocument')
+
+
+def test_send_file_raises_on_not_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused sendDocument surfaces as TgError (caught upstream)."""
+    import requests
+
+    clip = tmp_path / 'c.mp4'
+    clip.write_bytes(b'z')
+    monkeypatch.setattr(requests, 'post', lambda *_a, **_k: _OkResp(ok=False))
+    with pytest.raises(TgError):
+        TgChannel(TgApi('tok')).send_file(Origin('tg', '5:6::/spool/x'), clip)
