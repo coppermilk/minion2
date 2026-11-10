@@ -164,7 +164,9 @@ def _bot(tmp_path: Path) -> main.Userbot:
             field_keys=(),
             variety=Variety(),
         ),
-        groups=[Group(title='Waiting one', created_at=NOW - 600)],
+        groups=[
+            Group(title='Waiting one', created_at=NOW - 600, username='@bob')
+        ],
         posted=[
             Posted(
                 title='Posted one',
@@ -333,7 +335,7 @@ GOLDEN = """\
 . posting -> @dst (-1002)
 
 [V] Videos . pending 1 (timeout 3h) . posted 1 . rejected 1 . guard 7d/last 5
-. "Waiting one" have [-] wait [tiktok, youtube] -> ~2h
+. "Waiting one" (@bob) have [-] wait [tiktok, youtube] -> ~2h
 . "Posted one" . 2026-08-01 . 1 links
 
 [K] Reactions . (+) on . 1 reactions / 1 likes

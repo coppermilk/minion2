@@ -111,9 +111,10 @@ class LinkAggregator:
             p for p in self.deps.config.platforms if p not in group.items
         ]
         log.info(
-            'caught msg %s (%s) for %r -- have %d/%d, waiting for: %s',
+            'caught msg %s (%s) from %s for %r -- have %d/%d, waiting for: %s',
             item.msg_id,
             item.platform,
+            item.username or '-',
             group.title,
             len(group.items),
             len(self.deps.config.platforms),
@@ -159,7 +160,7 @@ class LinkAggregator:
                 self.deps.config.max_duration,
                 item.title,
             )
-            self._reject(item.title)
+            self._reject(item.title, item.username)
             return None
         return item
 
@@ -184,28 +185,35 @@ class LinkAggregator:
         self._save()
         return titles
 
-    def _reject(self, title: str) -> None:
+    def _reject(self, title: str, username: str) -> None:
         """Remember a non-Short video and drop any group open for it.
 
         Newest last, capped: a title that rolled off is simply judged again
-        from the message's own duration if it ever comes back.
+        from the message's own duration if it ever comes back. The rejected
+        set stays global (a long video is not a Short for anyone); only the
+        open group dropped is this sender's (``username``).
         """
         key = norm(title)
         if key not in self.rejected:
             self.rejected.append(key)
             del self.rejected[:-REJECTED_CAP]
-        group = self._match(title)
+        group = self._match(title, username)
         if group is not None and group in self.groups:
             self.groups.remove(group)
             if group.task is not None:
                 group.task.cancel()
         self._save()
 
-    def _match(self, title: str) -> Group | None:
-        """Return a group whose title is >= threshold similar, or None."""
+    def _match(self, title: str, username: str) -> Group | None:
+        """Return THIS sender's group with a similar-enough title, or None.
+
+        Scoped by ``username``: two submitters' similarly-titled but different
+        videos never collapse into one group. An empty username is its own
+        bucket -- the old single-sender behaviour.
+        """
         norm_title = norm(title)
         for group in self.groups:
-            if (
+            if group.username == username and (
                 similar(norm_title, norm(group.title))
                 >= self.deps.config.threshold
             ):
@@ -219,7 +227,7 @@ class LinkAggregator:
         one -- unless this video was already posted inside the re-post window,
         in which case it is skipped so the same video is not posted twice.
         """
-        group = self._match(item.title)
+        group = self._match(item.title, item.username)
         if group is not None:
             return group
         if self._recently_posted(item.title):
@@ -253,7 +261,7 @@ class LinkAggregator:
 
     def _start(self, item: Item) -> Group:
         """Create a group for a new video and arm its flush timeout."""
-        group = Group(title=item.title)
+        group = Group(title=item.title, username=item.username)
         self.groups.append(group)
         self._arm(group)
         return group
@@ -297,8 +305,9 @@ class LinkAggregator:
         if group.task is not None and group.task is not asyncio.current_task():
             group.task.cancel()
         log.info(
-            'posting %r with %d platform(s): %s',
+            'posting %r from %s with %d platform(s): %s',
             group.title,
+            group.username or '-',
             len(group.items),
             ', '.join(sorted(group.items)),
         )

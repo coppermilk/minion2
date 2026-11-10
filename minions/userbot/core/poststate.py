@@ -66,6 +66,7 @@ def pending_row(group: Group) -> tuple[object, ...]:
             'thumbnail': item.thumbnail,
             'duration': item.duration,
             'msg_id': item.msg_id,
+            'username': item.username,
         }
         for key, item in group.items.items()
     }
@@ -87,18 +88,23 @@ def _item(key: str, title: str, value: dict[str, object]) -> Item:
         thumbnail=codec.text(value.get('thumbnail')),
         duration=codec.text(value.get('duration')),
         msg_id=codec.whole(value.get('msg_id')),
+        username=codec.text(value.get('username')),  # old rows lack it -> ''
     )
 
 
 def pending_from_row(row: sqlite3.Row) -> Group:
     """Rebuild a Group from its row in ``pending``."""
     title = str(row['title'])
+    items = {
+        key: _item(key, title, codec.table(value))
+        for key, value in _table(row['items']).items()
+    }
+    # The sender is the same across a group's items; take the first non-empty.
+    username = next((it.username for it in items.values() if it.username), '')
     return Group(
         title=title,
-        items={
-            key: _item(key, title, codec.table(value))
-            for key, value in _table(row['items']).items()
-        },
+        username=username,
+        items=items,
         msg_ids={codec.whole(i) for i in _list(row['msg_ids'])},
         created_at=float(row['since']),
     )

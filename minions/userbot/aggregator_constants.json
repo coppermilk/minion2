@@ -54,7 +54,8 @@
         "caption": "caption",
         "link": "link",
         "thumbnail": "thumnailUrl",
-        "duration": "duration"
+        "duration": "duration",
+        "username": "username"
       },
       "action_value": "newVideo"
     },

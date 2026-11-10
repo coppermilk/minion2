@@ -50,6 +50,10 @@ DEFAULT_FIELDS = {
     'link': 'link',
     'thumbnail': 'thumnailUrl',
     'duration': 'duration',
+    # Optional: who submitted the video. Absent -> '' (one global bucket, the
+    # old single-sender behaviour); present -> videos group per sender, so two
+    # people's similar titles never collapse into one post.
+    'username': 'username',
 }
 # Thumbnail key spellings seen in the wild; any is accepted (optional field).
 THUMB_ALIASES = ('thumbnail', 'thumbnailUrl', 'thumnailUrl')
@@ -92,6 +96,7 @@ class Item:
     thumbnail: str
     duration: str
     msg_id: int
+    username: str = ''  # who submitted it (optional); '' = unknown
 
 
 @dataclass
@@ -103,6 +108,8 @@ class Group:
     msg_ids: set[int] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
     task: asyncio.Task[None] | None = None
+    # Last, so positional Group(title, items, ...) calls are unchanged.
+    username: str = ''  # the submitter, so groups never cross senders
 
 
 @dataclass(frozen=True)

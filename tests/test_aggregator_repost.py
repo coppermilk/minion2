@@ -379,7 +379,7 @@ def test_rejected_titles_stop_growing_forever() -> None:
     """
     agg = _bare_aggregator(_FakeFlush([]))
     for i in range(_OVER_CAP):
-        agg._reject(f'a long video number {i}')
+        agg._reject(f'a long video number {i}', '')
     assert len(agg.rejected) == aggregator.REJECTED_CAP
     assert agg.rejected[-1] == matching.norm(
         f'a long video number {_OVER_CAP - 1}'
@@ -391,5 +391,5 @@ def test_a_rejected_title_is_remembered_once() -> None:
     """Re-rejecting the same video does not spend a slot twice."""
     agg = _bare_aggregator(_FakeFlush([]))
     for _ in range(5):
-        agg._reject('the same long video')
+        agg._reject('the same long video', '')
     assert agg.rejected == [matching.norm('the same long video')]

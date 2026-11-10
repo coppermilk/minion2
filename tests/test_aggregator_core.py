@@ -105,6 +105,29 @@ def test_parse_item_incomplete_is_none() -> None:
     assert matching.parse_item(data, 1, CONSTS.fields) is None
 
 
+def test_parse_item_reads_username_and_ignores_unknown_fields() -> None:
+    """An optional username rides in; an unknown extra field never crashes."""
+    text = (
+        '{"action":"newVideo","platform":"TikTok","caption":"Hi",'
+        '"link":"https://t/1","username":"@alice","brandNewField":"ok"}'
+    )
+    data = matching.extract_fields(text, CONSTS.fields.values())
+    item = matching.parse_item(data, 3, CONSTS.fields)
+    assert item is not None
+    assert item.username == '@alice'
+
+
+def test_parse_item_without_username_is_empty() -> None:
+    """No username in the JSON -> '' (the global, single-sender bucket)."""
+    data = matching.extract_fields(
+        '{"platform":"TikTok","caption":"Hi","link":"u"}',
+        CONSTS.fields.values(),
+    )
+    item = matching.parse_item(data, 1, CONSTS.fields)
+    assert item is not None
+    assert item.username == ''
+
+
 @pytest.mark.parametrize(
     ('text', 'seconds'),
     [('0:30', 30), ('1:02:03', 3723), ('45', 45), ('', -1), ('nope', -1)],
@@ -208,6 +231,19 @@ def test_pending_round_trip_keeps_items_and_time() -> None:
     assert back.msg_ids == {9}
     assert back.items['tiktok'].url == 'u'
     assert back.created_at == group.created_at
+    assert back.username == ''  # an old row (no username) reads as unknown
+
+
+def test_pending_round_trip_keeps_username() -> None:
+    """A pending group's submitter survives the row round-trip."""
+    item = Item('tiktok', 'tiktok', 'T', 'u', '', '30', 9, 'alice')
+    group = Group('T', {'tiktok': item}, {9}, created_at=1_700_000_000.0)
+    group.username = 'alice'
+    back = poststate.pending_from_row(
+        _row(poststate.pending_row(group), PENDING)
+    )
+    assert back.username == 'alice'
+    assert back.items['tiktok'].username == 'alice'
 
 
 # ------------------------------------------------------- Userbot core flow
@@ -260,6 +296,22 @@ def test_group_for_starts_new_group() -> None:
     group = agg._group_for(item)
     assert group is not None
     assert group in agg.groups
+
+
+def test_group_for_scopes_by_username() -> None:
+    """Two senders' similar titles make two groups; same sender joins one."""
+    agg = _bare_core()
+    alice = Item('tiktok', 'tiktok', 'Same clip', 'u', '', '', 1, 'alice')
+    bob = Item('youtube', 'youtube', 'Same clip', 'u', '', '', 2, 'bob')
+    ga = agg._group_for(alice)
+    gb = agg._group_for(bob)
+    assert ga is not None
+    assert gb is not None
+    assert ga is not gb  # different submitters never collapse into one post
+    assert ga.username == 'alice'
+    assert gb.username == 'bob'
+    alice2 = Item('youtube', 'youtube', 'Same clip', 'u', '', '', 3, 'alice')
+    assert agg._group_for(alice2) is ga  # same submitter joins the group
 
 
 def test_short_or_reject_drops_long_video() -> None:

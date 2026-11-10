@@ -153,6 +153,7 @@ def parse_item(
         thumbnail=_pick(data, fields['thumbnail'], *THUMB_ALIASES),
         duration=str(data.get(fields['duration']) or '').strip(),
         msg_id=msg_id,
+        username=str(data.get(fields['username']) or '').strip(),
     )
 
 

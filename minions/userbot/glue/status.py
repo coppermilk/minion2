@@ -562,8 +562,10 @@ class StatusReport:
                 or 'complete'
             )
             left = self.bot.config.timeout - (time.time() - group.created_at)
+            who = f' ({group.username})' if group.username else ''
             lines.append(
-                f'{b} "{trim(group.title)}" have [{have}] wait [{missing}]'
+                f'{b} "{trim(group.title)}"{who}'
+                f' have [{have}] wait [{missing}]'
                 f' {self.arrow()} ~{self._span(left)}'
             )
         lines.extend(
