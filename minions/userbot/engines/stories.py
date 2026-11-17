@@ -55,6 +55,17 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+# ===========================================================================
+# BOOKMARK -- temporary kill-switch: never like people's stories.
+# Search LIKE_STORIES to find this. Flip to True to re-enable story reactions.
+# Stories are still VIEWED exactly as before; only the like/reaction is
+# suppressed: _react_budget returns 0, so no story id is ever chosen to react
+# to and the glue places no reaction (glue/stories.py reacts only to ids in
+# view.react_ids, which stays empty).
+# ===========================================================================
+LIKE_STORIES = False
+
+
 def _seen_key(peer_id: int, story_id: int) -> str:
     """Return the dedup key for one story of one peer."""
     return f'{peer_id}:{story_id}'
@@ -560,8 +571,13 @@ class StoryBrain:
         self._trim_peers()
 
     def _react_budget(self, now: float) -> int:
-        """Return how many reactions are still allowed today (date roll)."""
-        if not self.params.react_enabled:
+        """Return how many reactions are still allowed today (date roll).
+
+        The LIKE_STORIES bookmark at the top of this module hard-disables
+        story likes: when it is off, the budget is 0 regardless of the
+        persona setting, so nothing is ever reacted to.
+        """
+        if not LIKE_STORIES or not self.params.react_enabled:
             return 0
         return self.ledger.recip_left(self._control(), now, self._tz())
 

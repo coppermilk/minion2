@@ -36,6 +36,8 @@ _POLL_LIVE = 3600.0
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 
 def _params(**over: object) -> stories.StoryParams:
     base = {
@@ -326,14 +328,32 @@ def test_react_fraction_converges_to_target(tmp_path: Path) -> None:
     assert abs(ratio - _R_TARGET) < _EXPO_TOL
 
 
-def test_react_budget_caps_the_day(tmp_path: Path) -> None:
+def test_react_budget_caps_the_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No more than react_max_per_day reactions go out, then it floors at 0."""
+    monkeypatch.setattr(stories, 'LIKE_STORIES', True)  # test the cap math
     brain = _brain(tmp_path, react_max_per_day=_THREE)
     assert brain._react_budget(_NOON) == _THREE
     brain.mark_reacted(7, _ids(_TWO), _NOON)
     assert brain._react_budget(_NOON) == _THREE - _TWO
     brain.mark_reacted(7, _ids(_FIVE), _NOON)  # overshoots via one call
     assert brain._react_budget(_NOON) == 0
+
+
+def test_like_stories_killswitch_zeroes_the_budget(tmp_path: Path) -> None:
+    """The LIKE_STORIES bookmark hard-disables likes even when enabled.
+
+    react_enabled is on and a day's cap is available, yet the budget is 0 --
+    so _lay_out picks no react_ids and the glue places no reaction. Guards
+    the temporary 'never like people's stories' bookmark.
+    """
+    assert stories.LIKE_STORIES is False  # the shipped default
+    brain = _brain(tmp_path, react_enabled=True, react_max_per_day=50)
+    budget = brain._react_budget(_NOON)
+    assert budget == 0
+    r_ids, _budget = brain._plan_reacts(7, (1, 2, 3), budget)
+    assert r_ids == ()
 
 
 def test_react_disabled_plans_no_reactions(tmp_path: Path) -> None:
@@ -365,8 +385,11 @@ def test_the_daily_budget_is_a_series_not_a_counter(tmp_path: Path) -> None:
     assert brain.ledger.row(7).recip == _FIVE + _TWO  # cumulative per peer
 
 
-def test_plan_attaches_reactions(tmp_path: Path) -> None:
+def test_plan_attaches_reactions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A planned view carries its react ids (subset) and a glyph from pool."""
+    monkeypatch.setattr(stories, 'LIKE_STORIES', True)  # test the react path
     brain = _brain(tmp_path, react_fraction_target=1.0)
     views = brain.plan([_cand(7, (1, 2, 3))], now=_NOON)
     assert views
@@ -804,7 +827,7 @@ def _likes_in_a_week(tmp_path: Path, seed: int) -> int:
 
 
 def test_the_shipped_rate_leaves_one_or_two_likes_a_week(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A heart has to stay rare, or it stops meaning anything.
 
@@ -816,6 +839,7 @@ def test_the_shipped_rate_leaves_one_or_two_likes_a_week(
     -- and a circle of three posting once a day is the case it was set for.
     At the previous 0.20 the same week averages 3.7, well outside this.
     """
+    monkeypatch.setattr(stories, 'LIKE_STORIES', True)  # measure the rate
     got = [_likes_in_a_week(tmp_path, seed) for seed in range(_SEEDS)]
 
     assert _WEEK_LIKES_MIN <= sum(got) / len(got) <= _WEEK_LIKES_MAX
