@@ -199,18 +199,22 @@ def compose(  # noqa: PLR0913, PLR0917 -- variety is an optional post-decoration
     consts: Consts,
     variety: Variety | None = None,
 ) -> PremiumMessage:
-    """Build the full post: author line, description line, and link grid.
+    """Build the full post: author line, title line, and link grid.
 
-    ``variety`` picks the announce line and the love/lead/arrow emoji so a
-    post does not repeat what the previous one used (see ``humanize``).
-    Default is a fresh, memory-less picker -- the real post path passes a
-    persistent one; previews and tests get plain, independent variety.
+    ``variety`` picks the love/lead/arrow emoji so a post does not repeat
+    what the previous one used (see ``humanize``). Default is a fresh,
+    memory-less picker -- the real post path passes a persistent one;
+    previews and tests get plain, independent variety.
+
+    The first line is just the author and the love emoji: the old random
+    ``announce`` phrase was dropped on request, so the video's title (the
+    caption line below) is the only text that varies per post. The
+    ``announce`` list stays in the constants, dormant, in case it returns.
     """
     pick = (variety or Variety()).pick
     caption = _strip_tags(primary(group, order).title)
     rich = RichText()
     rich.text(consts.author).text(' ')
-    rich.text(pick('announce', consts.announce)).text(' ')
     rich.emoji(pick('love', consts.love)).text('\n\n')
     rich.emoji(pick('lead', consts.lead)).text(' ')
     rich.text(caption).text(' ')
