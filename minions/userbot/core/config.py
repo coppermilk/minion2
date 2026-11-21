@@ -286,6 +286,9 @@ def load_constants(path: Path) -> Consts:
             if not k.startswith('_')
         },
         emoji_all=catalog,
+        short_link_domain=codec.text(post.get('short_link_domain')).strip(
+            ' /'
+        ),
     )
 
 

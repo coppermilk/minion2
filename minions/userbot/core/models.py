@@ -198,3 +198,9 @@ class Consts:
     # tests/test_status.py holds the guard that keeps the two in step.
     status: dict[str, str]
     emoji_all: list[Emoji]  # the whole catalog, in file order
+    # The link domain of the site's shortener (``daetotyoma.com``): every
+    # video link in the post is rewritten to its trackable short address,
+    # ``<network>.<domain>/<code>``, by ``core/shortlinks``. Empty = off, the
+    # links go out as they arrived. Last, with a default, so the positional
+    # ``Consts(...)`` constructions elsewhere stay valid.
+    short_link_domain: str = ''
