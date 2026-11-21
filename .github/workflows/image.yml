@@ -12,15 +12,60 @@ on:
   push:
   pull_request:
 
+# Least privilege: branch and PR builds get a read-only token. Only the
+# publish job (push to main) holds packages/actions write, so a branch
+# that edits the Dockerfile never runs with a token that can push to GHCR.
+permissions:
+  contents: read
+
 jobs:
+  # Every branch/PR: prove the image still builds; nothing is pushed.
   build:
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PUBLISH: 'false'
+      DOCKER_BUILD_SUMMARY: 'false'
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Push to main: build, publish to GHCR, prune old versions and runs.
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       actions: write  # to delete old workflow runs after a publish
     env:
-      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      PUBLISH: 'true'
       # Don't upload the per-build .dockerbuild record artifact or the
       # job summary -- they only pile up in Actions storage.
       DOCKER_BUILD_SUMMARY: 'false'

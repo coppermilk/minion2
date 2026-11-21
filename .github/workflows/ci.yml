@@ -6,6 +6,10 @@ on:
   push:
   pull_request:
 
+# Least privilege: the gates only read the checkout.
+permissions:
+  contents: read
+
 jobs:
   gates:
     runs-on: ubuntu-latest
