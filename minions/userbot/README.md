@@ -88,9 +88,22 @@ in the section of the engine that reads it.**
 | `persona` | one human: timezone, waking window, silent-day chance. Fanned into every engine at load, so you tune the person in one place |
 | `runtime` | the process: watchdog, liveness probe, flood-sleep threshold |
 | `engines` | one block per engine -- `aggregator` (platforms, timeouts, the dedup/flood guards, the incoming `fields` names), `reactions`, `stories`, `greeter`, `comod`, `users` |
-| `post` | what a post looks like: author, announce lines, rows, labels, samples |
+| `post` | what a post looks like: author, announce lines, rows, labels, samples, `short_link_domain` (below) |
 | `emoji` | the unified premium-emoji catalog, each entry tagged with its `type` |
 | `texts` | what the operator sees: `/help`, the `/status` legend and glyphs, the words that suppress a sticker |
+
+**Short links in the post.** With `post.short_link_domain` set (it ships as
+`daetotyoma.com`), every video link in the published grid is rewritten to the
+site shortener's trackable address -- `https://<network>.<domain>/<code>`,
+where `<code>` is the first seven bytes of SHA-256 over `<network>:<id>` on a
+31-letter alphabet without `0 1 i l o` (`core/shortlinks.py`). That is the
+shortener's own naming rule, so the address is computed here offline: no
+network call, no secret, and the worker resolves a code it has not stored
+yet by hashing its own feeds the same way. The four video networks are
+rewritten (tiktok, youtube, instagram, pinterest); an intermediary such as
+`vm.tiktok.com`, a profile, a channel or any other address passes through
+untouched, as does everything when the domain is blank. The posted log keeps
+the URLs as they arrived.
 
 ## State on disk
 

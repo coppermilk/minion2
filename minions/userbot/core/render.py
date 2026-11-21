@@ -22,6 +22,7 @@ from minions.userbot.core.models import Emoji
 from minions.userbot.core.models import Group
 from minions.userbot.core.models import Item
 from minions.userbot.core.runtime import fmt_span
+from minions.userbot.core.shortlinks import short_url
 from minions.userbot.engines.premium_emoji import RichText
 
 if TYPE_CHECKING:
@@ -149,6 +150,12 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
     Each label is padded only to the longest label actually used in its
     column, so the '|' separators line up with no wasted space -- and the last
     cell of a row is never padded (no trailing spaces).
+
+    Every video link goes out as the site shortener's trackable address
+    (``shortlinks.short_url``) when ``consts.short_link_domain`` is set, so
+    the channel's clicks show up in the site's link analytics instead of
+    vanishing into the networks' own URLs. The state keeps the URLs as they
+    arrived; only the rendered post is rewritten.
     """
     rows = _grid_cells(group, consts)
     widths = _col_widths(rows)
@@ -156,7 +163,10 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
         last = len(row) - 1
         for index, (key, label) in enumerate(row):
             rich.emoji(consts.platform_emoji.get(key, Emoji())).text(' ')
-            rich.link(label, group.items[key].url)
+            rich.link(
+                label,
+                short_url(group.items[key].url, consts.short_link_domain),
+            )
             if index != last:
                 pad = ' ' * (widths[index] - len(label))
                 rich.text(pad + consts.column_separator)
