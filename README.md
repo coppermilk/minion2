@@ -19,7 +19,8 @@ minions/       one directory per bot; streaming or batch; relay/ = thin transpor
 services/      atomic web services: HTTP/OpenAPI + MCP over a Step (bytes in/out)
 tests/         requirement-based suite + structural analysis
 docker/        base image; deploy/reactflow/ = canvas placeholder
-deploy/        nas-update.sh, reactflow canvas, kindle Apps Script (off-kernel)
+deploy/        windows launcher + version report, reactflow canvas, kindle Apps Script;
+               the NAS is updated by the separate nas-update repo, not by anything here
 ```
 
 ## Quick start
@@ -44,17 +45,17 @@ against both OS flavors). `moderator` and `props` need their own
 
 The image is built on GitHub and published to GHCR on every push to
 main (`.github/workflows/image.yml`); the NAS pulls it rather than
-compiling torch, so an update is a quick layer download. One
-self-healing command does everything -- point DSM Task Scheduler
-(root, weekly) at `deploy/nas-update.sh`:
-
-- force-syncs the checkout to `origin/main` even in a non-empty
-  folder (`git init` + hard reset, never `git clone`), keeping your
-  git-ignored `.env`;
-- pulls the fresh image *before* touching the bots, then recreates the
-  stack cleanly and prunes old images;
-- pulls the local Qwen model itself, so you never run `docker compose
-  exec ... ollama pull` by hand.
+compiling torch, so an update is a quick layer download. The NAS is
+updated by **nas-update** (github.com/coppermilk/nas-update, its own
+folder `/volume1/docker/nas-update`, DSM task every 5 minutes): it
+fetches `origin/main`, deploys a commit only with the image built from
+it, renders compose in a chroot and checks it against its policy,
+requires a fresh snapshot of the data share, waits for the containers
+to stay healthy and rolls back otherwise, then reports the outcome to
+the site's admin "Versions" section. Nothing in this repo is executed
+by root on the NAS; there is no deploy script here on purpose (an old
+`deploy/nas-update.sh` used to live here and confused agents -- see
+nas-update's README for the real flow).
 
 Make the GHCR package public once for anonymous pulls (or `docker
 login`).

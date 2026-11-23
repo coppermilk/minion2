@@ -484,15 +484,16 @@ restart.
 
 **Every deployment reports its version.** The cloud cannot see the NAS or the
 Windows PC, so each of them tells the site's admin (`daetotyoma.com/admin/versions/`)
-what it runs: `deploy/report-version.sh` (NAS: after a successful `up`, after a
-rollback or failure, and daily from Task Scheduler) and
-`deploy/windows/report-version.ps1` (Windows: at logon from `run.ps1`, and daily).
-A report is one `PUT https://daetotyoma.com/admin/versions/<project>` with the
-site's key (`VERSIONS_KEY` in `.env`) and `{event, ok, commit, image, message}`;
-offline, it waits in `bots/_data/state/versions-outbox.jsonl` and is resent on
-the next run. The image carries its commit too (`GIT_SHA` from `image.yml` ->
-`docker/Dockerfile`): `/healthz` of every service and the userbot `/status`
-show it. A report must never break a deploy: the scripts always exit 0.
+what it runs. The NAS is updated and reported by the separate **nas-update**
+tool (`[report]` in its `apps/minion2.conf`; root executes only nas-update's
+own code, never scripts from this repo). Windows reports with
+`deploy/windows/report-version.ps1` (at logon from `run.ps1`, and daily from Task
+Scheduler). A report is one `PUT https://daetotyoma.com/admin/versions/<project>`
+with the site's key (`VERSIONS_KEY` in `.env` on Windows, a root-only key file on
+the NAS) and `{event, ok, commit, image, message}`; offline, it waits in an
+outbox and is resent on the next run. The image carries its commit too
+(`GIT_SHA` from `image.yml` -> `docker/Dockerfile`): `/healthz` of every service
+and the userbot `/status` show it. A report must never break a deploy.
 
 ## 15. Build-from-zero procedure
 

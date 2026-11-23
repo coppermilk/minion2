@@ -132,27 +132,19 @@ never re-processed.
 
 - **Versions**: the site's admin section "Versions" (`daetotyoma.com/admin/versions/`)
   shows, per machine, the running commit, the last deploy/rollback with its
-  message, and marks a machine "stale" when its daily heartbeat is missing
-  for `heartbeat_hours` (36). The NAS reports from `deploy/nas-update.sh`
-  (via `deploy/report-version.sh`) and from a daily DSM task
-  `sh /volume1/docker/minion2/deploy/report-version.sh heartbeat`; Windows
-  reports at logon (`run.ps1`) and from a daily Task Scheduler entry running
-  `deploy\windows\report-version.ps1 heartbeat`. Both need `VERSIONS_KEY` in
-  `.env`. "Stale" means the machine or its task is down, not the bots; a
-  "rollback"/"error" entry carries the unhealthy containers in its message.
-  `docker inspect` on the NAS and `/healthz` of each service show `GIT_SHA`
-  for a manual check.
-- **A blocked update is reported too**: when the NAS script refuses to deploy
-  (dirty tree, compose policy, missing snapshot) or rolls back, it must say so:
-  `sh deploy/report-version.sh error 0 "compose policy failed"` in that branch,
-  `sh deploy/report-version.sh rollback 0 "UNHEALTHY: props, sort"` after a
-  rollback, `sh deploy/report-version.sh deploy 1 "updated to <sha>"` after a
-  good `up`. The containers keep the previous version either way; the site's
-  "Versions" section then shows the machine red with the reason, the admin
-  overview names it, and the agents see it through the `versions` MCP tool.
-  The site also compares every project with `main` on GitHub: a machine that
-  did not pick up the newest commit shows as "behind main" even if its script
-  never ran.
+  message, and marks a machine "stale" when its heartbeat is missing. The NAS
+  is reported by **nas-update** itself (`[report]` section in its
+  `apps/minion2.conf`, see nas-update's README): `deploy` after a good update,
+  `rollback` after a rollback, `error` when an update is blocked (dirty tree,
+  compose policy, no fresh snapshot) or fails, `heartbeat` daily. Root never
+  runs anything from this repo, so there is no report script for the NAS here.
+  Windows reports at logon (`run.ps1`) and from a daily Task Scheduler entry
+  running `deploy\windows\report-version.ps1 heartbeat`; it needs
+  `VERSIONS_KEY` in `.env`. "Stale" means the machine or its task is down, not
+  the bots. The site also compares every project with `main` on GitHub: a
+  machine that did not pick up the newest commit shows as "behind main".
+  `docker inspect` on the NAS and `/healthz` of each service show `GIT_SHA` for
+  a manual check.
 
 ## 6. Naming
 
@@ -221,7 +213,8 @@ Classification and the props bot run behind one adapter
   (`ollama_timeout`). Switch to local only on capable hardware. The exact
   prompt sent to either backend is logged (grep `prompt model=`).
 - **Local option ("gem").** The `ollama` container runs Qwen2.5-VL; the model
-  is pulled automatically by `deploy/nas-update.sh` (idempotent). Weights live
+  is pulled by hand once (`docker compose exec ollama ollama pull <model>`); the NAS
+  updater (nas-update) does not do it. Weights live
   in the `ollama-models` named volume (CACHE class; `image prune` never
   touches volumes). `OLLAMA_KEEP_ALIVE=5m` unloads the model 5 min after last
   use, so its ~6 GB is freed while the backend is Gemini or the queue is idle.
