@@ -23,3 +23,6 @@ deploy/windows/launcher-bootstrap.log
 # Aggregator runtime state (in-flight video groups); regenerated at runtime.
 minions/aggregator/aggregator_state.json
 minions/aggregator/aggregator_state.tmp
+
+# version reports waiting for the site (deploy/report-version.sh fallback outside DRIVE)
+deploy/versions-outbox.jsonl
