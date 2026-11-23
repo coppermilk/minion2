@@ -38,6 +38,7 @@ that day is an extraction, not a rewrite.
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from dataclasses import dataclass
@@ -186,6 +187,54 @@ class Text:
     thread: int = 0
     html: bool = False
     preview: bool = False
+
+
+@dataclass(frozen=True)
+class LinkSpan:
+    """One link entity of a post: which entity, what kind, where it points.
+
+    ``kind`` is ``'text'`` for an address hidden behind words (text_url)
+    and ``'url'`` for an address that IS the text; ``index`` is the
+    entity's place in ``Linked.spans``. Offsets are UTF-16 units.
+    """
+
+    index: int
+    kind: str
+    offset: int
+    length: int
+    url: str
+
+
+@dataclass(frozen=True)
+class Linked:
+    """A post read for its links: text, every entity's span, the links.
+
+    ``spans`` covers EVERY entity -- bold, custom emoji, links alike -- so
+    an edit can hand all of them back shifted and lose none. ``raw`` is the
+    vendor's own entity list, kept opaque so an edit copies each entity
+    rather than rebuilding it from a smaller vocabulary.
+    """
+
+    id: int
+    text: str
+    date: float
+    spans: tuple[tuple[int, int], ...]
+    links: tuple[LinkSpan, ...]
+    preview: bool = False
+    raw: tuple[object, ...] = field(default=(), compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class Relinked:
+    """What an edit should look like: new text, spans, and link addresses.
+
+    ``spans`` is parallel to ``Linked.spans``; ``urls`` maps an entity index
+    to its new address (hidden links only change there).
+    """
+
+    text: str
+    spans: tuple[tuple[int, int], ...]
+    urls: dict[int, str] = field(default_factory=dict)
 
 
 def paces(runtime: dict[str, object]) -> Gate:
@@ -376,6 +425,41 @@ class Account:
             self.client.send_message(user_id, text.body, **_send_kwargs(text)),
         )
         return sent is not None
+
+    async def linked(
+        self, chat: int, limit: int, below: int = 0
+    ) -> list[Linked]:
+        """Read up to ``limit`` posts newest first, below id ``below``.
+
+        ``below`` 0 reads from the top. Every post comes back with all of
+        its entities, so the caller can rewrite links and keep the rest.
+        """
+        kwargs: dict[str, object] = {'limit': limit}
+        if below:
+            kwargs['max_id'] = below
+        got = await self._call(READ, self.client.get_messages(chat, **kwargs))
+        rows = got if isinstance(got, list) else []
+        return [_linked(row) for row in rows if row is not None]
+
+    async def relink(self, chat: int, post: Linked, edit: Relinked) -> bool:
+        """Edit one post to ``edit``, keeping every entity; False on failure.
+
+        Each vendor entity is copied with its new offset and length, and a
+        hidden link with its new address, so formatting and premium emoji
+        survive untouched. The link preview stays on when the post had one.
+        """
+        ents = _reentities(post, edit)
+        got = await self._call(
+            WRITE,
+            self.client.edit_message(
+                chat,
+                post.id,
+                edit.text,
+                formatting_entities=ents,
+                link_preview=post.preview,
+            ),
+        )
+        return got is not None
 
     def pacing(self) -> list[Lane]:
         """Report every lane of the gate, for an operator readout."""
@@ -666,6 +750,50 @@ def _msg(raw: object) -> Msg:
         mine_reacted=_mine(getattr(raw, 'reactions', None)),
         spans=_spans(raw),
     )
+
+
+def _linked(raw: object) -> Linked:
+    """Read a vendor message into a Linked post."""
+    text = str(getattr(raw, 'message', '') or '')
+    units = text.encode(_UTF16)
+    ents = tuple(getattr(raw, 'entities', None) or ())
+    spans: list[tuple[int, int]] = []
+    links: list[LinkSpan] = []
+    for index, entity in enumerate(ents):
+        offset = int(getattr(entity, 'offset', 0) or 0)
+        length = int(getattr(entity, 'length', 0) or 0)
+        spans.append((offset, length))
+        url = getattr(entity, 'url', None)
+        if url is not None:
+            links.append(LinkSpan(index, 'text', offset, length, str(url)))
+        elif type(entity).__name__ == 'MessageEntityUrl':
+            seen = units[offset * 2 : (offset + length) * 2]
+            shown = seen.decode(_UTF16, errors='ignore')
+            links.append(LinkSpan(index, 'url', offset, length, shown))
+    media = type(getattr(raw, 'media', None)).__name__
+    return Linked(
+        id=int(getattr(raw, 'id', 0) or 0),
+        text=text,
+        date=epoch(getattr(raw, 'date', None)),
+        spans=tuple(spans),
+        links=tuple(links),
+        preview=media == 'MessageMediaWebPage',
+        raw=ents,
+    )
+
+
+def _reentities(post: Linked, edit: Relinked) -> list[object]:
+    """Copy each vendor entity of ``post`` onto the spans of ``edit``."""
+    out: list[object] = []
+    for index, entity in enumerate(post.raw):
+        clone = copy.copy(entity)
+        offset, length = edit.spans[index]
+        clone.offset = offset  # type: ignore[attr-defined]
+        clone.length = length  # type: ignore[attr-defined]
+        if index in edit.urls:
+            clone.url = edit.urls[index]  # type: ignore[attr-defined]
+        out.append(clone)
+    return out
 
 
 def _root(reply: object) -> int:

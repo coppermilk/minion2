@@ -293,6 +293,15 @@
       "enabled": false,
       "store_message_text": true,
       "enrich": true
+    },
+    "links": {
+      "_note": "Держит ссылки в постах канала короткими (core/relink.py, glue/links.py). Режим off/dry/on хранится в links.json и по умолчанию dry: ничего не правит, присылает оператору строки «post N: было -> станет». В on переводит только команда /links_on в управляющем чате; /links_dry, /links_off, /links — статус. domain пустой = берётся post.short_link_domain. cap_per_day — правок в сутки (по часам persona), delay_sec — сколько ждать после публикации, tick_sec — период прохода, page — постов за проход (свежие + следующая страница истории), pause_sec — пауза между правками. Правятся только видео TikTok/YouTube/Instagram/Pinterest; daetotyoma.com и t.me не трогаются, прочие ссылки — списком в отчёте.",
+      "domain": "",
+      "cap_per_day": 20,
+      "delay_sec": 1800,
+      "tick_sec": 900,
+      "page": 20,
+      "pause_sec": 60
     }
   },
   "post": {
