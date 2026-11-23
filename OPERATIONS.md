@@ -142,6 +142,17 @@ never re-processed.
   "rollback"/"error" entry carries the unhealthy containers in its message.
   `docker inspect` on the NAS and `/healthz` of each service show `GIT_SHA`
   for a manual check.
+- **A blocked update is reported too**: when the NAS script refuses to deploy
+  (dirty tree, compose policy, missing snapshot) or rolls back, it must say so:
+  `sh deploy/report-version.sh error 0 "compose policy failed"` in that branch,
+  `sh deploy/report-version.sh rollback 0 "UNHEALTHY: props, sort"` after a
+  rollback, `sh deploy/report-version.sh deploy 1 "updated to <sha>"` after a
+  good `up`. The containers keep the previous version either way; the site's
+  "Versions" section then shows the machine red with the reason, the admin
+  overview names it, and the agents see it through the `versions` MCP tool.
+  The site also compares every project with `main` on GitHub: a machine that
+  did not pick up the newest commit shows as "behind main" even if its script
+  never ran.
 
 ## 6. Naming
 
