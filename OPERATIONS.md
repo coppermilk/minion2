@@ -130,6 +130,19 @@ never re-processed.
   A crash is a supervised restart; the restart is safe because STATE is on
   disk (section 1).
 
+- **Versions**: the site's admin section "Versions" (`daetotyoma.com/admin/versions/`)
+  shows, per machine, the running commit, the last deploy/rollback with its
+  message, and marks a machine "stale" when its daily heartbeat is missing
+  for `heartbeat_hours` (36). The NAS reports from `deploy/nas-update.sh`
+  (via `deploy/report-version.sh`) and from a daily DSM task
+  `sh /volume1/docker/minion2/deploy/report-version.sh heartbeat`; Windows
+  reports at logon (`run.ps1`) and from a daily Task Scheduler entry running
+  `deploy\windows\report-version.ps1 heartbeat`. Both need `VERSIONS_KEY` in
+  `.env`. "Stale" means the machine or its task is down, not the bots; a
+  "rollback"/"error" entry carries the unhealthy containers in its message.
+  `docker inspect` on the NAS and `/healthz` of each service show `GIT_SHA`
+  for a manual check.
+
 ## 6. Naming
 
 Two naming domains, one file each:

@@ -21,6 +21,12 @@ WORKDIR /app
 # shows every line as it happens, not in delayed blocks.
 ENV PYTHONUNBUFFERED=1
 
+# Which commit this image was built from (image.yml passes GIT_SHA): /healthz of the
+# services and the userbot /status show it, so what runs where is visible
+# (the site's admin "Versions" section collects the same from every project).
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
 # Dependencies first, code second: a code-only change must not
 # re-download torch. This layer re-runs only when pyproject.toml
 # changes; the runtime extras are pinned here (dev stays out).

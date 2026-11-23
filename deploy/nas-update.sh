@@ -94,6 +94,7 @@ else
 fi
 "$GIT" fetch --prune origin main
 "$GIT" reset --hard origin/main
+PREV_SHA="$("$GIT" rev-parse HEAD 2>/dev/null || true)"
 echo "at $("$GIT" rev-parse --short HEAD)"
 
 # --- 2. Pull the new image BEFORE touching the running bots ----------
@@ -136,10 +137,14 @@ fi
 set -e
 if [ "$up_rc" -ne 0 ]; then
     echo 'ERROR: stack did not come up (see errors above)'
+    # tell the site's "Versions" section (deploy/report-version.sh; never fatal)
+    sh "$SCRIPT_DIR/report-version.sh" error 0 "stack did not come up after update to $("$GIT" rev-parse --short HEAD)" || true
     exit 1
 fi
 
 # Remove now-dangling old layers so the NAS stays bounded.
 "$DOCKER" image prune -f
 
+# tell the site's "Versions" section what is running now (deploy/report-version.sh; never fatal)
+sh "$SCRIPT_DIR/report-version.sh" deploy 1 "updated to $("$GIT" rev-parse --short HEAD)${PREV_SHA:+ from $(printf '%s' "$PREV_SHA" | cut -c1-7)}" || true
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') update done ====="

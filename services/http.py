@@ -21,6 +21,7 @@ Ways in (bytes in, bytes out -- no shared object store):
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import tempfile
 import threading
@@ -202,7 +203,9 @@ def create_app(step: str, make: Make) -> FastAPI:
 
     @app.get('/healthz')
     def healthz() -> dict[str, str]:
-        return {'status': 'ok', 'step': step}
+        # commit baked into the image (docker/Dockerfile GIT_SHA): which version
+        # answers -- the same the admin "Versions" section expects to see
+        return {'status': 'ok', 'step': step, 'commit': os.environ.get('GIT_SHA', 'unknown')}
 
     @app.post('/run-file')
     def run_file(file: UploadFile) -> FileResponse:

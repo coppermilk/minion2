@@ -9,6 +9,7 @@ engines at once, so its exact text is pinned by tests/test_status.py.
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import UTC
 from datetime import datetime
@@ -211,8 +212,11 @@ class StatusReport:
     def text(self, known: dict[int, Actor]) -> str:
         """Return the /status text: header, routing, videos, engines."""
         flag = 'TEST' if self.bot.mode == 'test' else 'LIVE'
+        # commit baked into the image (GIT_SHA from docker/Dockerfile): the
+        # /status header says which version is running
+        commit = os.environ.get('GIT_SHA', '')[:7]
         parts = [
-            self._header('title', 'Userbot', f'{self._dot(on=True)} {flag}'),
+            self._header('title', 'Userbot', f'{self._dot(on=True)} {flag}', commit),
             '',
             *self._routing_lines(known),
             '',

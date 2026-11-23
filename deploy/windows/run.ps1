@@ -110,6 +110,17 @@ if ($hash -ne $prev -or -not $importOk) {
     }
 }
 
+# Report this machine's version to the site admin ("Versions" section):
+# commit (if git is installed) or the pyproject hash, event "start". Never
+# fatal -- the bots start whatever the report says; a missing VERSIONS_KEY
+# in .env just logs one line. A daily "heartbeat" is a second Task
+# Scheduler entry, see README.md.
+try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'report-version.ps1') start
+} catch {
+    Write-Output "version report skipped: $_"
+}
+
 # Zero-config printing: if PRINT_SPOOLER is not set in .env, auto-locate
 # SumatraPDF (the Windows equivalent of the NAS's `lp`) and point the
 # print bot at it with the usual silent-print flags. An explicit

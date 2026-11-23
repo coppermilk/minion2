@@ -89,3 +89,14 @@ to the NAS -- no container rebuild.
 > The `.session` file is full account access -- it is git-ignored; don't
 > commit or share it, and revoke it from Telegram -> Settings -> Devices
 > if it leaks.
+
+## Version report
+
+`run.ps1` reports this PC's version (git commit, or the `pyproject.toml` hash
+when git is not installed) to the site's admin section "Versions"
+(`daetotyoma.com/admin/versions/`) at every logon, via
+`report-version.ps1 start`. Add a second Task Scheduler entry, daily, running
+`powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\minion2\deploy\windows\report-version.ps1 heartbeat`,
+so the site can tell when the PC stops reporting. Set `VERSIONS_KEY` in `.env`
+(the site's `BOARD_KEY`); without it the report logs one line and does nothing.
+Offline, reports wait in `%DRIVE%\bots\_data\state\versions-outbox.jsonl`.

@@ -482,6 +482,18 @@ unless-stopped`). Batch containers run `cron -f` foreground (the supervisor);
 link bots run `yt-dlp -U` before start so extractors are fresh on every
 restart.
 
+**Every deployment reports its version.** The cloud cannot see the NAS or the
+Windows PC, so each of them tells the site's admin (`daetotyoma.com/admin/versions/`)
+what it runs: `deploy/report-version.sh` (NAS: after a successful `up`, after a
+rollback or failure, and daily from Task Scheduler) and
+`deploy/windows/report-version.ps1` (Windows: at logon from `run.ps1`, and daily).
+A report is one `PUT https://daetotyoma.com/admin/versions/<project>` with the
+site's key (`VERSIONS_KEY` in `.env`) and `{event, ok, commit, image, message}`;
+offline, it waits in `bots/_data/state/versions-outbox.jsonl` and is resent on
+the next run. The image carries its commit too (`GIT_SHA` from `image.yml` ->
+`docker/Dockerfile`): `/healthz` of every service and the userbot `/status`
+show it. A report must never break a deploy: the scripts always exit 0.
+
 ## 15. Build-from-zero procedure
 
 1. `pyproject.toml`: metadata, package discovery, the law block of section 4,
