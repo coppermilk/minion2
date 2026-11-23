@@ -12,6 +12,7 @@ Link aggregation is just one of them:
 | **greeter** | welcome / farewell DMs to channel subscribers |
 | **comod** | the supporter "cabinet" (`/comod`): a named shelf per donor for a month |
 | **users** | an opt-in SQLite record of the channel audience over time |
+| **links** | keeps the video links in the channel's posts short (trackable), history and new posts alike; ships in dry mode |
 
 `main.py` is only the **host**: it loads config, builds the active profile,
 routes each incoming event to the engines, and runs the status/heartbeat loop.
@@ -105,6 +106,34 @@ rewritten (tiktok, youtube, instagram, pinterest); an intermediary such as
 untouched, as does everything when the domain is blank. The posted log keeps
 the URLs as they arrived.
 
+## Link keeper (`links`, dry by default)
+
+`glue/links.py` over the pure `core/relink.py`. Every `tick_sec`, inside the
+persona's waking window, it reads the newest `page` posts of the profile's
+channel (new and recently edited ones) plus the next page down the history,
+and rewrites each raw TikTok / YouTube / Instagram / Pinterest video address
+to its short one (`core/shortlinks.py`). The site's own addresses and `t.me`
+are never touched; any other link is left as is and listed in the report.
+
+- **Modes** `off` / `dry` / `on`, persisted in `links.json`. A fresh install
+  is `dry`: nothing is edited, the operator gets `post N: old -> new` once
+  per post. Only the operator, in the source chat, switches it:
+  `/links_dry`, `/links_on`, `/links_off`; `/links` reports. A mode change
+  restarts the history walk from the top.
+- **Edits keep the post**: a hidden link changes only its address; a visible
+  one is replaced in the text and every later or wrapping entity is shifted,
+  so bold, underline and premium emoji stay where they were. The preview is
+  kept when the post had one.
+- **Gentle**: at most `cap_per_day` edits per local day, `pause_sec` apart, a
+  post younger than `delay_sec` waits, and a strained write lane (FloodWait)
+  ends the pass; the next tick resumes at the same post.
+- **Idempotent**: a post whose links are already short plans nothing, so a
+  second pass edits nothing. State is the mode, the history cursor and the
+  day's edit count -- no per-post records.
+
+Knobs: `engines.links` in `aggregator_constants.json` (`domain` blank =
+`post.short_link_domain`).
+
 ## State on disk
 
 Two shapes, because two things behave differently. Per-peer data grows with
@@ -119,6 +148,7 @@ of scalars and are the only part worth reading by eye.
   aggregator_state.json        the posted log + groups still collecting
   greeter_state.json           the admin-log cursor and DM budget
   comod.json                   who is on which shelf
+  links.json                   link keeper: mode, history cursor, edits today
   users.db                     the opt-in audience DB (PII, off by default)
 ```
 

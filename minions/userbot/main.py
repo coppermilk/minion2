@@ -80,6 +80,10 @@ from minions.userbot.glue.aggregator import LinkAggregator
 from minions.userbot.glue.commands import CommandRouter
 from minions.userbot.glue.comod import Cabinet
 from minions.userbot.glue.comod import CabinetDeps
+from minions.userbot.glue.links import STATE_FILE as LINKS_FILE
+from minions.userbot.glue.links import LinkDeps
+from minions.userbot.glue.links import LinkKeeper
+from minions.userbot.glue.links import load_link_params
 from minions.userbot.glue.profiles import ServiceModes
 from minions.userbot.glue.reactions import CommentDeps
 from minions.userbot.glue.reactions import CommentWatch
@@ -132,6 +136,7 @@ class Userbot:
         self.greeter_task: asyncio.Task[None] | None = None
         self.rescan_task: asyncio.Task[None] | None = None
         self.stories_task: asyncio.Task[None] | None = None
+        self.links_task: asyncio.Task[None] | None = None
         self.startup_task: asyncio.Task[None] | None = None
         rt = codec.section(self.settings, 'runtime')
         # One door to Telegram, one gate in front of it: every service this
@@ -355,6 +360,19 @@ class Userbot:
                 mode=self.mode,
             )
         )
+        # Link keeper: rewrites raw video links in the profile's channel to
+        # trackable short ones. Its own off/dry/on mode lives in links.json
+        # in the poster's dir and ships as dry (report only).
+        self.links = LinkKeeper(
+            LinkDeps(
+                account=self.account,
+                channel=lambda: self.live_targets()[0],
+                say=self.say,
+                path=pdir / LINKS_FILE,
+                params=load_link_params(self.settings),
+            )
+        )
+        self.links.load()
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
         self.cabinet = Cabinet(
             CabinetDeps(
@@ -375,7 +393,9 @@ class Userbot:
         replies to our own posts (any chat); aggregation stays source-scoped.
         """
         text = msg.text.strip().lower()
-        if await self.router.handle(text):
+        if await self._operator_command(msg, text) or await self.router.handle(
+            text
+        ):
             return
         if await self.router.nudge_unknown(msg, text):
             return
@@ -384,6 +404,16 @@ class Userbot:
             self.comment_watch.on_message(msg)
         if msg.chat_id == self.config.source:
             await self.aggregator.on_message(msg)
+
+    async def _operator_command(self, msg: userchat.Msg, text: str) -> bool:
+        """Run an operator-only command (the link keeper's), else False.
+
+        /links_on edits the channel, so unlike /status it is not a word for
+        anyone anywhere: only the source (control) chat may say it.
+        """
+        if msg.chat_id != self.config.source:
+            return False
+        return await self.links.command(text)
 
     async def status_report(self) -> None:
         """Post the pending/posted/reaction diagnostics to the source chat."""
