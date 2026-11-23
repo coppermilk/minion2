@@ -57,7 +57,13 @@ try {
         } catch {
             $status = $null
             try { $status = [int]$_.Exception.Response.StatusCode } catch { }
-            if ($status -and $status -ge 400 -and $status -lt 500) { return "rejected:$status" }
+            if ($status -and $status -ge 400 -and $status -lt 500) {
+                # Текст ответа сайта называет причину («не задан секрет BOARD_KEY» / «ключ не совпал») — показать его, не только код
+                $reply = ''
+                try { $reply = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd().Split("`n")[0].Trim() } catch { }
+                try { if (-not $reply -and $_.ErrorDetails) { $reply = "$($_.ErrorDetails.Message)".Split("`n")[0].Trim() } } catch { }
+                return "rejected:$status $reply"
+            }
             return 'offline'
         }
     }
@@ -69,7 +75,8 @@ try {
     $r = Send-Report $body
     switch -Wildcard ($r) {
         'ok' { Write-Output "версии: отправлено $Event ok=$okVal $(if ($commit) { $commit.Substring(0, 7) }) → $url/$project" }
-        'rejected:*' { Write-Output "версии: сайт отверг отчёт ($r) — проверьте VERSIONS_KEY" }
+        'rejected:401*' { Write-Output "версии: сайт отверг отчёт ($r) — VERSIONS_KEY в .env должен совпадать с секретом BOARD_KEY сайта (Cloudflare → Pages → Variables and Secrets → Production)" }
+        'rejected:*' { Write-Output "версии: сайт отверг отчёт ($r) — проверьте VERSIONS_URL и VERSIONS_PROJECT" }
         default { Add-Content -Path $outbox -Value $body; Write-Output "версии: сайт недоступен — отчёт отложен в $outbox" }
     }
 } catch {
