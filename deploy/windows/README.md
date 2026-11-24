@@ -98,5 +98,5 @@ when git is not installed) to the site's admin section "Versions"
 `report-version.ps1 start`. Add a second Task Scheduler entry, daily, running
 `powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\minion2\deploy\windows\report-version.ps1 heartbeat`,
 so the site can tell when the PC stops reporting. Set `VERSIONS_KEY` in `.env`
-(the site's `BOARD_KEY`); without it the report logs one line and does nothing.
+(the site's `VERSIONS_KEY`); without it the report logs one line and does nothing.
 Offline, reports wait in `%DRIVE%\bots\_data\state\versions-outbox.jsonl`.

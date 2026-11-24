@@ -3,7 +3,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\report-version.ps1 start      # из run.ps1 при входе в систему
 #   powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\report-version.ps1 heartbeat  # задача планировщика раз в день
 # Параметры: событие (deploy|rollback|heartbeat|start|stop|error), ok, сообщение. Коммит — git rev-parse HEAD, если git есть, иначе
-# хеш pyproject.toml. Настройки из .env: VERSIONS_KEY (ключ BOARD_KEY сайта, обязателен), VERSIONS_URL, VERSIONS_PROJECT
+# хеш pyproject.toml. Настройки из .env: VERSIONS_KEY (ключ отчётов, тот же секрет VERSIONS_KEY в Pages, обязателен), VERSIONS_URL, VERSIONS_PROJECT
 # (по умолчанию minion2-windows). Нет сети — отчёт ложится в %DRIVE%\bots\_data\state\versions-outbox.jsonl и досылается потом.
 # Никогда не роняет вызывающего: любая ошибка — строка в вывод и выход с кодом 0.
 param(
@@ -58,7 +58,7 @@ try {
             $status = $null
             try { $status = [int]$_.Exception.Response.StatusCode } catch { }
             if ($status -and $status -ge 400 -and $status -lt 500) {
-                # Текст ответа сайта называет причину («не задан секрет BOARD_KEY» / «ключ не совпал») — показать его, не только код
+                # Текст ответа сайта называет причину («не задан секрет VERSIONS_KEY» / «ключ не совпал») — показать его, не только код
                 $reply = ''
                 try { $reply = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd().Split("`n")[0].Trim() } catch { }
                 try { if (-not $reply -and $_.ErrorDetails) { $reply = "$($_.ErrorDetails.Message)".Split("`n")[0].Trim() } } catch { }
@@ -75,7 +75,7 @@ try {
     $r = Send-Report $body
     switch -Wildcard ($r) {
         'ok' { Write-Output "версии: отправлено $Event ok=$okVal $(if ($commit) { $commit.Substring(0, 7) }) → $url/$project" }
-        'rejected:401*' { Write-Output "версии: сайт отверг отчёт ($r) — VERSIONS_KEY в .env должен совпадать с секретом BOARD_KEY сайта (Cloudflare → Pages → Variables and Secrets → Production)" }
+        'rejected:401*' { Write-Output "версии: сайт отверг отчёт ($r) — VERSIONS_KEY в .env должен совпадать с секретом VERSIONS_KEY сайта (Cloudflare → Pages → Variables and Secrets → Production)" }
         'rejected:*' { Write-Output "версии: сайт отверг отчёт ($r) — проверьте VERSIONS_URL и VERSIONS_PROJECT" }
         default { Add-Content -Path $outbox -Value $body; Write-Output "версии: сайт недоступен — отчёт отложен в $outbox" }
     }
