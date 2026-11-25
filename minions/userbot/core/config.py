@@ -20,6 +20,7 @@ from minions.userbot.core.models import DEFAULT_FIELDS
 from minions.userbot.core.models import Config
 from minions.userbot.core.models import Consts
 from minions.userbot.core.models import Emoji
+from minions.userbot.core.models import Footer
 
 log = logging.getLogger('userbot')
 
@@ -77,6 +78,16 @@ def read_json(path: Path) -> dict[str, object]:
         reason = f'{path.name} must be a JSON object'
     log.error('%s; using defaults -- fix it and restart.', reason)
     return {}
+
+
+def _footer(value: object) -> Footer:
+    """Read ``post.footer`` ({text, label, url}); an empty one = off."""
+    raw = codec.table(value)
+    return Footer(
+        text=codec.text(raw.get('text')),
+        label=codec.text(raw.get('label')),
+        url=codec.text(raw.get('url')),
+    )
 
 
 def _str_list(value: object, default: str) -> list[str]:
@@ -289,6 +300,7 @@ def load_constants(path: Path) -> Consts:
         short_link_domain=codec.text(post.get('short_link_domain')).strip(
             ' /'
         ),
+        footer=_footer(post.get('footer')),
     )
 
 

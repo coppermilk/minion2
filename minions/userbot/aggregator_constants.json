@@ -346,6 +346,11 @@
       "Посмотреть"
     ],
     "column_separator": "  |  ",
+    "footer": {
+      "text": "\n🤝 сотрудничество → ",
+      "label": "go.daetotyoma.com/tg-collabs?s=tg-post",
+      "url": "https://go.daetotyoma.com/tg-collabs?s=tg-post"
+    },
     "rows": [
       [
         "tiktok",
