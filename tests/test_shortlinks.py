@@ -122,7 +122,8 @@ def test_compose_links_to_the_short_address() -> None:
     url, _source, code = KNOWN[0]
     message = render.compose(_group(url), ('tiktok',), consts)
     links = [span.ref for span in message.spans if span.kind == LINK]
-    assert links == [f'https://tiktok.{DOMAIN}/{code}']
+    # the footer link closes the post and is already a short address
+    assert links == [f'https://tiktok.{DOMAIN}/{code}', consts.footer.url]
 
 
 def test_compose_keeps_raw_links_when_off() -> None:
@@ -132,4 +133,4 @@ def test_compose_keeps_raw_links_when_off() -> None:
     url = KNOWN[0][0]
     message = render.compose(_group(url), ('tiktok',), off)
     links = [span.ref for span in message.spans if span.kind == LINK]
-    assert links == [url]
+    assert links == [url, off.footer.url]

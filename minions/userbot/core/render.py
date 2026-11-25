@@ -174,6 +174,18 @@ def _compose_links(rich: RichText, group: Group, consts: Consts) -> None:
             rich.text('\n')
 
 
+def _compose_footer(rich: RichText, group: Group, consts: Consts) -> None:
+    """Append the closing line, only under a post that has the link grid.
+
+    A post with no "View" row (no network link yet) gets no footer, so the
+    line never stands alone without the video it closes.
+    """
+    footer = consts.footer
+    if not footer.text or not any(_cells(group, r) for r in consts.rows):
+        return
+    rich.text(footer.text).link(footer.label, footer.url)
+
+
 def _catalog_suffix(entry: Emoji) -> str:
     """Return the trailing id + platform / reaction tags for one entry."""
     parts = [entry.id or '?']
@@ -230,6 +242,7 @@ def compose(  # noqa: PLR0913, PLR0917 -- variety is an optional post-decoration
     rich.text(caption).text(' ')
     rich.emoji(pick('arrow', consts.arrow_down)).text('\n\n')
     _compose_links(rich, group, consts)
+    _compose_footer(rich, group, consts)
     return rich.build()
 
 

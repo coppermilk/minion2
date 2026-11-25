@@ -207,6 +207,27 @@ def test_compose_drops_the_announce_phrase_keeps_the_title() -> None:
     assert all(p not in text for p in CONSTS.announce if p)  # no announce line
 
 
+def test_compose_ends_with_the_footer_under_the_link_grid() -> None:
+    """A post with "View" rows closes with the footer link, last."""
+    order = ('tiktok', 'youtube')
+    group = render._sample_group(order, 'Cat meets cucumber')
+    post = render.compose(group, order, CONSTS)
+    footer = CONSTS.footer
+    assert footer.url.endswith('tg-collabs?s=tg-post')
+    assert post.text.endswith(footer.text + footer.label)
+    assert post.text.count(footer.label) == 1
+    assert any(s.ref == footer.url for s in post.spans)
+
+
+def test_compose_has_no_footer_without_links() -> None:
+    """A post with no network link gets no footer either."""
+    order = ('tiktok',)
+    item = Item('tiktok', 'tiktok', 't', '', '', '30', 1)
+    group = Group('t', {'tiktok': item})
+    text = render.compose(group, order, CONSTS).text
+    assert CONSTS.footer.label not in text
+
+
 # ------------------------------------------------------ the poster shapes
 
 POSTED = ('title', 'at', 'links', 'msg_ids')

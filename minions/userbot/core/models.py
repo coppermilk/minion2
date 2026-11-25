@@ -145,6 +145,19 @@ class Comment:
 
 
 @dataclass(frozen=True)
+class Footer:
+    """The closing line of a video post: plain lead-in text, then one link.
+
+    Empty ``text`` = no footer. Non-ASCII, so it lives in the JSON
+    (``post.footer``), not here.
+    """
+
+    text: str = ''
+    label: str = ''
+    url: str = ''
+
+
+@dataclass(frozen=True)
 class Emoji:
     """One entry of the unified premium-emoji catalog.
 
@@ -204,3 +217,8 @@ class Consts:
     # links go out as they arrived. Last, with a default, so the positional
     # ``Consts(...)`` constructions elsewhere stay valid.
     short_link_domain: str = ''
+    # The last line of a post that carries the link grid (the "View" rows):
+    # a lead-in and one link (the brands' way in, ``tg-collabs?s=tg-post``).
+    # Posts without links get none. Default = off, for the same positional
+    # ``Consts(...)`` reason as above.
+    footer: Footer = Footer()
