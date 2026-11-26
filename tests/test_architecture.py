@@ -24,6 +24,7 @@ VENDORS = {
         'minion_core/adapters/service_call.py',
         'minion_core/adapters/donations.py',
         'minion_core/adapters/wishlist.py',
+        'minion_core/adapters/board.py',
     ),
     'yt_dlp': ('minion_core/adapters/fetch.py',),
     'PIL': ('minion_core/adapters/files.py',),

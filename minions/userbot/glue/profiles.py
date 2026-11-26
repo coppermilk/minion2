@@ -151,6 +151,7 @@ class ServiceModes:
         bot.rescan_task = asyncio.create_task(bot.comment_watch.rescan_loop())
         bot.stories_task = asyncio.create_task(bot.story_watch.loop())
         bot.links_task = asyncio.create_task(bot.links.loop())
+        bot.tgedit_task = asyncio.create_task(bot.tgedit.loop())
         bot.startup_task = asyncio.create_task(
             self._startup_backfill(source_backfill=source_backfill)
         )
@@ -187,6 +188,7 @@ class ServiceModes:
             bot.rescan_task,
             bot.stories_task,
             bot.links_task,
+            bot.tgedit_task,
         ):
             cancel(task)
         bot.startup_task = None
@@ -194,6 +196,7 @@ class ServiceModes:
         bot.rescan_task = None
         bot.stories_task = None
         bot.links_task = None
+        bot.tgedit_task = None
 
     def _profile_dir(self, mode: str) -> Path:
         """Return the state dir for MODE: base for live, base/test for test."""
