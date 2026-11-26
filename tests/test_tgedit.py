@@ -29,6 +29,7 @@ from minions.userbot.core import relink
 from minions.userbot.core import tgedit
 from minions.userbot.dev import tgedit_check
 from minions.userbot.glue import tgedit as worker
+from tests.conftest import install_telethon_stub
 
 CHAT = 't.me/da_eto_tyoma_chat'
 WATCH = 'Watch'
@@ -38,6 +39,16 @@ CHANNEL = -100
 NOW = 1_800_000_000.0
 PACKAGE = '475-cleanup'
 PAUSE = 10.0
+CAT = '5359648353913167803'
+"""A premium-emoji id the catalog knows (the first of the constants)."""
+STRANGER = '1'
+"""An id no catalog carries."""
+FIRE = chr(0x1F525)
+"""A non-BMP glyph: one character, two UTF-16 units."""
+CONSTANT_EMOJI = (('love', CAT, FIRE),)
+GUARD_EMOJI = tgedit.Guard(
+    urls=(CHAT,), link_texts=(WATCH,), emoji=frozenset({CAT})
+)
 EMPTY = tgedit.Outcome(tgedit.Item(1, tgedit.EDIT, 'x'), tgedit.DRY_OK)
 
 
@@ -409,6 +420,153 @@ def test_the_report_says_how_many_links_one_item_moved() -> None:
     ]
 
 
+# ------------------------------------------- premium emoji in new text
+
+BUNNY = chr(0x1F430)
+"""A second non-BMP glyph, so two glyphs never make a fragment ambiguous."""
+
+
+def _tag(ident: str, glyph: str = FIRE) -> str:
+    """Return one ``<tg-emoji>`` tag."""
+    return f'<tg-emoji emoji-id="{ident}">{glyph}</tg-emoji>'
+
+
+def _units16(text: str) -> int:
+    """Length of ``text`` in UTF-16 units, as the test counts it."""
+    return len(text.encode('utf-16-le')) // 2
+
+
+def test_an_edit_turns_a_tag_into_a_premium_emoji_over_its_glyph() -> None:
+    """The glyph lands in the text, the entity over it in UTF-16 units."""
+    post = _post(f'{FIRE} hi there')
+    plan = tgedit.plan_post(
+        post, (_edit('there', f'{_tag(CAT, BUNNY)} there'),), GUARD_EMOJI
+    )
+    assert plan.outcomes[0].status == tgedit.DRY_OK
+    assert plan.text == f'{FIRE} hi {BUNNY} there'
+    assert plan.emoji == ((_units16(f'{FIRE} hi '), 2, CAT),)
+
+
+def test_an_id_outside_the_catalog_skips_the_edit() -> None:
+    """An unknown id is never sent: not as an entity, not as a glyph."""
+    plan = tgedit.plan_post(
+        _post('hi there'), (_edit('there', _tag(STRANGER)),), GUARD_EMOJI
+    )
+    assert plan.outcomes[0].reason == tgedit.UNKNOWN_EMOJI
+    assert not plan.changes
+    assert plan.text == 'hi there'
+
+
+@pytest.mark.parametrize(
+    'new',
+    [
+        f'<tg-emoji emoji-id="{CAT}">{FIRE}',
+        f'<tg-emoji>{FIRE}</tg-emoji>',
+        f'<tg-emoji emoji-id="{CAT}"></tg-emoji>',
+        f"<tg-emoji emoji-id='{CAT}'>{FIRE}</tg-emoji>",
+        f'{FIRE}</tg-emoji>',
+    ],
+    ids=['unclosed', 'no-id', 'no-glyph', 'single-quotes', 'stray-close'],
+)
+def test_broken_markup_skips_the_edit(new: str) -> None:
+    """A tag the reader cannot read is skipped, never sent as raw markup."""
+    plan = tgedit.plan_post(
+        _post('hi there'), (_edit('there', new),), GUARD_EMOJI
+    )
+    assert plan.outcomes[0].reason == tgedit.MARKUP
+    assert not plan.changes
+
+
+def test_an_added_emoji_moves_with_later_edits_and_is_then_locked() -> None:
+    """Items apply in order: a later fragment shifts it, cannot touch it."""
+    items = (
+        _edit('end', f'end {_tag(CAT, BUNNY)}'),
+        _edit('hi', 'hello'),
+        _edit(BUNNY, 'x'),
+    )
+    plan = tgedit.plan_post(_post('hi, the end'), items, GUARD_EMOJI)
+    assert [one.reason for one in plan.outcomes] == ['', '', tgedit.PROTECTED]
+    assert plan.text == f'hello, the end {BUNNY}'
+    assert plan.emoji == ((len('hello, the end '), 2, CAT),)
+
+
+def test_a_pin_carries_its_emoji_and_is_compared_without_tags() -> None:
+    """pin_new reads the tags; 'already out' compares the plain text."""
+    item = tgedit.Item(0, tgedit.PIN_NEW, new=f'new {_tag(CAT)}')
+    assert tgedit.plan_pin([], item, GUARD_EMOJI) == ''
+    assert tgedit.plan_pin([f'new {FIRE}'], item, GUARD_EMOJI) == (
+        tgedit.ALREADY
+    )
+    stranger = tgedit.Item(0, tgedit.PIN_NEW, new=_tag(STRANGER))
+    assert tgedit.plan_pin([], stranger, GUARD_EMOJI) == tgedit.UNKNOWN_EMOJI
+    new = tgedit.read_markup(item.new, GUARD_EMOJI.emoji)
+    assert new.text == f'new {FIRE}'
+    assert [(s.at, s.length, s.ref) for s in new.spans] == [(4, 1, CAT)]
+
+
+def test_a_description_cannot_carry_premium_emoji() -> None:
+    """The about is plain text: a tag there is skipped, not appended raw."""
+    item = tgedit.Item(0, tgedit.DESC, new=f' {_tag(CAT)}')
+    assert tgedit.plan_about('about', item, GUARD_EMOJI) == ('', tgedit.MARKUP)
+
+
+@dataclass
+class _Glyph:
+    """A vendor custom-emoji entity, as the adapter reads and copies it."""
+
+    offset: int
+    length: int
+    document_id: int
+
+
+@dataclass
+class _Message:
+    """A vendor message: text and entities, no media."""
+
+    id: int
+    message: str
+    entities: list[object]
+    date: object = None
+    media: object = None
+
+
+def test_an_edit_keeps_every_premium_emoji_of_the_post() -> None:
+    """Three emoji, an edit between them: all three, same ids, same glyphs.
+
+    Through the adapter's own read (``_linked``) and copy (``_reentities``),
+    as the engine writes a post, plus one emoji the edit adds.
+    """
+    install_telethon_stub()
+    text = f'{FIRE} one {FIRE} two {FIRE} {WATCH}'
+    at = [_units16(text[:i]) for i, c in enumerate(text) if c == FIRE]
+    raw = _Message(
+        7,
+        text,
+        [
+            _Glyph(o, 2, ident)
+            for o, ident in zip(at, (11, 22, 33), strict=True)
+        ],
+    )
+    read = userchat._linked(raw)
+    plan = tgedit.plan_post(
+        worker.to_post(read),
+        (_edit('one', f'number one {_tag(CAT, BUNNY)}'),),
+        GUARD_EMOJI,
+    )
+    assert plan.outcomes[0].status == tgedit.DRY_OK
+    edit = userchat.Relinked(plan.text, plan.spans, plan.urls, plan.emoji)
+    ents = userchat._reentities(read, edit)
+    units = plan.text.encode('utf-16-le')
+    shown = [
+        units[e.offset * 2 : (e.offset + e.length) * 2].decode('utf-16-le')
+        for e in cast('list[_Glyph]', ents)
+    ]
+    ids = [int(cast('_Glyph', e).document_id) for e in ents]
+    assert ids == [11, int(CAT), 22, 33]
+    assert shown == [FIRE, BUNNY, FIRE, FIRE]
+    assert [e.document_id for e in raw.entities] == [11, 22, 33]  # type: ignore[attr-defined]
+
+
 # ---------------------------------------------------------- the worker
 
 
@@ -423,6 +581,13 @@ class _Account:
     description: str = 'about'
     unreadable: bool = False
     writes: list[tuple[str, int]] = field(default_factory=list)
+    sets: list[userchat.EmojiSet] | None = field(default_factory=list)
+    edits: list[userchat.Relinked] = field(default_factory=list)
+    sent: list[userchat.Text] = field(default_factory=list)
+
+    async def emoji_sets(self) -> list[userchat.EmojiSet] | None:
+        """Return the installed custom-emoji sets (None: unreadable)."""
+        return self.sets
 
     async def rights(self, chat: int) -> frozenset[str] | None:
         """Return the granted rights."""
@@ -441,6 +606,7 @@ class _Account:
     ) -> bool:
         """Record an edit."""
         self.writes.append(('edit', post.id))
+        self.edits.append(edit)
         self.posts_by_id[post.id] = userchat.Linked(
             post.id, edit.text, post.date, edit.spans, post.links
         )
@@ -468,6 +634,7 @@ class _Account:
     async def send(self, chat: int, text: userchat.Text) -> int:
         """Record a new post."""
         self.writes.append(('send', 900))
+        self.sent.append(text)
         self.posts_by_id[900] = userchat.Linked(900, text.body, NOW, (), ())
         return 900
 
@@ -531,7 +698,9 @@ def _editor(
         slept.append(sec)
 
     account, site = world
-    params = worker.EditParams(mode=mode, pause_sec=PAUSE, guard=GUARD)
+    params = worker.EditParams(
+        mode=mode, pause_sec=PAUSE, guard=GUARD, emoji=CONSTANT_EMOJI
+    )
     editor = worker.ChannelEditor(
         worker.EditDeps(
             account=cast('userchat.Account', account),
@@ -539,6 +708,7 @@ def _editor(
             feed=site.read,
             path=tmp_path / worker.STATE_FILE,
             journal=tmp_path / worker.JOURNAL_FILE,
+            catalog=tmp_path / worker.CATALOG_FILE,
             params=params,
             sleep=sleep,
         )
@@ -1002,3 +1172,147 @@ def test_the_feed_door_turns_a_dead_network_into_its_error(
     _serve(monkeypatch, requests.ConnectionError('down'))
     with pytest.raises(feeds.FeedUnreachableError, match='ConnectionError'):
         feeds.read('https://site/tgedit.json')
+
+
+# ------------------------------------------------------ the emoji catalog
+
+PACK = userchat.EmojiSet('TyomaPack', 'Tyoma', (('777', BUNNY),))
+
+
+def _catalog(tmp_path: Path) -> dict[str, object]:
+    """Return the written emoji catalog."""
+    path = tmp_path / worker.CATALOG_FILE
+    return cast('dict[str, object]', json.loads(path.read_text('utf-8')))
+
+
+def _with_emoji(text: str, ident: str) -> userchat.Linked:
+    """Return a post whose first glyph is a custom emoji."""
+    return userchat.Linked(
+        5, text, NOW, ((0, 2),), (), kinds=('emoji',), refs=(ident,)
+    )
+
+
+def test_the_catalog_merges_sets_channel_and_constants(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One row per id with every source; logged and written to a file."""
+    world = _world(
+        [{'post': 1167, 'action': 'edit', 'old': 'gov', 'new': 'x'}]
+    )
+    world[0].sets = [PACK]
+    world[0].posts_by_id[5] = _with_emoji(f'{FIRE} hi', CAT)
+    editor, _ = _editor(tmp_path, world, 'dry')
+    with caplog.at_level(logging.INFO, logger='userbot'):
+        asyncio.run(editor.tick(NOW))
+    body = _catalog(tmp_path)
+    assert body['sets'] == [
+        {'short_name': 'TyomaPack', 'title': 'Tyoma', 'count': 1}
+    ]
+    assert body['sets_read'] is True
+    assert body['emoji'] == [
+        {
+            'id': '777',
+            'fallback': BUNNY,
+            'source': ['set'],
+            'set': 'TyomaPack',
+        },
+        {
+            'id': CAT,
+            'fallback': FIRE,
+            'source': ['channel', 'constants'],
+            'type': 'love',
+        },
+    ]
+    assert 'emoji catalog: 1 sets, 2 emoji' in caplog.text
+    assert 'emoji set TyomaPack "Tyoma": 1' in caplog.text
+    assert editor.known == {'777', CAT}
+
+
+def test_an_emoji_from_an_installed_set_goes_out_with_its_edit(
+    tmp_path: Path,
+) -> None:
+    """On: the edit carries the added emoji to the account's write."""
+    new = f'blog {_tag("777", BUNNY)}'
+    world = _world(
+        [{'post': 1167, 'action': 'edit', 'old': 'gov', 'new': new}]
+    )
+    world[0].sets = [PACK]
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    edit = world[0].edits[0]
+    assert edit.text == f'it is blog {BUNNY} and blog.'
+    assert edit.emoji == ((len('it is blog '), 2, '777'),)
+
+
+def test_a_new_pin_is_sent_with_its_premium_emoji(tmp_path: Path) -> None:
+    """The tags leave as spans over plain text, never as markup."""
+    world = _world(
+        [{'post': 0, 'action': 'pin_new', 'new': f'hi {_tag(CAT)}'}]
+    )
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    sent = world[0].sent[0]
+    assert sent.body == f'hi {FIRE}'
+    assert [(s.kind, s.at, s.length, s.ref) for s in sent.spans] == [
+        ('emoji', 3, 1, CAT)
+    ]
+
+
+def test_unreadable_sets_keep_the_constants_and_retry(tmp_path: Path) -> None:
+    """A set's id is unknown until the sets read; the next tick retries."""
+    new = _tag('777', BUNNY)
+    world = _world(
+        [{'post': 1167, 'action': 'edit', 'old': 'gov', 'new': new}]
+    )
+    world[0].sets = None
+    editor, _ = _editor(tmp_path, world, 'dry')
+    asyncio.run(editor.tick(NOW))
+    assert _catalog(tmp_path)['sets_read'] is False
+    assert editor.known == {CAT}
+    reasons = [row['reason'] for row in _journal(tmp_path, 'outcome')]
+    assert reasons == [tgedit.UNKNOWN_EMOJI]
+    world[0].sets = [PACK]
+    asyncio.run(editor.tick(NOW + 60))
+    assert '777' in editor.known
+    assert editor.catalog_at == NOW + 60
+
+
+def test_no_installed_sets_is_said_in_the_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An account without sets says so: the question is then for a human."""
+    editor, _ = _editor(tmp_path, _world(), 'dry')
+    with caplog.at_level(logging.INFO, logger='userbot'):
+        asyncio.run(editor.tick(NOW))
+    assert 'no custom emoji sets installed' in caplog.text
+    assert asyncio.run(editor.tick(NOW + 60)) == 0
+    assert editor.catalog_at == NOW
+
+
+def test_the_shipped_constants_are_the_first_catalog() -> None:
+    """Every premium emoji of the constants may be used in a package."""
+    params = worker.load_edit_params(config.read_json(config.CONSTANTS_PATH))
+    assert len(params.emoji) == 39  # noqa: PLR2004 -- the shipped catalog
+    assert {ident for _, ident, _ in params.emoji} == params.guard.emoji
+    assert CAT in params.guard.emoji
+
+
+def test_the_dry_check_matches_a_package_with_a_premium_emoji(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tag with a constants id reads as matched; an unknown one does not."""
+    labels = worker.load_edit_params(
+        config.read_json(config.CONSTANTS_PATH)
+    ).labels
+    edits = [
+        {'post': 1, 'action': 'edit', 'old': 'a', 'new': f'a {_tag(CAT)}'},
+        {'post': 2, 'action': 'edit', 'old': 'b', 'new': _tag(STRANGER)},
+    ]
+    feed = tmp_path / 'tgedit.json'
+    feed.write_text(_feed(_pkg(edits)), 'utf-8')
+    snapshot = tmp_path / 'telegram.json'
+    snapshot.write_text(_snapshot(_snap(1, 'a'), _snap(2, 'b')), 'utf-8')
+    assert tgedit_check.main([str(feed), str(snapshot)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[1] == f'{labels["post"]} 1 . edit -> {labels["dry_ok"]}'
+    assert out[2].endswith(f'({labels["unknown_emoji"]})')

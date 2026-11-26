@@ -179,6 +179,22 @@ More than `max_deletes` deletions refuses the WHOLE package (journaled,
 remembered by id). The site build checks the same schema, so a typo fails
 the site's CI before it reaches the feed.
 
+**Premium emoji.** The `new` of an `edit` or a `pin_new` may carry
+`<tg-emoji emoji-id="ID">glyph</tg-emoji>`: the glyph stays in the text and
+a custom-emoji entity goes over it (UTF-16 offsets, as for every entity).
+Only an id of the catalog passes; an unknown id or a tag that does not read
+(`markup`) skips the item, so markup never reaches the channel as plain
+text. `desc` takes no tags (a description has no entities). The emoji a
+post already carries stay where they are, with the same ids. The catalog
+is rebuilt once a day: the account's installed custom-emoji sets
+(`messages.getEmojiStickers`), every custom emoji in the newest 200 posts
+of the channel and the `emoji` of the constants (always there, so the dry
+check knows them too). It is logged -- `tgedit: emoji catalog: N sets, M
+emoji (set a, channel b, constants c)`, then one line per set -- and
+written to `emoji_catalog.json` next to `tgedit.json`:
+`{generated_at, sets_read, sets: [{short_name, title, count}], emoji:
+[{id, fallback, source: [set|channel|constants], set?, type?}]}`.
+
 **Approval is the merge.** A package arrives as a PR to the site; the
 site's team lead reviews and merges it into `main`, the deploy puts it in
 the feed, and the worker applies it on its next tick. No image rebuild,

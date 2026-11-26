@@ -91,6 +91,7 @@ from minions.userbot.glue.status import STATUS_WARM_PEERS
 from minions.userbot.glue.status import StatusReport
 from minions.userbot.glue.stories import StoryDeps
 from minions.userbot.glue.stories import StoryWatch
+from minions.userbot.glue.tgedit import CATALOG_FILE as TGEDIT_CATALOG
 from minions.userbot.glue.tgedit import JOURNAL_FILE as TGEDIT_JOURNAL
 from minions.userbot.glue.tgedit import STATE_FILE as TGEDIT_FILE
 from minions.userbot.glue.tgedit import ChannelEditor
@@ -390,6 +391,7 @@ class Userbot:
                 feed=read_feed(tgedit_params.feed_url),
                 path=pdir / TGEDIT_FILE,
                 journal=pdir / TGEDIT_JOURNAL,
+                catalog=pdir / TGEDIT_CATALOG,
                 params=tgedit_params,
             )
         )

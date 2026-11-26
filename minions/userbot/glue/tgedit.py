@@ -19,7 +19,14 @@ tick tries again -- and for each package not handled yet it:
    another.
 
 Either way every item's outcome -- ``post -> applied / skipped (reason) /
-error`` -- goes to the container log and to the journal. ``mode`` lives in
+error`` -- goes to the container log and to the journal.
+
+A new text may carry premium emoji (``<tg-emoji emoji-id=...>``); only ids
+of the catalog pass. The catalog -- the account's installed custom-emoji
+sets, every custom emoji in the channel's posts and the constants'
+``emoji`` -- is rebuilt once a day, logged (one line, plus one per set) and
+written to ``emoji_catalog.json`` next to ``tgedit.json``, so a package
+author can pick an id from it. ``mode`` lives in
 ``engines.tgedit``: switching it is a reviewed change of the constants
 file, not a chat command. A handled package is remembered by id in
 ``tgedit.json``, so it is applied once; a post the package does not name
@@ -35,7 +42,9 @@ import logging
 import time
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from typing import TYPE_CHECKING
+from typing import cast
 
 from minion_core.adapters import feed as feeds
 from minion_core.adapters import userchat
@@ -54,6 +63,13 @@ log = logging.getLogger('userbot')
 
 STATE_FILE = 'tgedit.json'
 JOURNAL_FILE = 'tgedit_journal.jsonl'
+CATALOG_FILE = 'emoji_catalog.json'
+CATALOG_SEC = 24 * 3600.0
+"""How often the emoji catalog is rebuilt (a failed read retries sooner)."""
+CATALOG_POSTS = 200
+"""Newest channel posts whose custom emoji join the catalog."""
+SET, CHANNEL, CONSTANTS = 'set', 'channel', 'constants'
+"""Where a catalog emoji was seen."""
 FEED_URL = 'https://daetotyoma.com/tgedit.json'
 """The site's feed of reviewed packages (``engines.tgedit.feed_url``)."""
 MODES = ('off', 'dry', 'on')
@@ -81,6 +97,8 @@ class EditParams:
     guard: tgedit.Guard = field(default_factory=tgedit.Guard)
     labels: dict[str, str] = field(default_factory=dict)
     clock: relink.Clock = field(default_factory=relink.Clock)
+    emoji: tuple[tuple[str, str, str], ...] = ()
+    """The constants' premium emoji: (type, id, fallback glyph)."""
 
 
 def _words(value: object) -> tuple[str, ...]:
@@ -88,16 +106,33 @@ def _words(value: object) -> tuple[str, ...]:
     return tuple(str(v) for v in codec.rows(value) if isinstance(v, str))
 
 
+def _constant_emoji(
+    settings: Mapping[str, object],
+) -> tuple[tuple[str, str, str], ...]:
+    """Read the constants' ``emoji`` list: (type, id, glyph) with an id."""
+    out: list[tuple[str, str, str]] = []
+    for row in codec.rows(settings.get('emoji')):
+        if not isinstance(row, dict):
+            continue
+        ident = codec.text(row.get('id'), '')
+        if ident:
+            kind = codec.text(row.get('type'), '')
+            out.append((kind, ident, codec.text(row.get('fallback'), '')))
+    return tuple(out)
+
+
 def load_edit_params(settings: Mapping[str, object]) -> EditParams:
     """Read ``engines.tgedit``; an unknown mode reads as ``off``.
 
     The two hard limits are clamped here, so no constants file can raise
-    the deletions cap above 15 or bring two writes closer than 10 s.
+    the deletions cap above 15 or bring two writes closer than 10 s. The
+    constants' premium emoji are the catalog before the account is read.
     """
     cfg = codec.engine(settings, 'tgedit')
     persona = codec.section(settings, 'persona')
     mode = codec.text(cfg.get('mode'), 'off')
     labels = codec.table(cfg.get('labels'))
+    emoji = _constant_emoji(settings)
     return EditParams(
         mode=mode if mode in MODES else 'off',
         feed_url=codec.text(cfg.get('feed_url'), FEED_URL),
@@ -113,6 +148,7 @@ def load_edit_params(settings: Mapping[str, object]) -> EditParams:
         guard=tgedit.Guard(
             urls=_words(cfg.get('protect_urls')),
             link_texts=_words(cfg.get('protect_link_texts')),
+            emoji=frozenset(ident for _, ident, _ in emoji),
         ),
         labels={str(k): str(v) for k, v in labels.items()},
         clock=relink.Clock(
@@ -120,6 +156,7 @@ def load_edit_params(settings: Mapping[str, object]) -> EditParams:
             wake_start_hour=int(codec.num(persona.get('wake_start_hour'), 0)),
             wake_end_hour=int(codec.num(persona.get('wake_end_hour'), 24)),
         ),
+        emoji=emoji,
     )
 
 
@@ -132,6 +169,7 @@ class EditDeps:
     feed: Callable[[], Awaitable[str]]  # the feed's text (read_feed)
     path: Path  # tgedit.json
     journal: Path  # tgedit_journal.jsonl
+    catalog: Path  # emoji_catalog.json
     params: EditParams
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep
 
@@ -177,6 +215,97 @@ def to_post(linked: userchat.Linked) -> tgedit.Post:
     )
 
 
+def _shown(text: str, span: tuple[int, int]) -> str:
+    """Return the text an entity's UTF-16 (offset, length) covers."""
+    offset, length = span
+    units = text.encode('utf-16-le')
+    return units[offset * 2 : (offset + length) * 2].decode(
+        'utf-16-le', errors='ignore'
+    )
+
+
+@dataclass
+class _Catalog:
+    """Catalog rows being merged, one per emoji id, in order first seen."""
+
+    rows: dict[str, dict[str, object]] = field(default_factory=dict)
+
+    def add(self, ident: str, glyph: str, source: str, **extra: str) -> None:
+        """Record one sighting of an emoji; the first glyph and names win."""
+        if not ident:
+            return
+        row = self.rows.setdefault(
+            ident, {'id': ident, 'fallback': glyph, 'source': []}
+        )
+        seen = cast('list[str]', row['source'])
+        if source not in seen:
+            seen.append(source)
+        for key, value in extra.items():
+            if value:
+                row.setdefault(key, value)
+
+    def add_set(self, one: userchat.EmojiSet) -> None:
+        """Record every emoji of an installed set."""
+        for ident, glyph in one.emoji:
+            self.add(ident, glyph, SET, set=one.short_name)
+
+    def add_post(self, post: userchat.Linked) -> None:
+        """Record every custom emoji of a channel post."""
+        for ident, span in zip(post.refs, post.spans, strict=False):
+            self.add(ident, _shown(post.text, span), CHANNEL)
+
+
+def catalog_rows(
+    sets: list[userchat.EmojiSet],
+    posts: list[userchat.Linked],
+    constants: tuple[tuple[str, str, str], ...],
+) -> list[dict[str, object]]:
+    """Merge every premium emoji seen into one row per id.
+
+    A row: ``id``, ``fallback`` glyph, ``source`` (every place it was seen:
+    ``set``, ``channel``, ``constants``), and ``set`` / ``type`` when known.
+    """
+    out = _Catalog()
+    for one in sets:
+        out.add_set(one)
+    for post in posts:
+        out.add_post(post)
+    for kind, ident, glyph in constants:
+        out.add(ident, glyph, CONSTANTS, type=kind)
+    return list(out.rows.values())
+
+
+def _log_catalog(
+    heads: list[dict[str, object]],
+    rows: list[dict[str, object]],
+    path: Path,
+) -> None:
+    """Log the catalog: one line of counts, then one line per set."""
+    by = {
+        source: sum(
+            1 for row in rows if source in cast('list[str]', row['source'])
+        )
+        for source in (SET, CHANNEL, CONSTANTS)
+    }
+    log.info(
+        'tgedit: emoji catalog: %d sets, %d emoji '
+        '(set %d, channel %d, constants %d) -> %s',
+        len(heads),
+        len(rows),
+        by[SET],
+        by[CHANNEL],
+        by[CONSTANTS],
+        path,
+    )
+    for head in heads:
+        log.info(
+            'tgedit: emoji set %s "%s": %d',
+            head['short_name'],
+            head['title'],
+            head['count'],
+        )
+
+
 def read_feed(url: str) -> Callable[[], Awaitable[str]]:
     """Return the reader of the feed at ``url``, off the event loop."""
 
@@ -207,6 +336,9 @@ class ChannelEditor:
 
     deps: EditDeps
     state: EditState = field(default_factory=EditState)
+    known: frozenset[str] = frozenset()
+    """Premium-emoji ids of the last catalog (the constants' always pass)."""
+    catalog_at: float = 0.0
 
     def load(self) -> None:
         """Read the persisted state."""
@@ -232,6 +364,8 @@ class ChannelEditor:
         params = self.deps.params
         if params.mode == 'off' or not params.clock.awake(now):
             return 0
+        if now - self.catalog_at >= CATALOG_SEC:
+            await self.catalog(now)
         try:
             feed = tgedit.parse_feed(await self.deps.feed())
         except (feeds.FeedUnreachableError, tgedit.FeedError) as exc:
@@ -242,6 +376,51 @@ class ChannelEditor:
         for package in pending:
             await self._handle(package, rules)
         return len(pending)
+
+    @property
+    def guard(self) -> tgedit.Guard:
+        """The guard, with the catalog's ids as the emoji a text may carry."""
+        base = self.deps.params.guard
+        return replace(base, emoji=base.emoji | self.known)
+
+    async def catalog(self, now: float) -> None:
+        """Rebuild the emoji catalog: log it, write ``emoji_catalog.json``.
+
+        Unreadable sets keep the channel's and the constants' emoji and try
+        again next tick; read, the catalog waits ``CATALOG_SEC``.
+        """
+        account = self.deps.account
+        sets = await account.emoji_sets()
+        posts = await account.linked(self.deps.channel(), CATALOG_POSTS)
+        rows = catalog_rows(sets or [], posts, self.deps.params.emoji)
+        self.known = frozenset(str(row['id']) for row in rows)
+        heads = [
+            {
+                'short_name': one.short_name,
+                'title': one.title,
+                'count': len(one.emoji),
+            }
+            for one in sets or []
+        ]
+        body = {
+            'generated_at': time.strftime(
+                '%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)
+            ),
+            'sets_read': sets is not None,
+            'sets': heads,
+            'emoji': rows,
+        }
+        atomic_write(
+            self.deps.catalog,
+            json.dumps(body, ensure_ascii=False, indent=1).encode('utf-8'),
+        )
+        _log_catalog(heads, rows, self.deps.catalog)
+        if sets is None:
+            log.warning('tgedit: emoji sets unreadable; will retry next tick')
+            return
+        if not sets:
+            log.info('tgedit: the account has no custom emoji sets installed')
+        self.catalog_at = now
 
     def _pending(
         self, packages: tuple[tgedit.Package, ...]
@@ -288,9 +467,7 @@ class ChannelEditor:
                 continue
             found = read.get(post_id)
             plan = tgedit.plan_post(
-                to_post(found) if found else None,
-                group,
-                self.deps.params.guard,
+                to_post(found) if found else None, group, self.guard
             )
             if not run.live or not plan.changes or found is None:
                 run.outcomes += plan.outcomes
@@ -307,7 +484,7 @@ class ChannelEditor:
         self._journal(run.package, 'post', userchat.dump(post))
         if plan.delete:
             return await self.deps.account.delete(chat, post.id)
-        edit = userchat.Relinked(plan.text, plan.spans, plan.urls)
+        edit = userchat.Relinked(plan.text, plan.spans, plan.urls, plan.emoji)
         return await self.deps.account.relink(chat, post, edit)
 
     async def _channel(
@@ -333,7 +510,7 @@ class ChannelEditor:
         about = await self.deps.account.about(chat)
         if about is None:
             return tgedit.Outcome(item, tgedit.ERROR, tgedit.FAILED)
-        after, why = tgedit.plan_about(about, item, self.deps.params.guard)
+        after, why = tgedit.plan_about(about, item, self.guard)
         if why:
             return tgedit.Outcome(item, tgedit.SKIPPED, why)
         if not run.live:
@@ -347,15 +524,17 @@ class ChannelEditor:
         """Post a new message to the channel and pin it."""
         chat = self.deps.channel()
         recent = await self.deps.account.linked(chat, RECENT)
-        why = tgedit.plan_pin(
-            [p.text for p in recent], item, self.deps.params.guard
-        )
+        guard = self.guard
+        why = tgedit.plan_pin([p.text for p in recent], item, guard)
         if why:
             return tgedit.Outcome(item, tgedit.SKIPPED, why)
         if not run.live:
             return tgedit.Outcome(item, tgedit.DRY_OK)
+        new = tgedit.read_markup(item.new, guard.emoji)
         await self._pace(run)
-        sent = await self.deps.account.send(chat, userchat.Text(item.new))
+        sent = await self.deps.account.send(
+            chat, userchat.Text(new.text, spans=new.spans)
+        )
         if not sent:
             return tgedit.Outcome(item, tgedit.ERROR, tgedit.FAILED)
         self._journal(run.package, 'sent', {'id': sent})
