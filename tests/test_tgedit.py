@@ -1,50 +1,62 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""The channel editor: parse, approve, dry-run, limits, never-touch, apply.
+"""The channel editor: parse, dry-run, limits, never-touch, apply, check.
 
-Pure logic (core/tgedit) and the worker over a fake account and a fake
-board (glue/tgedit). The dry run is the heart of it: ``old`` that matches
-the post's current text is applied, anything else is skipped and said so.
+Pure logic (core/tgedit), the worker over a fake account and a fake site
+feed (glue/tgedit), and the dry check over a ``telegram`` snapshot
+(dev/tgedit_check). The dry run is the heart of it: ``old`` that
+matches the post's current text is applied, anything else is skipped and
+said so.
 """
 
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
+import logging
 from dataclasses import dataclass
 from dataclasses import field
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Self
 from typing import cast
 
 import pytest
 
-from minion_core.adapters import board as boardapi
+from minion_core.adapters import feed as feeds
 from minion_core.adapters import userchat
 from minions.userbot.core import config
 from minions.userbot.core import relink
 from minions.userbot.core import tgedit
+from minions.userbot.dev import tgedit_check
 from minions.userbot.glue import tgedit as worker
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 CHAT = 't.me/da_eto_tyoma_chat'
 WATCH = 'Watch'
 GUARD = tgedit.Guard(urls=(CHAT,), link_texts=(WATCH,))
-WORD = 'ok'
-APPROVAL = tgedit.Approval(WORD, ('strateg',))
 AUTHOR = 'audience-head'
 CHANNEL = -100
 NOW = 1_800_000_000.0
-PACKAGE = 475
+PACKAGE = '475-cleanup'
 PAUSE = 10.0
 EMPTY = tgedit.Outcome(tgedit.Item(1, tgedit.EDIT, 'x'), tgedit.DRY_OK)
 
 
-def _block(items: list[dict[str, object]]) -> str:
-    """Return a package note's text with its JSON block."""
-    return f'package\n```json\n{json.dumps(items)}\n```'
+def _pkg(items: object, **over: object) -> dict[str, object]:
+    """Return a package; ``over`` replaces top-level keys."""
+    body = {'id': PACKAGE, 'author': AUTHOR, 'why': 'clean up', 'edits': items}
+    return {**body, **over}
+
+
+def _feed(*packages: object, **over: object) -> str:
+    """Return the site feed's text; ``over`` replaces top-level keys."""
+    rules = {'max_deletes': 15, 'min_pause_sec': 10, 'apply_once': True}
+    body = {'version': 1, 'rules': rules, 'packages': list(packages)}
+    return json.dumps({**body, **over})
+
+
+def _parse(items: object, **over: object) -> tgedit.Package:
+    """Parse one package with id PACKAGE."""
+    return tgedit.parse(_pkg(items, **over))
 
 
 Ent = tuple[int, int, str, str]
@@ -82,17 +94,21 @@ def _status(plan: tgedit.PostPlan) -> list[tuple[str, str]]:
 
 def test_a_package_block_parses_into_items() -> None:
     """Every action of the protocol reads; post 0 is the channel."""
-    items = tgedit.parse(
-        _block(
-            [
-                {'post': 0, 'action': 'desc', 'new': '\nfor brands'},
-                {'post': 0, 'action': 'pin_new', 'new': 'hello'},
-                {'post': 1142, 'action': 'delete'},
-                {'post': 1006, 'action': 'delete', 'only_if_empty': True},
-                {'post': 944, 'action': 'edit', 'old': 'a', 'new': 'b'},
-                {'post': 944, 'action': 'link', 'old': 'u', 'new': 'v'},
-            ]
-        )
+    package = _parse(
+        [
+            {'post': 0, 'action': 'desc', 'new': '\nfor brands'},
+            {'post': 0, 'action': 'pin_new', 'new': 'hello'},
+            {'post': 1142, 'action': 'delete'},
+            {'post': 1006, 'action': 'delete', 'only_if_empty': True},
+            {'post': 944, 'action': 'edit', 'old': 'a', 'new': 'b'},
+            {'post': 944, 'action': 'link', 'old': 'u', 'new': 'v'},
+        ]
+    )
+    items = package.items
+    assert (package.id, package.author, package.why) == (
+        PACKAGE,
+        AUTHOR,
+        'clean up',
     )
     assert [one.action for one in items] == [
         'desc',
@@ -106,26 +122,48 @@ def test_a_package_block_parses_into_items() -> None:
     assert not items[2].only_if_empty
 
 
+_DEL = [{'post': 1, 'action': 'delete'}]
+
+
 @pytest.mark.parametrize(
-    ('text', 'says'),
+    ('raw', 'says'),
     [
-        ('no block here', 'no ```json'),
-        ('```json\n[{"post": 1,]\n```', 'does not parse'),
-        ('```json\n[]\n```', 'non-empty list'),
-        (_block([{'post': 1, 'action': 'move'}]), "action 'move'"),
-        (_block([{'post': 1, 'action': 'delete', 'x': 1}]), 'unknown key'),
-        (_block([{'post': 5, 'action': 'desc', 'new': 'x'}]), 'needs post 0'),
-        (_block([{'post': 0, 'action': 'edit', 'old': 'x'}]), 'needs post >0'),
-        (_block([{'post': 1, 'action': 'edit'}]), 'non-empty old/new'),
-        (_block([{'post': -1, 'action': 'delete'}]), 'whole number'),
-        (_block([{'post': True, 'action': 'delete'}]), 'whole number'),
+        (_pkg(_DEL, extra=1), 'unknown key'),
+        (_pkg([]), 'non-empty list'),
+        (_pkg(_DEL, author=' '), 'author'),
+        (_pkg(_DEL, why='a\nb'), 'one line'),
+        (_pkg([{'post': 1, 'action': 'move'}]), "action 'move'"),
+        (_pkg([{'post': 1, 'action': 'delete', 'x': 1}]), 'edit 1: unknown'),
+        (_pkg([{'post': 5, 'action': 'desc', 'new': 'x'}]), 'needs post 0'),
+        (_pkg([{'post': 0, 'action': 'edit', 'old': 'x'}]), 'needs post >0'),
+        (_pkg([{'post': 1, 'action': 'edit'}]), 'non-empty old/new'),
+        (_pkg([{'post': -1, 'action': 'delete'}]), 'whole number'),
+        (_pkg([{'post': True, 'action': 'delete'}]), 'whole number'),
     ],
 )
-def test_a_broken_package_is_refused_whole(text: str, says: str) -> None:
+def test_a_broken_package_is_refused_whole(
+    raw: dict[str, object], says: str
+) -> None:
     """A typo stops the package before anything is touched."""
     with pytest.raises(tgedit.PackageError, match=None) as caught:
-        tgedit.parse(text)
+        tgedit.parse(raw)
     assert says in str(caught.value)
+    assert str(caught.value).startswith(PACKAGE)
+
+
+def test_a_package_is_an_object() -> None:
+    """A list where a package should be is refused."""
+    with pytest.raises(tgedit.PackageError, match='JSON object'):
+        tgedit.parse([])
+
+
+@pytest.mark.parametrize(
+    'name', ['cleanup', '475', '475-Cleanup', '475-', 475, None]
+)
+def test_a_package_id_is_a_number_dash_word(name: object) -> None:
+    """The id is what ``tgedit.json`` remembers."""
+    with pytest.raises(tgedit.PackageError, match='<number>-<word>'):
+        tgedit.parse(_pkg(_DEL, id=name))
 
 
 def test_fifteen_deletions_pass_sixteen_refuse_the_package() -> None:
@@ -137,44 +175,56 @@ def test_fifteen_deletions_pass_sixteen_refuse_the_package() -> None:
         tgedit.check_limits(sixteen, 99)
 
 
-# ------------------------------------------------------------- approval
+# ----------------------------------------------------------------- feed
 
 
-def _note(ident: int, role: str, text: str) -> tgedit.Note:
-    """Return a board note written after the package."""
-    return tgedit.Note(ident, role, text, '2')
+def test_a_good_feed_reads_its_packages_in_order() -> None:
+    """The site's feed: version 1, its rules, every package."""
+    feed = tgedit.parse_feed(_feed(_pkg(_DEL), _pkg(_DEL, id='476-pin')))
+    assert [one.id for one in feed.packages] == [PACKAGE, '476-pin']
+    assert feed.rules == tgedit.Rules(15, 10.0)
 
 
-PKG = tgedit.Note(PACKAGE, AUTHOR, 'package', '1')
-
-
-def test_the_strategist_approves_with_the_word_and_the_id() -> None:
-    """An approver's ``<word> #<id>`` anywhere on the board approves."""
-    notes = [_note(497, 'strateg', 'OK #475\nchecked it')]
-    assert APPROVAL.by(PKG, notes) == 'strateg'
+def test_an_empty_feed_has_nothing_to_do() -> None:
+    """No packages is a feed, not an error."""
+    assert tgedit.parse_feed(_feed()).packages == ()
 
 
 @pytest.mark.parametrize(
-    'note',
+    ('text', 'says'),
     [
-        _note(500, AUTHOR, 'ok #475'),  # the author cannot approve own work
-        _note(501, 'astro-dev', 'ok #475'),  # not an approver
-        _note(502, 'strateg', 'ok #4750'),  # another package
-        tgedit.Note(503, 'strateg', 'ok #475', '0'),  # older than it
-        _note(504, 'strateg', 'not yet #475'),  # no approval word
-        _note(505, 'strateg', 'not ok #475'),  # the word, negated
-        _note(506, 'strateg', 'I will say ok #475 later'),  # not a verdict
+        ('{"version": ', 'does not parse'),
+        ('<html>busy</html>', 'does not parse'),
+        ('[]', 'not a JSON object'),
+        (_feed(version=2), 'version 2'),
+        (_feed(version='1'), "version '1'"),
+        (_feed(version=True), 'version True'),
+        (json.dumps({'packages': []}), 'version None'),
+        (_feed(packages={}), 'no packages list'),
+        (_feed(_pkg(_DEL), _pkg(_DEL)), 'more than once'),
+        (_feed(_pkg(_DEL), _pkg([], id='476-x')), '476-x: edits'),
+        (_feed(rules=[]), 'rules are not an object'),
+        (_feed(rules={'max_deletes': 'all'}), 'max_deletes'),
+        (_feed(rules={'min_pause_sec': None}), 'min_pause_sec'),
     ],
 )
-def test_no_approval_without_an_approver_saying_it(note: tgedit.Note) -> None:
-    """Only a different, permitted role's explicit word approves."""
-    assert APPROVAL.by(PKG, [note]) == ''
+def test_a_broken_feed_is_refused_whole(text: str, says: str) -> None:
+    """Broken, of another version, a bad package or one id twice: none."""
+    with pytest.raises(tgedit.FeedError) as caught:
+        tgedit.parse_feed(text)
+    assert says in str(caught.value)
 
 
-def test_the_approval_may_open_any_line_of_the_note() -> None:
-    """A verdict on its own line after a preamble still approves."""
-    notes = [_note(507, 'strateg', 'checked the package\n  ok #475')]
-    assert APPROVAL.by(PKG, notes) == 'strateg'
+def test_the_feed_rules_only_tighten_ours() -> None:
+    """The stricter of the feed and the engine; never past the hard ones."""
+    strict = tgedit.Rules(max_deletes=3, min_pause_sec=30)
+    assert strict.tighten(15, 10) == tgedit.Rules(3, 30.0)
+    loose = tgedit.Rules(max_deletes=99, min_pause_sec=0)
+    assert loose.tighten(15, 10) == tgedit.Rules(15, 10.0)
+    assert loose.tighten(99, 1) == tgedit.Rules(15, 10.0)
+    assert tgedit.Rules(-5).tighten(15, 10).max_deletes == 0
+    rules = tgedit.parse_feed(_feed(rules={})).rules
+    assert rules == tgedit.Rules()
 
 
 # -------------------------------------------------------------- dry run
@@ -427,57 +477,6 @@ class _Account:
         return True
 
 
-@dataclass
-class _Board:
-    """A fake board: the package, the approvals, and the replies."""
-
-    notes_list: list[boardapi.BoardNote]
-    replies: list[tuple[int, str, str]] = field(default_factory=list)
-
-    def notes(self, **query: object) -> list[boardapi.BoardNote]:
-        """Answer like the live board did on 26.11.
-
-        ``q`` searches every note, replies and the archive included, in
-        text and tags; without it the list holds only root notes, so a
-        package replied in a thread is reached through ``q`` alone.
-        """
-        kind = query.get('kind')
-        rows = [n for n in self.notes_list if not kind or n.kind == kind]
-        if 'q' in query:
-            q = str(query['q'])
-            return [n for n in rows if q in n.text or q in n.tags]
-        return [
-            n
-            for n in rows
-            if query.get('tag') in n.tags
-            and not n.parent_id
-            and not n.archived
-        ]
-
-    def reply(self, parent: int, text: str, ref: str) -> int:
-        """Record a reply."""
-        self.replies.append((parent, text, ref))
-        return len(self.replies)
-
-
-THREAD = 388
-"""The thread the live package #475 was replied into (task No 92)."""
-
-
-def _row(ident: int, role: str, text: str) -> boardapi.BoardNote:
-    """Return a reply in THREAD; a package (a JSON block) carries the tag."""
-    tags = ('tg-edit',) if '```json' in text else ()
-    return boardapi.BoardNote(
-        ident,
-        role,
-        'note',
-        text,
-        tags,
-        f'2026-11-{ident}',
-        parent_id=THREAD,
-    )
-
-
 def _linked(ident: int, text: str) -> userchat.Linked:
     """Return an adapter post without entities."""
     return userchat.Linked(ident, text, NOW, (), (), kinds=())
@@ -492,47 +491,52 @@ ITEMS: list[dict[str, object]] = [
 ]
 
 
-def _world(
-    items: list[dict[str, object]] | None = None, *, approved: bool = True
-) -> tuple[_Account, _Board]:
-    """Return the account and the board of one approved package."""
-    account = _Account(
+@dataclass
+class _Site:
+    """A fake site feed: its text, or a failure to reach it."""
+
+    text: str
+    down: bool = False
+    reads: int = 0
+
+    async def read(self) -> str:
+        """Return the feed, or fail as the adapter does."""
+        self.reads += 1
+        if self.down:
+            msg = 'https://site/tgedit.json: ConnectionError'
+            raise feeds.FeedUnreachableError(msg)
+        return self.text
+
+
+def _world(items: object = None) -> tuple[_Account, _Site]:
+    """Put one package in the feed; return the account and the site."""
+    site = _Site(_feed(_pkg(ITEMS if items is None else items)))
+    return _Account(
         {
             1142: _linked(1142, 'old tour'),
             1167: _linked(1167, 'it is gov and blog.'),
             944: _linked(944, 'support'),
             1000: _linked(1000, 'not in the package'),
         }
-    )
-    notes = [_row(25, AUTHOR, _block(items or ITEMS))]
-    if approved:
-        notes.append(_row(26, 'strateg', 'ok #25'))
-    return account, _Board(notes)
+    ), site
 
 
 def _editor(
-    tmp_path: Path, world: tuple[_Account, _Board], mode: str
+    tmp_path: Path, world: tuple[_Account, _Site], mode: str
 ) -> tuple[worker.ChannelEditor, list[float]]:
     """Build an editor in ``mode``; return it and the pauses it took."""
-    account, board = world
     slept: list[float] = []
 
     async def sleep(sec: float) -> None:
         slept.append(sec)
 
-    params = worker.EditParams(
-        mode=mode,
-        board_url='https://board',
-        authors=(AUTHOR,),
-        approval=APPROVAL,
-        pause_sec=PAUSE,
-        guard=GUARD,
-    )
+    account, site = world
+    params = worker.EditParams(mode=mode, pause_sec=PAUSE, guard=GUARD)
     editor = worker.ChannelEditor(
         worker.EditDeps(
             account=cast('userchat.Account', account),
-            board=cast('boardapi.Board', board),
             channel=lambda: CHANNEL,
+            feed=site.read,
             path=tmp_path / worker.STATE_FILE,
             journal=tmp_path / worker.JOURNAL_FILE,
             params=params,
@@ -543,35 +547,48 @@ def _editor(
     return editor, slept
 
 
+def _journal(tmp_path: Path, what: str) -> list[dict[str, object]]:
+    """Return the journal's rows of one kind."""
+    path = tmp_path / worker.JOURNAL_FILE
+    if not path.exists():
+        return []
+    rows = [json.loads(line) for line in path.read_text('utf-8').splitlines()]
+    return [row for row in rows if row['what'] == what]
+
+
 def test_off_reads_nothing(tmp_path: Path) -> None:
-    """The shipped mode touches neither the board nor the channel."""
-    account, board = _world()
-    editor, _ = _editor(tmp_path, (account, board), 'off')
+    """Off reads neither the feed nor the channel, writes no journal."""
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'off')
     assert asyncio.run(editor.tick(NOW)) == 0
-    assert board.replies == []
-    assert account.writes == []
+    assert world[0].writes == []
+    assert world[1].reads == 0
+    assert not (tmp_path / worker.JOURNAL_FILE).exists()
 
 
-def test_dry_reports_into_the_thread_and_writes_nothing(
-    tmp_path: Path,
+def test_dry_logs_and_journals_every_item_once_and_writes_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Dry: every item's dry-run outcome goes to the package's thread once."""
-    account, board = _world()
-    editor, _ = _editor(tmp_path, (account, board), 'dry')
-    assert asyncio.run(editor.tick(NOW)) == 1
-    assert account.writes == []
-    parent, text, ref = board.replies[0]
-    assert (parent, ref) == (25, 'tgedit-25-dry-1')
-    assert 'post 1167 . edit -> dry_ok' in text
-    assert 'post 944 . edit -> skipped (not_found)' in text
+    """Dry: every item's outcome goes to the log and the journal, once."""
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'dry')
+    with caplog.at_level(logging.INFO, logger='userbot'):
+        assert asyncio.run(editor.tick(NOW)) == 1
+    assert world[0].writes == []
+    assert f'{PACKAGE}: post 1167 . edit -> dry_ok' in caplog.text
+    assert f'{PACKAGE}: post 944 . edit -> skipped (not_found)' in caplog.text
+    rows = _journal(tmp_path, 'outcome')
+    assert len(rows) == len(ITEMS)
+    assert {row['mode'] for row in rows} == {'dry'}
     assert asyncio.run(editor.tick(NOW)) == 0
-    assert len(board.replies) == 1
+    assert len(_journal(tmp_path, 'outcome')) == len(ITEMS)
 
 
 def test_on_applies_journals_paces_and_reports(tmp_path: Path) -> None:
     """On: what passed is written, 10 s apart, after its before-image."""
-    account, board = _world()
-    editor, slept = _editor(tmp_path, (account, board), 'on')
+    world = _world()
+    account = world[0]
+    editor, slept = _editor(tmp_path, world, 'on')
     assert asyncio.run(editor.tick(NOW)) == 1
     assert account.writes == [
         ('delete', 1142),
@@ -584,109 +601,178 @@ def test_on_applies_journals_paces_and_reports(tmp_path: Path) -> None:
     assert account.posts_by_id[1167].text == 'it is blog.'
     assert account.posts_by_id[1000].text == 'not in the package'
     assert account.description == 'about\nfor brands'
-    journal = (tmp_path / worker.JOURNAL_FILE).read_text('utf-8').splitlines()
-    before = [json.loads(line) for line in journal]
-    assert [row.get('text') for row in before if row['what'] == 'post'] == [
+    before = _journal(tmp_path, 'post')
+    assert [row.get('text') for row in before] == [
         'old tour',
         'it is gov and blog.',
     ]
-    _, text, _ = board.replies[0]
-    assert 'applied 4' in text
-    assert 'skipped 1' in text
-    assert asyncio.run(editor.tick(NOW)) == 0  # applied once, never twice
-
-
-def test_an_unapproved_package_waits(tmp_path: Path) -> None:
-    """No approval: nothing is read, written or reported."""
-    account, board = _world(approved=False)
-    editor, _ = _editor(tmp_path, (account, board), 'on')
-    assert asyncio.run(editor.tick(NOW)) == 0
-    assert account.writes == []
-
-
-def test_only_live_tagged_packages_are_picked_up(tmp_path: Path) -> None:
-    """A note that only names the tag, or an archived package, is no package.
-
-    The real reply to the package (#476) says ``tg-edit`` in its text; the
-    board's ``q`` finds it, the tag filter drops it.
-    """
-    account, board = _world()
-    board.notes_list += [
-        boardapi.BoardNote(
-            24,
-            AUTHOR,
-            'note',
-            'format: see tg-edit',
-            (),
-            '2026-11-24',
-            parent_id=THREAD,
-        ),
-        dataclasses.replace(_row(23, AUTHOR, _block(ITEMS)), archived=True),
-        _row(27, 'strateg', 'ok #23'),
+    outcomes = [
+        (r['post'], r['status']) for r in _journal(tmp_path, 'outcome')
     ]
-    editor, _ = _editor(tmp_path, (account, board), 'dry')
-    assert asyncio.run(editor.tick(NOW)) == 1
-    assert [parent for parent, _, _ in board.replies] == [25]
+    assert outcomes.count((0, tgedit.APPLIED)) == 2  # noqa: PLR2004
+    assert (944, tgedit.SKIPPED) in outcomes
+    assert len(outcomes) == len(ITEMS)
 
 
-def test_a_package_by_another_role_is_ignored(tmp_path: Path) -> None:
-    """Only the configured authors write packages."""
-    account, board = _world()
-    board.notes_list[0] = _row(25, 'astro-dev', _block(ITEMS))
-    editor, _ = _editor(tmp_path, (account, board), 'on')
+def test_a_package_id_is_applied_once_across_restarts(tmp_path: Path) -> None:
+    """The same id again -- next tick or after a restart -- writes nothing."""
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    writes = list(world[0].writes)
     assert asyncio.run(editor.tick(NOW)) == 0
+    again, _ = _editor(tmp_path, world, 'on')
+    assert asyncio.run(again.tick(NOW)) == 0
+    assert world[0].writes == writes
+
+
+def test_a_new_package_in_the_feed_is_the_only_one_handled(
+    tmp_path: Path,
+) -> None:
+    """A feed that grows: only the new id runs; the old one stays done."""
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    new = _pkg([{'post': 944, 'action': 'delete'}], id='476-tidy')
+    world[1].text = _feed(_pkg(ITEMS), new)
+    assert asyncio.run(editor.tick(NOW)) == 1
+    assert world[0].writes[-1] == ('delete', 944)
+    assert editor.state.done == {PACKAGE, '476-tidy'}
+
+
+def test_a_package_gone_from_the_feed_is_not_applied(tmp_path: Path) -> None:
+    """Dry-reported, then dropped from the feed: on never applies it."""
+    world = _world()
+    dry, _ = _editor(tmp_path, world, 'dry')
+    asyncio.run(dry.tick(NOW))
+    world[1].text = _feed()
+    on, _ = _editor(tmp_path, world, 'on')
+    assert asyncio.run(on.tick(NOW)) == 0
+    assert world[0].writes == []
+
+
+def test_a_dry_reported_package_is_still_applied_once_on(
+    tmp_path: Path,
+) -> None:
+    """Dry, then on: the dry report does not count as applied."""
+    world = _world()
+    dry, _ = _editor(tmp_path, world, 'dry')
+    asyncio.run(dry.tick(NOW))
+    on, _ = _editor(tmp_path, world, 'on')
+    assert asyncio.run(on.tick(NOW)) == 1
+    assert world[0].writes
+    assert worker.read_state(tmp_path / worker.STATE_FILE).done == {PACKAGE}
+
+
+@pytest.mark.parametrize(
+    'case',
+    [
+        ('', True, 'ConnectionError'),
+        ('{', False, 'does not parse'),
+        (_feed(version=2), False, 'version 2'),
+        (_feed(_pkg(ITEMS), _pkg(ITEMS)), False, 'more than once'),
+    ],
+    ids=['unreachable', 'broken', 'version-2', 'id-twice'],
+)
+def test_a_feed_it_cannot_trust_skips_the_tick_and_says_so(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    case: tuple[str, bool, str],
+) -> None:
+    """Nothing read, written or remembered; one log line; next tick tries."""
+    text, down, says = case
+    world = _world()
+    world[1].text, world[1].down = text, down
+    editor, _ = _editor(tmp_path, world, 'on')
+    with caplog.at_level(logging.WARNING, logger='userbot'):
+        assert asyncio.run(editor.tick(NOW)) == 0
+    assert 'feed skipped this tick' in caplog.text
+    assert says in caplog.text
+    assert world[0].writes == []
+    assert not (tmp_path / worker.JOURNAL_FILE).exists()
+    assert editor.state == worker.EditState()
+    world[1].text, world[1].down = _feed(_pkg(ITEMS)), False
+    assert asyncio.run(editor.tick(NOW)) == 1
+
+
+def test_the_feed_rules_slow_the_writes_down(tmp_path: Path) -> None:
+    """A feed asking for 30 s between writes gets 30 s, not our 10."""
+    world = _world()
+    world[1].text = _feed(_pkg(ITEMS), rules={'min_pause_sec': 30})
+    editor, slept = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    assert slept
+    assert set(slept) == {30.0}
+
+
+def test_the_feed_rules_cap_deletions_lower(tmp_path: Path) -> None:
+    """A feed allowing one deletion refuses a package with two."""
+    two = [
+        {'post': 1142, 'action': 'delete'},
+        {'post': 944, 'action': 'delete'},
+    ]
+    world = _world(two)
+    world[1].text = _feed(_pkg(two), rules={'max_deletes': 1})
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    assert world[0].writes == []
+    assert '2 deletions' in str(_journal(tmp_path, 'refused')[0]['why'])
 
 
 def test_too_many_deletions_refuse_the_package(tmp_path: Path) -> None:
-    """Sixteen deletions: refused whole, reported, nothing deleted."""
-    many: list[dict[str, object]] = [
-        {'post': n, 'action': 'delete'} for n in range(1, 17)
-    ]
-    account, board = _world(many)
-    editor, _ = _editor(tmp_path, (account, board), 'on')
+    """Sixteen deletions: refused whole, journaled, nothing deleted."""
+    many = [{'post': n, 'action': 'delete'} for n in range(1, 17)]
+    world = _world(many)
+    world[1].text = _feed(_pkg(many), rules={'max_deletes': 99})
+    editor, _ = _editor(tmp_path, world, 'on')
     asyncio.run(editor.tick(NOW))
-    assert account.writes == []
-    assert '16 deletions' in board.replies[0][1]
+    assert world[0].writes == []
+    assert '16 deletions' in str(_journal(tmp_path, 'refused')[0]['why'])
 
 
 def test_without_rights_every_item_says_so(tmp_path: Path) -> None:
     """An account that may not edit the channel edits nothing."""
-    account, board = _world()
-    account.granted = frozenset()
-    editor, _ = _editor(tmp_path, (account, board), 'on')
+    world = _world()
+    world[0].granted = frozenset()
+    editor, _ = _editor(tmp_path, world, 'on')
     asyncio.run(editor.tick(NOW))
-    assert account.writes == []
-    assert board.replies[0][1].count('(no_rights)') == len(ITEMS)
+    assert world[0].writes == []
+    reasons = [row['reason'] for row in _journal(tmp_path, 'outcome')]
+    assert reasons == [tgedit.NO_RIGHTS] * len(ITEMS)
 
 
 def test_an_unreadable_channel_retries_later(tmp_path: Path) -> None:
     """A failed read is no 'post gone': the package stays pending."""
-    account, board = _world()
-    account.unreadable = True
-    editor, _ = _editor(tmp_path, (account, board), 'on')
+    world = _world()
+    world[0].unreadable = True
+    editor, _ = _editor(tmp_path, world, 'on')
     with pytest.raises(worker.ChannelUnreadableError):
         asyncio.run(editor.tick(NOW))
     assert editor.state.done == set()
-    account.unreadable = False
+    world[0].unreadable = False
     assert asyncio.run(editor.tick(NOW)) == 1
+
+
+def test_an_old_state_file_with_board_ids_reads_empty(tmp_path: Path) -> None:
+    """Board note numbers from the old engine never match a package id."""
+    path = tmp_path / worker.STATE_FILE
+    path.write_text('{"done": [475], "dry": [475]}', 'utf-8')
+    assert worker.read_state(path) == worker.EditState()
 
 
 # ------------------------------------------------------- configuration
 
 
-def test_the_shipped_constants_keep_the_editor_read_only_and_safe() -> None:
-    """Shipped off or dry (no writes); the chat and watch links are protected.
-
-    ``on`` is a separate reviewed change, after the first dry-run report.
-    """
+def test_the_shipped_constants_keep_the_editor_safe() -> None:
+    """Hard limits hold, the chat and the watch links are protected."""
     params = worker.load_edit_params(config.read_json(config.CONSTANTS_PATH))
-    assert params.mode in ('off', 'dry')
+    assert params.mode in worker.MODES
     assert params.max_deletes == tgedit.MAX_DELETES
     assert params.pause_sec >= tgedit.MIN_PAUSE_SEC
     assert CHAT in params.guard.urls
     assert params.guard.link_texts
-    assert params.approval.approvers == ('strateg',)
-    assert params.approval.word
+    assert params.feed_url == worker.FEED_URL
+    assert worker.load_edit_params({}).feed_url == worker.FEED_URL
 
 
 def test_the_hard_limits_cannot_be_loosened() -> None:
@@ -698,76 +784,221 @@ def test_the_hard_limits_cannot_be_loosened() -> None:
     assert worker.load_edit_params({}).mode == 'off'
 
 
-def test_no_token_no_board() -> None:
-    """Without a token in the env the editor has no board and stays idle."""
-    params = worker.EditParams(board_url='https://board')
-    assert worker.board_from_env(params, {}) is None
-    got = worker.board_from_env(params, {worker.TOKEN_ENV: 'x'})
-    assert isinstance(got, boardapi.Board)
+def test_the_engine_has_no_door_to_the_board() -> None:
+    """Approval is the merge: neither half of the engine reads a board."""
+    for module in (tgedit, worker, feeds, tgedit_check):
+        source = Path(str(module.__file__)).read_text('utf-8').lower()
+        assert 'board' not in source, module.__name__
 
 
-# ----------------------------------------------------------- the board
+# ------------------------------------------------------- the dry check
 
 
-def _answer(text: str, *, error: bool = False) -> dict[str, object]:
-    """Return a JSON-RPC answer carrying ``text``."""
-    result = {'content': [{'type': 'text', 'text': text}], 'isError': error}
-    return {'jsonrpc': '2.0', 'id': 1, 'result': result}
+def _snapshot(*posts: dict[str, object]) -> str:
+    """Return a ``telegram`` answer as the MCP's JSON-RPC envelope."""
+    body = json.dumps({'channel': 'c', 'posts': list(posts)})
+    text = f'{len(posts)} posts\n\n{body}'
+    return json.dumps(
+        {'result': {'content': [{'type': 'text', 'text': text}]}}
+    )
 
 
-def test_the_board_answer_is_unwrapped_from_its_summary_line() -> None:
-    """A summary line, then the JSON object; notes are typed."""
-    body = {
-        'notes': [{'id': 5, 'role': 'strateg', 'text': 'ok #4', 'tags': []}]
-    }
-    got = boardapi._payload('board', _answer(f'1 note\n\n{json.dumps(body)}'))
-    assert boardapi._note(got['notes'][0]).role == 'strateg'  # type: ignore[index]
+def _snap(ident: int, text: str, *links: dict[str, str]) -> dict[str, object]:
+    """Return one snapshot post with text links."""
+    rows = [{**one, 'kind': one.get('kind', 'text')} for one in links]
+    return {'id': ident, 'text': text, 'links': rows, 'video': False}
 
 
-def test_a_board_error_raises_with_its_reason() -> None:
-    """A tool error or a JSON-RPC error is raised, not swallowed."""
-    with pytest.raises(boardapi.BoardError, match='forbidden'):
-        boardapi._payload('board_post', _answer('forbidden', error=True))
-    with pytest.raises(boardapi.BoardError, match='bad token'):
-        boardapi._payload('board', {'error': {'message': 'bad token'}})
+def test_the_snapshot_reads_as_envelope_or_text_and_refuses_the_rest() -> None:
+    """The curl answer and the tool's text read alike; a stranger raises."""
+    envelope = _snapshot(_snap(1, 'a'))
+    text = json.loads(envelope)['result']['content'][0]['text']
+    assert tgedit_check.read_snapshot(envelope)[0]['id'] == 1
+    assert tgedit_check.read_snapshot(text)[0]['id'] == 1
+    with pytest.raises(tgedit_check.SnapshotError, match='no posts'):
+        tgedit_check.read_snapshot('{"board": "admin"}')
 
 
-@pytest.mark.parametrize(
-    'text',
-    [
-        '1 note\n\n{"board": "admin"}',  # no notes field
-        '1 note\n\n{"notes": {"id": 5}}',  # notes is not a list
-        'board is down',  # no JSON at all
-        '1 note\n\n["a list"]',  # JSON, but not an object
-    ],
-)
-def test_a_broken_board_answer_raises_not_looks_empty(
-    text: str, monkeypatch: pytest.MonkeyPatch
+def test_the_dry_check_says_matched_missing_twice_and_no_post() -> None:
+    """Each item reads as the engine's planner would read it."""
+    package = _parse(
+        [
+            {'post': 1, 'action': 'edit', 'old': 'gov', 'new': 'blog'},
+            {'post': 2, 'action': 'edit', 'old': 'gone', 'new': 'x'},
+            {'post': 3, 'action': 'edit', 'old': 'ha', 'new': 'x'},
+            {'post': 4, 'action': 'delete'},
+            {'post': 0, 'action': 'desc', 'new': 'x'},
+            {'post': 0, 'action': 'pin_new', 'new': 'b'},
+        ]
+    )
+    posts = tgedit_check.read_snapshot(
+        _snapshot(_snap(1, 'gov'), _snap(2, 'b'), _snap(3, 'ha ha'))
+    )
+    got = tgedit_check.check(package, posts, GUARD)
+    assert [(one.item.post, one.status, one.reason) for one in got] == [
+        (1, tgedit.DRY_OK, ''),
+        (2, tgedit.SKIPPED, tgedit.NOT_FOUND),
+        (3, tgedit.SKIPPED, tgedit.AMBIGUOUS),
+        (4, tgedit.SKIPPED, tgedit.NO_POST),
+        (0, tgedit_check.UNCHECKED, ''),
+        (0, tgedit.SKIPPED, tgedit.ALREADY),
+    ]
+
+
+def test_the_dry_check_keeps_links_and_their_protection() -> None:
+    """A link moves by address; a watch row and a swallowed link do not.
+
+    The last case is post 1155 of package #475: the fragment holds the
+    whole link, so the engine would skip it and the check says so first.
+    """
+    watch = {'href': 'https://a', 'text': WATCH}
+    ask = {'href': 'https://q', 'text': 'ask'}
+    posts = tgedit_check.read_snapshot(
+        _snapshot(
+            _snap(1, 'see here', {'href': 'https://old', 'text': 'here'}),
+            _snap(2, f'{WATCH} now', watch),
+            _snap(3, 'hi\n\nask me', ask),
+        )
+    )
+    package = _parse(
+        [
+            {'post': 1, 'action': 'link', 'old': 'https://old', 'new': 'n'},
+            {'post': 2, 'action': 'link', 'old': 'https://a', 'new': 'n'},
+            {'post': 3, 'action': 'edit', 'old': '\n\nask me', 'new': ''},
+        ]
+    )
+    got = tgedit_check.check(package, posts, GUARD)
+    assert [(one.status, one.reason) for one in got] == [
+        (tgedit.DRY_OK, ''),
+        (tgedit.SKIPPED, tgedit.PROTECTED),
+        (tgedit.SKIPPED, tgedit.FORMATTING),
+    ]
+
+
+def test_a_post_with_media_is_not_empty() -> None:
+    """only_if_empty spares a post that is only a video."""
+    raw = {'id': 9, 'text': '', 'links': [], 'video': True, 'photos': 0}
+    assert tgedit_check.to_post(raw).media
+
+
+def test_the_dry_check_prints_a_block_per_package_of_the_feed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A broken answer must not read as "no packages" (the #507 blind spot)."""
-
-    def fake_post(*_: object, **__: object) -> object:
-        return _Response(_answer(text))
-
-    monkeypatch.setattr('requests.post', fake_post)
-    with pytest.raises(boardapi.BoardError, match='board board'):
-        boardapi.Board('https://board', 'token').notes(q='tg-edit')
-
-
-@dataclass
-class _Response:
-    """A fake HTTP response carrying one JSON body."""
-
-    body: object
-
-    def raise_for_status(self) -> None:
-        """Pretend the status was 200."""
-
-    def json(self) -> object:
-        """Return the body."""
-        return self.body
+    """The command prints each package's tally, then each of its items."""
+    feed = tmp_path / 'tgedit.json'
+    edit = [{'post': 1, 'action': 'edit', 'old': 'a', 'new': 'b'}]
+    feed.write_text(_feed(_pkg(edit), _pkg(edit, id='476-x')), 'utf-8')
+    snapshot = tmp_path / 'telegram.json'
+    snapshot.write_text(_snapshot(_snap(1, 'a')), 'utf-8')
+    assert tgedit_check.main([str(feed), str(snapshot)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith(f'{PACKAGE}: 1 items')
+    assert out[2].startswith('476-x: 1 items')
+    assert len(out) == 4  # noqa: PLR2004
+    snapshot.write_text('not json', 'utf-8')
+    assert tgedit_check.main([str(feed), str(snapshot)]) == 1
+    snapshot.write_text(_snapshot(_snap(1, 'a')), 'utf-8')
+    feed.write_text(_feed(version=2), 'utf-8')
+    assert tgedit_check.main([str(feed), str(snapshot)]) == 1
+    assert tgedit_check.main([str(tmp_path / 'none'), str(snapshot)]) == 1
 
 
 def test_an_outcome_is_counted_by_status() -> None:
     """The report's first line counts outcomes by status."""
     assert tgedit.tally([EMPTY, EMPTY]) == {tgedit.DRY_OK: 2}
+
+
+# ------------------------------------------------------ the feed door
+
+
+@dataclass
+class _Raw:
+    """The body of a fake response, read in one go."""
+
+    body: bytes
+
+    def read(self, limit: int, *, decode_content: bool) -> bytes:
+        """Return at most ``limit`` bytes."""
+        assert decode_content
+        return self.body[:limit]
+
+
+@dataclass
+class _Resp:
+    """A fake ``requests`` response with a status and a body."""
+
+    raw: _Raw
+    status: int = 200
+
+    def __enter__(self) -> Self:
+        """Open the response."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Close the response."""
+
+    def raise_for_status(self) -> None:
+        """Fail on a non-2xx status, as requests does."""
+        import requests
+
+        if self.status >= 400:  # noqa: PLR2004 -- HTTP's error range
+            raise requests.HTTPError(str(self.status))
+
+
+def _serve(
+    monkeypatch: pytest.MonkeyPatch, resp: _Resp | Exception
+) -> list[dict[str, object]]:
+    """Answer every ``requests.get`` with ``resp``; return the calls."""
+    import requests
+
+    calls: list[dict[str, object]] = []
+
+    def get(url: str, **kw: object) -> _Resp:
+        calls.append({'url': url, **kw})
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
+
+    monkeypatch.setattr(requests, 'get', get)
+    return calls
+
+
+def test_the_feed_door_says_who_it_is_and_reads_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cloudflare turns the stdlib's client name away: ours is named."""
+    calls = _serve(monkeypatch, _Resp(_Raw('{"a": "\u0451"}'.encode())))
+    assert feeds.read('https://site/tgedit.json') == '{"a": "\u0451"}'
+    headers = cast('dict[str, str]', calls[0]['headers'])
+    assert headers['User-Agent'] == feeds.USER_AGENT
+    assert calls[0]['timeout'] == feeds.TIMEOUT_SEC
+
+
+@pytest.mark.parametrize(
+    ('resp', 'says'),
+    [
+        (_Resp(_Raw(b'busy'), status=503), 'HTTPError'),
+        (_Resp(_Raw(b'x' * (feeds.LIMIT_BYTES + 1))), 'larger than'),
+        (_Resp(_Raw(b'\xff')), 'not UTF-8'),
+    ],
+    ids=['http-503', 'too-big', 'not-utf8'],
+)
+def test_the_feed_door_raises_instead_of_reading_nothing(
+    monkeypatch: pytest.MonkeyPatch, resp: _Resp, says: str
+) -> None:
+    """A failed read is an error naming the address, never an empty feed."""
+    _serve(monkeypatch, resp)
+    with pytest.raises(feeds.FeedUnreachableError, match=says) as caught:
+        feeds.read('https://site/tgedit.json')
+    assert 'https://site/tgedit.json' in str(caught.value)
+
+
+def test_the_feed_door_turns_a_dead_network_into_its_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No network: the worker's error, with the address and the cause."""
+    import requests
+
+    _serve(monkeypatch, requests.ConnectionError('down'))
+    with pytest.raises(feeds.FeedUnreachableError, match='ConnectionError'):
+        feeds.read('https://site/tgedit.json')

@@ -13,7 +13,7 @@ Link aggregation is just one of them:
 | **comod** | the supporter "cabinet" (`/comod`): a named shelf per donor for a month |
 | **users** | an opt-in SQLite record of the channel audience over time |
 | **links** | keeps the video links in the channel's posts short (trackable), history and new posts alike; ships in dry mode |
-| **tgedit** | applies approved packages of channel edits from the team board (edit, delete, relink, description, new pin); ships in dry mode |
+| **tgedit** | applies the reviewed packages of the site's feed `/tgedit.json` to the channel (edit, delete, relink, description, new pin) |
 
 `main.py` is only the **host**: it loads config, builds the active profile,
 routes each incoming event to the engines, and runs the status/heartbeat loop.
@@ -45,7 +45,7 @@ minions/userbot/
     links (LinkKeeper), tgedit (ChannelEditor),
     status (StatusReport), commands (CommandRouter), profiles (ServiceModes)
   dev/                    # developer tools, not the running bot
-    dump_emoji_ids
+    dump_emoji_ids, tgedit_check
 ```
 
 The principle: `core/` is pure logic/maths/IO, `engines/` are the domain brains,
@@ -136,66 +136,93 @@ are never touched; any other link is left as is and listed in the report.
 Knobs: `engines.links` in `aggregator_constants.json` (`domain` blank =
 `post.short_link_domain`).
 
-## Channel editor (`tgedit`, off by default)
+## Channel editor (`tgedit`)
 
-`glue/tgedit.py` over the pure `core/tgedit.py`, so the channel's posts are
-cleaned up from the team board without the owner doing it by hand.
+`glue/tgedit.py` over the pure `core/tgedit.py`: a worker that executes a
+feed, so the channel's posts are cleaned up without the owner doing it by
+hand. It reads one public address and talks to nobody but Telegram -- no
+board, no token.
 
-**The package.** A board note, `kind=note`, tag `tg-edit`, written by a role
-in `authors`, not archived, carrying one JSON block. It may be a reply in a
-task's thread: the board lists only root notes by `tag`, so packages are
-found with `q=tg-edit` and kept only when the tag is in their `tags`.
+**The feed** is the site's `https://daetotyoma.com/tgedit.json`
+(`engines.tgedit.feed_url`), built from the site repository's
+`data/tgedit/<number>-<word>.json` (schema: `shared/tgedit.mjs` there, the
+same as `core/tgedit.py` here). The engine reads it once a tick, in the
+persona's waking hours:
 
 ```json
-[{"post": 1167, "action": "edit", "old": "exact fragment", "new": "new one"},
- {"post": 1164, "action": "link", "old": "https://old", "new": "https://new"},
- {"post": 1142, "action": "delete"},
- {"post": 1006, "action": "delete", "only_if_empty": true},
- {"post": 0, "action": "desc", "new": "\nappended to the description"},
- {"post": 0, "action": "pin_new", "new": "a new post, pinned silently"}]
+{"version": 1,
+ "rules": {"max_deletes": 15, "min_pause_sec": 10,
+           "apply_once": true, "old_must_match_once": true},
+ "packages": [
+  {"id": "475-cleanup", "author": "audience-head", "why": "one line",
+   "edits": [
+  {"post": 1167, "action": "edit", "old": "exact fragment", "new": "new one"},
+  {"post": 1164, "action": "link", "old": "https://old", "new": "https://new"},
+  {"post": 1142, "action": "delete"},
+  {"post": 1006, "action": "delete", "only_if_empty": true},
+  {"post": 0, "action": "desc", "new": "\nappended to the description"},
+  {"post": 0, "action": "pin_new", "new": "a new post, pinned silently"}]}]}
 ```
+
+A feed that cannot be read, does not parse, has another `version`, carries
+a broken package or one id twice is refused WHOLE: one line in the log,
+nothing read in the channel, nothing remembered; the next tick tries again.
+The feed's `rules` can only tighten ours: the engine takes the stricter of
+`rules` and `engines.tgedit` and never goes past 15 deletions a package or
+under 10 s between writes. A package that left the feed is not applied.
 
 `post` 0 is the channel itself (`desc`, `pin_new`). `edit` replaces a
 fragment of the text (empty `new` removes it), `link` points every link
 whose address is `old` at `new` (a visible address changes its text too;
 the report says `replaced N` when it moved more than one).
-A broken block, an unknown key or action, or more than `max_deletes`
-deletions refuses the WHOLE package, and the reason goes to the thread.
+More than `max_deletes` deletions refuses the WHOLE package (journaled,
+remembered by id). The site build checks the same schema, so a typo fails
+the site's CI before it reaches the feed.
 
-**Approval.** A note with a line that OPENS with `<approve_word> #<package id>`
-("not approved #475" does not count), anywhere on the board, by a role in
-`approvers` other than the package's author, written after it.
-Found with the board's `q=#<id>` search.
+**Approval is the merge.** A package arrives as a PR to the site; the
+site's team lead reviews and merges it into `main`, the deploy puts it in
+the feed, and the worker applies it on its next tick. No image rebuild,
+nobody approves anything on the board.
+
+**Dry check before the merge, without the NAS**: save the site MCP's
+`telegram` answer (`limit` 1000) and run
+
+```
+python -m minions.userbot.dev.tgedit_check \
+    https://daetotyoma.com/tgedit.json telegram.json
+```
+
+The feed is its address or a file (the site's `dist/tgedit.json`, to check
+a package before its PR merges). It runs every item of every package through the engine's own planner against that
+snapshot and prints `post N . action -> matched / old not found / old more
+than once / no post` (in the words of `engines.tgedit.labels`). The
+snapshot has no entity offsets beyond its links and no description, so
+`desc` reads "unchecked"; the engine's dry run in Telegram has the last word.
 
 **Dry run first.** Every item is checked against the post as it is now:
 `old` must occur in the text exactly once, character for character (none or
 two: skipped), a link's `old` must be the address of one of its links (all
 links with that address move). An
-edit that cuts across formatting, or touches a premium emoji, is skipped
-rather than allowed to move a glyph onto the wrong letter.
+edit that cuts across formatting, swallows a whole link, or touches a
+premium emoji is skipped rather than allowed to move a glyph onto the
+wrong letter.
 
 **Never touched**: an address in `protect_urls` (the chat), a link whose
 words contain one of `protect_link_texts` (the "watch" row), every premium
 emoji, and any post the package does not name -- those are never read.
 
 **Modes** (`engines.tgedit.mode`, a reviewed change of the constants file,
-not a chat command): `off` does nothing; `dry` (shipped) posts the dry-run
-outcome of each item into the package's thread; `on` journals each post
-before changing it (`tgedit_journal.jsonl`: text and Telegram's own entity
-dicts, enough to undo by hand), writes what passed at least `pause_sec`
-apart (never under 10 s) and reports `post N . action -> applied / skipped
-(reason) / error` into the thread. A package is applied once (`tgedit.json`);
-a channel that cannot be read leaves it pending for the next tick. Rights
+not a chat command; ships `on`): `off` does nothing; `dry` dry-runs each
+package once; `on` journals each post before changing it
+(`tgedit_journal.jsonl`: text and Telegram's own entity dicts, enough to
+undo by hand) and writes what passed at least `pause_sec` apart (never
+under 10 s). Either way each item's outcome -- `post N . action -> applied
+/ skipped (reason) / error` -- goes to the container log and, as an
+`outcome` row, to the journal. A package is applied once (`tgedit.json`,
+by id); a dry-reported one is still applied when the mode turns `on`; a
+channel that cannot be read leaves it pending for the next tick. Rights
 are read first (`edit`, `delete`, `pin`, `post`, `info` = change the
 description): an item the account may not do is reported `no_rights`.
-
-A board answer that is not JSON or has no `notes` list raises `BoardError`
-(the tick logs and retries) rather than reading as "no packages".
-
-The board is reached through the site's MCP with ONE role's token in the
-env (`TGEDIT_BOARD_TOKEN`); without it the editor stays idle. The server
-signs the reports with that role, so the editor cannot write under another
-name, and it uses only `board` (read) and `board_post` (a report reply).
 
 ## State on disk
 
@@ -212,8 +239,8 @@ of scalars and are the only part worth reading by eye.
   greeter_state.json           the admin-log cursor and DM budget
   comod.json                   who is on which shelf
   links.json                   link keeper: mode, history cursor, edits today
-  tgedit.json                  channel editor: packages applied / dry-reported
-  tgedit_journal.jsonl         channel editor: each post before it was changed
+  tgedit.json                  channel editor: package ids applied / dry-run
+  tgedit_journal.jsonl         channel editor: before-images and outcomes
   users.db                     the opt-in audience DB (PII, off by default)
 ```
 

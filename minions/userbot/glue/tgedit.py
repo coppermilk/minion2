@@ -1,26 +1,30 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Apply approved channel-edit packages from the team board.
+"""Apply the channel-edit packages of the site's feed.
 
-The Telethon side of ``core/tgedit``. Each tick, inside the persona's
-waking hours, it reads the board's notes tagged ``tg-edit``, keeps the
-ones a permitted author wrote and an approver accepted, and for each
-package not handled yet:
+The Telethon side of ``core/tgedit``. The packages live in the site's
+feed (``engines.tgedit.feed_url``, ``/tgedit.json``); merging a package
+into the site's ``main`` IS the approval, so the worker asks nobody. Each
+tick, inside the persona's waking hours, it reads the feed -- unreachable,
+unparsable or of another version: one log line, nothing done, the next
+tick tries again -- and for each package not handled yet it:
 
-1. checks the account's rights in the channel and the package's limits;
+1. checks the account's rights in the channel and the package's limits
+   (the stricter of the feed's ``rules`` and our own);
 2. reads every post the package names and DRY-RUNS each item against the
    post as it is now (``old`` must match it character for character);
-3. ``dry`` mode stops there and posts the dry-run report into the
-   package's thread; ``on`` mode journals every post it is about to
-   change (text and entities, for an undo by hand), applies what passed,
-   one write at least ``pause_sec`` (never under 10 s) after another,
-   and posts ``post -> applied / skipped / error`` into the thread.
+3. ``dry`` mode stops there; ``on`` mode journals every post it is about
+   to change (text and entities, for an undo by hand) and applies what
+   passed, one write at least ``pause_sec`` (never under 10 s) after
+   another.
 
-``mode`` lives in ``engines.tgedit`` and ships ``dry`` (reports, no
-writes): switching it is a reviewed change of the constants file, not
-a chat command. A handled package is remembered in ``tgedit.json``, so
-it is applied once; a post the package does not name is never read,
-let alone written.
+Either way every item's outcome -- ``post -> applied / skipped (reason) /
+error`` -- goes to the container log and to the journal. ``mode`` lives in
+``engines.tgedit``: switching it is a reviewed change of the constants
+file, not a chat command. A handled package is remembered by id in
+``tgedit.json``, so it is applied once; a post the package does not name
+is never read, let alone written; a package the feed no longer carries
+is not applied.
 """
 
 from __future__ import annotations
@@ -33,13 +37,12 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
-from minion_core.adapters import board as boardapi
+from minion_core.adapters import feed as feeds
 from minion_core.adapters import userchat
 from minion_core.kernel import atomic_write
 from minions.userbot.core import codec
 from minions.userbot.core import relink
 from minions.userbot.core import tgedit
-from minions.userbot.glue.links import chunks
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -51,9 +54,9 @@ log = logging.getLogger('userbot')
 
 STATE_FILE = 'tgedit.json'
 JOURNAL_FILE = 'tgedit_journal.jsonl'
+FEED_URL = 'https://daetotyoma.com/tgedit.json'
+"""The site's feed of reviewed packages (``engines.tgedit.feed_url``)."""
 MODES = ('off', 'dry', 'on')
-REPORT_CHUNK = 3800
-"""Characters per board reply (the board's limit is 4000)."""
 RECENT = 20
 """Newest posts read to tell whether a pin_new post is already out."""
 NEEDS = {
@@ -71,12 +74,7 @@ class EditParams:
     """The worker's knobs, from ``engines.tgedit`` and ``persona``."""
 
     mode: str = 'off'
-    board_url: str = ''
-    tag: str = 'tg-edit'
-    authors: tuple[str, ...] = ()
-    approval: tgedit.Approval = field(
-        default_factory=lambda: tgedit.Approval('', ())
-    )
+    feed_url: str = FEED_URL
     max_deletes: int = tgedit.MAX_DELETES
     pause_sec: float = tgedit.MIN_PAUSE_SEC
     tick_sec: float = 900.0
@@ -102,13 +100,7 @@ def load_edit_params(settings: Mapping[str, object]) -> EditParams:
     labels = codec.table(cfg.get('labels'))
     return EditParams(
         mode=mode if mode in MODES else 'off',
-        board_url=codec.text(cfg.get('board_url'), '').strip(),
-        tag=codec.text(cfg.get('tag'), 'tg-edit'),
-        authors=_words(cfg.get('authors')),
-        approval=tgedit.Approval(
-            word=codec.text(cfg.get('approve_word'), '').strip(),
-            approvers=_words(cfg.get('approvers')),
-        ),
+        feed_url=codec.text(cfg.get('feed_url'), FEED_URL),
         max_deletes=min(
             tgedit.MAX_DELETES,
             int(codec.num(cfg.get('max_deletes'), tgedit.MAX_DELETES)),
@@ -131,27 +123,13 @@ def load_edit_params(settings: Mapping[str, object]) -> EditParams:
     )
 
 
-TOKEN_ENV = 'TGEDIT_BOARD_TOKEN'  # noqa: S105 -- the env var's name, not a secret
-"""The env var holding the board role's MCP token (never in the JSON)."""
-
-
-def board_from_env(
-    params: EditParams, env: Mapping[str, str]
-) -> boardapi.Board | None:
-    """Return the board door, or None when the url or the token is unset."""
-    token = env.get(TOKEN_ENV, '').strip()
-    if not params.board_url or not token:
-        return None
-    return boardapi.Board(params.board_url, token)
-
-
 @dataclass(frozen=True)
 class EditDeps:
     """Everything the worker may reach; nothing else is in scope."""
 
     account: userchat.Account
-    board: boardapi.Board | None  # None: no token configured, idle
     channel: Callable[[], int]  # the profile's channel (test or live)
+    feed: Callable[[], Awaitable[str]]  # the feed's text (read_feed)
     path: Path  # tgedit.json
     journal: Path  # tgedit_journal.jsonl
     params: EditParams
@@ -160,10 +138,10 @@ class EditDeps:
 
 @dataclass
 class EditState:
-    """What survives a restart: packages applied, packages dry-reported."""
+    """What survives a restart: package ids applied and dry-reported."""
 
-    done: set[int] = field(default_factory=set)
-    dry: set[int] = field(default_factory=set)
+    done: set[str] = field(default_factory=set)
+    dry: set[str] = field(default_factory=set)
 
 
 def read_state(path: Path) -> EditState:
@@ -175,8 +153,8 @@ def read_state(path: Path) -> EditState:
     if not isinstance(raw, dict):
         return EditState()
 
-    def ids(key: str) -> set[int]:
-        return {int(v) for v in codec.rows(raw.get(key)) if isinstance(v, int)}
+    def ids(key: str) -> set[str]:
+        return {v for v in codec.rows(raw.get(key)) if isinstance(v, str)}
 
     return EditState(done=ids('done'), dry=ids('dry'))
 
@@ -199,9 +177,13 @@ def to_post(linked: userchat.Linked) -> tgedit.Post:
     )
 
 
-def _note(row: boardapi.BoardNote) -> tgedit.Note:
-    """Convert a board row into the approval check's note."""
-    return tgedit.Note(row.id, row.role, row.text, row.created_at)
+def read_feed(url: str) -> Callable[[], Awaitable[str]]:
+    """Return the reader of the feed at ``url``, off the event loop."""
+
+    async def read() -> str:
+        return await asyncio.to_thread(feeds.read, url)
+
+    return read
 
 
 class ChannelUnreadableError(RuntimeError):
@@ -212,15 +194,16 @@ class ChannelUnreadableError(RuntimeError):
 class _Run:
     """One package's pass: outcomes so far and whether writes go out."""
 
-    package: int
+    package: str
     live: bool
+    pause_sec: float = tgedit.MIN_PAUSE_SEC
     outcomes: list[tgedit.Outcome] = field(default_factory=list)
     writes: int = 0
 
 
 @dataclass
 class ChannelEditor:
-    """Apply approved ``tg-edit`` packages to the channel."""
+    """Apply the feed's packages to the channel."""
 
     deps: EditDeps
     state: EditState = field(default_factory=EditState)
@@ -246,71 +229,47 @@ class ChannelEditor:
 
     async def tick(self, now: float) -> int:
         """Handle every pending package; return how many were handled."""
-        params, board = self.deps.params, self.deps.board
-        if params.mode == 'off' or board is None:
-            return 0
-        if not params.clock.awake(now):
-            return 0
-        handled = 0
-        for package in await self._pending(board):
-            await self._handle(board, package)
-            handled += 1
-        return handled
-
-    async def _pending(
-        self, board: boardapi.Board
-    ) -> list[boardapi.BoardNote]:
-        """Return approved packages not handled in the current mode yet.
-
-        Found by ``q``, not ``tag``: the board's tag list holds only root
-        notes, and a package is usually a reply in its task's thread. ``q``
-        also matches notes that merely name the tag, and the archive, so
-        the tag and ``archived`` are checked here.
-        """
         params = self.deps.params
-        seen = self.state.dry if params.mode == 'dry' else self.state.done
-        notes = await asyncio.to_thread(
-            board.notes, q=params.tag, kind='note', limit=50
-        )
-        fresh = [
-            note
-            for note in sorted(notes, key=lambda n: n.id)
-            if params.tag in note.tags
-            and not note.archived
-            and note.id not in seen | self.state.done
-            and note.role in params.authors
-        ]
-        return [note for note in fresh if await self._approved(board, note)]
+        if params.mode == 'off' or not params.clock.awake(now):
+            return 0
+        try:
+            feed = tgedit.parse_feed(await self.deps.feed())
+        except (feeds.FeedUnreachableError, tgedit.FeedError) as exc:
+            log.warning('tgedit: feed skipped this tick: %s', exc)
+            return 0
+        rules = feed.rules.tighten(params.max_deletes, params.pause_sec)
+        pending = self._pending(feed.packages)
+        for package in pending:
+            await self._handle(package, rules)
+        return len(pending)
 
-    async def _approved(
-        self, board: boardapi.Board, package: boardapi.BoardNote
-    ) -> bool:
-        """Whether an approver accepted ``package`` anywhere on the board."""
-        mentions = await asyncio.to_thread(
-            board.notes, q=f'#{package.id}', limit=50
-        )
-        approval = self.deps.params.approval
-        return bool(approval.by(_note(package), [_note(m) for m in mentions]))
+    def _pending(
+        self, packages: tuple[tgedit.Package, ...]
+    ) -> list[tgedit.Package]:
+        """Return the feed's packages not handled in the current mode yet."""
+        seen = self.state.dry if self.deps.params.mode == 'dry' else set()
+        return [
+            one for one in packages if one.id not in seen | self.state.done
+        ]
 
     async def _handle(
-        self, board: boardapi.Board, package: boardapi.BoardNote
+        self, package: tgedit.Package, rules: tgedit.Rules
     ) -> None:
         """Dry-run (and in ``on`` mode apply) one package; report it."""
         live = self.deps.params.mode == 'on'
-        run = _Run(package.id, live)
+        run = _Run(package.id, live, rules.min_pause_sec)
         try:
-            items = tgedit.parse(package.text)
-            tgedit.check_limits(items, self.deps.params.max_deletes)
+            tgedit.check_limits(package.items, rules.max_deletes)
         except tgedit.PackageError as exc:
-            await self._post(board, run, refused=str(exc))
+            self._report(run, refused=str(exc))
             return
         rights = await self.deps.account.rights(self.deps.channel())
         if rights is None:
-            msg = f'tgedit: rights in the channel unreadable (#{package.id})'
+            msg = f'tgedit: rights in the channel unreadable ({run.package})'
             raise ChannelUnreadableError(msg)
-        await self._posts(run, items, rights)
-        await self._channel(run, items, rights)
-        await self._post(board, run)
+        await self._posts(run, package.items, rights)
+        await self._channel(run, package.items, rights)
+        self._report(run)
 
     async def _posts(
         self, run: _Run, items: tuple[tgedit.Item, ...], rights: frozenset[str]
@@ -320,7 +279,7 @@ class ChannelEditor:
         chat = self.deps.channel()
         read = await self.deps.account.posts(chat, list(groups))
         if read is None:
-            msg = f'tgedit: posts unreadable (#{run.package})'
+            msg = f'tgedit: posts unreadable ({run.package})'
             raise ChannelUnreadableError(msg)
         for post_id, group in groups.items():
             missing = {NEEDS[one.action] for one in group} - rights
@@ -406,53 +365,61 @@ class ChannelEditor:
     async def _pace(self, run: _Run) -> None:
         """Keep writes at least ``pause_sec`` apart (none before the first)."""
         if run.writes:
-            await self.deps.sleep(self.deps.params.pause_sec)
+            await self.deps.sleep(run.pause_sec)
         run.writes += 1
 
     def _journal(
-        self, package: int, what: str, body: dict[str, object]
+        self, package: str, what: str, body: dict[str, object]
     ) -> None:
-        """Append one before-image to the journal, before the write."""
+        """Append one row: a before-image (before the write) or an outcome."""
         row = {'at': time.time(), 'package': package, 'what': what, **body}
         line = json.dumps(row, ensure_ascii=False) + '\n'
         with self.deps.journal.open('a', encoding='utf-8') as out:
             out.write(line)
 
-    async def _post(
-        self, board: boardapi.Board, run: _Run, refused: str = ''
-    ) -> None:
-        """Report into the package's thread; remember the package."""
+    def _report(self, run: _Run, refused: str = '') -> None:
+        """Log and journal every item's outcome; remember the package."""
         labels = self.deps.params.labels
         mode = 'on' if run.live else 'dry'
         head = labels.get(f'head_{mode}', f'tg-edit {mode}')
         if refused:
-            lines = [
-                f'{head} #{run.package}',
-                labels.get('refused', 'refused') + f': {refused}',
-            ]
+            log.warning(
+                '%s %s: %s: %s',
+                head,
+                run.package,
+                labels.get('refused', 'refused'),
+                refused,
+            )
+            self._journal(
+                run.package, 'refused', {'mode': mode, 'why': refused}
+            )
         else:
             counts = tgedit.tally(run.outcomes)
             summary = ', '.join(
                 f'{labels.get(k, k)} {v}' for k, v in sorted(counts.items())
             )
-            lines = [
-                f'{head} #{run.package}: {summary}',
-                *tgedit.report(run.outcomes, labels),
-            ]
-        for n, text in enumerate(chunks(lines, REPORT_CHUNK), start=1):
-            ref = f'tgedit-{run.package}-{mode}-{n}'
-            await asyncio.to_thread(board.reply, run.package, text, ref)
+            log.info('%s %s: %s', head, run.package, summary)
+            for line in tgedit.report(run.outcomes, labels):
+                log.info('tgedit %s: %s', run.package, line)
+            for one in run.outcomes:
+                self._journal(run.package, 'outcome', _row(one, mode))
         if run.live:
             self.state.done.add(run.package)
         else:
             self.state.dry.add(run.package)
         self.save()
-        log.info(
-            'tgedit: package %d %s, %d item(s)',
-            run.package,
-            mode,
-            len(run.outcomes),
-        )
+
+
+def _row(one: tgedit.Outcome, mode: str) -> dict[str, object]:
+    """Return one outcome as a journal row's body."""
+    return {
+        'mode': mode,
+        'post': one.item.post,
+        'action': one.item.action,
+        'status': one.status,
+        'reason': one.reason,
+        'count': one.count,
+    }
 
 
 def _same(items: tuple[tgedit.Item, ...], reason: str) -> list[tgedit.Outcome]:
