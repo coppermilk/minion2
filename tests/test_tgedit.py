@@ -712,6 +712,7 @@ def _editor(
             params=params,
             sleep=sleep,
             report=tmp_path / worker.REPORT_FILE,
+            outbox=tmp_path / worker.OUTBOX_DIR,
         )
     )
     editor.load()
@@ -1380,6 +1381,18 @@ def test_the_report_is_rebuilt_from_the_journal_on_start(
         out.write('{torn line\n')
     _editor(tmp_path, _world(), 'on')
     assert [p['id'] for p in _packages(_report(tmp_path))] == [PACKAGE]
+
+
+def test_the_report_goes_to_the_outbox_too(tmp_path: Path) -> None:
+    """The shared NAS -> site channel gets the very same report."""
+    editor, _ = _editor(tmp_path, _world(), 'on')
+    asyncio.run(editor.tick(NOW))
+    copy = tmp_path / worker.OUTBOX_DIR / worker.OUTBOX_REPORT
+    assert copy.read_bytes() == (tmp_path / worker.REPORT_FILE).read_bytes()
+    body = json.loads(copy.read_text('utf-8'))
+    assert body['v'] == 1
+    assert [p['id'] for p in _packages(body)] == [PACKAGE]
+    assert [p.name for p in copy.parent.iterdir()] == [worker.OUTBOX_REPORT]
 
 
 def test_the_report_fits_the_site_and_drops_the_oldest() -> None:
