@@ -91,6 +91,12 @@ from minions.userbot.glue.status import STATUS_WARM_PEERS
 from minions.userbot.glue.status import StatusReport
 from minions.userbot.glue.stories import StoryDeps
 from minions.userbot.glue.stories import StoryWatch
+from minions.userbot.glue.tgedit import JOURNAL_FILE as TGEDIT_JOURNAL
+from minions.userbot.glue.tgedit import STATE_FILE as TGEDIT_FILE
+from minions.userbot.glue.tgedit import ChannelEditor
+from minions.userbot.glue.tgedit import EditDeps
+from minions.userbot.glue.tgedit import board_from_env
+from minions.userbot.glue.tgedit import load_edit_params
 from minions.userbot.glue.users import AudienceDeps
 from minions.userbot.glue.users import AudienceLog
 
@@ -137,6 +143,7 @@ class Userbot:
         self.rescan_task: asyncio.Task[None] | None = None
         self.stories_task: asyncio.Task[None] | None = None
         self.links_task: asyncio.Task[None] | None = None
+        self.tgedit_task: asyncio.Task[None] | None = None
         self.startup_task: asyncio.Task[None] | None = None
         rt = codec.section(self.settings, 'runtime')
         # One door to Telegram, one gate in front of it: every service this
@@ -373,6 +380,20 @@ class Userbot:
             )
         )
         self.links.load()
+        # Channel editor: applies approved tg-edit packages from the team
+        # board. Ships off (engines.tgedit.mode); idle without a board token.
+        edit_params = load_edit_params(self.settings)
+        self.tgedit = ChannelEditor(
+            EditDeps(
+                account=self.account,
+                board=board_from_env(edit_params, os.environ),
+                channel=lambda: self.live_targets()[0],
+                path=pdir / TGEDIT_FILE,
+                journal=pdir / TGEDIT_JOURNAL,
+                params=edit_params,
+            )
+        )
+        self.tgedit.load()
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
         self.cabinet = Cabinet(
             CabinetDeps(

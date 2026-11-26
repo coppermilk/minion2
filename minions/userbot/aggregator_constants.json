@@ -302,6 +302,42 @@
       "tick_sec": 900,
       "page": 20,
       "pause_sec": 60
+    },
+    "tgedit": {
+      "_note": "Применяет одобренные пакеты правок канала с доски команды (core/tgedit.py, glue/tgedit.py). Пакет — заметка kind=note с тегом tag от роли из authors, с блоком ```json [{post, action: edit|delete|link|desc|pin_new, old, new, only_if_empty}]```. Одобрение — заметка «<approve_word> #<id пакета>» от роли из approvers (не автора пакета). mode: off — ничего; dry — сухой прогон и отчёт в тред пакета; on — сухой прогон, журнал исходников (tgedit_journal.jsonl), правки не чаще 1 в pause_sec (не меньше 10 с), удалений не больше max_deletes (не больше 15) за пакет, отчёт в тред. Пакет применяется один раз (tgedit.json). Никогда не трогает адреса из protect_urls, ссылки с текстом из protect_link_texts, премиум-эмодзи и посты вне пакета. Токен роли доски — только в .env (TGEDIT_BOARD_TOKEN), без него движок спит.",
+      "mode": "off",
+      "board_url": "https://daetotyoma.com/mcp",
+      "tag": "tg-edit",
+      "authors": ["audience-head"],
+      "approvers": ["strateg"],
+      "approve_word": "принято",
+      "max_deletes": 15,
+      "pause_sec": 10,
+      "tick_sec": 900,
+      "protect_urls": ["t.me/da_eto_tyoma_chat"],
+      "protect_link_texts": ["Посмотреть"],
+      "labels": {
+        "head_dry": "tg-edit · сухой прогон пакета",
+        "head_on": "tg-edit · применён пакет",
+        "refused": "пакет не принят движком",
+        "channel": "канал",
+        "post": "пост",
+        "applied": "применено",
+        "skipped": "пропущено",
+        "error": "ошибка",
+        "dry_ok": "совпало, будет применено",
+        "not_found": "old не совпал с текущим текстом",
+        "ambiguous": "old встречается больше одного раза",
+        "no_post": "поста нет",
+        "protected": "защищено: чат, кнопки «Посмотреть» или премиум-эмодзи",
+        "formatting": "фрагмент режет форматирование",
+        "not_empty": "пост не пустой",
+        "already": "уже сделано",
+        "too_long": "описание длиннее 255 знаков",
+        "no_rights": "у аккаунта нет права в канале",
+        "conflict": "удаление и правка одного поста в одном пакете",
+        "failed": "Telegram не принял"
+      }
     }
   },
   "post": {

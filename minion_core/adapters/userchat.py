@@ -222,6 +222,10 @@ class Linked:
     links: tuple[LinkSpan, ...]
     preview: bool = False
     raw: tuple[object, ...] = field(default=(), compare=False, repr=False)
+    kinds: tuple[str, ...] = ()
+    """Parallel to ``spans``: ``emoji``, ``text``, ``url`` or ``other``."""
+    media: bool = False
+    """Whether the post carries media (a photo, a video) beyond a preview."""
 
 
 @dataclass(frozen=True)
@@ -460,6 +464,85 @@ class Account:
             ),
         )
         return got is not None
+
+    async def posts(
+        self, chat: int, ids: Sequence[int]
+    ) -> dict[int, Linked] | None:
+        """Read exact posts by id; a missing or deleted one is absent.
+
+        None when the read itself failed -- the caller must not mistake an
+        unreachable channel for posts that are gone.
+        """
+        if not ids:
+            return {}
+        got = await self._call(
+            READ, self.client.get_messages(chat, ids=list(ids))
+        )
+        if got is None:
+            return None
+        rows = list(got) if isinstance(got, list) else [got]
+        found = [_linked(row) for row in rows if row is not None]
+        return {post.id: post for post in found if post.id}
+
+    async def delete(self, chat: int, msg_id: int) -> bool:
+        """Delete one post; False when Telegram refused or was unreachable."""
+        got = await self._call(
+            WRITE, self.client.delete_messages(chat, [msg_id])
+        )
+        return got is not None
+
+    async def pin(self, chat: int, msg_id: int) -> bool:
+        """Pin one post without notifying the subscribers."""
+        got = await self._call(
+            WRITE, self.client.pin_message(chat, msg_id, notify=False)
+        )
+        return got is not None
+
+    async def about(self, chat: int) -> str | None:
+        """Return a channel's description; None when it cannot be read."""
+        from telethon.tl.functions.channels import GetFullChannelRequest
+
+        got = await self._call(READ, self.client(GetFullChannelRequest(chat)))
+        full = getattr(got, 'full_chat', None)
+        if full is None:
+            return None
+        return str(getattr(full, 'about', '') or '')
+
+    async def set_about(self, chat: int, about: str) -> bool:
+        """Replace a channel's description; False on failure."""
+        from telethon.tl.functions.messages import EditChatAboutRequest
+
+        peer = await self._call(READ, self.client.get_input_entity(chat))
+        if peer is None:
+            return False
+        got = await self._call(
+            WRITE, self.client(EditChatAboutRequest(peer=peer, about=about))
+        )
+        return got is not None
+
+    async def rights(self, chat: int) -> frozenset[str] | None:
+        """Return what this account may do in a channel.
+
+        A subset of ``post``, ``edit``, ``delete``, ``pin`` and ``info``
+        (change the description); empty when it is no admin there, None
+        when the channel cannot be read.
+        """
+        got = await self._call(READ, self.client.get_permissions(chat, 'me'))
+        if got is None:
+            return None
+        names = {
+            'post': 'post_messages',
+            'edit': 'edit_messages',
+            'delete': 'delete_messages',
+            'pin': 'pin_messages',
+            'info': 'change_info',
+        }
+        creator = bool(getattr(got, 'is_creator', False))
+        return frozenset(
+            word
+            for word, attr in names.items()
+            if creator or getattr(got, attr, False)
+        )
 
     def pacing(self) -> list[Lane]:
         """Report every lane of the gate, for an operator readout."""
@@ -758,6 +841,7 @@ def _linked(raw: object) -> Linked:
     units = text.encode(_UTF16)
     ents = tuple(getattr(raw, 'entities', None) or ())
     spans: list[tuple[int, int]] = []
+    kinds: list[str] = []
     links: list[LinkSpan] = []
     for index, entity in enumerate(ents):
         offset = int(getattr(entity, 'offset', 0) or 0)
@@ -766,20 +850,42 @@ def _linked(raw: object) -> Linked:
         url = getattr(entity, 'url', None)
         if url is not None:
             links.append(LinkSpan(index, 'text', offset, length, str(url)))
+            kinds.append('text')
         elif type(entity).__name__ == 'MessageEntityUrl':
             seen = units[offset * 2 : (offset + length) * 2]
             shown = seen.decode(_UTF16, errors='ignore')
             links.append(LinkSpan(index, 'url', offset, length, shown))
-    media = type(getattr(raw, 'media', None)).__name__
+            kinds.append('url')
+        elif getattr(entity, 'document_id', None) is not None:
+            kinds.append('emoji')
+        else:
+            kinds.append('other')
+    media = getattr(raw, 'media', None)
+    kind = type(media).__name__
     return Linked(
         id=int(getattr(raw, 'id', 0) or 0),
         text=text,
         date=epoch(getattr(raw, 'date', None)),
         spans=tuple(spans),
         links=tuple(links),
-        preview=media == 'MessageMediaWebPage',
+        preview=kind == 'MessageMediaWebPage',
         raw=ents,
+        kinds=tuple(kinds),
+        media=media is not None and kind != 'MessageMediaWebPage',
     )
+
+
+def dump(post: Linked) -> dict[str, object]:
+    """Return a post's text and vendor entities as plain JSON, for a log.
+
+    What the channel editor journals before it touches a post, so an edit
+    can be undone by hand: the entities in Telegram's own dict form.
+    """
+    ents: list[object] = []
+    for entity in post.raw:
+        to_dict = getattr(entity, 'to_dict', None)
+        ents.append(to_dict() if callable(to_dict) else repr(entity))
+    return {'id': post.id, 'text': post.text, 'entities': ents}
 
 
 def _reentities(post: Linked, edit: Relinked) -> list[object]:

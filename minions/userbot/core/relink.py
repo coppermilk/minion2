@@ -187,19 +187,29 @@ def apply(post: Post, changes: tuple[Change, ...]) -> Edit:
     order of ``post.spans``.
     """
     links = post.links
-    units = post.text.encode(_UTF16)
-    out = list(post.spans)
+    edit = Edit(post.text, post.spans)
     visible = [c for c in changes if links[c.index].kind == VISIBLE]
     for change in sorted(
         visible, key=lambda c: links[c.index].offset, reverse=True
     ):
         link = links[change.index]
-        at, old = link.offset, link.length
-        new = change.new.encode(_UTF16)
-        units = units[: at * 2] + new + units[(at + old) * 2 :]
-        cut = _Cut(at, old, _units(change.new) - old)
-        out = [_shift(span, cut) for span in out]
-    return Edit(units.decode(_UTF16), tuple(out))
+        edit = splice(edit, (link.offset, link.length), change.new)
+    return edit
+
+
+def splice(edit: Edit, where: tuple[int, int], new: str) -> Edit:
+    """Replace the (offset, length) ``where`` with ``new``; shift the spans.
+
+    A span after the cut moves, a span around it grows or shrinks, any
+    other span stays -- the one rule both the link keeper and the channel
+    editor (``core/tgedit``) rely on to keep formatting in place.
+    """
+    at, old = where
+    units = edit.text.encode(_UTF16)
+    units = units[: at * 2] + new.encode(_UTF16) + units[(at + old) * 2 :]
+    cut = _Cut(at, old, _units(new) - old)
+    spans = tuple(_shift(span, cut) for span in edit.spans)
+    return Edit(units.decode(_UTF16), spans)
 
 
 def report(plans: list[Plan]) -> list[str]:
