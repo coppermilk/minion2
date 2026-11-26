@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from minion_core.adapters import userchat
 from minion_core.pace import Gate
 from minion_core.pace import Pace
+from tests.conftest import install_telethon_stub
 
 CHAT = -1001
 MSG = 77
@@ -312,3 +313,59 @@ def test_no_request_leaves_without_passing_the_gate() -> None:
         if _touches_client(method) and not _waits(method)
     ]
     assert unpaced == ['on_message']
+
+
+# ------------------------------------------------------ custom emoji sets
+
+
+@dataclass
+class _Sets:
+    """A fake client answering the two emoji-set requests by their name."""
+
+    answers: dict[str, object]
+    asked: list[str] = field(default_factory=list)
+
+    def __call__(self, request: object) -> object:
+        """Answer one raw request; an unknown one fails as Telegram would."""
+        name = type(request).__name__
+        self.asked.append(name)
+        if name not in self.answers:
+            return _boom()
+        return _answer(self.answers[name])
+
+
+def _emoji_doc(ident: int, alt: str) -> SimpleNamespace:
+    """Return a custom-emoji document with its fallback glyph."""
+    attr = type('DocumentAttributeCustomEmoji', (), {'alt': alt})()
+    return SimpleNamespace(id=ident, attributes=[attr])
+
+
+def test_emoji_sets_reads_each_installed_set_glyph_by_glyph() -> None:
+    """Every installed set comes back with its names and (id, glyph)."""
+    install_telethon_stub()
+    head = SimpleNamespace(id=1, access_hash=2, short_name='Pack', title='P')
+    client = _Sets(
+        {
+            'GetEmojiStickersRequest': SimpleNamespace(sets=[head]),
+            'GetStickerSetRequest': SimpleNamespace(
+                documents=[_emoji_doc(777, 'x'), _emoji_doc(778, 'y')]
+            ),
+        }
+    )
+    account = userchat.Account(client, _gate())
+    got = asyncio.run(account.emoji_sets())
+    assert got == [
+        userchat.EmojiSet('Pack', 'P', (('777', 'x'), ('778', 'y')))
+    ]
+
+
+def test_emoji_sets_is_none_when_any_read_fails() -> None:
+    """A set that cannot be read makes the answer None, not a short list."""
+    install_telethon_stub()
+    head = SimpleNamespace(id=1, access_hash=2, short_name='Pack', title='P')
+    client = _Sets({'GetEmojiStickersRequest': SimpleNamespace(sets=[head])})
+    account = userchat.Account(client, _gate())
+    assert asyncio.run(account.emoji_sets()) is None
+    assert (
+        asyncio.run(userchat.Account(_Sets({}), _gate()).emoji_sets()) is None
+    )

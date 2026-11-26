@@ -32,7 +32,13 @@ network or Telegram, so every rule is under a test:
 * **never touched** -- a protected address (the chat), the protected link
   rows and every premium emoji (the "watch" buttons), and any post that is
   not in the package. An edit whose fragment cuts into formatting is
-  skipped rather than allowed to shift a glyph onto the wrong letter.
+  skipped rather than allowed to shift a glyph onto the wrong letter;
+* **premium emoji in new text** -- the ``new`` of an edit or a pin_new may
+  carry ``<tg-emoji emoji-id="ID">glyph</tg-emoji>``; it becomes a custom
+  emoji entity over the glyph. An id outside the catalog (``Guard.emoji``)
+  or a broken tag skips the item: it never reaches the channel as raw
+  markup or as a plain glyph. A description cannot carry entities, so a
+  tag there is skipped too.
 
 Offsets are UTF-16 code units, Telegram's entity unit, as in ``relink``.
 """
@@ -44,6 +50,8 @@ import re
 from dataclasses import dataclass
 from dataclasses import field
 
+from minion_core.richtext import EMOJI as EMOJI_SPAN
+from minion_core.richtext import Span
 from minions.userbot.core import relink
 
 EDIT = 'edit'
@@ -79,6 +87,8 @@ TOO_LONG = 'too_long'
 NO_RIGHTS = 'no_rights'
 CONFLICT = 'conflict'
 FAILED = 'failed'
+MARKUP = 'markup'
+UNKNOWN_EMOJI = 'unknown_emoji'
 """Why an item was skipped or failed; the config maps each to words."""
 
 EMOJI = 'emoji'
@@ -89,6 +99,12 @@ _PACKAGE_KEYS = frozenset({'id', 'author', 'why', 'edits'})
 _ID = re.compile(r'[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*')
 """A package id: the number of the note it came from, a dash, a word."""
 _UTF16 = 'utf-16-le'
+_TAG = re.compile(
+    r'<tg-emoji emoji-id="([0-9]{1,20})">([^<>]{1,16})</tg-emoji>'
+)
+"""One premium emoji in new text: its id and the glyph it covers."""
+_TAG_PIECE = re.compile(r'</?tg-emoji|emoji-id=')
+"""What is left of a tag that ``_TAG`` did not read: broken markup."""
 
 
 class PackageError(ValueError):
@@ -126,6 +142,8 @@ class Guard:
 
     urls: tuple[str, ...] = ()
     link_texts: tuple[str, ...] = ()
+    emoji: frozenset[str] = frozenset()
+    """The premium-emoji ids a new text may carry: the catalog."""
 
     def names(self, text: str) -> bool:
         """Whether ``text`` names a protected address."""
@@ -153,8 +171,9 @@ class PostPlan:
     """One post after the dry run: each item's outcome and the new post.
 
     ``text``/``spans`` are the post once every passing item is applied;
-    ``urls`` maps an entity index to its new address. ``delete`` is set
-    when the one item is a passing deletion.
+    ``urls`` maps an entity index to its new address. ``emoji`` are the
+    premium emoji the edits add, ``(offset, length, id)`` in UTF-16 units
+    of ``text``. ``delete`` is set when the one item is a passing deletion.
     """
 
     post_id: int
@@ -162,6 +181,7 @@ class PostPlan:
     text: str = ''
     spans: tuple[tuple[int, int], ...] = ()
     urls: dict[int, str] = field(default_factory=dict)
+    emoji: tuple[tuple[int, int, str], ...] = ()
     delete: bool = False
 
     @property
@@ -394,6 +414,55 @@ def _rules(raw: object) -> Rules:
     return Rules(max_deletes=deletes, min_pause_sec=float(pause))
 
 
+# --------------------------------------------------------------- markup
+
+
+class MarkupError(ValueError):
+    """A new text's premium emoji cannot be sent; ``reason`` says why."""
+
+    def __init__(self, reason: str) -> None:
+        """Keep the skip reason (``MARKUP`` or ``UNKNOWN_EMOJI``)."""
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class Markup:
+    """A new text read from its tags: the plain text and its emoji runs.
+
+    ``spans`` count Python characters (``richtext``), as a send expects.
+    """
+
+    text: str
+    spans: tuple[Span, ...] = ()
+
+
+def read_markup(new: str, known: frozenset[str]) -> Markup:
+    """Turn ``<tg-emoji>`` tags into plain text plus premium-emoji spans.
+
+    Raises ``MarkupError``: ``UNKNOWN_EMOJI`` for an id not in ``known``
+    (Telegram would show a hole, or refuse), ``MARKUP`` for a tag it cannot
+    read -- either way the item is skipped, never sent half-converted.
+    """
+    parts: list[str] = []
+    spans: list[Span] = []
+    cursor = 0
+    for match in _TAG.finditer(new):
+        ident, glyph = match.group(1), match.group(2)
+        if ident not in known:
+            raise MarkupError(UNKNOWN_EMOJI)
+        parts.append(new[cursor : match.start()])
+        at = sum(len(one) for one in parts)
+        spans.append(Span(EMOJI_SPAN, at, len(glyph), ident))
+        parts.append(glyph)
+        cursor = match.end()
+    parts.append(new[cursor:])
+    text = ''.join(parts)
+    if _TAG_PIECE.search(text):
+        raise MarkupError(MARKUP)
+    return Markup(text, tuple(spans))
+
+
 # -------------------------------------------------------------- dry run
 
 
@@ -422,12 +491,22 @@ class _Draft:
     guard: Guard
     text: str = ''
     spans: list[tuple[int, int]] = field(default_factory=list)
+    kinds: list[str] = field(default_factory=list)
     urls: dict[int, str] = field(default_factory=dict)
+    added: dict[int, str] = field(default_factory=dict)
+    """Entity index -> id of a premium emoji an edit added."""
 
     def __post_init__(self) -> None:
         """Start from the post as read."""
         self.text = self.post.text
         self.spans = list(self.post.spans)
+        self.kinds = list(self.post.kinds)
+
+    def emoji(self) -> tuple[tuple[int, int, str], ...]:
+        """Return the added emoji as (offset, length, id), in UTF-16."""
+        return tuple(
+            (*self.spans[i], ident) for i, ident in self.added.items()
+        )
 
     def shown(self, index: int) -> str:
         """Return the text an entity currently covers."""
@@ -439,13 +518,13 @@ class _Draft:
 
     def url(self, index: int, read: str) -> str:
         """Return a link entity's current address."""
-        if self.post.kinds[index] == relink.VISIBLE:
+        if self.kinds[index] == relink.VISIBLE:
             return self.shown(index)
         return self.urls.get(index, read)
 
     def locked(self, index: int) -> bool:
         """Whether an entity is never touched: emoji or a protected link."""
-        kind = self.post.kinds[index]
+        kind = self.kinds[index]
         if kind == EMOJI:
             return True
         links = dict(self.post.links)
@@ -467,6 +546,10 @@ class _Draft:
         """Dry-run and apply one text edit; return '' or why it is skipped."""
         if self.guard.names(item.old) or self.guard.names(item.new):
             return PROTECTED
+        try:
+            new = read_markup(item.new, self.guard.emoji)
+        except MarkupError as exc:
+            return exc.reason
         count = self.text.count(item.old)
         if count != 1:
             return NOT_FOUND if count == 0 else AMBIGUOUS
@@ -474,10 +557,24 @@ class _Draft:
             _units(self.text[: self.text.index(item.old)]),
             _units(item.old),
         )
-        why = self._cuts(where, removes=not item.new)
+        why = self._cuts(where, removes=not new.text)
         if not why:
-            self.splice(where, item.new)
+            self.splice(where, new.text)
+            self._decorate(where[0], new)
         return why
+
+    def _decorate(self, at: int, new: Markup) -> None:
+        """Add the premium emoji of text just spliced in at unit ``at``.
+
+        Added after the splice, so they are not shifted by it; later edits
+        shift them like any entity, and ``locked`` keeps them untouched.
+        """
+        for span in new.spans:
+            offset = at + _units(new.text[: span.at])
+            glyph = new.text[span.at : span.at + span.length]
+            self.spans.append((offset, _units(glyph)))
+            self.kinds.append(EMOJI)
+            self.added[len(self.spans) - 1] = span.ref
 
     def _cuts(self, where: tuple[int, int], *, removes: bool) -> str:
         """Return why replacing ``where`` would break an entity, or ''.
@@ -516,7 +613,7 @@ class _Draft:
 
     def _readdress(self, index: int, new: str) -> None:
         """Point one link at ``new``: a visible one changes its text too."""
-        if self.post.kinds[index] == relink.VISIBLE:
+        if self.kinds[index] == relink.VISIBLE:
             self.splice(self.spans[index], new)
         else:
             self.urls[index] = new
@@ -549,7 +646,12 @@ def plan_post(
             else Outcome(item, DRY_OK, count=count)
         )
     return PostPlan(
-        post.id, tuple(outcomes), draft.text, tuple(draft.spans), draft.urls
+        post.id,
+        tuple(outcomes),
+        draft.text,
+        tuple(draft.spans[: len(post.spans)]),
+        draft.urls,
+        draft.emoji(),
     )
 
 
@@ -573,9 +675,14 @@ def _skip(items: tuple[Item, ...], reason: str) -> PostPlan:
 
 
 def plan_about(about: str, item: Item, guard: Guard) -> tuple[str, str]:
-    """Dry-run a description append: (new about, '') or ('', why)."""
+    """Dry-run a description append: (new about, '') or ('', why).
+
+    A description is plain text: premium-emoji markup there is skipped.
+    """
     if guard.names(item.new):
         return '', PROTECTED
+    if _TAG_PIECE.search(item.new):
+        return '', MARKUP
     if about.endswith(item.new):
         return '', ALREADY
     after = about + item.new
@@ -585,10 +692,18 @@ def plan_about(about: str, item: Item, guard: Guard) -> tuple[str, str]:
 
 
 def plan_pin(recent: list[str], item: Item, guard: Guard) -> str:
-    """Dry-run a new pinned post: '' when it may go out, else why not."""
+    """Dry-run a new pinned post: '' when it may go out, else why not.
+
+    ``recent`` are plain texts, so the post is compared without its tags;
+    what goes out is ``read_markup(item.new, guard.emoji)``.
+    """
     if guard.names(item.new):
         return PROTECTED
-    if item.new.strip() in {one.strip() for one in recent}:
+    try:
+        new = read_markup(item.new, guard.emoji)
+    except MarkupError as exc:
+        return exc.reason
+    if new.text.strip() in {one.strip() for one in recent}:
         return ALREADY
     return ''
 

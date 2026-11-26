@@ -226,6 +226,8 @@ class Linked:
     """Parallel to ``spans``: ``emoji``, ``text``, ``url`` or ``other``."""
     media: bool = False
     """Whether the post carries media (a photo, a video) beyond a preview."""
+    refs: tuple[str, ...] = ()
+    """Parallel to ``spans``: a custom emoji's document id, else ''."""
 
 
 @dataclass(frozen=True)
@@ -233,12 +235,28 @@ class Relinked:
     """What an edit should look like: new text, spans, and link addresses.
 
     ``spans`` is parallel to ``Linked.spans``; ``urls`` maps an entity index
-    to its new address (hidden links only change there).
+    to its new address (hidden links only change there). ``emoji`` are
+    premium emoji the edit adds: ``(offset, length, document id)`` in
+    UTF-16 units of ``text``.
     """
 
     text: str
     spans: tuple[tuple[int, int], ...]
     urls: dict[int, str] = field(default_factory=dict)
+    emoji: tuple[tuple[int, int, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class EmojiSet:
+    """One custom-emoji set the account has installed.
+
+    ``emoji`` pairs each document id (a decimal string, the ``emoji-id`` of
+    a ``<tg-emoji>`` tag) with the glyph a client without it shows.
+    """
+
+    short_name: str
+    title: str
+    emoji: tuple[tuple[str, str], ...]
 
 
 def paces(runtime: dict[str, object]) -> Gate:
@@ -544,6 +562,37 @@ class Account:
             if creator or getattr(got, attr, False)
         )
 
+    async def emoji_sets(self) -> list[EmojiSet] | None:
+        """Return the account's installed custom-emoji sets, glyph by glyph.
+
+        None when any read failed: a partial list would pass for the whole.
+        """
+        from telethon.tl.functions.messages import GetEmojiStickersRequest
+        from telethon.tl.functions.messages import GetStickerSetRequest
+        from telethon.tl.types import InputStickerSetID
+
+        got = await self._call(
+            READ, self.client(GetEmojiStickersRequest(hash=0))
+        )
+        if got is None:
+            return None
+        out: list[EmojiSet] = []
+        for head in getattr(got, 'sets', None) or ():
+            which = InputStickerSetID(id=head.id, access_hash=head.access_hash)
+            full = await self._call(
+                READ, self.client(GetStickerSetRequest(which, hash=0))
+            )
+            if full is None:
+                return None
+            out.append(
+                EmojiSet(
+                    str(getattr(head, 'short_name', '') or ''),
+                    str(getattr(head, 'title', '') or ''),
+                    _glyphs(full),
+                )
+            )
+        return out
+
     def pacing(self) -> list[Lane]:
         """Report every lane of the gate, for an operator readout."""
         return self.gate.lanes()
@@ -842,11 +891,14 @@ def _linked(raw: object) -> Linked:
     ents = tuple(getattr(raw, 'entities', None) or ())
     spans: list[tuple[int, int]] = []
     kinds: list[str] = []
+    refs: list[str] = []
     links: list[LinkSpan] = []
     for index, entity in enumerate(ents):
         offset = int(getattr(entity, 'offset', 0) or 0)
         length = int(getattr(entity, 'length', 0) or 0)
         spans.append((offset, length))
+        document = getattr(entity, 'document_id', None)
+        refs.append('' if document is None else str(document))
         url = getattr(entity, 'url', None)
         if url is not None:
             links.append(LinkSpan(index, 'text', offset, length, str(url)))
@@ -856,7 +908,7 @@ def _linked(raw: object) -> Linked:
             shown = seen.decode(_UTF16, errors='ignore')
             links.append(LinkSpan(index, 'url', offset, length, shown))
             kinds.append('url')
-        elif getattr(entity, 'document_id', None) is not None:
+        elif document is not None:
             kinds.append('emoji')
         else:
             kinds.append('other')
@@ -872,7 +924,24 @@ def _linked(raw: object) -> Linked:
         raw=ents,
         kinds=tuple(kinds),
         media=media is not None and kind != 'MessageMediaWebPage',
+        refs=tuple(refs),
     )
+
+
+def _glyphs(full: object) -> tuple[tuple[str, str], ...]:
+    """Return (document id, fallback glyph) of each emoji of a full set."""
+    out: list[tuple[str, str]] = []
+    for doc in getattr(full, 'documents', None) or ():
+        alt = next(
+            (
+                str(getattr(attr, 'alt', '') or '')
+                for attr in getattr(doc, 'attributes', None) or ()
+                if type(attr).__name__ == 'DocumentAttributeCustomEmoji'
+            ),
+            '',
+        )
+        out.append((str(getattr(doc, 'id', '')), alt))
+    return tuple(out)
 
 
 def dump(post: Linked) -> dict[str, object]:
@@ -889,7 +958,11 @@ def dump(post: Linked) -> dict[str, object]:
 
 
 def _reentities(post: Linked, edit: Relinked) -> list[object]:
-    """Copy each vendor entity of ``post`` onto the spans of ``edit``."""
+    """Copy each vendor entity of ``post`` onto the spans of ``edit``.
+
+    The premium emoji the edit adds join them; the list is ordered by
+    offset, as Telegram sends it.
+    """
     out: list[object] = []
     for index, entity in enumerate(post.raw):
         clone = copy.copy(entity)
@@ -899,7 +972,17 @@ def _reentities(post: Linked, edit: Relinked) -> list[object]:
         if index in edit.urls:
             clone.url = edit.urls[index]  # type: ignore[attr-defined]
         out.append(clone)
-    return out
+    if not edit.emoji:
+        return out
+    from telethon.tl.types import MessageEntityCustomEmoji
+
+    out += [
+        MessageEntityCustomEmoji(
+            offset=offset, length=length, document_id=int(ident)
+        )
+        for offset, length, ident in edit.emoji
+    ]
+    return sorted(out, key=lambda one: int(getattr(one, 'offset', 0)))
 
 
 def _root(reply: object) -> int:
