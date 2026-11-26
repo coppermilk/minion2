@@ -92,11 +92,11 @@ from minions.userbot.glue.status import StatusReport
 from minions.userbot.glue.stories import StoryDeps
 from minions.userbot.glue.stories import StoryWatch
 from minions.userbot.glue.tgedit import JOURNAL_FILE as TGEDIT_JOURNAL
-from minions.userbot.glue.tgedit import PACKAGES_DIR as TGEDIT_PACKAGES
 from minions.userbot.glue.tgedit import STATE_FILE as TGEDIT_FILE
 from minions.userbot.glue.tgedit import ChannelEditor
 from minions.userbot.glue.tgedit import EditDeps
 from minions.userbot.glue.tgedit import load_edit_params
+from minions.userbot.glue.tgedit import read_feed
 from minions.userbot.glue.users import AudienceDeps
 from minions.userbot.glue.users import AudienceLog
 
@@ -380,16 +380,17 @@ class Userbot:
             )
         )
         self.links.load()
-        # Channel editor: applies the package files merged into main
-        # (minions/userbot/tgedit/); engines.tgedit.mode says off/dry/on.
+        # Channel editor: applies the packages of the site's feed
+        # (engines.tgedit.feed_url); engines.tgedit.mode says off/dry/on.
+        tgedit_params = load_edit_params(self.settings)
         self.tgedit = ChannelEditor(
             EditDeps(
                 account=self.account,
                 channel=lambda: self.live_targets()[0],
-                packages=TGEDIT_PACKAGES,
+                feed=read_feed(tgedit_params.feed_url),
                 path=pdir / TGEDIT_FILE,
                 journal=pdir / TGEDIT_JOURNAL,
-                params=load_edit_params(self.settings),
+                params=tgedit_params,
             )
         )
         self.tgedit.load()

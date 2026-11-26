@@ -2,9 +2,9 @@
 # Proprietary -- no use without the author's prior approval.
 """The channel editor: parse, dry-run, limits, never-touch, apply, check.
 
-Pure logic (core/tgedit), the worker over a fake account and a directory
-of package files (glue/tgedit), and the dry check over a ``telegram``
-snapshot (dev/tgedit_check). The dry run is the heart of it: ``old`` that
+Pure logic (core/tgedit), the worker over a fake account and a fake site
+feed (glue/tgedit), and the dry check over a ``telegram`` snapshot
+(dev/tgedit_check). The dry run is the heart of it: ``old`` that
 matches the post's current text is applied, anything else is skipped and
 said so.
 """
@@ -17,10 +17,12 @@ import logging
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
+from typing import Self
 from typing import cast
 
 import pytest
 
+from minion_core.adapters import feed as feeds
 from minion_core.adapters import userchat
 from minions.userbot.core import config
 from minions.userbot.core import relink
@@ -39,15 +41,22 @@ PAUSE = 10.0
 EMPTY = tgedit.Outcome(tgedit.Item(1, tgedit.EDIT, 'x'), tgedit.DRY_OK)
 
 
-def _file(items: object, **over: object) -> str:
-    """Return a package file's text; ``over`` replaces top-level keys."""
+def _pkg(items: object, **over: object) -> dict[str, object]:
+    """Return a package; ``over`` replaces top-level keys."""
     body = {'id': PACKAGE, 'author': AUTHOR, 'why': 'clean up', 'edits': items}
+    return {**body, **over}
+
+
+def _feed(*packages: object, **over: object) -> str:
+    """Return the site feed's text; ``over`` replaces top-level keys."""
+    rules = {'max_deletes': 15, 'min_pause_sec': 10, 'apply_once': True}
+    body = {'version': 1, 'rules': rules, 'packages': list(packages)}
     return json.dumps({**body, **over})
 
 
 def _parse(items: object, **over: object) -> tgedit.Package:
-    """Parse a package file named PACKAGE."""
-    return tgedit.parse(_file(items, **over), PACKAGE)
+    """Parse one package with id PACKAGE."""
+    return tgedit.parse(_pkg(items, **over))
 
 
 Ent = tuple[int, int, str, str]
@@ -113,39 +122,48 @@ def test_a_package_block_parses_into_items() -> None:
     assert not items[2].only_if_empty
 
 
+_DEL = [{'post': 1, 'action': 'delete'}]
+
+
 @pytest.mark.parametrize(
-    ('text', 'says'),
+    ('raw', 'says'),
     [
-        ('{"id": ', 'does not parse'),
-        ('[]', 'JSON object'),
-        (_file([{'post': 1, 'action': 'delete'}], extra=1), 'unknown key'),
-        (_file([{'post': 1, 'action': 'delete'}], id='476-x'), 'file name'),
-        (_file([], id=PACKAGE), 'non-empty list'),
-        (_file([{'post': 1, 'action': 'delete'}], author=' '), 'author'),
-        (_file([{'post': 1, 'action': 'delete'}], why='a\nb'), 'one line'),
-        (_file([{'post': 1, 'action': 'move'}]), "action 'move'"),
-        (_file([{'post': 1, 'action': 'delete', 'x': 1}]), 'edit 1: unknown'),
-        (_file([{'post': 5, 'action': 'desc', 'new': 'x'}]), 'needs post 0'),
-        (_file([{'post': 0, 'action': 'edit', 'old': 'x'}]), 'needs post >0'),
-        (_file([{'post': 1, 'action': 'edit'}]), 'non-empty old/new'),
-        (_file([{'post': -1, 'action': 'delete'}]), 'whole number'),
-        (_file([{'post': True, 'action': 'delete'}]), 'whole number'),
+        (_pkg(_DEL, extra=1), 'unknown key'),
+        (_pkg([]), 'non-empty list'),
+        (_pkg(_DEL, author=' '), 'author'),
+        (_pkg(_DEL, why='a\nb'), 'one line'),
+        (_pkg([{'post': 1, 'action': 'move'}]), "action 'move'"),
+        (_pkg([{'post': 1, 'action': 'delete', 'x': 1}]), 'edit 1: unknown'),
+        (_pkg([{'post': 5, 'action': 'desc', 'new': 'x'}]), 'needs post 0'),
+        (_pkg([{'post': 0, 'action': 'edit', 'old': 'x'}]), 'needs post >0'),
+        (_pkg([{'post': 1, 'action': 'edit'}]), 'non-empty old/new'),
+        (_pkg([{'post': -1, 'action': 'delete'}]), 'whole number'),
+        (_pkg([{'post': True, 'action': 'delete'}]), 'whole number'),
     ],
 )
-def test_a_broken_package_is_refused_whole(text: str, says: str) -> None:
+def test_a_broken_package_is_refused_whole(
+    raw: dict[str, object], says: str
+) -> None:
     """A typo stops the package before anything is touched."""
     with pytest.raises(tgedit.PackageError, match=None) as caught:
-        tgedit.parse(text, PACKAGE)
+        tgedit.parse(raw)
     assert says in str(caught.value)
     assert str(caught.value).startswith(PACKAGE)
 
 
-@pytest.mark.parametrize('name', ['cleanup', '475', '475-Cleanup', '475-'])
-def test_a_package_id_is_a_number_dash_word(name: str) -> None:
-    """The id names the file and is what ``tgedit.json`` remembers."""
-    text = _file([{'post': 1, 'action': 'delete'}], id=name)
+def test_a_package_is_an_object() -> None:
+    """A list where a package should be is refused."""
+    with pytest.raises(tgedit.PackageError, match='JSON object'):
+        tgedit.parse([])
+
+
+@pytest.mark.parametrize(
+    'name', ['cleanup', '475', '475-Cleanup', '475-', 475, None]
+)
+def test_a_package_id_is_a_number_dash_word(name: object) -> None:
+    """The id is what ``tgedit.json`` remembers."""
     with pytest.raises(tgedit.PackageError, match='<number>-<word>'):
-        tgedit.parse(text, name)
+        tgedit.parse(_pkg(_DEL, id=name))
 
 
 def test_fifteen_deletions_pass_sixteen_refuse_the_package() -> None:
@@ -155,6 +173,58 @@ def test_fifteen_deletions_pass_sixteen_refuse_the_package() -> None:
     sixteen = (*fifteen, tgedit.Item(99, tgedit.DELETE))
     with pytest.raises(tgedit.PackageError, match='16 deletions'):
         tgedit.check_limits(sixteen, 99)
+
+
+# ----------------------------------------------------------------- feed
+
+
+def test_a_good_feed_reads_its_packages_in_order() -> None:
+    """The site's feed: version 1, its rules, every package."""
+    feed = tgedit.parse_feed(_feed(_pkg(_DEL), _pkg(_DEL, id='476-pin')))
+    assert [one.id for one in feed.packages] == [PACKAGE, '476-pin']
+    assert feed.rules == tgedit.Rules(15, 10.0)
+
+
+def test_an_empty_feed_has_nothing_to_do() -> None:
+    """No packages is a feed, not an error."""
+    assert tgedit.parse_feed(_feed()).packages == ()
+
+
+@pytest.mark.parametrize(
+    ('text', 'says'),
+    [
+        ('{"version": ', 'does not parse'),
+        ('<html>busy</html>', 'does not parse'),
+        ('[]', 'not a JSON object'),
+        (_feed(version=2), 'version 2'),
+        (_feed(version='1'), "version '1'"),
+        (_feed(version=True), 'version True'),
+        (json.dumps({'packages': []}), 'version None'),
+        (_feed(packages={}), 'no packages list'),
+        (_feed(_pkg(_DEL), _pkg(_DEL)), 'more than once'),
+        (_feed(_pkg(_DEL), _pkg([], id='476-x')), '476-x: edits'),
+        (_feed(rules=[]), 'rules are not an object'),
+        (_feed(rules={'max_deletes': 'all'}), 'max_deletes'),
+        (_feed(rules={'min_pause_sec': None}), 'min_pause_sec'),
+    ],
+)
+def test_a_broken_feed_is_refused_whole(text: str, says: str) -> None:
+    """Broken, of another version, a bad package or one id twice: none."""
+    with pytest.raises(tgedit.FeedError) as caught:
+        tgedit.parse_feed(text)
+    assert says in str(caught.value)
+
+
+def test_the_feed_rules_only_tighten_ours() -> None:
+    """The stricter of the feed and the engine; never past the hard ones."""
+    strict = tgedit.Rules(max_deletes=3, min_pause_sec=30)
+    assert strict.tighten(15, 10) == tgedit.Rules(3, 30.0)
+    loose = tgedit.Rules(max_deletes=99, min_pause_sec=0)
+    assert loose.tighten(15, 10) == tgedit.Rules(15, 10.0)
+    assert loose.tighten(99, 1) == tgedit.Rules(15, 10.0)
+    assert tgedit.Rules(-5).tighten(15, 10).max_deletes == 0
+    rules = tgedit.parse_feed(_feed(rules={})).rules
+    assert rules == tgedit.Rules()
 
 
 # -------------------------------------------------------------- dry run
@@ -421,13 +491,26 @@ ITEMS: list[dict[str, object]] = [
 ]
 
 
-def _world(tmp_path: Path, items: object = None) -> _Account:
-    """Ship one package file into ``tmp_path/packages``; return the account."""
-    packages = tmp_path / 'packages'
-    packages.mkdir(exist_ok=True)
-    (packages / f'{PACKAGE}.json').write_text(
-        _file(ITEMS if items is None else items), 'utf-8'
-    )
+@dataclass
+class _Site:
+    """A fake site feed: its text, or a failure to reach it."""
+
+    text: str
+    down: bool = False
+    reads: int = 0
+
+    async def read(self) -> str:
+        """Return the feed, or fail as the adapter does."""
+        self.reads += 1
+        if self.down:
+            msg = 'https://site/tgedit.json: ConnectionError'
+            raise feeds.FeedUnreachableError(msg)
+        return self.text
+
+
+def _world(items: object = None) -> tuple[_Account, _Site]:
+    """Put one package in the feed; return the account and the site."""
+    site = _Site(_feed(_pkg(ITEMS if items is None else items)))
     return _Account(
         {
             1142: _linked(1142, 'old tour'),
@@ -435,11 +518,11 @@ def _world(tmp_path: Path, items: object = None) -> _Account:
             944: _linked(944, 'support'),
             1000: _linked(1000, 'not in the package'),
         }
-    )
+    ), site
 
 
 def _editor(
-    tmp_path: Path, account: _Account, mode: str
+    tmp_path: Path, world: tuple[_Account, _Site], mode: str
 ) -> tuple[worker.ChannelEditor, list[float]]:
     """Build an editor in ``mode``; return it and the pauses it took."""
     slept: list[float] = []
@@ -447,12 +530,13 @@ def _editor(
     async def sleep(sec: float) -> None:
         slept.append(sec)
 
+    account, site = world
     params = worker.EditParams(mode=mode, pause_sec=PAUSE, guard=GUARD)
     editor = worker.ChannelEditor(
         worker.EditDeps(
             account=cast('userchat.Account', account),
             channel=lambda: CHANNEL,
-            packages=tmp_path / 'packages',
+            feed=site.read,
             path=tmp_path / worker.STATE_FILE,
             journal=tmp_path / worker.JOURNAL_FILE,
             params=params,
@@ -473,11 +557,12 @@ def _journal(tmp_path: Path, what: str) -> list[dict[str, object]]:
 
 
 def test_off_reads_nothing(tmp_path: Path) -> None:
-    """Off touches neither the channel nor the journal."""
-    account = _world(tmp_path)
-    editor, _ = _editor(tmp_path, account, 'off')
+    """Off reads neither the feed nor the channel, writes no journal."""
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'off')
     assert asyncio.run(editor.tick(NOW)) == 0
-    assert account.writes == []
+    assert world[0].writes == []
+    assert world[1].reads == 0
     assert not (tmp_path / worker.JOURNAL_FILE).exists()
 
 
@@ -485,11 +570,11 @@ def test_dry_logs_and_journals_every_item_once_and_writes_nothing(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Dry: every item's outcome goes to the log and the journal, once."""
-    account = _world(tmp_path)
-    editor, _ = _editor(tmp_path, account, 'dry')
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'dry')
     with caplog.at_level(logging.INFO, logger='userbot'):
         assert asyncio.run(editor.tick(NOW)) == 1
-    assert account.writes == []
+    assert world[0].writes == []
     assert f'{PACKAGE}: post 1167 . edit -> dry_ok' in caplog.text
     assert f'{PACKAGE}: post 944 . edit -> skipped (not_found)' in caplog.text
     rows = _journal(tmp_path, 'outcome')
@@ -501,8 +586,9 @@ def test_dry_logs_and_journals_every_item_once_and_writes_nothing(
 
 def test_on_applies_journals_paces_and_reports(tmp_path: Path) -> None:
     """On: what passed is written, 10 s apart, after its before-image."""
-    account = _world(tmp_path)
-    editor, slept = _editor(tmp_path, account, 'on')
+    world = _world()
+    account = world[0]
+    editor, slept = _editor(tmp_path, world, 'on')
     assert asyncio.run(editor.tick(NOW)) == 1
     assert account.writes == [
         ('delete', 1142),
@@ -526,73 +612,144 @@ def test_on_applies_journals_paces_and_reports(tmp_path: Path) -> None:
     assert outcomes.count((0, tgedit.APPLIED)) == 2  # noqa: PLR2004
     assert (944, tgedit.SKIPPED) in outcomes
     assert len(outcomes) == len(ITEMS)
-    assert asyncio.run(editor.tick(NOW)) == 0  # applied once, never twice
+
+
+def test_a_package_id_is_applied_once_across_restarts(tmp_path: Path) -> None:
+    """The same id again -- next tick or after a restart -- writes nothing."""
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    writes = list(world[0].writes)
+    assert asyncio.run(editor.tick(NOW)) == 0
+    again, _ = _editor(tmp_path, world, 'on')
+    assert asyncio.run(again.tick(NOW)) == 0
+    assert world[0].writes == writes
+
+
+def test_a_new_package_in_the_feed_is_the_only_one_handled(
+    tmp_path: Path,
+) -> None:
+    """A feed that grows: only the new id runs; the old one stays done."""
+    world = _world()
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    new = _pkg([{'post': 944, 'action': 'delete'}], id='476-tidy')
+    world[1].text = _feed(_pkg(ITEMS), new)
+    assert asyncio.run(editor.tick(NOW)) == 1
+    assert world[0].writes[-1] == ('delete', 944)
+    assert editor.state.done == {PACKAGE, '476-tidy'}
+
+
+def test_a_package_gone_from_the_feed_is_not_applied(tmp_path: Path) -> None:
+    """Dry-reported, then dropped from the feed: on never applies it."""
+    world = _world()
+    dry, _ = _editor(tmp_path, world, 'dry')
+    asyncio.run(dry.tick(NOW))
+    world[1].text = _feed()
+    on, _ = _editor(tmp_path, world, 'on')
+    assert asyncio.run(on.tick(NOW)) == 0
+    assert world[0].writes == []
 
 
 def test_a_dry_reported_package_is_still_applied_once_on(
     tmp_path: Path,
 ) -> None:
     """Dry, then on: the dry report does not count as applied."""
-    account = _world(tmp_path)
-    dry, _ = _editor(tmp_path, account, 'dry')
+    world = _world()
+    dry, _ = _editor(tmp_path, world, 'dry')
     asyncio.run(dry.tick(NOW))
-    on, _ = _editor(tmp_path, account, 'on')
+    on, _ = _editor(tmp_path, world, 'on')
     assert asyncio.run(on.tick(NOW)) == 1
-    assert account.writes
+    assert world[0].writes
     assert worker.read_state(tmp_path / worker.STATE_FILE).done == {PACKAGE}
 
 
-def test_only_json_files_are_packages(tmp_path: Path) -> None:
-    """A README or a draft beside the packages is not read."""
-    account = _world(tmp_path)
-    (tmp_path / 'packages' / 'README.md').write_text('notes', 'utf-8')
-    editor, _ = _editor(tmp_path, account, 'dry')
+@pytest.mark.parametrize(
+    'case',
+    [
+        ('', True, 'ConnectionError'),
+        ('{', False, 'does not parse'),
+        (_feed(version=2), False, 'version 2'),
+        (_feed(_pkg(ITEMS), _pkg(ITEMS)), False, 'more than once'),
+    ],
+    ids=['unreachable', 'broken', 'version-2', 'id-twice'],
+)
+def test_a_feed_it_cannot_trust_skips_the_tick_and_says_so(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    case: tuple[str, bool, str],
+) -> None:
+    """Nothing read, written or remembered; one log line; next tick tries."""
+    text, down, says = case
+    world = _world()
+    world[1].text, world[1].down = text, down
+    editor, _ = _editor(tmp_path, world, 'on')
+    with caplog.at_level(logging.WARNING, logger='userbot'):
+        assert asyncio.run(editor.tick(NOW)) == 0
+    assert 'feed skipped this tick' in caplog.text
+    assert says in caplog.text
+    assert world[0].writes == []
+    assert not (tmp_path / worker.JOURNAL_FILE).exists()
+    assert editor.state == worker.EditState()
+    world[1].text, world[1].down = _feed(_pkg(ITEMS)), False
     assert asyncio.run(editor.tick(NOW)) == 1
 
 
-def test_a_broken_package_is_refused_whole_and_said_so(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A file that does not parse: nothing written, refusal journaled."""
-    account = _world(tmp_path)
-    (tmp_path / 'packages' / f'{PACKAGE}.json').write_text('{', 'utf-8')
-    editor, _ = _editor(tmp_path, account, 'on')
+def test_the_feed_rules_slow_the_writes_down(tmp_path: Path) -> None:
+    """A feed asking for 30 s between writes gets 30 s, not our 10."""
+    world = _world()
+    world[1].text = _feed(_pkg(ITEMS), rules={'min_pause_sec': 30})
+    editor, slept = _editor(tmp_path, world, 'on')
     asyncio.run(editor.tick(NOW))
-    assert account.writes == []
-    assert 'does not parse' in caplog.text
-    assert _journal(tmp_path, 'refused')
+    assert slept
+    assert set(slept) == {30.0}
+
+
+def test_the_feed_rules_cap_deletions_lower(tmp_path: Path) -> None:
+    """A feed allowing one deletion refuses a package with two."""
+    two = [
+        {'post': 1142, 'action': 'delete'},
+        {'post': 944, 'action': 'delete'},
+    ]
+    world = _world(two)
+    world[1].text = _feed(_pkg(two), rules={'max_deletes': 1})
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    assert world[0].writes == []
+    assert '2 deletions' in str(_journal(tmp_path, 'refused')[0]['why'])
 
 
 def test_too_many_deletions_refuse_the_package(tmp_path: Path) -> None:
     """Sixteen deletions: refused whole, journaled, nothing deleted."""
     many = [{'post': n, 'action': 'delete'} for n in range(1, 17)]
-    account = _world(tmp_path, many)
-    editor, _ = _editor(tmp_path, account, 'on')
+    world = _world(many)
+    world[1].text = _feed(_pkg(many), rules={'max_deletes': 99})
+    editor, _ = _editor(tmp_path, world, 'on')
     asyncio.run(editor.tick(NOW))
-    assert account.writes == []
+    assert world[0].writes == []
     assert '16 deletions' in str(_journal(tmp_path, 'refused')[0]['why'])
 
 
 def test_without_rights_every_item_says_so(tmp_path: Path) -> None:
     """An account that may not edit the channel edits nothing."""
-    account = _world(tmp_path)
-    account.granted = frozenset()
-    editor, _ = _editor(tmp_path, account, 'on')
+    world = _world()
+    world[0].granted = frozenset()
+    editor, _ = _editor(tmp_path, world, 'on')
     asyncio.run(editor.tick(NOW))
-    assert account.writes == []
+    assert world[0].writes == []
     reasons = [row['reason'] for row in _journal(tmp_path, 'outcome')]
     assert reasons == [tgedit.NO_RIGHTS] * len(ITEMS)
 
 
 def test_an_unreadable_channel_retries_later(tmp_path: Path) -> None:
     """A failed read is no 'post gone': the package stays pending."""
-    account = _world(tmp_path)
-    account.unreadable = True
-    editor, _ = _editor(tmp_path, account, 'on')
+    world = _world()
+    world[0].unreadable = True
+    editor, _ = _editor(tmp_path, world, 'on')
     with pytest.raises(worker.ChannelUnreadableError):
         asyncio.run(editor.tick(NOW))
     assert editor.state.done == set()
-    account.unreadable = False
+    world[0].unreadable = False
     assert asyncio.run(editor.tick(NOW)) == 1
 
 
@@ -614,6 +771,8 @@ def test_the_shipped_constants_keep_the_editor_safe() -> None:
     assert params.pause_sec >= tgedit.MIN_PAUSE_SEC
     assert CHAT in params.guard.urls
     assert params.guard.link_texts
+    assert params.feed_url == worker.FEED_URL
+    assert worker.load_edit_params({}).feed_url == worker.FEED_URL
 
 
 def test_the_hard_limits_cannot_be_loosened() -> None:
@@ -625,18 +784,9 @@ def test_the_hard_limits_cannot_be_loosened() -> None:
     assert worker.load_edit_params({}).mode == 'off'
 
 
-@pytest.mark.parametrize(
-    'path', sorted(worker.PACKAGES_DIR.glob('*.json')), ids=lambda p: p.stem
-)
-def test_every_shipped_package_parses_within_the_limits(path: Path) -> None:
-    """A merged package is approved, so a typo must fail CI, not the NAS."""
-    package = tgedit.parse(path.read_text('utf-8'), path.stem)
-    tgedit.check_limits(package.items, tgedit.MAX_DELETES)
-
-
 def test_the_engine_has_no_door_to_the_board() -> None:
     """Approval is the merge: neither half of the engine reads a board."""
-    for module in (tgedit, worker):
+    for module in (tgedit, worker, feeds, tgedit_check):
         source = Path(str(module.__file__)).read_text('utf-8').lower()
         assert 'board' not in source, module.__name__
 
@@ -731,25 +881,124 @@ def test_a_post_with_media_is_not_empty() -> None:
     assert tgedit_check.to_post(raw).media
 
 
-def test_the_dry_check_prints_one_line_per_item(
+def test_the_dry_check_prints_a_block_per_package_of_the_feed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The command prints the tally, then each item in the log's words."""
-    package = tmp_path / f'{PACKAGE}.json'
-    package.write_text(
-        _file([{'post': 1, 'action': 'edit', 'old': 'a', 'new': 'b'}]),
-        'utf-8',
-    )
+    """The command prints each package's tally, then each of its items."""
+    feed = tmp_path / 'tgedit.json'
+    edit = [{'post': 1, 'action': 'edit', 'old': 'a', 'new': 'b'}]
+    feed.write_text(_feed(_pkg(edit), _pkg(edit, id='476-x')), 'utf-8')
     snapshot = tmp_path / 'telegram.json'
     snapshot.write_text(_snapshot(_snap(1, 'a')), 'utf-8')
-    assert tgedit_check.main([str(package), str(snapshot)]) == 0
+    assert tgedit_check.main([str(feed), str(snapshot)]) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[0].startswith(f'{PACKAGE}: 1 items')
-    assert len(out) == 2  # noqa: PLR2004
+    assert out[2].startswith('476-x: 1 items')
+    assert len(out) == 4  # noqa: PLR2004
     snapshot.write_text('not json', 'utf-8')
-    assert tgedit_check.main([str(package), str(snapshot)]) == 1
+    assert tgedit_check.main([str(feed), str(snapshot)]) == 1
+    snapshot.write_text(_snapshot(_snap(1, 'a')), 'utf-8')
+    feed.write_text(_feed(version=2), 'utf-8')
+    assert tgedit_check.main([str(feed), str(snapshot)]) == 1
+    assert tgedit_check.main([str(tmp_path / 'none'), str(snapshot)]) == 1
 
 
 def test_an_outcome_is_counted_by_status() -> None:
     """The report's first line counts outcomes by status."""
     assert tgedit.tally([EMPTY, EMPTY]) == {tgedit.DRY_OK: 2}
+
+
+# ------------------------------------------------------ the feed door
+
+
+@dataclass
+class _Raw:
+    """The body of a fake response, read in one go."""
+
+    body: bytes
+
+    def read(self, limit: int, *, decode_content: bool) -> bytes:
+        """Return at most ``limit`` bytes."""
+        assert decode_content
+        return self.body[:limit]
+
+
+@dataclass
+class _Resp:
+    """A fake ``requests`` response with a status and a body."""
+
+    raw: _Raw
+    status: int = 200
+
+    def __enter__(self) -> Self:
+        """Open the response."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Close the response."""
+
+    def raise_for_status(self) -> None:
+        """Fail on a non-2xx status, as requests does."""
+        import requests
+
+        if self.status >= 400:  # noqa: PLR2004 -- HTTP's error range
+            raise requests.HTTPError(str(self.status))
+
+
+def _serve(
+    monkeypatch: pytest.MonkeyPatch, resp: _Resp | Exception
+) -> list[dict[str, object]]:
+    """Answer every ``requests.get`` with ``resp``; return the calls."""
+    import requests
+
+    calls: list[dict[str, object]] = []
+
+    def get(url: str, **kw: object) -> _Resp:
+        calls.append({'url': url, **kw})
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
+
+    monkeypatch.setattr(requests, 'get', get)
+    return calls
+
+
+def test_the_feed_door_says_who_it_is_and_reads_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cloudflare turns the stdlib's client name away: ours is named."""
+    calls = _serve(monkeypatch, _Resp(_Raw('{"a": "\u0451"}'.encode())))
+    assert feeds.read('https://site/tgedit.json') == '{"a": "\u0451"}'
+    headers = cast('dict[str, str]', calls[0]['headers'])
+    assert headers['User-Agent'] == feeds.USER_AGENT
+    assert calls[0]['timeout'] == feeds.TIMEOUT_SEC
+
+
+@pytest.mark.parametrize(
+    ('resp', 'says'),
+    [
+        (_Resp(_Raw(b'busy'), status=503), 'HTTPError'),
+        (_Resp(_Raw(b'x' * (feeds.LIMIT_BYTES + 1))), 'larger than'),
+        (_Resp(_Raw(b'\xff')), 'not UTF-8'),
+    ],
+    ids=['http-503', 'too-big', 'not-utf8'],
+)
+def test_the_feed_door_raises_instead_of_reading_nothing(
+    monkeypatch: pytest.MonkeyPatch, resp: _Resp, says: str
+) -> None:
+    """A failed read is an error naming the address, never an empty feed."""
+    _serve(monkeypatch, resp)
+    with pytest.raises(feeds.FeedUnreachableError, match=says) as caught:
+        feeds.read('https://site/tgedit.json')
+    assert 'https://site/tgedit.json' in str(caught.value)
+
+
+def test_the_feed_door_turns_a_dead_network_into_its_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No network: the worker's error, with the address and the cause."""
+    import requests
+
+    _serve(monkeypatch, requests.ConnectionError('down'))
+    with pytest.raises(feeds.FeedUnreachableError, match='ConnectionError'):
+        feeds.read('https://site/tgedit.json')

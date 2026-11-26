@@ -1,11 +1,16 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-r"""Dry-check a channel-edit package against a snapshot, without the NAS.
+r"""Dry-check the feed's packages against a snapshot, without the NAS.
 
-Run before the package's PR is merged (the merge is the approval)::
+Run before a package's PR is merged into the site (the merge is the
+approval)::
 
     python -m minions.userbot.dev.tgedit_check \\
-        minions/userbot/tgedit/475-cleanup.json telegram.json
+        https://daetotyoma.com/tgedit.json telegram.json
+
+The feed is the site's ``/tgedit.json``: its address, or a file (the
+site's ``dist/tgedit.json`` before the merge). Every package in it is
+checked, one block each.
 
 ``telegram.json`` is the site MCP's ``telegram`` answer (``limit`` 1000):
 the JSON-RPC envelope as curl saved it, or the tool's text. Every item is
@@ -25,6 +30,7 @@ import json
 import sys
 from pathlib import Path
 
+from minion_core.adapters import feed as feeds
 from minions.userbot.core import codec
 from minions.userbot.core import config
 from minions.userbot.core import relink
@@ -35,7 +41,7 @@ from minions.userbot.glue.tgedit import load_edit_params
 UNCHECKED = 'unchecked'
 """Outcome of an item the snapshot cannot check (the description)."""
 _UTF16 = 'utf-16-le'
-_USAGE = 'usage: tgedit_check <package.json> <telegram snapshot>'
+_USAGE = 'usage: tgedit_check <feed: file or URL> <telegram snapshot>'
 
 
 class SnapshotError(ValueError):
@@ -147,31 +153,54 @@ def check(
     return outcomes
 
 
-def main(argv: list[str]) -> int:
-    """Print the dry check; 1 when the package or snapshot is refused."""
-    if len(argv) != 2:  # noqa: PLR2004 -- two paths
-        sys.stderr.write(_USAGE + '\n')
-        return 2
-    package_path, snapshot_path = (Path(one) for one in argv)
-    params = load_edit_params(config.read_json(config.CONSTANTS_PATH))
-    try:
-        package = tgedit.parse(
-            package_path.read_text('utf-8'), package_path.stem
-        )
-        tgedit.check_limits(package.items, params.max_deletes)
-        posts = read_snapshot(snapshot_path.read_text('utf-8'))
-    except (tgedit.PackageError, SnapshotError) as exc:
-        sys.stderr.write(f'refused: {exc}\n')
-        return 1
-    outcomes = check(package, posts, params.guard)
-    labels = params.labels
+def read_feed(where: str) -> str:
+    """Return the feed's text from an ``http(s)`` address or a file."""
+    if where.startswith(('https://', 'http://')):
+        return feeds.read(where)
+    return Path(where).read_text('utf-8')
+
+
+def lines(
+    package: tgedit.Package,
+    outcomes: list[tgedit.Outcome],
+    labels: dict[str, str],
+) -> list[str]:
+    """Return one package's block: the tally, then one line per item."""
     counts = tgedit.tally(outcomes)
     summary = ', '.join(
         f'{labels.get(k, k)} {v}' for k, v in sorted(counts.items())
     )
-    lines = [f'{package.id}: {len(outcomes)} items, {summary}']
-    lines += tgedit.report(outcomes, labels)
-    sys.stdout.write('\n'.join(lines) + '\n')
+    head = f'{package.id}: {len(outcomes)} items, {summary}'
+    return [head, *tgedit.report(outcomes, labels)]
+
+
+def main(argv: list[str]) -> int:
+    """Print the dry check; 1 when the feed or the snapshot is refused."""
+    if len(argv) != 2:  # noqa: PLR2004 -- the feed and the snapshot
+        sys.stderr.write(_USAGE + '\n')
+        return 2
+    where, snapshot_path = argv
+    params = load_edit_params(config.read_json(config.CONSTANTS_PATH))
+    try:
+        feed = tgedit.parse_feed(read_feed(where))
+        rules = feed.rules.tighten(params.max_deletes, params.pause_sec)
+        for package in feed.packages:
+            tgedit.check_limits(package.items, rules.max_deletes)
+        posts = read_snapshot(Path(snapshot_path).read_text('utf-8'))
+    except (
+        feeds.FeedUnreachableError,
+        tgedit.FeedError,
+        tgedit.PackageError,
+        SnapshotError,
+        OSError,
+    ) as exc:
+        sys.stderr.write(f'refused: {exc}\n')
+        return 1
+    out: list[str] = []
+    for package in feed.packages:
+        outcomes = check(package, posts, params.guard)
+        out += lines(package, outcomes, params.labels)
+    sys.stdout.write('\n'.join(out) + '\n')
     return 0
 
 

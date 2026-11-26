@@ -1,13 +1,16 @@
 # Copyright (C) 2026 Artem Herych. All rights reserved.
 # Proprietary -- no use without the author's prior approval.
-"""Apply the channel-edit packages that ship in the image.
+"""Apply the channel-edit packages of the site's feed.
 
-The Telethon side of ``core/tgedit``. A package is a JSON file in
-``minions/userbot/tgedit/``; merging it into ``main`` IS the approval, so
-the worker asks nobody. Each tick, inside the persona's waking hours, for
-each package file not handled yet it:
+The Telethon side of ``core/tgedit``. The packages live in the site's
+feed (``engines.tgedit.feed_url``, ``/tgedit.json``); merging a package
+into the site's ``main`` IS the approval, so the worker asks nobody. Each
+tick, inside the persona's waking hours, it reads the feed -- unreachable,
+unparsable or of another version: one log line, nothing done, the next
+tick tries again -- and for each package not handled yet it:
 
-1. checks the account's rights in the channel and the package's limits;
+1. checks the account's rights in the channel and the package's limits
+   (the stricter of the feed's ``rules`` and our own);
 2. reads every post the package names and DRY-RUNS each item against the
    post as it is now (``old`` must match it character for character);
 3. ``dry`` mode stops there; ``on`` mode journals every post it is about
@@ -20,7 +23,8 @@ error`` -- goes to the container log and to the journal. ``mode`` lives in
 ``engines.tgedit``: switching it is a reviewed change of the constants
 file, not a chat command. A handled package is remembered by id in
 ``tgedit.json``, so it is applied once; a post the package does not name
-is never read, let alone written.
+is never read, let alone written; a package the feed no longer carries
+is not applied.
 """
 
 from __future__ import annotations
@@ -31,9 +35,9 @@ import logging
 import time
 from dataclasses import dataclass
 from dataclasses import field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from minion_core.adapters import feed as feeds
 from minion_core.adapters import userchat
 from minion_core.kernel import atomic_write
 from minions.userbot.core import codec
@@ -44,13 +48,14 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
     from collections.abc import Mapping
+    from pathlib import Path
 
 log = logging.getLogger('userbot')
 
 STATE_FILE = 'tgedit.json'
 JOURNAL_FILE = 'tgedit_journal.jsonl'
-PACKAGES_DIR = Path(__file__).resolve().parent.parent / 'tgedit'
-"""Where the reviewed package files ship: ``minions/userbot/tgedit``."""
+FEED_URL = 'https://daetotyoma.com/tgedit.json'
+"""The site's feed of reviewed packages (``engines.tgedit.feed_url``)."""
 MODES = ('off', 'dry', 'on')
 RECENT = 20
 """Newest posts read to tell whether a pin_new post is already out."""
@@ -69,6 +74,7 @@ class EditParams:
     """The worker's knobs, from ``engines.tgedit`` and ``persona``."""
 
     mode: str = 'off'
+    feed_url: str = FEED_URL
     max_deletes: int = tgedit.MAX_DELETES
     pause_sec: float = tgedit.MIN_PAUSE_SEC
     tick_sec: float = 900.0
@@ -94,6 +100,7 @@ def load_edit_params(settings: Mapping[str, object]) -> EditParams:
     labels = codec.table(cfg.get('labels'))
     return EditParams(
         mode=mode if mode in MODES else 'off',
+        feed_url=codec.text(cfg.get('feed_url'), FEED_URL),
         max_deletes=min(
             tgedit.MAX_DELETES,
             int(codec.num(cfg.get('max_deletes'), tgedit.MAX_DELETES)),
@@ -122,7 +129,7 @@ class EditDeps:
 
     account: userchat.Account
     channel: Callable[[], int]  # the profile's channel (test or live)
-    packages: Path  # the directory of package files (PACKAGES_DIR)
+    feed: Callable[[], Awaitable[str]]  # the feed's text (read_feed)
     path: Path  # tgedit.json
     journal: Path  # tgedit_journal.jsonl
     params: EditParams
@@ -170,6 +177,15 @@ def to_post(linked: userchat.Linked) -> tgedit.Post:
     )
 
 
+def read_feed(url: str) -> Callable[[], Awaitable[str]]:
+    """Return the reader of the feed at ``url``, off the event loop."""
+
+    async def read() -> str:
+        return await asyncio.to_thread(feeds.read, url)
+
+    return read
+
+
 class ChannelUnreadableError(RuntimeError):
     """Telegram could not be read; the package waits for the next tick."""
 
@@ -180,13 +196,14 @@ class _Run:
 
     package: str
     live: bool
+    pause_sec: float = tgedit.MIN_PAUSE_SEC
     outcomes: list[tgedit.Outcome] = field(default_factory=list)
     writes: int = 0
 
 
 @dataclass
 class ChannelEditor:
-    """Apply the shipped package files to the channel."""
+    """Apply the feed's packages to the channel."""
 
     deps: EditDeps
     state: EditState = field(default_factory=EditState)
@@ -215,29 +232,34 @@ class ChannelEditor:
         params = self.deps.params
         if params.mode == 'off' or not params.clock.awake(now):
             return 0
-        handled = 0
-        for path in self._pending():
-            await self._handle(path)
-            handled += 1
-        return handled
+        try:
+            feed = tgedit.parse_feed(await self.deps.feed())
+        except (feeds.FeedUnreachableError, tgedit.FeedError) as exc:
+            log.warning('tgedit: feed skipped this tick: %s', exc)
+            return 0
+        rules = feed.rules.tighten(params.max_deletes, params.pause_sec)
+        pending = self._pending(feed.packages)
+        for package in pending:
+            await self._handle(package, rules)
+        return len(pending)
 
-    def _pending(self) -> list[Path]:
-        """Return the package files not handled in the current mode yet."""
+    def _pending(
+        self, packages: tuple[tgedit.Package, ...]
+    ) -> list[tgedit.Package]:
+        """Return the feed's packages not handled in the current mode yet."""
         seen = self.state.dry if self.deps.params.mode == 'dry' else set()
         return [
-            path
-            for path in sorted(self.deps.packages.glob('*.json'))
-            if path.stem not in seen | self.state.done
+            one for one in packages if one.id not in seen | self.state.done
         ]
 
-    async def _handle(self, path: Path) -> None:
+    async def _handle(
+        self, package: tgedit.Package, rules: tgedit.Rules
+    ) -> None:
         """Dry-run (and in ``on`` mode apply) one package; report it."""
         live = self.deps.params.mode == 'on'
-        run = _Run(path.stem, live)
+        run = _Run(package.id, live, rules.min_pause_sec)
         try:
-            text = await asyncio.to_thread(path.read_text, 'utf-8')
-            package = tgedit.parse(text, path.stem)
-            tgedit.check_limits(package.items, self.deps.params.max_deletes)
+            tgedit.check_limits(package.items, rules.max_deletes)
         except tgedit.PackageError as exc:
             self._report(run, refused=str(exc))
             return
@@ -343,7 +365,7 @@ class ChannelEditor:
     async def _pace(self, run: _Run) -> None:
         """Keep writes at least ``pause_sec`` apart (none before the first)."""
         if run.writes:
-            await self.deps.sleep(self.deps.params.pause_sec)
+            await self.deps.sleep(run.pause_sec)
         run.writes += 1
 
     def _journal(

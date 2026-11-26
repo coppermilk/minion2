@@ -2,26 +2,33 @@
 # Proprietary -- no use without the author's prior approval.
 """Apply an approved package of channel edits: the pure half.
 
-A package is a JSON file in the repository, ``minions/userbot/tgedit/``,
-named after its id (``475-cleanup.json``)::
+Packages come from the site's feed (``/tgedit.json``, built from the
+site repository's ``data/tgedit/``)::
 
-    {"id": "475-cleanup", "author": "audience-head", "why": "one line",
-     "edits": [
-       {"post": 1167, "action": "edit", "old": "exact text", "new": "..."},
-       {"post": 1164, "action": "link", "old": "https://a", "new": "https://b"},
-       {"post": 1142, "action": "delete"},
-       {"post": 0, "action": "desc", "new": "appended to the about"},
-       {"post": 0, "action": "pin_new", "new": "a new post, pinned"}]}
+    {"version": 1,
+     "rules": {"max_deletes": 15, "min_pause_sec": 10, ...},
+     "packages": [
+      {"id": "475-cleanup", "author": "audience-head", "why": "one line",
+       "edits": [
+        {"post": 1167, "action": "edit", "old": "exact text", "new": "..."},
+        {"post": 1164, "action": "link", "old": "https://a", "new": "https://b"},
+        {"post": 1142, "action": "delete"},
+        {"post": 0, "action": "desc", "new": "appended to the about"},
+        {"post": 0, "action": "pin_new", "new": "a new post, pinned"}]}]}
 
-Approval is the merge into ``main``: the reviewed file ships in the image,
-so this module only parses it and dry-runs every item against the post as
-it is NOW. It never touches Telegram, so every rule is under a test:
+Approval is the merge into the site's ``main``: the site build refuses a
+package that breaks this schema, so this module only parses the feed and
+dry-runs every item against the post as it is NOW. It never touches the
+network or Telegram, so every rule is under a test:
 
 * **dry run first** -- ``old`` must occur in the post's current text exactly
   once, character for character; a link's ``old`` must be the address of
   at least one of its links. Anything else is skipped, never guessed;
 * **limits** -- at most ``MAX_DELETES`` deletions per package (the whole
-  package is refused above that) and writes ``MIN_PAUSE_SEC`` apart;
+  package is refused above that) and writes ``MIN_PAUSE_SEC`` apart; the
+  feed's ``rules`` may only tighten them, never loosen;
+* **the feed whole or nothing** -- a feed that does not parse, has another
+  ``version``, a broken package or one id twice is refused whole;
 * **never touched** -- a protected address (the chat), the protected link
   rows and every premium emoji (the "watch" buttons), and any post that is
   not in the package. An edit whose fragment cuts into formatting is
@@ -176,16 +183,23 @@ class Package:
     items: tuple[Item, ...]
 
 
-def parse(text: str, name: str) -> Package:
-    """Read a package file's text; ``name`` is the file's stem.
+def parse(raw: object) -> Package:
+    """Read one package of the feed.
 
-    Raises ``PackageError`` naming the first problem: broken JSON, an
-    unknown key or action, a missing field, or an id that is not the
-    file's name (the name is what ``tgedit.json`` remembers). A package
-    is applied whole or not at all, so a typo stops it before anything
-    is touched.
+    Raises ``PackageError`` naming the first problem: not an object, an
+    unknown key or action, a missing field, or an id that is not
+    ``<number>-<word>`` (the id is what ``tgedit.json`` remembers). A
+    package is applied whole or not at all, so a typo stops it before
+    anything is touched.
     """
-    raw = _object(text, name)
+    if not isinstance(raw, dict):
+        msg = 'a package is a JSON object'
+        raise PackageError(msg)
+    name = _id(raw.get('id'))
+    unknown = set(raw) - _PACKAGE_KEYS
+    if unknown:
+        msg = f'{name}: unknown key(s) {sorted(unknown)}'
+        raise PackageError(msg)
     author, why = _head(raw, name)
     edits = raw.get('edits')
     if not isinstance(edits, list) or not edits:
@@ -199,28 +213,16 @@ def parse(text: str, name: str) -> Package:
     return Package(name, author, why, items)
 
 
-def _object(text: str, name: str) -> dict[str, object]:
-    """Read the file as a JSON object with only the package's keys."""
-    try:
-        raw = json.loads(text)
-    except json.JSONDecodeError as exc:
-        msg = f'{name}: the JSON does not parse: {exc.msg} at {exc.pos}'
-        raise PackageError(msg) from exc
-    if not isinstance(raw, dict):
-        msg = f'{name}: a package is a JSON object'
+def _id(value: object) -> str:
+    """Return a package id, ``<number>-<word>``."""
+    if not isinstance(value, str) or not _ID.fullmatch(value):
+        msg = f'id {value!r} must be <number>-<word>'
         raise PackageError(msg)
-    unknown = set(raw) - _PACKAGE_KEYS
-    if unknown:
-        msg = f'{name}: unknown key(s) {sorted(unknown)}'
-        raise PackageError(msg)
-    return raw
+    return value
 
 
 def _head(raw: dict[str, object], name: str) -> tuple[str, str]:
-    """Check the id against the file name; return (author, why)."""
-    if raw.get('id') != name or not _ID.fullmatch(name):
-        msg = f'{name}: id {raw.get("id")!r} must be the file name, '
-        raise PackageError(msg + '<number>-<word>')
+    """Return the package's (author, why)."""
     author, why = raw.get('author'), raw.get('why')
     if not isinstance(author, str) or not author.strip():
         msg = f'{name}: author must name the role that asked for it'
@@ -295,6 +297,101 @@ def check_limits(items: tuple[Item, ...], max_deletes: int) -> None:
     if deletes > cap:
         msg = f'{deletes} deletions in one package, at most {cap}'
         raise PackageError(msg)
+
+
+# ----------------------------------------------------------------- feed
+
+
+FEED_VERSION = 1
+"""The one feed layout this engine reads; any other is refused whole."""
+
+
+class FeedError(ValueError):
+    """The feed is refused whole; the message says why."""
+
+
+@dataclass(frozen=True)
+class Rules:
+    """The feed's limits; ``tighten`` keeps the stricter of them and ours."""
+
+    max_deletes: int = MAX_DELETES
+    min_pause_sec: float = MIN_PAUSE_SEC
+
+    def tighten(self, max_deletes: int, pause_sec: float) -> Rules:
+        """Return the stricter of these rules and ``(max_deletes, pause)``.
+
+        Never looser than the hard limits, whatever either side says.
+        """
+        return Rules(
+            max_deletes=max(
+                0, min(self.max_deletes, max_deletes, MAX_DELETES)
+            ),
+            min_pause_sec=max(self.min_pause_sec, pause_sec, MIN_PAUSE_SEC),
+        )
+
+
+@dataclass(frozen=True)
+class Feed:
+    """The feed: its limits and every package in it, in order."""
+
+    rules: Rules
+    packages: tuple[Package, ...]
+
+
+def parse_feed(text: str) -> Feed:
+    """Read the feed's text; raise ``FeedError`` on any problem.
+
+    The site build checks the same schema, so a problem here means the
+    two drifted apart: nothing is applied until a reviewed fix ships.
+    """
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        msg = f'the feed does not parse: {exc.msg} at {exc.pos}'
+        raise FeedError(msg) from exc
+    if not isinstance(raw, dict):
+        msg = 'the feed is not a JSON object'
+        raise FeedError(msg)
+    version = raw.get('version')
+    if version != FEED_VERSION or isinstance(version, bool):
+        msg = f'feed version {version!r}, this engine reads {FEED_VERSION}'
+        raise FeedError(msg)
+    packages = _packages(raw.get('packages'))
+    return Feed(_rules(raw.get('rules', {})), packages)
+
+
+def _packages(rows: object) -> tuple[Package, ...]:
+    """Read the feed's packages; one bad package or a twice id refuses all."""
+    if not isinstance(rows, list):
+        msg = 'the feed has no packages list'
+        raise FeedError(msg)
+    try:
+        packages = tuple(parse(one) for one in rows)
+    except PackageError as exc:
+        msg = f'the feed carries a broken package: {exc}'
+        raise FeedError(msg) from exc
+    ids = [one.id for one in packages]
+    twice = sorted({one for one in ids if ids.count(one) > 1})
+    if twice:
+        msg = f'the feed carries id(s) {twice} more than once'
+        raise FeedError(msg)
+    return packages
+
+
+def _rules(raw: object) -> Rules:
+    """Read the feed's ``rules``; a missing limit keeps the hard one."""
+    if not isinstance(raw, dict):
+        msg = 'the feed rules are not an object'
+        raise FeedError(msg)
+    deletes = raw.get('max_deletes', MAX_DELETES)
+    pause = raw.get('min_pause_sec', MIN_PAUSE_SEC)
+    if not isinstance(deletes, int) or isinstance(deletes, bool):
+        msg = f'feed rules: max_deletes {deletes!r} is not a whole number'
+        raise FeedError(msg)
+    if not isinstance(pause, (int, float)) or isinstance(pause, bool):
+        msg = f'feed rules: min_pause_sec {pause!r} is not a number'
+        raise FeedError(msg)
+    return Rules(max_deletes=deletes, min_pause_sec=float(pause))
 
 
 # -------------------------------------------------------------- dry run

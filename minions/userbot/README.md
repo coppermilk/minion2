@@ -13,7 +13,7 @@ Link aggregation is just one of them:
 | **comod** | the supporter "cabinet" (`/comod`): a named shelf per donor for a month |
 | **users** | an opt-in SQLite record of the channel audience over time |
 | **links** | keeps the video links in the channel's posts short (trackable), history and new posts alike; ships in dry mode |
-| **tgedit** | applies the reviewed package files in `tgedit/` to the channel (edit, delete, relink, description, new pin) |
+| **tgedit** | applies the reviewed packages of the site's feed `/tgedit.json` to the channel (edit, delete, relink, description, new pin) |
 
 `main.py` is only the **host**: it loads config, builds the active profile,
 routes each incoming event to the engines, and runs the status/heartbeat loop.
@@ -34,7 +34,6 @@ minions/userbot/
   main.py                 # the Userbot host + entry point (python -m minions.userbot.main)
   login.py                # one-time interactive login -> the session file
   aggregator_constants.json, assets/   # editable texts + premium-emoji ids (UTF-8), cabinet template/fonts
-  tgedit/                 # the channel editor's reviewed edit packages (UTF-8 JSON)
   core/                   # pure building blocks, no Telethon
     models, matching, state (the store), statefile, render, config, codec,
     runtime, client, humanize, tasks, attachment, relationship
@@ -140,44 +139,61 @@ Knobs: `engines.links` in `aggregator_constants.json` (`domain` blank =
 ## Channel editor (`tgedit`)
 
 `glue/tgedit.py` over the pure `core/tgedit.py`: a worker that executes a
-file, so the channel's posts are cleaned up without the owner doing it by
-hand. It talks to nobody but Telegram -- no board, no token.
+feed, so the channel's posts are cleaned up without the owner doing it by
+hand. It reads one public address and talks to nobody but Telegram -- no
+board, no token.
 
-**The package** is a file `minions/userbot/tgedit/<number>-<word>.json`;
-its `id` is the file name (the number is the note it came from):
+**The feed** is the site's `https://daetotyoma.com/tgedit.json`
+(`engines.tgedit.feed_url`), built from the site repository's
+`data/tgedit/<number>-<word>.json` (schema: `shared/tgedit.mjs` there, the
+same as `core/tgedit.py` here). The engine reads it once a tick, in the
+persona's waking hours:
 
 ```json
-{"id": "475-cleanup", "author": "audience-head", "why": "one line",
- "edits": [
+{"version": 1,
+ "rules": {"max_deletes": 15, "min_pause_sec": 10,
+           "apply_once": true, "old_must_match_once": true},
+ "packages": [
+  {"id": "475-cleanup", "author": "audience-head", "why": "one line",
+   "edits": [
   {"post": 1167, "action": "edit", "old": "exact fragment", "new": "new one"},
   {"post": 1164, "action": "link", "old": "https://old", "new": "https://new"},
   {"post": 1142, "action": "delete"},
   {"post": 1006, "action": "delete", "only_if_empty": true},
   {"post": 0, "action": "desc", "new": "\nappended to the description"},
-  {"post": 0, "action": "pin_new", "new": "a new post, pinned silently"}]}
+  {"post": 0, "action": "pin_new", "new": "a new post, pinned silently"}]}]}
 ```
+
+A feed that cannot be read, does not parse, has another `version`, carries
+a broken package or one id twice is refused WHOLE: one line in the log,
+nothing read in the channel, nothing remembered; the next tick tries again.
+The feed's `rules` can only tighten ours: the engine takes the stricter of
+`rules` and `engines.tgedit` and never goes past 15 deletions a package or
+under 10 s between writes. A package that left the feed is not applied.
 
 `post` 0 is the channel itself (`desc`, `pin_new`). `edit` replaces a
 fragment of the text (empty `new` removes it), `link` points every link
 whose address is `old` at `new` (a visible address changes its text too;
 the report says `replaced N` when it moved more than one).
-A broken file, an unknown key or action, an id that is not the file name,
-or more than `max_deletes` deletions refuses the WHOLE package. Every
-shipped file is parsed by the tests, so such a typo fails CI first.
+More than `max_deletes` deletions refuses the WHOLE package (journaled,
+remembered by id). The site build checks the same schema, so a typo fails
+the site's CI before it reaches the feed.
 
-**Approval is the merge.** A package arrives as a PR; the site's team lead
-reviews and merges it into `main`, the image ships the file, and the
-worker applies it. Nobody approves anything on the board.
+**Approval is the merge.** A package arrives as a PR to the site; the
+site's team lead reviews and merges it into `main`, the deploy puts it in
+the feed, and the worker applies it on its next tick. No image rebuild,
+nobody approves anything on the board.
 
 **Dry check before the merge, without the NAS**: save the site MCP's
 `telegram` answer (`limit` 1000) and run
 
 ```
 python -m minions.userbot.dev.tgedit_check \
-    minions/userbot/tgedit/475-cleanup.json telegram.json
+    https://daetotyoma.com/tgedit.json telegram.json
 ```
 
-It runs every item through the engine's own planner against that
+The feed is its address or a file (the site's `dist/tgedit.json`, to check
+a package before its PR merges). It runs every item of every package through the engine's own planner against that
 snapshot and prints `post N . action -> matched / old not found / old more
 than once / no post` (in the words of `engines.tgedit.labels`). The
 snapshot has no entity offsets beyond its links and no description, so
