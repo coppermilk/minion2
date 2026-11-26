@@ -64,6 +64,9 @@ log = logging.getLogger('userbot')
 STATE_FILE = 'tgedit.json'
 JOURNAL_FILE = 'tgedit_journal.jsonl'
 CATALOG_FILE = 'emoji_catalog.json'
+REPORT_FILE = 'tgedit_report.json'
+"""Every package's outcomes for the site (``tgedit.summary``); nas-update
+relays it to the site's version reports when it changes."""
 CATALOG_SEC = 24 * 3600.0
 """How often the emoji catalog is rebuilt (a failed read retries sooner)."""
 CATALOG_POSTS = 200
@@ -171,6 +174,7 @@ class EditDeps:
     journal: Path  # tgedit_journal.jsonl
     catalog: Path  # emoji_catalog.json
     params: EditParams
+    report: Path | None = None  # tgedit_report.json; None writes none
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep
 
 
@@ -201,6 +205,23 @@ def write_state(path: Path, state: EditState) -> None:
     """Persist the state atomically."""
     body = {'done': sorted(state.done), 'dry': sorted(state.dry)}
     atomic_write(path, json.dumps(body, indent=2).encode('utf-8'))
+
+
+def read_journal(path: Path) -> list[dict[str, object]]:
+    """Load the journal's rows; a missing file or a torn line is skipped."""
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return []
+    rows: list[dict[str, object]] = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
 
 
 def to_post(linked: userchat.Linked) -> tgedit.Post:
@@ -341,8 +362,23 @@ class ChannelEditor:
     catalog_at: float = 0.0
 
     def load(self) -> None:
-        """Read the persisted state."""
+        """Read the persisted state; bring the site's report up to date."""
         self.state = read_state(self.deps.path)
+        self.write_report(time.time())
+
+    def write_report(self, now: float) -> None:
+        """Rewrite ``tgedit_report.json`` from the whole journal.
+
+        The journal is the record of what the channel got; the report is
+        only its digest, so it is rebuilt rather than kept in step.
+        """
+        if self.deps.report is None:
+            return
+        body = tgedit.summary(read_journal(self.deps.journal), now)
+        atomic_write(
+            self.deps.report,
+            json.dumps(body, ensure_ascii=False, indent=1).encode('utf-8'),
+        )
 
     def save(self) -> None:
         """Write the state."""
@@ -587,6 +623,7 @@ class ChannelEditor:
         else:
             self.state.dry.add(run.package)
         self.save()
+        self.write_report(time.time())
 
 
 def _row(one: tgedit.Outcome, mode: str) -> dict[str, object]:

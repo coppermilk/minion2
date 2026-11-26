@@ -711,6 +711,7 @@ def _editor(
             catalog=tmp_path / worker.CATALOG_FILE,
             params=params,
             sleep=sleep,
+            report=tmp_path / worker.REPORT_FILE,
         )
     )
     editor.load()
@@ -1316,3 +1317,89 @@ def test_the_dry_check_matches_a_package_with_a_premium_emoji(
     out = capsys.readouterr().out.splitlines()
     assert out[1] == f'{labels["post"]} 1 . edit -> {labels["dry_ok"]}'
     assert out[2].endswith(f'({labels["unknown_emoji"]})')
+
+
+def _report(tmp_path: Path) -> dict[str, object]:
+    """Return the report the editor wrote for the site."""
+    path = tmp_path / worker.REPORT_FILE
+    return cast('dict[str, object]', json.loads(path.read_text('utf-8')))
+
+
+def _packages(body: dict[str, object]) -> list[dict[str, object]]:
+    """Return a report's packages."""
+    return cast('list[dict[str, object]]', body['packages'])
+
+
+def test_an_applied_package_is_reported_item_by_item(tmp_path: Path) -> None:
+    """On: the report names every item -- applied, or skipped and why."""
+    editor, _ = _editor(tmp_path, _world(), 'on')
+    asyncio.run(editor.tick(NOW))
+    (one,) = _packages(_report(tmp_path))
+    assert (one['id'], one['mode']) == (PACKAGE, 'on')
+    assert one['at']
+    items = cast('list[list[object]]', one['items'])
+    assert [1167, 'edit', tgedit.APPLIED] in items
+    assert [1142, 'delete', tgedit.APPLIED] in items
+    assert [944, 'edit', tgedit.SKIPPED, tgedit.NOT_FOUND] in items
+    assert len(items) == len(ITEMS)
+
+
+def test_the_on_pass_replaces_the_dry_one_in_the_report(
+    tmp_path: Path,
+) -> None:
+    """A package dry-run then applied is reported as applied, once."""
+    world = _world()
+    dry, _ = _editor(tmp_path, world, 'dry')
+    asyncio.run(dry.tick(NOW))
+    assert [p['mode'] for p in _packages(_report(tmp_path))] == ['dry']
+    live, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(live.tick(NOW))
+    (one,) = _packages(_report(tmp_path))
+    assert one['mode'] == 'on'
+    assert len(cast('list[object]', one['items'])) == len(ITEMS)
+
+
+def test_a_refused_package_is_reported_with_its_reason(tmp_path: Path) -> None:
+    """Too many deletions: the report says refused and why."""
+    many = [{'post': n, 'action': 'delete'} for n in range(1, 17)]
+    editor, _ = _editor(tmp_path, _world(many), 'on')
+    asyncio.run(editor.tick(NOW))
+    (one,) = _packages(_report(tmp_path))
+    assert one['refused']
+    assert one['items'] == []
+
+
+def test_the_report_is_rebuilt_from_the_journal_on_start(
+    tmp_path: Path,
+) -> None:
+    """A journal from before the report (475-cleanup) is reported on load."""
+    editor, _ = _editor(tmp_path, _world(), 'on')
+    asyncio.run(editor.tick(NOW))
+    (tmp_path / worker.REPORT_FILE).unlink()
+    with (tmp_path / worker.JOURNAL_FILE).open('a', encoding='utf-8') as out:
+        out.write('{torn line\n')
+    _editor(tmp_path, _world(), 'on')
+    assert [p['id'] for p in _packages(_report(tmp_path))] == [PACKAGE]
+
+
+def test_the_report_fits_the_site_and_drops_the_oldest() -> None:
+    """Past the site's limit the oldest packages go and are counted."""
+    rows: list[dict[str, object]] = [
+        {
+            'at': NOW + n,
+            'package': f'{n}-big',
+            'what': 'outcome',
+            'mode': 'on',
+            'post': post,
+            'action': 'delete',
+            'status': tgedit.APPLIED,
+        }
+        for n in range(1, 40)
+        for post in range(1000, 1010)
+    ]
+    body = tgedit.summary(rows, NOW)
+    text = json.dumps(body, ensure_ascii=False, separators=(',', ':'))
+    assert len(text) <= tgedit.REPORT_LIMIT
+    ids = [p['id'] for p in _packages(body)]
+    assert ids[0] == '39-big'
+    assert cast('int', body['dropped']) == 39 - len(ids)
