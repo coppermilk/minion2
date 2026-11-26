@@ -674,10 +674,13 @@ def test_an_unreadable_channel_retries_later(tmp_path: Path) -> None:
 # ------------------------------------------------------- configuration
 
 
-def test_the_shipped_constants_keep_the_editor_off_and_safe() -> None:
-    """Off by default; the chat and the watch links are protected."""
+def test_the_shipped_constants_keep_the_editor_read_only_and_safe() -> None:
+    """Shipped off or dry (no writes); the chat and watch links are protected.
+
+    ``on`` is a separate reviewed change, after the first dry-run report.
+    """
     params = worker.load_edit_params(config.read_json(config.CONSTANTS_PATH))
-    assert params.mode == 'off'
+    assert params.mode in ('off', 'dry')
     assert params.max_deletes == tgedit.MAX_DELETES
     assert params.pause_sec >= tgedit.MIN_PAUSE_SEC
     assert CHAT in params.guard.urls

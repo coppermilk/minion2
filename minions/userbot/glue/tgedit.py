@@ -16,10 +16,11 @@ package not handled yet:
    one write at least ``pause_sec`` (never under 10 s) after another,
    and posts ``post -> applied / skipped / error`` into the thread.
 
-``mode`` lives in ``engines.tgedit`` and ships ``off``: switching it is a
-reviewed change of the constants file, not a chat command. A handled
-package is remembered in ``tgedit.json``, so it is applied once; a post
-the package does not name is never read, let alone written.
+``mode`` lives in ``engines.tgedit`` and ships ``dry`` (reports, no
+writes): switching it is a reviewed change of the constants file, not
+a chat command. A handled package is remembered in ``tgedit.json``, so
+it is applied once; a post the package does not name is never read,
+let alone written.
 """
 
 from __future__ import annotations

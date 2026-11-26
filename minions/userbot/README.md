@@ -13,7 +13,7 @@ Link aggregation is just one of them:
 | **comod** | the supporter "cabinet" (`/comod`): a named shelf per donor for a month |
 | **users** | an opt-in SQLite record of the channel audience over time |
 | **links** | keeps the video links in the channel's posts short (trackable), history and new posts alike; ships in dry mode |
-| **tgedit** | applies approved packages of channel edits from the team board (edit, delete, relink, description, new pin); ships off |
+| **tgedit** | applies approved packages of channel edits from the team board (edit, delete, relink, description, new pin); ships in dry mode |
 
 `main.py` is only the **host**: it loads config, builds the active profile,
 routes each incoming event to the engines, and runs the status/heartbeat loop.
@@ -179,7 +179,7 @@ words contain one of `protect_link_texts` (the "watch" row), every premium
 emoji, and any post the package does not name -- those are never read.
 
 **Modes** (`engines.tgedit.mode`, a reviewed change of the constants file,
-not a chat command): `off` (shipped) does nothing; `dry` posts the dry-run
+not a chat command): `off` does nothing; `dry` (shipped) posts the dry-run
 outcome of each item into the package's thread; `on` journals each post
 before changing it (`tgedit_journal.jsonl`: text and Telegram's own entity
 dicts, enough to undo by hand), writes what passed at least `pause_sec`

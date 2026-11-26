@@ -305,7 +305,7 @@
     },
     "tgedit": {
       "_note": "Применяет одобренные пакеты правок канала с доски команды (core/tgedit.py, glue/tgedit.py). Пакет — заметка kind=note с тегом tag от роли из authors, с блоком ```json [{post, action: edit|delete|link|desc|pin_new, old, new, only_if_empty}]```. Пакет ищется через q=tag (список по tag отдаёт только корневые заметки, а пакет — обычно ответ в треде), тег проверяется в tags, архивные пропускаются. Одобрение — строка заметки, которая начинается с «<approve_word> #<id пакета>», от роли из approvers (не автора пакета); «не принято #id» не считается. link меняет все ссылки с адресом old и пишет в отчёт «заменено N». mode: off — ничего; dry — сухой прогон и отчёт в тред пакета; on — сухой прогон, журнал исходников (tgedit_journal.jsonl), правки не чаще 1 в pause_sec (не меньше 10 с), удалений не больше max_deletes (не больше 15) за пакет, отчёт в тред. Пакет применяется один раз (tgedit.json). Никогда не трогает адреса из protect_urls, ссылки с текстом из protect_link_texts, премиум-эмодзи и посты вне пакета. Токен роли доски — только в .env (TGEDIT_BOARD_TOKEN), без него движок спит.",
-      "mode": "off",
+      "mode": "dry",
       "board_url": "https://daetotyoma.com/mcp",
       "tag": "tg-edit",
       "authors": ["audience-head"],
