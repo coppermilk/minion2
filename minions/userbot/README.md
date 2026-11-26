@@ -240,6 +240,17 @@ channel that cannot be read leaves it pending for the next tick. Rights
 are read first (`edit`, `delete`, `pin`, `post`, `info` = change the
 description): an item the account may not do is reported `no_rights`.
 
+**The report for the site** (`tgedit_report.json`, next to the journal) is
+the journal's digest, rebuilt from it at start and after every package:
+`{v, generated_at, packages: [{id, mode, at, items: [[post, action,
+status, reason?]], refused?}]}`, newest first, at most 3900 characters
+(oldest packages dropped and counted in `dropped`). The engine holds no
+site key and writes nothing to the site: nas-update (root, `[relay]` in
+`apps/minion2.conf`) sends the file to the site's version reports
+(`minion2-tgedit`) when it changes, and the site takes every package
+handled `on` out of `/tgedit.json`: applied items go to the admin's
+archive, skipped and failed ones stay listed with their reason.
+
 ## State on disk
 
 Two shapes, because two things behave differently. Per-peer data grows with
@@ -257,6 +268,7 @@ of scalars and are the only part worth reading by eye.
   links.json                   link keeper: mode, history cursor, edits today
   tgedit.json                  channel editor: package ids applied / dry-run
   tgedit_journal.jsonl         channel editor: before-images and outcomes
+  tgedit_report.json           channel editor: every package's outcomes, for the site
   users.db                     the opt-in audience DB (PII, off by default)
 ```
 

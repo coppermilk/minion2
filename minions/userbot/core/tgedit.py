@@ -47,8 +47,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from dataclasses import field
+from typing import cast
 
 from minion_core.richtext import EMOJI as EMOJI_SPAN
 from minion_core.richtext import Span
@@ -751,3 +753,94 @@ def tally(outcomes: list[Outcome]) -> dict[str, int]:
     for one in outcomes:
         out[one.status] = out.get(one.status, 0) + 1
     return out
+
+
+REPORT_VERSION = 1
+REPORT_LIMIT = 3900
+"""Characters (UTF-16 units, as JS counts) the report may take: the site
+keeps 4000 of a version report's ``details`` and cuts the rest, which
+would no longer be JSON."""
+
+
+def _js_length(value: object) -> int:
+    """Length of ``JSON.stringify(value)`` in JS: UTF-16 code units."""
+    text = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    return len(text.encode('utf-16-le')) // 2
+
+
+def _iso(at: object) -> str:
+    """Render a journal row's epoch as UTC ISO-8601 (``''`` if absent)."""
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return ''
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(at))
+
+
+def _pass_key(row: dict[str, object]) -> tuple[str, str] | None:
+    """Return (package, mode) of an outcome or refusal row, else None."""
+    package, mode = row.get('package'), row.get('mode')
+    if row.get('what') not in {'outcome', 'refused'}:
+        return None
+    if not isinstance(package, str) or mode not in {'dry', 'on'}:
+        return None
+    return package, str(mode)
+
+
+def _add_row(one: dict[str, object], row: dict[str, object]) -> None:
+    """Add one journal row to its package's pass."""
+    one['at'] = _iso(row.get('at')) or one['at']
+    if row.get('what') == 'refused':
+        one['refused'] = str(row.get('why', ''))[:200]
+        return
+    item = [row.get('post'), row.get('action'), row.get('status')]
+    if row.get('reason'):
+        item.append(row.get('reason'))
+    cast('list[object]', one['items']).append(item)
+
+
+def _passes(rows: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    """Fold the journal into one pass per package: ``on`` beats ``dry``.
+
+    A package is handled once per mode (``tgedit.json``), so its rows of
+    one mode are one pass; the ``on`` pass is what the channel got, and a
+    dry row after it changes nothing.
+    """
+    out: dict[str, dict[str, object]] = {}
+    for row in rows:
+        key = _pass_key(row)
+        if key is None:
+            continue
+        package, mode = key
+        one = out.get(package)
+        if one is None or (one['mode'], mode) == ('dry', 'on'):
+            one = {'id': package, 'mode': mode, 'at': '', 'items': []}
+            out[package] = one
+        if one['mode'] == mode:
+            _add_row(one, row)
+    return out
+
+
+def summary(rows: list[dict[str, object]], now: float) -> dict[str, object]:
+    """Return the engine's report for the site from the journal's rows.
+
+    ``{v, generated_at, packages: [{id, mode, at, items: [[post, action,
+    status, reason?]], refused?}]}``, newest package first. The site
+    takes a package handled ``on`` out of its feed and shows its items:
+    applied in the archive, skipped and failed with the reason. Oldest
+    packages are dropped until it fits ``REPORT_LIMIT`` (the site keeps
+    the earlier reports, so a dropped package stays known there), and
+    ``dropped`` says how many.
+    """
+    packages = sorted(
+        _passes(rows).values(), key=lambda one: str(one['at']), reverse=True
+    )
+    body: dict[str, object] = {
+        'v': REPORT_VERSION,
+        'generated_at': _iso(now),
+        'packages': packages,
+    }
+    dropped = 0
+    while _js_length(body) > REPORT_LIMIT and packages:
+        packages.pop()
+        dropped += 1
+        body['dropped'] = dropped
+    return body
