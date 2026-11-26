@@ -13,16 +13,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pathlib
 import sqlite3
 import types
 from datetime import UTC
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import TYPE_CHECKING
 from typing import Never
 
 from minion_core.adapters import userchat
 from minion_core.pace import Gate
 from minion_core.pace import Pace
+from minions.userbot import main
+from minions.userbot.core import config
 from minions.userbot.core import state
 from minions.userbot.core.state import DB_NAME
 from minions.userbot.core.state import Database
@@ -508,3 +512,55 @@ def test_a_returning_subscriber_is_forgotten_once(tmp_path: Path) -> None:
     assert g.store.count_marks() == 1
     g._forget_departure(7)
     assert g.store.count_marks() == 0
+
+
+# --- the shipped welcome links really are links ---------------------------
+
+
+class _Anchors(HTMLParser):
+    """Collect every <a href> of an HTML template with its visible text.
+
+    Telethon's html parse mode is built on this same stdlib HTMLParser and
+    turns exactly these anchors into text-url entities; bare text outside
+    an anchor gets no entity, so in a DM it is not clickable.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._text = ''
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag == 'a':
+            self._href, self._text = dict(attrs).get('href') or '', ''
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._text += data
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == 'a' and self._href is not None:
+            self.links.append((self._href, self._text))
+            self._href = None
+
+
+def test_shipped_welcome_links_are_anchors() -> None:
+    """The shipped welcome carries both links as <a href>, text unchanged.
+
+    Regression (board #112): bare domains in an html=True message got no
+    link entity, so neither link opened from the Telegram DM.
+    """
+    root = pathlib.Path(main.__file__).with_name('aggregator_constants.json')
+    params = greeter.load_greeter_params(config.read_json(root), _CHANNEL_ID)
+    anchors = _Anchors()
+    anchors.feed(params.welcome)
+    assert anchors.links == [
+        ('https://t.me/da_eto_tyoma', 'telegram.daetotyoma.com'),
+        (
+            'https://go.daetotyoma.com/tg-collabs?s=tg-dm',
+            'go.daetotyoma.com/tg-collabs?s=tg-dm',
+        ),
+    ]
