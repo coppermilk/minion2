@@ -2,21 +2,21 @@
 # Proprietary -- no use without the author's prior approval.
 """Apply an approved package of channel edits: the pure half.
 
-The team's board carries a package of edits to the channel's posts -- a
-note tagged ``tg-edit`` with one JSON block::
+A package is a JSON file in the repository, ``minions/userbot/tgedit/``,
+named after its id (``475-cleanup.json``)::
 
-    [{"post": 1167, "action": "edit", "old": "exact text", "new": "..."},
-     {"post": 1164, "action": "link", "old": "https://a", "new": "https://b"},
-     {"post": 1142, "action": "delete"},
-     {"post": 0, "action": "desc", "new": "appended to the about"},
-     {"post": 0, "action": "pin_new", "new": "a new post, pinned"}]
+    {"id": "475-cleanup", "author": "audience-head", "why": "one line",
+     "edits": [
+       {"post": 1167, "action": "edit", "old": "exact text", "new": "..."},
+       {"post": 1164, "action": "link", "old": "https://a", "new": "https://b"},
+       {"post": 1142, "action": "delete"},
+       {"post": 0, "action": "desc", "new": "appended to the about"},
+       {"post": 0, "action": "pin_new", "new": "a new post, pinned"}]}
 
-This module parses that block, decides whether the package is approved,
-and dry-runs every item against the post as it is NOW. It never touches
-Telegram or the board, so every rule of the protocol is under a test:
+Approval is the merge into ``main``: the reviewed file ships in the image,
+so this module only parses it and dry-runs every item against the post as
+it is NOW. It never touches Telegram, so every rule is under a test:
 
-* **approval** -- a note ``<word> #<package id>`` by an approver role that
-  is not the package's author (nobody accepts their own work);
 * **dry run first** -- ``old`` must occur in the post's current text exactly
   once, character for character; a link's ``old`` must be the address of
   at least one of its links. Anything else is skipped, never guessed;
@@ -78,7 +78,9 @@ EMOJI = 'emoji'
 """The entity kind of a premium (custom) emoji."""
 
 _KEYS = frozenset({'post', 'action', 'old', 'new', 'only_if_empty'})
-_BLOCK = re.compile(r'```(?:json)?\s*\n(.*?)\n?```', re.DOTALL)
+_PACKAGE_KEYS = frozenset({'id', 'author', 'why', 'edits'})
+_ID = re.compile(r'[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*')
+"""A package id: the number of the note it came from, a dash, a word."""
 _UTF16 = 'utf-16-le'
 
 
@@ -88,7 +90,7 @@ class PackageError(ValueError):
 
 @dataclass(frozen=True)
 class Item:
-    """One edit of the package, as written on the board."""
+    """One edit of the package, as written in its file."""
 
     post: int
     action: str
@@ -164,26 +166,69 @@ class PostPlan:
 # ------------------------------------------------------------- parsing
 
 
-def parse(text: str) -> tuple[Item, ...]:
-    """Read the JSON block of a package note into items.
+@dataclass(frozen=True)
+class Package:
+    """One package file: who asked for it, why, and its edits in order."""
 
-    Raises ``PackageError`` naming the first problem: no block, broken
-    JSON, an unknown key or action, a missing field. A package is applied
-    whole or not at all, so a typo stops it before anything is touched.
+    id: str
+    author: str
+    why: str
+    items: tuple[Item, ...]
+
+
+def parse(text: str, name: str) -> Package:
+    """Read a package file's text; ``name`` is the file's stem.
+
+    Raises ``PackageError`` naming the first problem: broken JSON, an
+    unknown key or action, a missing field, or an id that is not the
+    file's name (the name is what ``tgedit.json`` remembers). A package
+    is applied whole or not at all, so a typo stops it before anything
+    is touched.
     """
-    found = _BLOCK.search(text)
-    if found is None:
-        msg = 'no ```json block in the note'
+    raw = _object(text, name)
+    author, why = _head(raw, name)
+    edits = raw.get('edits')
+    if not isinstance(edits, list) or not edits:
+        msg = f'{name}: edits must be a non-empty list'
         raise PackageError(msg)
     try:
-        raw = json.loads(found.group(1))
-    except json.JSONDecodeError as exc:
-        msg = f'the JSON block does not parse: {exc.msg} at {exc.pos}'
+        items = tuple(_item(n, one) for n, one in enumerate(edits, start=1))
+    except PackageError as exc:
+        msg = f'{name}: {exc}'
         raise PackageError(msg) from exc
-    if not isinstance(raw, list) or not raw:
-        msg = 'the JSON block must be a non-empty list of edits'
+    return Package(name, author, why, items)
+
+
+def _object(text: str, name: str) -> dict[str, object]:
+    """Read the file as a JSON object with only the package's keys."""
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        msg = f'{name}: the JSON does not parse: {exc.msg} at {exc.pos}'
+        raise PackageError(msg) from exc
+    if not isinstance(raw, dict):
+        msg = f'{name}: a package is a JSON object'
         raise PackageError(msg)
-    return tuple(_item(n, one) for n, one in enumerate(raw, start=1))
+    unknown = set(raw) - _PACKAGE_KEYS
+    if unknown:
+        msg = f'{name}: unknown key(s) {sorted(unknown)}'
+        raise PackageError(msg)
+    return raw
+
+
+def _head(raw: dict[str, object], name: str) -> tuple[str, str]:
+    """Check the id against the file name; return (author, why)."""
+    if raw.get('id') != name or not _ID.fullmatch(name):
+        msg = f'{name}: id {raw.get("id")!r} must be the file name, '
+        raise PackageError(msg + '<number>-<word>')
+    author, why = raw.get('author'), raw.get('why')
+    if not isinstance(author, str) or not author.strip():
+        msg = f'{name}: author must name the role that asked for it'
+        raise PackageError(msg)
+    if not isinstance(why, str) or not why.strip() or '\n' in why:
+        msg = f'{name}: why must be one line'
+        raise PackageError(msg)
+    return author.strip(), why.strip()
 
 
 def _fail(n: int, why: str) -> PackageError:
@@ -250,53 +295,6 @@ def check_limits(items: tuple[Item, ...], max_deletes: int) -> None:
     if deletes > cap:
         msg = f'{deletes} deletions in one package, at most {cap}'
         raise PackageError(msg)
-
-
-# ------------------------------------------------------------ approval
-
-
-@dataclass(frozen=True)
-class Note:
-    """A board note, as far as approval cares: who wrote what, and when."""
-
-    id: int
-    role: str
-    text: str
-    created_at: str = ''
-
-
-@dataclass(frozen=True)
-class Approval:
-    """Who may approve a package, and the word that does it."""
-
-    word: str
-    approvers: tuple[str, ...]
-
-    def by(self, package: Note, notes: list[Note]) -> str:
-        """Return the role that approved ``package``; '' when none did.
-
-        An approval is a line opening with ``<word> #<id>``
-        (case-insensitive) by one of ``approvers``, written after the
-        package, by a role other than the package's author. Only the start
-        of a line counts, so "not approved #475" approves nothing.
-        """
-        if not self.word:
-            return ''
-        mark = re.compile(
-            rf'^\s*{re.escape(self.word)}\s*#{package.id}(?!\d)',
-            re.IGNORECASE | re.MULTILINE,
-        )
-        for note in notes:
-            if self._counts(package, note) and mark.search(note.text):
-                return note.role
-        return ''
-
-    def _counts(self, package: Note, note: Note) -> bool:
-        """Whether ``note`` is by someone allowed to approve ``package``."""
-        if note.id == package.id or note.role == package.role:
-            return False
-        later = not package.created_at or note.created_at >= package.created_at
-        return later and note.role in self.approvers
 
 
 # -------------------------------------------------------------- dry run
@@ -514,8 +512,8 @@ def report(outcomes: list[Outcome], labels: dict[str, str]) -> list[str]:
     """Render ``post N . action -> outcome (reason)``, one line per item.
 
     An item that changed more than one place adds ``, replaced N``.
-    ``labels`` maps the status and reason codes to the words the board
-    reads; a code without a label is shown as is.
+    ``labels`` maps the status and reason codes to the words the log
+    shows; a code without a label is shown as is.
     """
     lines: list[str] = []
     for one in outcomes:

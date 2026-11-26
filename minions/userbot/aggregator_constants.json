@@ -304,13 +304,8 @@
       "pause_sec": 60
     },
     "tgedit": {
-      "_note": "Применяет одобренные пакеты правок канала с доски команды (core/tgedit.py, glue/tgedit.py). Пакет — заметка kind=note с тегом tag от роли из authors, с блоком ```json [{post, action: edit|delete|link|desc|pin_new, old, new, only_if_empty}]```. Пакет ищется через q=tag (список по tag отдаёт только корневые заметки, а пакет — обычно ответ в треде), тег проверяется в tags, архивные пропускаются. Одобрение — строка заметки, которая начинается с «<approve_word> #<id пакета>», от роли из approvers (не автора пакета); «не принято #id» не считается. link меняет все ссылки с адресом old и пишет в отчёт «заменено N». mode: off — ничего; dry — сухой прогон и отчёт в тред пакета; on — сухой прогон, журнал исходников (tgedit_journal.jsonl), правки не чаще 1 в pause_sec (не меньше 10 с), удалений не больше max_deletes (не больше 15) за пакет, отчёт в тред. Пакет применяется один раз (tgedit.json). Никогда не трогает адреса из protect_urls, ссылки с текстом из protect_link_texts, премиум-эмодзи и посты вне пакета. Токен роли доски — только в .env (TGEDIT_BOARD_TOKEN), без него движок спит.",
-      "mode": "dry",
-      "board_url": "https://daetotyoma.com/mcp",
-      "tag": "tg-edit",
-      "authors": ["audience-head"],
-      "approvers": ["strateg"],
-      "approve_word": "принято",
+      "_note": "Применяет пакеты правок канала, слитые в main (core/tgedit.py, glue/tgedit.py). Пакет — файл minions/userbot/tgedit/<номер>-<слово>.json: {id (= имя файла), author, why, edits: [{post, action: edit|delete|link|desc|pin_new, old, new, only_if_empty}]}. Одобрение — слияние PR: движок ни у кого не спрашивает и на доску не ходит. link меняет все ссылки с адресом old и пишет «заменено N». mode: off — ничего; dry — сухой прогон, итог в лог и журнал; on — сухой прогон, журнал исходников и итогов (tgedit_journal.jsonl), правки не чаще 1 в pause_sec (не меньше 10 с), удалений не больше max_deletes (не больше 15) за пакет. Пакет применяется один раз (tgedit.json, по id). Никогда не трогает адреса из protect_urls, ссылки с текстом из protect_link_texts, премиум-эмодзи и посты вне пакета. Проверка до слияния: python -m minions.userbot.dev.tgedit_check <пакет> <снимок MCP telegram>.",
+      "mode": "on",
       "max_deletes": 15,
       "pause_sec": 10,
       "tick_sec": 900,
@@ -337,7 +332,8 @@
         "no_rights": "у аккаунта нет права в канале",
         "conflict": "удаление и правка одного поста в одном пакете",
         "failed": "Telegram не принял",
-        "replaced": "заменено"
+        "replaced": "заменено",
+        "unchecked": "в снимке этого нет, проверит движок"
       }
     }
   },

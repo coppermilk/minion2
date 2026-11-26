@@ -13,7 +13,7 @@ Link aggregation is just one of them:
 | **comod** | the supporter "cabinet" (`/comod`): a named shelf per donor for a month |
 | **users** | an opt-in SQLite record of the channel audience over time |
 | **links** | keeps the video links in the channel's posts short (trackable), history and new posts alike; ships in dry mode |
-| **tgedit** | applies approved packages of channel edits from the team board (edit, delete, relink, description, new pin); ships in dry mode |
+| **tgedit** | applies the reviewed package files in `tgedit/` to the channel (edit, delete, relink, description, new pin) |
 
 `main.py` is only the **host**: it loads config, builds the active profile,
 routes each incoming event to the engines, and runs the status/heartbeat loop.
@@ -34,6 +34,7 @@ minions/userbot/
   main.py                 # the Userbot host + entry point (python -m minions.userbot.main)
   login.py                # one-time interactive login -> the session file
   aggregator_constants.json, assets/   # editable texts + premium-emoji ids (UTF-8), cabinet template/fonts
+  tgedit/                 # the channel editor's reviewed edit packages (UTF-8 JSON)
   core/                   # pure building blocks, no Telethon
     models, matching, state (the store), statefile, render, config, codec,
     runtime, client, humanize, tasks, attachment, relationship
@@ -45,7 +46,7 @@ minions/userbot/
     links (LinkKeeper), tgedit (ChannelEditor),
     status (StatusReport), commands (CommandRouter), profiles (ServiceModes)
   dev/                    # developer tools, not the running bot
-    dump_emoji_ids
+    dump_emoji_ids, tgedit_check
 ```
 
 The principle: `core/` is pure logic/maths/IO, `engines/` are the domain brains,
@@ -136,66 +137,76 @@ are never touched; any other link is left as is and listed in the report.
 Knobs: `engines.links` in `aggregator_constants.json` (`domain` blank =
 `post.short_link_domain`).
 
-## Channel editor (`tgedit`, off by default)
+## Channel editor (`tgedit`)
 
-`glue/tgedit.py` over the pure `core/tgedit.py`, so the channel's posts are
-cleaned up from the team board without the owner doing it by hand.
+`glue/tgedit.py` over the pure `core/tgedit.py`: a worker that executes a
+file, so the channel's posts are cleaned up without the owner doing it by
+hand. It talks to nobody but Telegram -- no board, no token.
 
-**The package.** A board note, `kind=note`, tag `tg-edit`, written by a role
-in `authors`, not archived, carrying one JSON block. It may be a reply in a
-task's thread: the board lists only root notes by `tag`, so packages are
-found with `q=tg-edit` and kept only when the tag is in their `tags`.
+**The package** is a file `minions/userbot/tgedit/<number>-<word>.json`;
+its `id` is the file name (the number is the note it came from):
 
 ```json
-[{"post": 1167, "action": "edit", "old": "exact fragment", "new": "new one"},
- {"post": 1164, "action": "link", "old": "https://old", "new": "https://new"},
- {"post": 1142, "action": "delete"},
- {"post": 1006, "action": "delete", "only_if_empty": true},
- {"post": 0, "action": "desc", "new": "\nappended to the description"},
- {"post": 0, "action": "pin_new", "new": "a new post, pinned silently"}]
+{"id": "475-cleanup", "author": "audience-head", "why": "one line",
+ "edits": [
+  {"post": 1167, "action": "edit", "old": "exact fragment", "new": "new one"},
+  {"post": 1164, "action": "link", "old": "https://old", "new": "https://new"},
+  {"post": 1142, "action": "delete"},
+  {"post": 1006, "action": "delete", "only_if_empty": true},
+  {"post": 0, "action": "desc", "new": "\nappended to the description"},
+  {"post": 0, "action": "pin_new", "new": "a new post, pinned silently"}]}
 ```
 
 `post` 0 is the channel itself (`desc`, `pin_new`). `edit` replaces a
 fragment of the text (empty `new` removes it), `link` points every link
 whose address is `old` at `new` (a visible address changes its text too;
 the report says `replaced N` when it moved more than one).
-A broken block, an unknown key or action, or more than `max_deletes`
-deletions refuses the WHOLE package, and the reason goes to the thread.
+A broken file, an unknown key or action, an id that is not the file name,
+or more than `max_deletes` deletions refuses the WHOLE package. Every
+shipped file is parsed by the tests, so such a typo fails CI first.
 
-**Approval.** A note with a line that OPENS with `<approve_word> #<package id>`
-("not approved #475" does not count), anywhere on the board, by a role in
-`approvers` other than the package's author, written after it.
-Found with the board's `q=#<id>` search.
+**Approval is the merge.** A package arrives as a PR; the site's team lead
+reviews and merges it into `main`, the image ships the file, and the
+worker applies it. Nobody approves anything on the board.
+
+**Dry check before the merge, without the NAS**: save the site MCP's
+`telegram` answer (`limit` 1000) and run
+
+```
+python -m minions.userbot.dev.tgedit_check \
+    minions/userbot/tgedit/475-cleanup.json telegram.json
+```
+
+It runs every item through the engine's own planner against that
+snapshot and prints `post N . action -> matched / old not found / old more
+than once / no post` (in the words of `engines.tgedit.labels`). The
+snapshot has no entity offsets beyond its links and no description, so
+`desc` reads "unchecked"; the engine's dry run in Telegram has the last word.
 
 **Dry run first.** Every item is checked against the post as it is now:
 `old` must occur in the text exactly once, character for character (none or
 two: skipped), a link's `old` must be the address of one of its links (all
 links with that address move). An
-edit that cuts across formatting, or touches a premium emoji, is skipped
-rather than allowed to move a glyph onto the wrong letter.
+edit that cuts across formatting, swallows a whole link, or touches a
+premium emoji is skipped rather than allowed to move a glyph onto the
+wrong letter.
 
 **Never touched**: an address in `protect_urls` (the chat), a link whose
 words contain one of `protect_link_texts` (the "watch" row), every premium
 emoji, and any post the package does not name -- those are never read.
 
 **Modes** (`engines.tgedit.mode`, a reviewed change of the constants file,
-not a chat command): `off` does nothing; `dry` (shipped) posts the dry-run
-outcome of each item into the package's thread; `on` journals each post
-before changing it (`tgedit_journal.jsonl`: text and Telegram's own entity
-dicts, enough to undo by hand), writes what passed at least `pause_sec`
-apart (never under 10 s) and reports `post N . action -> applied / skipped
-(reason) / error` into the thread. A package is applied once (`tgedit.json`);
-a channel that cannot be read leaves it pending for the next tick. Rights
+not a chat command; ships `on`): `off` does nothing; `dry` dry-runs each
+package once; `on` journals each post before changing it
+(`tgedit_journal.jsonl`: text and Telegram's own entity dicts, enough to
+undo by hand) and writes what passed at least `pause_sec` apart (never
+under 10 s). Either way each item's outcome -- `post N . action -> applied
+/ skipped (reason) / error` -- goes to the container log and, as an
+`outcome` row, to the journal. A package is applied once (`tgedit.json`,
+by id); a dry-reported one is still applied when the mode turns `on`; a
+channel that cannot be read leaves it pending for the next tick. Rights
 are read first (`edit`, `delete`, `pin`, `post`, `info` = change the
 description): an item the account may not do is reported `no_rights`.
-
-A board answer that is not JSON or has no `notes` list raises `BoardError`
-(the tick logs and retries) rather than reading as "no packages".
-
-The board is reached through the site's MCP with ONE role's token in the
-env (`TGEDIT_BOARD_TOKEN`); without it the editor stays idle. The server
-signs the reports with that role, so the editor cannot write under another
-name, and it uses only `board` (read) and `board_post` (a report reply).
 
 ## State on disk
 
@@ -212,8 +223,8 @@ of scalars and are the only part worth reading by eye.
   greeter_state.json           the admin-log cursor and DM budget
   comod.json                   who is on which shelf
   links.json                   link keeper: mode, history cursor, edits today
-  tgedit.json                  channel editor: packages applied / dry-reported
-  tgedit_journal.jsonl         channel editor: each post before it was changed
+  tgedit.json                  channel editor: package ids applied / dry-run
+  tgedit_journal.jsonl         channel editor: before-images and outcomes
   users.db                     the opt-in audience DB (PII, off by default)
 ```
 
