@@ -93,6 +93,7 @@ from minions.userbot.glue.stories import StoryDeps
 from minions.userbot.glue.stories import StoryWatch
 from minions.userbot.glue.tgedit import CATALOG_FILE as TGEDIT_CATALOG
 from minions.userbot.glue.tgedit import JOURNAL_FILE as TGEDIT_JOURNAL
+from minions.userbot.glue.tgedit import OUTBOX_DIR
 from minions.userbot.glue.tgedit import REPORT_FILE as TGEDIT_REPORT
 from minions.userbot.glue.tgedit import STATE_FILE as TGEDIT_FILE
 from minions.userbot.glue.tgedit import ChannelEditor
@@ -395,6 +396,7 @@ class Userbot:
                 catalog=pdir / TGEDIT_CATALOG,
                 params=tgedit_params,
                 report=pdir / TGEDIT_REPORT,
+                outbox=pdir / OUTBOX_DIR,
             )
         )
         self.tgedit.load()

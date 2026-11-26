@@ -66,7 +66,14 @@ JOURNAL_FILE = 'tgedit_journal.jsonl'
 CATALOG_FILE = 'emoji_catalog.json'
 REPORT_FILE = 'tgedit_report.json'
 """Every package's outcomes for the site (``tgedit.summary``); nas-update
-relays it to the site's version reports when it changes."""
+relays it to the site's version reports when it changes. Kept until the NAS
+sends the outbox copy below; then this file and its relay go."""
+OUTBOX_DIR = 'outbox'
+"""The shared NAS -> site channel: nas-update sends every ``<kind>.json``
+here to the site when its meaning changes, so a new kind needs no NAS
+config."""
+OUTBOX_REPORT = 'tgedit-report.json'
+"""The report's kind on that channel (the site's ``INBOX_KINDS``)."""
 CATALOG_SEC = 24 * 3600.0
 """How often the emoji catalog is rebuilt (a failed read retries sooner)."""
 CATALOG_POSTS = 200
@@ -175,6 +182,7 @@ class EditDeps:
     catalog: Path  # emoji_catalog.json
     params: EditParams
     report: Path | None = None  # tgedit_report.json; None writes none
+    outbox: Path | None = None  # outbox/; None writes no copy there
     sleep: Callable[[float], Awaitable[object]] = asyncio.sleep
 
 
@@ -372,13 +380,16 @@ class ChannelEditor:
         The journal is the record of what the channel got; the report is
         only its digest, so it is rebuilt rather than kept in step.
         """
-        if self.deps.report is None:
+        targets = [self.deps.report]
+        if self.deps.outbox is not None:
+            targets.append(self.deps.outbox / OUTBOX_REPORT)
+        paths = [path for path in targets if path is not None]
+        if not paths:
             return
         body = tgedit.summary(read_journal(self.deps.journal), now)
-        atomic_write(
-            self.deps.report,
-            json.dumps(body, ensure_ascii=False, indent=1).encode('utf-8'),
-        )
+        data = json.dumps(body, ensure_ascii=False, indent=1).encode('utf-8')
+        for path in paths:
+            atomic_write(path, data)
 
     def save(self) -> None:
         """Write the state."""
