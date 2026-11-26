@@ -43,6 +43,7 @@ class BoardNote:
     tags: tuple[str, ...]
     created_at: str
     parent_id: int = 0
+    archived: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,11 +55,16 @@ class Board:
     timeout: float = TIMEOUT_SEC
 
     def notes(self, **query: object) -> list[BoardNote]:
-        """Return the notes matching ``query`` (the ``board`` tool's args)."""
+        """Return the notes matching ``query`` (the ``board`` tool's args).
+
+        An answer without a ``notes`` list raises: read as "no notes", a
+        broken query would look like an empty board and hide for good.
+        """
         body = self._tool('board', dict(query))
         rows = body.get('notes')
         if not isinstance(rows, list):
-            return []
+            msg = 'board board: answer has no notes list'
+            raise BoardError(msg)
         return [_note(row) for row in rows if isinstance(row, dict)]
 
     def reply(self, parent: int, text: str, ref: str) -> int:
@@ -109,12 +115,18 @@ def _payload(name: str, envelope: object) -> dict[str, object]:
     """
     text = _text(name, envelope)
     start = text.find('{')
+    if start < 0:
+        msg = f'board {name}: answer carries no JSON object'
+        raise BoardError(msg)
     try:
-        body = json.loads(text[start:]) if start >= 0 else {}
+        body = json.loads(text[start:])
     except json.JSONDecodeError as exc:
         msg = f'board {name}: answer is not JSON ({exc.msg})'
         raise BoardError(msg) from exc
-    return body if isinstance(body, dict) else {}
+    if not isinstance(body, dict):
+        msg = f'board {name}: answer is not a JSON object'
+        raise BoardError(msg)
+    return body
 
 
 def _text(name: str, envelope: object) -> str:
@@ -161,4 +173,5 @@ def _note(row: Mapping[str, object]) -> BoardNote:
         tags=tuple(str(t) for t in tags) if isinstance(tags, list) else (),
         created_at=str(row.get('created_at') or ''),
         parent_id=parent if isinstance(parent, int) else 0,
+        archived=row.get('archived') is True,
     )

@@ -10,6 +10,7 @@ the post's current text is applied, anything else is skipped and said so.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from dataclasses import dataclass
 from dataclasses import field
@@ -161,11 +162,19 @@ def test_the_strategist_approves_with_the_word_and_the_id() -> None:
         _note(502, 'strateg', 'ok #4750'),  # another package
         tgedit.Note(503, 'strateg', 'ok #475', '0'),  # older than it
         _note(504, 'strateg', 'not yet #475'),  # no approval word
+        _note(505, 'strateg', 'not ok #475'),  # the word, negated
+        _note(506, 'strateg', 'I will say ok #475 later'),  # not a verdict
     ],
 )
 def test_no_approval_without_an_approver_saying_it(note: tgedit.Note) -> None:
     """Only a different, permitted role's explicit word approves."""
     assert APPROVAL.by(PKG, [note]) == ''
+
+
+def test_the_approval_may_open_any_line_of_the_note() -> None:
+    """A verdict on its own line after a preamble still approves."""
+    notes = [_note(507, 'strateg', 'checked the package\n  ok #475')]
+    assert APPROVAL.by(PKG, notes) == 'strateg'
 
 
 # -------------------------------------------------------------- dry run
@@ -239,6 +248,20 @@ def test_a_hidden_link_changes_only_its_address() -> None:
     assert _status(plan) == [(tgedit.DRY_OK, '')]
     assert plan.urls == {0: new, 1: new}
     assert plan.text == 'on YT and me'
+
+
+def test_a_link_counts_every_address_it_moves() -> None:
+    """Two links with the same ``old`` (post 1045): both move, count 2."""
+    old, new = 'https://youtube.com/@a', 'https://youtube.daetotyoma.com/x'
+    post = _post(
+        'on YT and me', (3, 2, relink.HIDDEN, old), (10, 2, relink.HIDDEN, old)
+    )
+    plan = tgedit.plan_post(post, (_link(old, new),), GUARD)
+    assert [one.count for one in plan.outcomes] == [2]
+    applied = worker._landed(plan.outcomes, landed=True)
+    assert [(one.status, one.count) for one in applied] == [
+        (tgedit.APPLIED, 2)
+    ]
 
 
 def test_a_visible_link_changes_its_text_too() -> None:
@@ -320,6 +343,22 @@ def test_the_report_names_each_post_and_its_outcome() -> None:
     ]
 
 
+def test_the_report_says_how_many_links_one_item_moved() -> None:
+    """One replacement says nothing extra; two or more say the number."""
+    item = _link('https://a', 'https://b')
+    lines = tgedit.report(
+        [
+            tgedit.Outcome(item, tgedit.APPLIED, count=2),
+            tgedit.Outcome(item, tgedit.APPLIED),
+        ],
+        {'replaced': 'N'},
+    )
+    assert lines == [
+        'post 7 . link -> applied, N 2',
+        'post 7 . link -> applied',
+    ]
+
+
 # ---------------------------------------------------------- the worker
 
 
@@ -396,10 +435,24 @@ class _Board:
     replies: list[tuple[int, str, str]] = field(default_factory=list)
 
     def notes(self, **query: object) -> list[boardapi.BoardNote]:
-        """Return tagged notes, or the ones mentioning ``#id``."""
+        """Answer like the live board did on 26.11.
+
+        ``q`` searches every note, replies and the archive included, in
+        text and tags; without it the list holds only root notes, so a
+        package replied in a thread is reached through ``q`` alone.
+        """
+        kind = query.get('kind')
+        rows = [n for n in self.notes_list if not kind or n.kind == kind]
         if 'q' in query:
-            return [n for n in self.notes_list if str(query['q']) in n.text]
-        return [n for n in self.notes_list if query.get('tag') in n.tags]
+            q = str(query['q'])
+            return [n for n in rows if q in n.text or q in n.tags]
+        return [
+            n
+            for n in rows
+            if query.get('tag') in n.tags
+            and not n.parent_id
+            and not n.archived
+        ]
 
     def reply(self, parent: int, text: str, ref: str) -> int:
         """Record a reply."""
@@ -407,11 +460,21 @@ class _Board:
         return len(self.replies)
 
 
+THREAD = 388
+"""The thread the live package #475 was replied into (task No 92)."""
+
+
 def _row(ident: int, role: str, text: str) -> boardapi.BoardNote:
-    """Return a board row; a package (a JSON block) carries the tag."""
+    """Return a reply in THREAD; a package (a JSON block) carries the tag."""
     tags = ('tg-edit',) if '```json' in text else ()
     return boardapi.BoardNote(
-        ident, role, 'note', text, tags, f'2026-11-{ident}'
+        ident,
+        role,
+        'note',
+        text,
+        tags,
+        f'2026-11-{ident}',
+        parent_id=THREAD,
     )
 
 
@@ -541,6 +604,31 @@ def test_an_unapproved_package_waits(tmp_path: Path) -> None:
     assert account.writes == []
 
 
+def test_only_live_tagged_packages_are_picked_up(tmp_path: Path) -> None:
+    """A note that only names the tag, or an archived package, is no package.
+
+    The real reply to the package (#476) says ``tg-edit`` in its text; the
+    board's ``q`` finds it, the tag filter drops it.
+    """
+    account, board = _world()
+    board.notes_list += [
+        boardapi.BoardNote(
+            24,
+            AUTHOR,
+            'note',
+            'format: see tg-edit',
+            (),
+            '2026-11-24',
+            parent_id=THREAD,
+        ),
+        dataclasses.replace(_row(23, AUTHOR, _block(ITEMS)), archived=True),
+        _row(27, 'strateg', 'ok #23'),
+    ]
+    editor, _ = _editor(tmp_path, (account, board), 'dry')
+    assert asyncio.run(editor.tick(NOW)) == 1
+    assert [parent for parent, _, _ in board.replies] == [25]
+
+
 def test_a_package_by_another_role_is_ignored(tmp_path: Path) -> None:
     """Only the configured authors write packages."""
     account, board = _world()
@@ -639,6 +727,42 @@ def test_a_board_error_raises_with_its_reason() -> None:
         boardapi._payload('board_post', _answer('forbidden', error=True))
     with pytest.raises(boardapi.BoardError, match='bad token'):
         boardapi._payload('board', {'error': {'message': 'bad token'}})
+
+
+@pytest.mark.parametrize(
+    'text',
+    [
+        '1 note\n\n{"board": "admin"}',  # no notes field
+        '1 note\n\n{"notes": {"id": 5}}',  # notes is not a list
+        'board is down',  # no JSON at all
+        '1 note\n\n["a list"]',  # JSON, but not an object
+    ],
+)
+def test_a_broken_board_answer_raises_not_looks_empty(
+    text: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken answer must not read as "no packages" (the #507 blind spot)."""
+
+    def fake_post(*_: object, **__: object) -> object:
+        return _Response(_answer(text))
+
+    monkeypatch.setattr('requests.post', fake_post)
+    with pytest.raises(boardapi.BoardError, match='board board'):
+        boardapi.Board('https://board', 'token').notes(q='tg-edit')
+
+
+@dataclass
+class _Response:
+    """A fake HTTP response carrying one JSON body."""
+
+    body: object
+
+    def raise_for_status(self) -> None:
+        """Pretend the status was 200."""
+
+    def json(self) -> object:
+        """Return the body."""
+        return self.body
 
 
 def test_an_outcome_is_counted_by_status() -> None:

@@ -142,7 +142,9 @@ Knobs: `engines.links` in `aggregator_constants.json` (`domain` blank =
 cleaned up from the team board without the owner doing it by hand.
 
 **The package.** A board note, `kind=note`, tag `tg-edit`, written by a role
-in `authors`, carrying one JSON block:
+in `authors`, not archived, carrying one JSON block. It may be a reply in a
+task's thread: the board lists only root notes by `tag`, so packages are
+found with `q=tg-edit` and kept only when the tag is in their `tags`.
 
 ```json
 [{"post": 1167, "action": "edit", "old": "exact fragment", "new": "new one"},
@@ -155,17 +157,20 @@ in `authors`, carrying one JSON block:
 
 `post` 0 is the channel itself (`desc`, `pin_new`). `edit` replaces a
 fragment of the text (empty `new` removes it), `link` points every link
-whose address is `old` at `new` (a visible address changes its text too).
+whose address is `old` at `new` (a visible address changes its text too;
+the report says `replaced N` when it moved more than one).
 A broken block, an unknown key or action, or more than `max_deletes`
 deletions refuses the WHOLE package, and the reason goes to the thread.
 
-**Approval.** A note `<approve_word> #<package id>` anywhere on the board,
-by a role in `approvers` other than the package's author, written after it.
+**Approval.** A note with a line that OPENS with `<approve_word> #<package id>`
+("not approved #475" does not count), anywhere on the board, by a role in
+`approvers` other than the package's author, written after it.
 Found with the board's `q=#<id>` search.
 
 **Dry run first.** Every item is checked against the post as it is now:
 `old` must occur in the text exactly once, character for character (none or
-two: skipped), a link's `old` must be the address of one of its links. An
+two: skipped), a link's `old` must be the address of one of its links (all
+links with that address move). An
 edit that cuts across formatting, or touches a premium emoji, is skipped
 rather than allowed to move a glyph onto the wrong letter.
 
@@ -183,6 +188,9 @@ apart (never under 10 s) and reports `post N . action -> applied / skipped
 a channel that cannot be read leaves it pending for the next tick. Rights
 are read first (`edit`, `delete`, `pin`, `post`, `info` = change the
 description): an item the account may not do is reported `no_rights`.
+
+A board answer that is not JSON or has no `notes` list raises `BoardError`
+(the tick logs and retries) rather than reading as "no packages".
 
 The board is reached through the site's MCP with ONE role's token in the
 env (`TGEDIT_BOARD_TOKEN`); without it the editor stays idle. The server

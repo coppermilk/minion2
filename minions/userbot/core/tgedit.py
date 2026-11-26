@@ -99,11 +99,16 @@ class Item:
 
 @dataclass(frozen=True)
 class Outcome:
-    """What happened (or would happen) to one item, and why."""
+    """What happened (or would happen) to one item, and why.
+
+    ``count`` is how many places the item changes: a ``link`` moves every
+    link with its address (post 1045 has two), anything else one.
+    """
 
     item: Item
     status: str
     reason: str = ''
+    count: int = 1
 
 
 @dataclass(frozen=True)
@@ -270,14 +275,16 @@ class Approval:
     def by(self, package: Note, notes: list[Note]) -> str:
         """Return the role that approved ``package``; '' when none did.
 
-        An approval is a note ``<word> #<id>`` (case-insensitive, any place
-        in the text) by one of ``approvers``, written after the package, by
-        a role other than the package's author.
+        An approval is a line opening with ``<word> #<id>``
+        (case-insensitive) by one of ``approvers``, written after the
+        package, by a role other than the package's author. Only the start
+        of a line counts, so "not approved #475" approves nothing.
         """
         if not self.word:
             return ''
         mark = re.compile(
-            rf'{re.escape(self.word)}\s*#{package.id}(?!\d)', re.IGNORECASE
+            rf'^\s*{re.escape(self.word)}\s*#{package.id}(?!\d)',
+            re.IGNORECASE | re.MULTILINE,
         )
         for note in notes:
             if self._counts(package, note) and mark.search(note.text):
@@ -393,20 +400,24 @@ class _Draft:
                 return FORMATTING
         return ''
 
-    def link(self, item: Item) -> str:
-        """Dry-run and apply one address change; '' or why it is skipped."""
+    def link(self, item: Item) -> tuple[str, int]:
+        """Dry-run and apply one address change: ('', links moved) or why.
+
+        Every link whose address is exactly ``old`` moves; unlike a text
+        fragment, two equal addresses are one target, not an ambiguity.
+        """
         if self.guard.names(item.old) or self.guard.names(item.new):
-            return PROTECTED
+            return PROTECTED, 0
         hits = [
             i for i, read in self.post.links if self.url(i, read) == item.old
         ]
         if not hits:
-            return NOT_FOUND
+            return NOT_FOUND, 0
         if any(self.locked(i) for i in hits):
-            return PROTECTED
+            return PROTECTED, 0
         for index in sorted(hits, key=lambda i: self.spans[i], reverse=True):
             self._readdress(index, item.new)
-        return ''
+        return '', len(hits)
 
     def _readdress(self, index: int, new: str) -> None:
         """Point one link at ``new``: a visible one changes its text too."""
@@ -434,9 +445,13 @@ def plan_post(
     draft = _Draft(post, guard)
     outcomes: list[Outcome] = []
     for item in items:
-        why = draft.edit(item) if item.action == EDIT else draft.link(item)
+        why, count = (
+            (draft.edit(item), 1) if item.action == EDIT else draft.link(item)
+        )
         outcomes.append(
-            Outcome(item, SKIPPED, why) if why else Outcome(item, DRY_OK)
+            Outcome(item, SKIPPED, why)
+            if why
+            else Outcome(item, DRY_OK, count=count)
         )
     return PostPlan(
         post.id, tuple(outcomes), draft.text, tuple(draft.spans), draft.urls
@@ -498,6 +513,7 @@ def by_post(items: tuple[Item, ...]) -> dict[int, tuple[Item, ...]]:
 def report(outcomes: list[Outcome], labels: dict[str, str]) -> list[str]:
     """Render ``post N . action -> outcome (reason)``, one line per item.
 
+    An item that changed more than one place adds ``, replaced N``.
     ``labels`` maps the status and reason codes to the words the board
     reads; a code without a label is shown as is.
     """
@@ -510,7 +526,12 @@ def report(outcomes: list[Outcome], labels: dict[str, str]) -> list[str]:
         )
         said = labels.get(one.status, one.status)
         why = f' ({labels.get(one.reason, one.reason)})' if one.reason else ''
-        lines.append(f'{where} . {one.item.action} -> {said}{why}')
+        times = (
+            f', {labels.get("replaced", "replaced")} {one.count}'
+            if one.count > 1
+            else ''
+        )
+        lines.append(f'{where} . {one.item.action} -> {said}{why}{times}')
     return lines
 
 

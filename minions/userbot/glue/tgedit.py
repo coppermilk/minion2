@@ -259,16 +259,24 @@ class ChannelEditor:
     async def _pending(
         self, board: boardapi.Board
     ) -> list[boardapi.BoardNote]:
-        """Return approved packages not handled in the current mode yet."""
+        """Return approved packages not handled in the current mode yet.
+
+        Found by ``q``, not ``tag``: the board's tag list holds only root
+        notes, and a package is usually a reply in its task's thread. ``q``
+        also matches notes that merely name the tag, and the archive, so
+        the tag and ``archived`` are checked here.
+        """
         params = self.deps.params
         seen = self.state.dry if params.mode == 'dry' else self.state.done
         notes = await asyncio.to_thread(
-            board.notes, tag=params.tag, kind='note', limit=50
+            board.notes, q=params.tag, kind='note', limit=50
         )
         fresh = [
             note
             for note in sorted(notes, key=lambda n: n.id)
-            if note.id not in seen | self.state.done
+            if params.tag in note.tags
+            and not note.archived
+            and note.id not in seen | self.state.done
             and note.role in params.authors
         ]
         return [note for note in fresh if await self._approved(board, note)]
@@ -451,10 +459,10 @@ def _same(items: tuple[tgedit.Item, ...], reason: str) -> list[tgedit.Outcome]:
     return [tgedit.Outcome(one, tgedit.SKIPPED, reason) for one in items]
 
 
-def _one(item: tgedit.Item, *, landed: bool) -> tgedit.Outcome:
-    """Return the outcome of one write."""
+def _one(item: tgedit.Item, *, landed: bool, count: int = 1) -> tgedit.Outcome:
+    """Return the outcome of one write that moved ``count`` places."""
     if landed:
-        return tgedit.Outcome(item, tgedit.APPLIED)
+        return tgedit.Outcome(item, tgedit.APPLIED, count=count)
     return tgedit.Outcome(item, tgedit.ERROR, tgedit.FAILED)
 
 
@@ -463,6 +471,8 @@ def _landed(
 ) -> list[tgedit.Outcome]:
     """Turn a post's dry-run passes into applied (or failed) outcomes."""
     return [
-        _one(one.item, landed=landed) if one.status == tgedit.DRY_OK else one
+        _one(one.item, landed=landed, count=one.count)
+        if one.status == tgedit.DRY_OK
+        else one
         for one in outcomes
     ]
