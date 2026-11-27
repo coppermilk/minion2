@@ -342,6 +342,7 @@ class _Account:
 
     posts_by_id: dict[int, userchat.Linked]
     edits: list[tuple[int, userchat.Relinked]] = field(default_factory=list)
+    refused: set[int] = field(default_factory=set)  # Telegram says no
 
     async def linked(self, chat: int, limit: int) -> list[userchat.Linked]:
         """Return the newest posts."""
@@ -360,6 +361,8 @@ class _Account:
         """Record an edit and store the post as edited."""
         install_telethon_stub()
         self.edits.append((post.id, edit))
+        if post.id in self.refused:
+            return False
         ents = userchat._reentities(post, edit)
         self.posts_by_id[post.id] = userchat._linked(
             _Message(post.id, edit.text, ents, date=post.date)
@@ -494,3 +497,62 @@ def test_at_most_per_tick_posts_are_edited(tmp_path: Path) -> None:
     keeper = _keeper(account, _Site(_feed(SHORT)), tmp_path, per_tick=cap)
     assert len(asyncio.run(keeper.tick(NOW))) == len(posts)
     assert len(account.edits) == cap
+
+
+def test_a_failed_edit_is_not_retried_while_the_plan_is_the_same(
+    tmp_path: Path,
+) -> None:
+    """Telegram refused the edit: the next tick does not try it again."""
+    post = _dated(_read(('tiktok',)), NOW)
+    account = _Account({post.id: post}, refused={post.id})
+    keeper = _keeper(account, _Site(_feed(SHORT)), tmp_path)
+    asyncio.run(keeper.tick(NOW))
+    assert asyncio.run(keeper.tick(NOW + PARAMS.tick_sec)) == []
+    assert len(account.edits) == 1
+
+
+def test_failed_posts_do_not_take_the_slots_of_the_rest(
+    tmp_path: Path,
+) -> None:
+    """Two posts that always fail; the third one is edited on the next tick."""
+    posts = {i: _dated(_read(('tiktok',), post_id=i), NOW) for i in (1, 2, 3)}
+    account = _Account(posts, refused={2, 3})
+    keeper = _keeper(account, _Site(_feed(SHORT)), tmp_path, per_tick=2)
+    asyncio.run(keeper.tick(NOW))
+    asyncio.run(keeper.tick(NOW + PARAMS.tick_sec))
+    assert [i for i, _ in account.edits] == [3, 2, 1]
+    assert SHORT['youtube'] in {
+        one.url for one in account.posts_by_id[1].links
+    }
+
+
+def test_a_restart_remembers_the_failures_from_the_journal(
+    tmp_path: Path,
+) -> None:
+    """A new keeper (container restart) reads the failures back."""
+    post = _dated(_read(('tiktok',)), NOW)
+    account = _Account({post.id: post}, refused={post.id})
+    site = _Site(_feed(SHORT))
+    asyncio.run(_keeper(account, site, tmp_path).tick(NOW))
+    restarted = _keeper(account, site, tmp_path)
+    assert asyncio.run(restarted.tick(NOW + PARAMS.tick_sec)) == []
+    assert len(account.edits) == 1
+
+
+def test_a_failed_post_is_tried_again_once_the_feed_changes(
+    tmp_path: Path,
+) -> None:
+    """Another network in the feed is another plan: one more try."""
+    post = _dated(_read(('tiktok',)), NOW)
+    account = _Account({post.id: post}, refused={post.id})
+    site = _Site(
+        _feed({'tiktok': SHORT['tiktok'], 'youtube': SHORT['youtube']})
+    )
+    keeper = _keeper(account, site, tmp_path)
+    asyncio.run(keeper.tick(NOW))
+    site.body = _feed(SHORT)
+    account.refused.clear()
+    plans = asyncio.run(keeper.tick(NOW + PARAMS.tick_sec))
+    assert [i for i, _ in account.edits] == [post.id, post.id]
+    assert len(plans) == 1
+    assert 'youtube' in plans[0].added

@@ -18,8 +18,13 @@ older ones), and for each post whose grid lacks a network the feed has:
 
 Nothing else of the post moves: the text before and after the grid, every
 premium emoji, the label and underline of each cell. A feed that cannot be
-read or parsed skips the tick (one log line). It keeps no state: a
-completed post plans nothing, so the next tick edits nothing.
+read or parsed skips the tick (one log line). A completed post plans
+nothing, so the next tick edits nothing. An edit Telegram refused is not
+tried again while the post's plan is the same (the networks it adds):
+otherwise ``per_tick`` posts that always fail would take every slot, and
+journal a before-image every tick. The failures are read back from the
+journal's outcome rows, so a restart remembers them; a new network in the
+feed is a new plan and gets one more try.
 """
 
 from __future__ import annotations
@@ -52,6 +57,9 @@ JOURNAL_FILE = 'grid_journal.jsonl'
 FEED_URL = 'https://daetotyoma.com/posts.json'
 MODES = ('off', 'dry', 'on')
 DAY_SEC = 24 * 3600.0
+
+Attempt = tuple[int, tuple[str, ...]]
+"""A post and the networks an edit tried to add to it."""
 
 
 @dataclass(frozen=True)
@@ -138,6 +146,7 @@ class GridKeeper:
     """Keep the posts' grids as complete as the site's posts feed."""
 
     deps: GridDeps
+    _failed: set[Attempt] | None = field(default=None, init=False)
 
     async def loop(self) -> None:
         """Tick forever; one failed tick is logged and retried later."""
@@ -185,14 +194,33 @@ class GridKeeper:
         on purpose, so a silent skip would hide a failure.
         """
         params = self.deps.params
+        failed = self._failures()
         due = []
         for post in posts:
             got = gridfill.plan(to_post(post), feed, params.layout)
-            if got.added:
+            if got.added and (got.post_id, got.added) not in failed:
                 due.append((post, got))
             elif post.id in params.posts:
-                log.info('grid: post %s left: %s', post.id, got.reason)
+                reason = got.reason or 'the same edit failed before'
+                log.info('grid: post %s left: %s', post.id, reason)
         return due
+
+    def _failures(self) -> set[Attempt]:
+        """Return the refused edits, read from the journal on first use."""
+        if self._failed is None:
+            self._failed = set()
+            path = self.deps.journal
+            lines = (
+                path.read_text('utf-8').splitlines() if path.exists() else []
+            )
+            for line in lines:
+                row = json.loads(line)
+                if (
+                    row.get('what') == 'outcome'
+                    and row.get('status') == tgedit.ERROR
+                ):
+                    self._failed.add((int(row['post']), tuple(row['added'])))
+        return self._failed
 
     async def _posts(self, now: float) -> list[userchat.Linked]:
         """Return the window's newest posts and the catch-up ones, once."""
@@ -236,6 +264,12 @@ class GridKeeper:
             },
         )
         log.info('grid: post %s + %s -> %s', plan.post_id, added, status)
+        if not landed:
+            self._failures().add((plan.post_id, plan.added))
+            log.warning(
+                'grid: post %s is not tried again until the feed changes',
+                plan.post_id,
+            )
 
     def _journal(self, what: str, body: dict[str, object]) -> None:
         """Append one row: a before-image (before the write) or an outcome."""

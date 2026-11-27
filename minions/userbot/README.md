@@ -311,9 +311,15 @@ post whose grid lacks a network the feed has, draws the grid again:
   post to `grid_journal.jsonl` (text and Telegram's own entities, enough to
   undo by hand), edits it, and logs `grid: post N + network -> applied`.
   At most `per_tick` posts a tick, `pause_sec` (never under 10 s) apart.
-- **No state**: a complete post plans nothing, so the next tick edits
-  nothing. A feed that cannot be read or parsed skips the tick with one
-  log line (`grid: posts feed skipped this tick`).
+- **Only the journal as state**: a complete post plans nothing, so the
+  next tick edits nothing. An edit Telegram refused (`-> error` in the log
+  and the journal) is not tried again while the post's plan -- the
+  networks it adds -- is the same, so failing posts never take the
+  `per_tick` slots of the rest; the failures are read back from
+  `grid_journal.jsonl`, a restart keeps them, and a new network in the
+  feed gives the post one more try. To retry by hand, delete the post's
+  `error` outcome rows. A feed that cannot be read or parsed skips the
+  tick with one log line (`grid: posts feed skipped this tick`).
 
 ## State on disk
 
