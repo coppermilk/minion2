@@ -242,13 +242,17 @@ class Relinked:
     ``spans`` is parallel to ``Linked.spans``; ``urls`` maps an entity index
     to its new address (hidden links only change there). ``emoji`` are
     premium emoji the edit adds: ``(offset, length, document id)`` in
-    UTF-16 units of ``text``.
+    UTF-16 units of ``text``. ``clones`` are new entities copied from one
+    of the post's: ``(source index, offset, length, address)``, the address
+    '' keeping the source's -- how a new link cell gets the very formatting
+    of its neighbours.
     """
 
     text: str
     spans: tuple[tuple[int, int], ...]
     urls: dict[int, str] = field(default_factory=dict)
     emoji: tuple[tuple[int, int, str], ...] = ()
+    clones: tuple[tuple[int, int, int, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -977,20 +981,16 @@ def dump(post: Linked) -> dict[str, object]:
 def _reentities(post: Linked, edit: Relinked) -> list[object]:
     """Copy each vendor entity of ``post`` onto the spans of ``edit``.
 
-    The premium emoji the edit adds join them; the list is ordered by
-    offset, as Telegram sends it.
+    The copies (``clones``) and premium emoji the edit adds join them; the
+    list is ordered by offset, as Telegram sends it.
     """
-    out: list[object] = []
-    for index, entity in enumerate(post.raw):
-        clone = copy.copy(entity)
-        offset, length = edit.spans[index]
-        clone.offset = offset  # type: ignore[attr-defined]
-        clone.length = length  # type: ignore[attr-defined]
-        if index in edit.urls:
-            clone.url = edit.urls[index]  # type: ignore[attr-defined]
-        out.append(clone)
+    out = [
+        _clone(entity, edit.spans[index], edit.urls.get(index, ''))
+        for index, entity in enumerate(post.raw)
+    ]
+    out += [_clone(post.raw[i], (o, n), url) for i, o, n, url in edit.clones]
     if not edit.emoji:
-        return out
+        return sorted(out, key=lambda one: int(getattr(one, 'offset', 0)))
     from telethon.tl.types import MessageEntityCustomEmoji
 
     out += [
@@ -1000,6 +1000,15 @@ def _reentities(post: Linked, edit: Relinked) -> list[object]:
         for offset, length, ident in edit.emoji
     ]
     return sorted(out, key=lambda one: int(getattr(one, 'offset', 0)))
+
+
+def _clone(entity: object, span: tuple[int, int], url: str) -> object:
+    """Copy one vendor entity onto a new span (and address, unless '')."""
+    clone = copy.copy(entity)
+    clone.offset, clone.length = span  # type: ignore[attr-defined]
+    if url:
+        clone.url = url  # type: ignore[attr-defined]
+    return clone
 
 
 def _root(reply: object) -> int:

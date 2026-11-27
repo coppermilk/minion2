@@ -82,6 +82,10 @@ from minions.userbot.glue.comments import CommentCounter
 from minions.userbot.glue.comments import CounterDeps
 from minions.userbot.glue.comod import Cabinet
 from minions.userbot.glue.comod import CabinetDeps
+from minions.userbot.glue.grid import JOURNAL_FILE as GRID_JOURNAL
+from minions.userbot.glue.grid import GridDeps
+from minions.userbot.glue.grid import GridKeeper
+from minions.userbot.glue.grid import load_grid_params
 from minions.userbot.glue.links import STATE_FILE as LINKS_FILE
 from minions.userbot.glue.links import LinkDeps
 from minions.userbot.glue.links import LinkKeeper
@@ -149,6 +153,7 @@ class Userbot:
         self.stories_task: asyncio.Task[None] | None = None
         self.links_task: asyncio.Task[None] | None = None
         self.tgedit_task: asyncio.Task[None] | None = None
+        self.grid_task: asyncio.Task[None] | None = None
         self.comments_task: asyncio.Task[None] | None = None
         self.startup_task: asyncio.Task[None] | None = None
         rt = codec.section(self.settings, 'runtime')
@@ -403,6 +408,18 @@ class Userbot:
             )
         )
         self.tgedit.load()
+        # Grid keeper: adds a network that came out after the post to its
+        # "watch" grid, from the site's posts feed (engines.grid).
+        grid_params = load_grid_params(self.settings)
+        self.grid = GridKeeper(
+            GridDeps(
+                account=self.account,
+                channel=lambda: self.live_targets()[0],
+                feed=read_feed(grid_params.feed_url),
+                journal=pdir / GRID_JOURNAL,
+                params=grid_params,
+            )
+        )
         # Comment counter: the channel's per-post comment counts, written
         # to the outbox for the site (the public page the site reads has
         # none). Read-only, so it has no mode of its own.

@@ -152,6 +152,7 @@ class ServiceModes:
         bot.stories_task = asyncio.create_task(bot.story_watch.loop())
         bot.links_task = asyncio.create_task(bot.links.loop())
         bot.tgedit_task = asyncio.create_task(bot.tgedit.loop())
+        bot.grid_task = asyncio.create_task(bot.grid.loop())
         bot.comments_task = asyncio.create_task(bot.comments.loop())
         bot.startup_task = asyncio.create_task(
             self._startup_backfill(source_backfill=source_backfill)
@@ -190,6 +191,7 @@ class ServiceModes:
             bot.stories_task,
             bot.links_task,
             bot.tgedit_task,
+            bot.grid_task,
             bot.comments_task,
         ):
             cancel(task)
@@ -199,6 +201,7 @@ class ServiceModes:
         bot.stories_task = None
         bot.links_task = None
         bot.tgedit_task = None
+        bot.grid_task = None
         bot.comments_task = None
 
     def _profile_dir(self, mode: str) -> Path:

@@ -14,6 +14,7 @@ Link aggregation is just one of them:
 | **users** | an opt-in SQLite record of the channel audience over time |
 | **links** | keeps the video links in the channel's posts short (trackable), history and new posts alike; ships in dry mode |
 | **tgedit** | applies the reviewed packages of the site's feed `/tgedit.json` to the channel (edit, delete, relink, description, new pin) |
+| **grid** | adds a network that came out after the post to the post's "watch" grid, from the site's posts feed `/posts.json` |
 
 `main.py` is only the **host**: it loads config, builds the active profile,
 routes each incoming event to the engines, and runs the status/heartbeat loop.
@@ -36,13 +37,13 @@ minions/userbot/
   aggregator_constants.json, assets/   # editable texts + premium-emoji ids (UTF-8), cabinet template/fonts
   core/                   # pure building blocks, no Telethon
     models, matching, state (the store), statefile, render, config, codec,
-    runtime, client, humanize, tasks, attachment, relationship
+    runtime, client, humanize, tasks, attachment, relationship, gridfill
   engines/                # domain brains (Telethon-free, unit-tested)
     reactions, stories, greeter, comod, users, premium_emoji
   glue/                   # the collaborators that DO touch Telethon
     aggregator (LinkAggregator), reactions (CommentWatch),
     stories (StoryWatch), comod (Cabinet), users (AudienceLog),
-    links (LinkKeeper), tgedit (ChannelEditor),
+    links (LinkKeeper), tgedit (ChannelEditor), grid (GridKeeper),
     status (StatusReport), commands (CommandRouter), profiles (ServiceModes)
   dev/                    # developer tools, not the running bot
     dump_emoji_ids, tgedit_check
@@ -283,6 +284,43 @@ site key and writes nothing to the site: nas-update (root, `[relay]` in
 handled `on` out of `/tgedit.json`: applied items go to the admin's
 archive, skipped and failed ones stay listed with their reason.
 
+## Grid keeper (`grid`)
+
+`glue/grid.py` over the pure `core/gridfill.py`. The aggregator posts a
+video when every network arrived or when `timeout_sec` (three hours) ran
+out, so a network published later never reached the post. Every `tick_sec`
+(15 minutes), in the persona's waking hours, the keeper reads the site's
+public posts feed `https://daetotyoma.com/posts.json` (one sketch, its
+short links by network; the site's own clustering decides what one sketch
+is), the channel's newest `page` posts younger than `window_days` (14) and
+the posts listed in `posts` (a one-off catch-up of older ones), and for a
+post whose grid lacks a network the feed has, draws the grid again:
+
+- **What moves**: only the grid. Existing cells keep their premium emoji
+  ids, label and underline; a new cell takes its network's `platform`
+  emoji of the constants and copies the first cell's link formatting with
+  the feed's address. Rows follow `post.rows`, separators line up exactly
+  as `compose` draws them; the text before and after (the footer line)
+  shifts with its entities. A cell is never removed.
+- **Never guessed**: the post matches the feed's sketch whose links hold
+  one of its cell addresses; no sketch or two, foreign formatting inside
+  the grid, or a network without an emoji -- the post is left (logged for
+  the catch-up posts).
+- **Modes** (`engines.grid.mode`, a reviewed change of the constants):
+  `off`; `dry` logs `grid dry: post N + network`; `on` (ships) journals the
+  post to `grid_journal.jsonl` (text and Telegram's own entities, enough to
+  undo by hand), edits it, and logs `grid: post N + network -> applied`.
+  At most `per_tick` posts a tick, `pause_sec` (never under 10 s) apart.
+- **Only the journal as state**: a complete post plans nothing, so the
+  next tick edits nothing. An edit Telegram refused (`-> error` in the log
+  and the journal) is not tried again while the post's plan -- the
+  networks it adds -- is the same, so failing posts never take the
+  `per_tick` slots of the rest; the failures are read back from
+  `grid_journal.jsonl`, a restart keeps them, and a new network in the
+  feed gives the post one more try. To retry by hand, delete the post's
+  `error` outcome rows. A feed that cannot be read or parsed skips the
+  tick with one log line (`grid: posts feed skipped this tick`).
+
 ## State on disk
 
 Two shapes, because two things behave differently. Per-peer data grows with
@@ -301,6 +339,7 @@ of scalars and are the only part worth reading by eye.
   tgedit.json                  channel editor: package ids applied / dry-run
   tgedit_journal.jsonl         channel editor: before-images and outcomes
   tgedit_report.json           channel editor: every package's outcomes, for the site
+  grid_journal.jsonl           grid keeper: before-images and outcomes
   users.db                     the opt-in audience DB (PII, off by default)
 ```
 
