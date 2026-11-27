@@ -216,7 +216,9 @@ class StatusReport:
         # /status header says which version is running
         commit = os.environ.get('GIT_SHA', '')[:7]
         parts = [
-            self._header('title', 'Userbot', f'{self._dot(on=True)} {flag}', commit),
+            self._header(
+                'title', 'Userbot', f'{self._dot(on=True)} {flag}', commit
+            ),
             '',
             *self._routing_lines(known),
             '',
