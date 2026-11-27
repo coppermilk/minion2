@@ -95,6 +95,15 @@ in the section of the engine that reads it.**
 | `emoji` | the unified premium-emoji catalog, each entry tagged with its `type` |
 | `texts` | what the operator sees: `/help`, the `/status` legend and glyphs, the words that suppress a sticker |
 
+**Announce phrase.** A post opens with the author handle, one phrase from
+`post.announce` and the love emoji. Phrases are drawn without replacement
+(`PhraseBag` in `core/humanize.py`): a used phrase does not come back until
+every phrase of the pool has been used once, and the phrase that closed a
+round never opens the next one. The memory is one dedup mark per used phrase
+(`announce:<hash>`) in the aggregator's rows of `userbot.db`, so it survives
+restarts; editing the pool needs no migration -- a new line starts unused.
+`/preview` shows posts without the phrase.
+
 **Short links in the post.** With `post.short_link_domain` set (it ships as
 `daetotyoma.com`), every video link in the published grid is rewritten to the
 site shortener's trackable address -- `https://<network>.<domain>/<code>`,

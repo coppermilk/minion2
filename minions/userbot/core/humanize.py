@@ -18,12 +18,14 @@ unit-testable and callable from any params object.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
+from typing import Protocol
 from typing import TypeVar
 
 if TYPE_CHECKING:
@@ -174,4 +176,61 @@ class Variety:
         weights = [0.0 if item == last else 1.0 for item in items]
         chosen = weighted_choice(self._rng, items, weights)
         self._last[key] = chosen
+        return chosen
+
+
+class Marks(Protocol):
+    """The slice of a ``StateStore`` a ``PhraseBag`` keeps its memory in."""
+
+    def mark(self, key: str) -> bool:
+        """Record ``key``; True if it was new."""
+
+    def marked(self, key: str) -> bool:
+        """Whether ``key`` is recorded."""
+
+    def drop_marks(self, prefix: str) -> None:
+        """Forget every key under ``prefix``."""
+
+
+class PhraseBag:
+    """Draw a pool's phrases without replacement, remembered on disk.
+
+    ``Variety`` only stops back-to-back repeats, and it forgets on restart.
+    That is fine for an emoji, not for a confession: the channel's announce
+    pool is 33 first-person lines, a new video comes every few days, and a
+    line seen twice reads as fake (task 213, audit #877 found five pairs).
+    So a used phrase stays out until every phrase of the pool has been used
+    once. The memory is one dedup mark per used phrase (keyed by a hash of
+    its text, so editing the pool needs no migration: a new line starts
+    unused, a removed line's mark is simply never asked about).
+
+    When a draw empties the bag, the bag is refilled with the phrase just
+    drawn still marked, so the first post of the next round cannot repeat
+    the last post of this one.
+    """
+
+    def __init__(
+        self, marks: Marks, prefix: str, rng: random.Random | None = None
+    ) -> None:
+        """Keep the memory in ``marks`` under ``prefix``."""
+        self._marks = marks
+        self._prefix = prefix
+        self._rng = rng or random.Random()  # noqa: S311 -- variety, not crypto
+
+    def _key(self, phrase: str) -> str:
+        digest = hashlib.sha256(phrase.encode()).hexdigest()[:16]
+        return f'{self._prefix}{digest}'
+
+    def draw(self, pool: Sequence[str]) -> str:
+        """Return an unused phrase of ``pool``, marked used ('' if none)."""
+        phrases = [p for p in dict.fromkeys(pool) if p]
+        if not phrases:
+            return ''
+        unused = [p for p in phrases if not self._marks.marked(self._key(p))]
+        chosen = self._rng.choice(unused or phrases)
+        self._marks.mark(self._key(chosen))
+        if all(self._marks.marked(self._key(p)) for p in phrases):
+            self._marks.drop_marks(self._prefix)
+            if len(phrases) > 1:
+                self._marks.mark(self._key(chosen))
         return chosen
