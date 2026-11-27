@@ -95,6 +95,16 @@ in the section of the engine that reads it.**
 | `emoji` | the unified premium-emoji catalog, each entry tagged with its `type` |
 | `texts` | what the operator sees: `/help`, the `/status` legend and glyphs, the words that suppress a sticker |
 
+**Comment counts for the site.** The site's `telegram` tool reads the
+channel's public page, which shows no comment counts. Every 30 minutes
+`CommentCounter` (`glue/comments.py`) reads the channel's last 30 posts --
+one history read, no thread opened -- and rewrites
+`outbox/tg-comments.json`: `{v: 1, generated_at, discussion, posts:
+{"<post id>": <comments>}}`; a post that takes no comments is left out, and
+`discussion` is false when none does. nas-update relays the file to the
+site's inbox (kind `tg-comments`) when a count changes. A failed or empty
+read is a log line (`comments: ...`) and keeps the last file.
+
 **Short links in the post.** With `post.short_link_domain` set (it ships as
 `daetotyoma.com`), every video link in the published grid is rewritten to the
 site shortener's trackable address -- `https://<network>.<domain>/<code>`,

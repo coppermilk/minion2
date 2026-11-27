@@ -118,6 +118,10 @@ class Msg:
     rooted at 0, which is to say invisible to the engine that answers
     them. ``reply_to`` is the message it answers directly; ``root`` is 0
     when the message is not a reply at all.
+
+    ``comments`` is how many comments a channel post has in the
+    discussion group, and None when the post takes none (no linked group,
+    or comments off) -- so "nobody wrote" and "nobody could" stay apart.
     """
 
     id: int
@@ -130,6 +134,7 @@ class Msg:
     date: datetime | None = None
     mine_reacted: bool = False
     spans: tuple[Span, ...] = ()
+    comments: int | None = None
 
 
 @dataclass(frozen=True)
@@ -881,7 +886,19 @@ def _msg(raw: object) -> Msg:
         date=getattr(raw, 'date', None),
         mine_reacted=_mine(getattr(raw, 'reactions', None)),
         spans=_spans(raw),
+        comments=_comments(getattr(raw, 'replies', None)),
     )
+
+
+def _comments(replies: object) -> int | None:
+    """Comment count of a channel post (see ``Msg.comments``).
+
+    Telegram fills ``replies`` for a group's reply threads too; only
+    ``comments`` set marks the discussion-group count of a channel post.
+    """
+    if replies is None or not getattr(replies, 'comments', False):
+        return None
+    return int(getattr(replies, 'replies', 0) or 0)
 
 
 def _linked(raw: object) -> Linked:

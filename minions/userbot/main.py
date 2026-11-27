@@ -78,6 +78,8 @@ from minions.userbot.engines.premium_emoji import build_premium_message
 from minions.userbot.glue.aggregator import AggregatorDeps
 from minions.userbot.glue.aggregator import LinkAggregator
 from minions.userbot.glue.commands import CommandRouter
+from minions.userbot.glue.comments import CommentCounter
+from minions.userbot.glue.comments import CounterDeps
 from minions.userbot.glue.comod import Cabinet
 from minions.userbot.glue.comod import CabinetDeps
 from minions.userbot.glue.links import STATE_FILE as LINKS_FILE
@@ -147,6 +149,7 @@ class Userbot:
         self.stories_task: asyncio.Task[None] | None = None
         self.links_task: asyncio.Task[None] | None = None
         self.tgedit_task: asyncio.Task[None] | None = None
+        self.comments_task: asyncio.Task[None] | None = None
         self.startup_task: asyncio.Task[None] | None = None
         rt = codec.section(self.settings, 'runtime')
         # One door to Telegram, one gate in front of it: every service this
@@ -400,6 +403,16 @@ class Userbot:
             )
         )
         self.tgedit.load()
+        # Comment counter: the channel's per-post comment counts, written
+        # to the outbox for the site (the public page the site reads has
+        # none). Read-only, so it has no mode of its own.
+        self.comments = CommentCounter(
+            CounterDeps(
+                account=self.account,
+                channel=lambda: self.live_targets()[0],
+                outbox=pdir / OUTBOX_DIR,
+            )
+        )
         # The cabinet ("shkaf"): command-only, so it rides the poster's dir.
         self.cabinet = Cabinet(
             CabinetDeps(
