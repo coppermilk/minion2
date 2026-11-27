@@ -243,20 +243,24 @@ def test_the_feed_rules_only_tighten_ours() -> None:
 
 def test_an_exact_fragment_is_replaced_and_formatting_moves_with_it() -> None:
     """``old`` matched once: replaced; a bold span after it shifts."""
-    post = _post('aaa bad word. tail', (14, 4, 'other', ''))
+    post = _post(
+        'aaa bad word. tail \U0001f929',
+        (14, 4, 'other', ''),
+        (19, 2, tgedit.EMOJI, ''),
+    )
     plan = tgedit.plan_post(post, (_edit('bad word.', 'ok.'),), GUARD)
     assert _status(plan) == [(tgedit.DRY_OK, '')]
-    assert plan.text == 'aaa ok. tail'
-    assert plan.spans == ((8, 4),)
+    assert plan.text == 'aaa ok. tail \U0001f929'
+    assert plan.spans == ((8, 4), (13, 2))
 
 
 def test_two_fragments_of_one_post_both_land_in_order() -> None:
     """The second item runs on the text the first one left."""
-    post = _post('one two three')
+    post = _post('one two three \U0001f929', (14, 2, tgedit.EMOJI, ''))
     plan = tgedit.plan_post(
         post, (_edit('one ', ''), _edit('three', '3')), GUARD
     )
-    assert plan.text == 'two 3'
+    assert plan.text == 'two 3 \U0001f929'
     assert plan.changes
 
 
@@ -371,10 +375,17 @@ def test_deletions_check_the_post_first() -> None:
     assert {one.reason for one in both.outcomes} == {tgedit.CONFLICT}
 
 
-def test_a_description_append_is_once_and_within_the_limit() -> None:
-    """Appended once; a second time is already done; over 255 is refused."""
+def test_a_description_append_never_passes_the_emoji_rule() -> None:
+    """The about is plain text, so no append carries a premium emoji.
+
+    The reasons before the rule still say what else is wrong: already
+    there, or over 255 characters.
+    """
     item = tgedit.Item(0, tgedit.DESC, new='\nfor brands')
-    assert tgedit.plan_about('about', item, GUARD) == ('about\nfor brands', '')
+    assert tgedit.plan_about('about', item, GUARD) == (
+        '',
+        tgedit.NO_PREMIUM_EMOJI,
+    )
     assert tgedit.plan_about('about\nfor brands', item, GUARD)[1] == (
         tgedit.ALREADY
     )
@@ -384,9 +395,11 @@ def test_a_description_append_is_once_and_within_the_limit() -> None:
 
 def test_a_new_pin_goes_out_once() -> None:
     """The same text already among the newest posts is not posted again."""
-    item = tgedit.Item(0, tgedit.PIN_NEW, new='for brands')
-    assert tgedit.plan_pin(['other'], item, GUARD) == ''
-    assert tgedit.plan_pin(['for brands '], item, GUARD) == tgedit.ALREADY
+    item = tgedit.Item(0, tgedit.PIN_NEW, new=f'for brands {_tag(CAT)}')
+    assert tgedit.plan_pin(['other'], item, GUARD_EMOJI) == ''
+    assert tgedit.plan_pin([f'for brands {FIRE} '], item, GUARD_EMOJI) == (
+        tgedit.ALREADY
+    )
 
 
 def test_the_report_names_each_post_and_its_outcome() -> None:
@@ -567,6 +580,39 @@ def test_an_edit_keeps_every_premium_emoji_of_the_post() -> None:
     assert [e.document_id for e in raw.entities] == [11, 22, 33]  # type: ignore[attr-defined]
 
 
+# ------------------------------------------- no text without premium emoji
+
+
+def test_words_written_into_a_bare_post_are_skipped() -> None:
+    """A post without premium emoji may not gain words that bring none."""
+    plan = tgedit.plan_post(
+        _post('hi there'), (_edit('there', 'you'),), GUARD_EMOJI
+    )
+    assert _status(plan) == [(tgedit.SKIPPED, tgedit.NO_PREMIUM_EMOJI)]
+    assert not plan.changes
+    assert plan.text == 'hi there'
+
+
+def test_removing_words_from_a_bare_post_passes() -> None:
+    """A removal writes nothing new, so the emoji rule does not stop it."""
+    plan = tgedit.plan_post(_post('hi gov there'), (_edit('gov ', ''),), GUARD)
+    assert _status(plan) == [(tgedit.DRY_OK, '')]
+    assert plan.text == 'hi there'
+
+
+def test_a_post_with_premium_emoji_takes_a_plain_fix() -> None:
+    """Its emoji are locked, so a typo fix leaves the post with them."""
+    post = _post('\U0001f929 helo', (0, 2, tgedit.EMOJI, ''))
+    plan = tgedit.plan_post(post, (_edit('helo', 'hello'),), GUARD)
+    assert _status(plan) == [(tgedit.DRY_OK, '')]
+
+
+def test_a_new_pin_without_premium_emoji_is_skipped() -> None:
+    """A pin is a whole new text: it must carry a tag of the catalog."""
+    item = tgedit.Item(0, tgedit.PIN_NEW, new='for brands')
+    assert tgedit.plan_pin([], item, GUARD_EMOJI) == tgedit.NO_PREMIUM_EMOJI
+
+
 # ---------------------------------------------------------- the worker
 
 
@@ -651,9 +697,9 @@ def _linked(ident: int, text: str) -> userchat.Linked:
 
 ITEMS: list[dict[str, object]] = [
     {'post': 0, 'action': 'desc', 'new': '\nfor brands'},
-    {'post': 0, 'action': 'pin_new', 'new': 'hello brands'},
+    {'post': 0, 'action': 'pin_new', 'new': f'hello brands {_tag(CAT)}'},
     {'post': 1142, 'action': 'delete'},
-    {'post': 1167, 'action': 'edit', 'old': 'gov and blog', 'new': 'blog'},
+    {'post': 1167, 'action': 'edit', 'old': 'gov and ', 'new': ''},
     {'post': 944, 'action': 'edit', 'old': 'not there', 'new': 'x'},
 ]
 
@@ -765,14 +811,13 @@ def test_on_applies_journals_paces_and_reports(tmp_path: Path) -> None:
     assert account.writes == [
         ('delete', 1142),
         ('edit', 1167),
-        ('about', 0),
         ('send', 900),
         ('pin', 900),
     ]
     assert slept == [PAUSE] * (len(account.writes) - 1)
     assert account.posts_by_id[1167].text == 'it is blog.'
     assert account.posts_by_id[1000].text == 'not in the package'
-    assert account.description == 'about\nfor brands'
+    assert account.description == 'about'
     before = _journal(tmp_path, 'post')
     assert [row.get('text') for row in before] == [
         'old tour',
@@ -781,7 +826,8 @@ def test_on_applies_journals_paces_and_reports(tmp_path: Path) -> None:
     outcomes = [
         (r['post'], r['status']) for r in _journal(tmp_path, 'outcome')
     ]
-    assert outcomes.count((0, tgedit.APPLIED)) == 2  # noqa: PLR2004
+    assert outcomes.count((0, tgedit.APPLIED)) == 1
+    assert (0, tgedit.SKIPPED) in outcomes
     assert (944, tgedit.SKIPPED) in outcomes
     assert len(outcomes) == len(ITEMS)
 
@@ -1008,12 +1054,12 @@ def test_the_dry_check_says_matched_missing_twice_and_no_post() -> None:
     )
     got = tgedit_check.check(package, posts, GUARD)
     assert [(one.item.post, one.status, one.reason) for one in got] == [
-        (1, tgedit.DRY_OK, ''),
+        (1, tgedit_check.UNCHECKED, ''),
         (2, tgedit.SKIPPED, tgedit.NOT_FOUND),
         (3, tgedit.SKIPPED, tgedit.AMBIGUOUS),
         (4, tgedit.SKIPPED, tgedit.NO_POST),
-        (0, tgedit_check.UNCHECKED, ''),
-        (0, tgedit.SKIPPED, tgedit.ALREADY),
+        (0, tgedit.SKIPPED, tgedit.NO_PREMIUM_EMOJI),
+        (0, tgedit.SKIPPED, tgedit.NO_PREMIUM_EMOJI),
     ]
 
 
@@ -1343,6 +1389,33 @@ def test_an_applied_package_is_reported_item_by_item(tmp_path: Path) -> None:
     assert [1142, 'delete', tgedit.APPLIED] in items
     assert [944, 'edit', tgedit.SKIPPED, tgedit.NOT_FOUND] in items
     assert len(items) == len(ITEMS)
+
+
+def test_a_package_without_premium_emoji_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """On: bare edit, pin and description are journalled and reported."""
+    bare = [
+        {'post': 1167, 'action': 'edit', 'old': 'gov', 'new': 'the'},
+        {'post': 0, 'action': 'pin_new', 'new': 'hello brands'},
+        {'post': 0, 'action': 'desc', 'new': '\nfor brands'},
+    ]
+    world = _world(bare)
+    editor, _ = _editor(tmp_path, world, 'on')
+    asyncio.run(editor.tick(NOW))
+    assert world[0].writes == []
+    reasons = [row['reason'] for row in _journal(tmp_path, 'outcome')]
+    assert reasons == [tgedit.NO_PREMIUM_EMOJI] * len(bare)
+    (one,) = _packages(_report(tmp_path))
+    items = cast('list[list[object]]', one['items'])
+    assert [1167, 'edit', tgedit.SKIPPED, tgedit.NO_PREMIUM_EMOJI] in items
+    assert [0, 'pin_new', tgedit.SKIPPED, tgedit.NO_PREMIUM_EMOJI] in items
+
+
+def test_the_shipped_labels_name_the_premium_emoji_rule() -> None:
+    """The log says the rule in words, not as a bare code."""
+    params = worker.load_edit_params(config.read_json(config.CONSTANTS_PATH))
+    assert tgedit.NO_PREMIUM_EMOJI in params.labels
 
 
 def test_the_on_pass_replaces_the_dry_one_in_the_report(

@@ -18,10 +18,12 @@ dry-run by the engine's own planner (``core/tgedit``) and printed as
 ``post N . action -> matched / old not found / old more than once / no
 post``, in the words of ``engines.tgedit.labels``.
 
-The snapshot is the public web view: it has links but no entity offsets
-and no channel description. Formatting cuts are therefore not seen here,
-and ``desc`` reads ``unchecked`` -- the engine's own dry run in Telegram
-remains the last word.
+The snapshot is the public web view: it has links but no entity offsets,
+no premium emoji and no channel description. Formatting cuts are
+therefore not seen here, and an edit the premium-emoji rule would stop on
+a bare post reads ``unchecked`` (the post may carry emoji the view does
+not show); a ``desc`` is refused by the rule whatever the description.
+The engine's own dry run in Telegram remains the last word.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from minions.userbot.glue.tgedit import RECENT
 from minions.userbot.glue.tgedit import load_edit_params
 
 UNCHECKED = 'unchecked'
-"""Outcome of an item the snapshot cannot check (the description)."""
+"""Outcome of an item the snapshot cannot check (premium emoji unseen)."""
 _UTF16 = 'utf-16-le'
 _USAGE = 'usage: tgedit_check <feed: file or URL> <telegram snapshot>'
 
@@ -146,11 +148,23 @@ def check(
                 else tgedit.Outcome(item, tgedit.DRY_OK)
             )
         elif item.action == tgedit.DESC:
-            outcomes.append(tgedit.Outcome(item, UNCHECKED))
+            # Every reason but ALREADY holds whatever the about is now.
+            why = tgedit.plan_about('', item, guard)[1]
+            outcomes.append(tgedit.Outcome(item, tgedit.SKIPPED, why))
         else:
             plan = plans.pop(item.post, None)
-            outcomes += plan.outcomes if plan else ()
+            outcomes += [_unseen(one) for one in plan.outcomes] if plan else []
     return outcomes
+
+
+def _unseen(outcome: tgedit.Outcome) -> tgedit.Outcome:
+    """Turn a premium-emoji skip of an edit into ``unchecked``.
+
+    The snapshot shows no premium emoji, so every post reads bare here.
+    """
+    if outcome.reason != tgedit.NO_PREMIUM_EMOJI:
+        return outcome
+    return tgedit.Outcome(outcome.item, UNCHECKED)
 
 
 def read_feed(where: str) -> str:
