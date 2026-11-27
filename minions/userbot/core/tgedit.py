@@ -38,7 +38,14 @@ network or Telegram, so every rule is under a test:
   emoji entity over the glyph. An id outside the catalog (``Guard.emoji``)
   or a broken tag skips the item: it never reaches the channel as raw
   markup or as a plain glyph. A description cannot carry entities, so a
-  tag there is skipped too.
+  tag there is skipped too;
+* **no channel text without a premium emoji** -- a pin_new whose ``new``
+  carries no tag, and an edit that writes words into a post left without
+  any premium emoji, are skipped as ``no_premium_emoji`` (the channel's
+  rule: every text carries an emoji of Tema's sets). An edit only
+  removing words passes: it writes nothing new. A description cannot
+  carry entities at all, so every ``desc`` is skipped -- the about is
+  changed by hand.
 
 Offsets are UTF-16 code units, Telegram's entity unit, as in ``relink``.
 """
@@ -91,6 +98,7 @@ CONFLICT = 'conflict'
 FAILED = 'failed'
 MARKUP = 'markup'
 UNKNOWN_EMOJI = 'unknown_emoji'
+NO_PREMIUM_EMOJI = 'no_premium_emoji'
 """Why an item was skipped or failed; the config maps each to words."""
 
 EMOJI = 'emoji'
@@ -559,11 +567,22 @@ class _Draft:
             _units(self.text[: self.text.index(item.old)]),
             _units(item.old),
         )
-        why = self._cuts(where, removes=not new.text)
+        why = self._cuts(where, removes=not new.text) or self._bare(new)
         if not why:
             self.splice(where, new.text)
             self._decorate(where[0], new)
         return why
+
+    def _bare(self, new: Markup) -> str:
+        """Return ``NO_PREMIUM_EMOJI`` when ``new`` would leave the post bare.
+
+        Words written into a post that has no premium emoji and brings
+        none break the channel's rule; removing words writes nothing. The
+        post's own emoji are locked, so no edit can strip them later.
+        """
+        if new.text and not new.spans and EMOJI not in self.kinds:
+            return NO_PREMIUM_EMOJI
+        return ''
 
     def _decorate(self, at: int, new: Markup) -> None:
         """Add the premium emoji of text just spliced in at unit ``at``.
@@ -677,9 +696,12 @@ def _skip(items: tuple[Item, ...], reason: str) -> PostPlan:
 
 
 def plan_about(about: str, item: Item, guard: Guard) -> tuple[str, str]:
-    """Dry-run a description append: (new about, '') or ('', why).
+    """Dry-run a description append: always ('', why).
 
-    A description is plain text: premium-emoji markup there is skipped.
+    A description is plain text: premium-emoji markup there is skipped,
+    and text without it breaks the channel's premium-emoji rule -- so no
+    append passes. The reasons checked first still say what else is wrong
+    with it (protected, already there, too long).
     """
     if guard.names(item.new):
         return '', PROTECTED
@@ -690,7 +712,7 @@ def plan_about(about: str, item: Item, guard: Guard) -> tuple[str, str]:
     after = about + item.new
     if len(after) > ABOUT_LIMIT:
         return '', TOO_LONG
-    return after, ''
+    return '', NO_PREMIUM_EMOJI
 
 
 def plan_pin(recent: list[str], item: Item, guard: Guard) -> str:
@@ -705,6 +727,8 @@ def plan_pin(recent: list[str], item: Item, guard: Guard) -> str:
         new = read_markup(item.new, guard.emoji)
     except MarkupError as exc:
         return exc.reason
+    if not new.spans:
+        return NO_PREMIUM_EMOJI
     if new.text.strip() in {one.strip() for one in recent}:
         return ALREADY
     return ''

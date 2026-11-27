@@ -185,7 +185,17 @@ a custom-emoji entity goes over it (UTF-16 offsets, as for every entity).
 Only an id of the catalog passes; an unknown id or a tag that does not read
 (`markup`) skips the item, so markup never reaches the channel as plain
 text. `desc` takes no tags (a description has no entities). The emoji a
-post already carries stay where they are, with the same ids. The catalog
+post already carries stay where they are, with the same ids.
+
+**No channel text without a premium emoji** (the channel's rule: every
+text carries an emoji of Tema's sets). A `pin_new` whose `new` has no tag,
+and an `edit` that writes words into a post with no premium emoji while
+bringing none, are skipped as `no_premium_emoji` -- in the log, the
+journal and `tgedit_report.json`. An `edit` that only removes words (empty
+`new`) passes, and so does a plain fix in a post that already has premium
+emoji: those are locked, no edit can strip them. A `desc` can never carry
+one, so every `desc` is skipped the same way: the description is changed
+by hand. The catalog
 is rebuilt once a day: the account's installed custom-emoji sets
 (`messages.getEmojiStickers`), every custom emoji in the newest 200 posts
 of the channel and the `emoji` of the constants (always there, so the dry
@@ -212,8 +222,11 @@ The feed is its address or a file (the site's `dist/tgedit.json`, to check
 a package before its PR merges). It runs every item of every package through the engine's own planner against that
 snapshot and prints `post N . action -> matched / old not found / old more
 than once / no post` (in the words of `engines.tgedit.labels`). The
-snapshot has no entity offsets beyond its links and no description, so
-`desc` reads "unchecked"; the engine's dry run in Telegram has the last word.
+snapshot has no entity offsets beyond its links, no premium emoji and no
+description, so an `edit` the premium-emoji rule would stop reads
+"unchecked" (the post may carry emoji the view does not show) and a `desc`
+reads as refused by the rule; the engine's dry run in Telegram has the last
+word.
 
 **Dry run first.** Every item is checked against the post as it is now:
 `old` must occur in the text exactly once, character for character (none or

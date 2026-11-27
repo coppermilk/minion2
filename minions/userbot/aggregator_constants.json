@@ -334,6 +334,7 @@
         "conflict": "удаление и правка одного поста в одном пакете",
         "markup": "разметка <tg-emoji> не читается",
         "unknown_emoji": "премиум-эмодзи нет в каталоге (emoji_catalog.json)",
+        "no_premium_emoji": "в тексте канала нет премиум-эмодзи (<tg-emoji>)",
         "failed": "Telegram не принял",
         "replaced": "заменено",
         "unchecked": "в снимке этого нет, проверит движок"
