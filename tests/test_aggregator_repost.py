@@ -243,6 +243,8 @@ def _sample_group() -> Group:
 def _patch_compose(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub message composition so no Telethon types are needed."""
     monkeypatch.setattr(aggregator, 'compose', lambda *a, **k: object())
+    # the fake deps carry neither store nor consts
+    monkeypatch.setattr(aggregator.LinkAggregator, '_announce', lambda _: '')
     monkeypatch.setattr(aggregator, 'youtube_thumb', lambda group: '')
 
 

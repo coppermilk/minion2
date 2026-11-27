@@ -197,14 +197,24 @@ def test_youtube_thumb_only_from_youtube() -> None:
     assert render.youtube_thumb(Group('t', {})) == ''
 
 
-def test_compose_drops_the_announce_phrase_keeps_the_title() -> None:
-    """The post opens with author + love, then the title; no random phrase."""
+def test_compose_without_announce_opens_with_author_and_title() -> None:
+    """No announce given: author + love, then the title; no pool phrase."""
     order = ('tiktok', 'youtube')
     group = render._sample_group(order, 'Cat meets cucumber')
     text = render.compose(group, order, CONSTS).text
     assert text.startswith(CONSTS.author)  # author leads the first line
     assert 'Cat meets cucumber' in text  # the video's title is still shown
     assert all(p not in text for p in CONSTS.announce if p)  # no announce line
+
+
+def test_compose_puts_the_announce_after_the_author() -> None:
+    """The drawn phrase sits between the handle and the love emoji."""
+    order = ('tiktok', 'youtube')
+    group = render._sample_group(order, 'Cat meets cucumber')
+    phrase = CONSTS.announce[0]
+    text = render.compose(group, order, CONSTS, announce=phrase).text
+    first = text.split('\n', 1)[0]
+    assert first.startswith(f'{CONSTS.author} {phrase} ')
 
 
 def test_compose_ends_with_the_footer_under_the_link_grid() -> None:

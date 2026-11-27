@@ -76,3 +76,73 @@ def test_variety_avoids_back_to_back_repeats() -> None:
     picks = [v.pick('k', ('a', 'b')) for _ in range(10)]
     assert all(a != b for a, b in itertools.pairwise(picks))
     assert v.pick('solo', ('only',)) == 'only'
+
+
+class _Marks:
+    """An in-memory stand-in for the StateStore dedup marks."""
+
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+
+    def mark(self, key: str) -> bool:
+        new = key not in self.keys
+        self.keys.add(key)
+        return new
+
+    def marked(self, key: str) -> bool:
+        return key in self.keys
+
+    def drop_marks(self, prefix: str) -> None:
+        self.keys = {k for k in self.keys if not k.startswith(prefix)}
+
+
+_POOL = ('a', 'b', 'c', 'd', 'e')
+
+
+def test_phrase_bag_uses_the_whole_pool_before_any_repeat() -> None:
+    """Each round of len(pool) draws holds every phrase exactly once."""
+    bag = humanize.PhraseBag(_Marks(), 'p:', random.Random(1))
+    first = [bag.draw(_POOL) for _ in _POOL]
+    assert sorted(first) == sorted(_POOL)
+
+
+def test_phrase_bag_does_not_repeat_across_the_round_boundary() -> None:
+    """The phrase that closed a round never opens the next one."""
+    for seed in range(50):
+        bag = humanize.PhraseBag(_Marks(), 'p:', random.Random(seed))
+        draws = [bag.draw(_POOL) for _ in range(40)]
+        assert all(x != y for x, y in itertools.pairwise(draws))
+
+
+def test_phrase_bag_memory_survives_a_new_bag() -> None:
+    """A restart builds a new bag over the same marks and keeps the round."""
+    marks = _Marks()
+    used = {humanize.PhraseBag(marks, 'p:').draw(_POOL) for _ in range(3)}
+    rest = {humanize.PhraseBag(marks, 'p:').draw(_POOL) for _ in range(2)}
+    assert used | rest == set(_POOL)
+
+
+def test_phrase_bag_takes_new_phrases_and_ignores_empty() -> None:
+    """An edited pool needs no migration; empty lines are never drawn."""
+    marks = _Marks()
+    bag = humanize.PhraseBag(marks, 'p:', random.Random(0))
+    for _ in range(4):
+        bag.draw(('a', 'b', 'c', 'd', 'e'))
+    assert bag.draw(('a', 'b', 'c', 'd', 'e', 'f', 'g')) in {'e', 'f', 'g'}
+    assert bag.draw(('', '')) == ''
+    assert bag.draw(('only',)) == 'only'
+    assert bag.draw(('only',)) == 'only'
+
+
+def test_phrase_bag_keeps_its_marks_in_the_state_db(tmp_path) -> None:  # noqa: ANN001
+    """The real store: marks persist across Database instances."""
+    from minions.userbot.core.state import DB_NAME
+    from minions.userbot.core.state import Database
+
+    def bag() -> humanize.PhraseBag:
+        return humanize.PhraseBag(
+            Database(tmp_path / DB_NAME).store('aggregator'), 'announce:'
+        )
+
+    used = {bag().draw(_POOL) for _ in range(4)}
+    assert {bag().draw(_POOL)} == set(_POOL) - used

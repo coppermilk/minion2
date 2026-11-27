@@ -18,6 +18,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 
 from minion_core.adapters import userchat
+from minions.userbot.core.humanize import PhraseBag
 from minions.userbot.core.matching import action_ok
 from minions.userbot.core.matching import duration_seconds
 from minions.userbot.core.matching import extract_fields
@@ -57,6 +58,9 @@ POSTED_CAP = 300
 # part of this state that grew for as long as the bot ran; 300 is the same
 # ceiling the posted log uses and is orders of magnitude more than the job.
 REJECTED_CAP = 300
+# Dedup-mark prefix of the announce phrases already used this round (the
+# PhraseBag memory): one mark per used phrase, at most the pool's size.
+ANNOUNCE_MARKS = 'announce:'
 
 
 @dataclass(frozen=True)
@@ -123,6 +127,11 @@ class LinkAggregator:
         self._save()
         if not missing:
             await self._flush(group)
+
+    def _announce(self) -> str:
+        """Draw the post's announce phrase; none repeats within a round."""
+        bag = PhraseBag(self.deps.store, ANNOUNCE_MARKS)
+        return bag.draw(self.deps.consts.announce)
 
     def _accept(self, msg: userchat.Msg) -> Item | None:
         """Parse a message into a Short's item, or None to ignore it."""
@@ -316,6 +325,7 @@ class LinkAggregator:
             self.deps.config.platforms,
             self.deps.consts,
             self.deps.variety,
+            announce=self._announce(),
         )
         posts = await self._deliver_post(message, youtube_thumb(group))
         if not posts:
