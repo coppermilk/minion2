@@ -1,11 +1,12 @@
-# Отчёт о версии на «Версии» админки сайта (daetotyoma.com/admin/versions/): что стоит на этом компьютере с Windows.
-# Облако не видит домашний ПК, поэтому он сообщает о себе сам. Вызовы:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\report-version.ps1 start      # из run.ps1 при входе в систему
-#   powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\report-version.ps1 heartbeat  # задача планировщика раз в день
-# Параметры: событие (deploy|rollback|heartbeat|start|stop|error), ok, сообщение. Коммит — git rev-parse HEAD, если git есть, иначе
-# хеш pyproject.toml. Настройки из .env: VERSIONS_KEY (ключ отчётов, тот же секрет VERSIONS_KEY в Pages, обязателен), VERSIONS_URL, VERSIONS_PROJECT
-# (по умолчанию minion2-windows). Нет сети — отчёт ложится в %DRIVE%\bots\_data\state\versions-outbox.jsonl и досылается потом.
-# Никогда не роняет вызывающего: любая ошибка — строка в вывод и выход с кодом 0.
+# Version report for the site admin's "Versions" page (daetotyoma.com/admin/versions/): what runs on this Windows PC.
+# The cloud cannot see the home PC, so it reports itself. Calls:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\report-version.ps1 start      # from run.ps1 at logon
+#   powershell -NoProfile -ExecutionPolicy Bypass -File deploy\windows\report-version.ps1 heartbeat  # daily Task Scheduler entry
+# Parameters: event (deploy|rollback|heartbeat|start|stop|error), ok, message. Commit -- git rev-parse HEAD when git exists, else
+# a hash of pyproject.toml. Settings from .env: VERSIONS_KEY (report key, the same VERSIONS_KEY secret as in Pages, required), VERSIONS_URL, VERSIONS_PROJECT
+# (default minion2-windows). No network -- the report goes to %DRIVE%\bots\_data\state\versions-outbox.jsonl and is resent later.
+# Never fails the caller: any error is one output line and exit code 0.
+# ASCII only (BLUEPRINT 4): a BOM-less .ps1 is read as ANSI by Windows PowerShell 5.1, so non-ASCII text would print garbled.
 param(
     [string]$Event = 'heartbeat',
     [string]$Ok = '',
@@ -29,14 +30,14 @@ try {
         }
     }
     $key = $cfg['VERSIONS_KEY']; if (-not $key) { $key = $env:VERSIONS_KEY }
-    if (-not $key) { Write-Output 'версии: VERSIONS_KEY не задан в .env — отчёт не отправлен'; exit 0 }
+    if (-not $key) { Write-Output 'versions: VERSIONS_KEY is not set in .env -- report not sent'; exit 0 }
     $url = if ($cfg['VERSIONS_URL']) { $cfg['VERSIONS_URL'] } else { 'https://daetotyoma.com/admin/versions' }
     $project = if ($cfg['VERSIONS_PROJECT']) { $cfg['VERSIONS_PROJECT'] } else { 'minion2-windows' }
     $drive = if ($cfg['DRIVE']) { $cfg['DRIVE'] } else { $env:DRIVE }
     $stateDir = if ($drive) { Join-Path $drive 'bots\_data\state' } else { $PSScriptRoot }
     New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
     $outbox = Join-Path $stateDir 'versions-outbox.jsonl'
-    if (-not @('deploy', 'rollback', 'heartbeat', 'start', 'stop', 'error').Contains($Event)) { Write-Output "версии: неизвестное событие $Event"; exit 0 }
+    if (-not @('deploy', 'rollback', 'heartbeat', 'start', 'stop', 'error').Contains($Event)) { Write-Output "versions: unknown event $Event"; exit 0 }
     if ($Ok -eq '') { $okVal = -not @('rollback', 'error').Contains($Event) } else { $okVal = ($Ok -eq '1' -or $Ok -eq 'true') }
     $commit = $null; $branch = $null
     $git = Get-Command git -ErrorAction SilentlyContinue
@@ -58,7 +59,7 @@ try {
             $status = $null
             try { $status = [int]$_.Exception.Response.StatusCode } catch { }
             if ($status -and $status -ge 400 -and $status -lt 500) {
-                # Текст ответа сайта называет причину («не задан секрет VERSIONS_KEY» / «ключ не совпал») — показать его, не только код
+                # The site's reply names the cause (secret VERSIONS_KEY not set / key mismatch) -- show it, not only the code
                 $reply = ''
                 try { $reply = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd().Split("`n")[0].Trim() } catch { }
                 try { if (-not $reply -and $_.ErrorDetails) { $reply = "$($_.ErrorDetails.Message)".Split("`n")[0].Trim() } } catch { }
@@ -74,12 +75,12 @@ try {
     }
     $r = Send-Report $body
     switch -Wildcard ($r) {
-        'ok' { Write-Output "версии: отправлено $Event ok=$okVal $(if ($commit) { $commit.Substring(0, 7) }) → $url/$project" }
-        'rejected:401*' { Write-Output "версии: сайт отверг отчёт ($r) — VERSIONS_KEY в .env должен совпадать с секретом VERSIONS_KEY сайта (Cloudflare → Pages → Variables and Secrets → Production)" }
-        'rejected:*' { Write-Output "версии: сайт отверг отчёт ($r) — проверьте VERSIONS_URL и VERSIONS_PROJECT" }
-        default { Add-Content -Path $outbox -Value $body; Write-Output "версии: сайт недоступен — отчёт отложен в $outbox" }
+        'ok' { Write-Output "versions: sent $Event ok=$okVal $(if ($commit) { $commit.Substring(0, 7) }) -> $url/$project" }
+        'rejected:401*' { Write-Output "versions: site rejected the report ($r) -- VERSIONS_KEY in .env must match the site's VERSIONS_KEY secret (Cloudflare -> Pages -> Variables and Secrets -> Production)" }
+        'rejected:*' { Write-Output "versions: site rejected the report ($r) -- check VERSIONS_URL and VERSIONS_PROJECT" }
+        default { Add-Content -Path $outbox -Value $body; Write-Output "versions: site unreachable -- report queued in $outbox" }
     }
 } catch {
-    Write-Output "версии: ошибка отчёта: $_"
+    Write-Output "versions: report error: $_"
 }
 exit 0
